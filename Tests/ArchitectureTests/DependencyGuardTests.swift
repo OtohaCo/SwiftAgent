@@ -2,6 +2,15 @@ import Foundation
 import XCTest
 
 final class DependencyGuardTests: XCTestCase {
+    func testPlatformSDKIsAllowedOnlyInItsDedicatedAdapter() {
+        XCTAssertEqual(DependencyGuard.violations("import FoundationModels\nimport AgentModels", module: "AgentAppleProvider"), [])
+        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders"] {
+            XCTAssertFalse(DependencyGuard.violations("import FoundationModels", module: module).isEmpty)
+        }
+        XCTAssertFalse(DependencyGuard.violations("import AgentTools", module: "AgentAppleProvider").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentCore", module: "AgentAppleProvider").isEmpty)
+    }
+
     private var packageRoot: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()

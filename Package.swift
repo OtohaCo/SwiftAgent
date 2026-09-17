@@ -9,16 +9,19 @@ let package = Package(
         .library(name: "AgentTools", targets: ["AgentTools"]),
         .library(name: "AgentCore", targets: ["AgentCore"]),
         .library(name: "AgentProviders", targets: ["AgentProviders"]),
+        .library(name: "AgentAppleProvider", targets: ["AgentAppleProvider"]),
     ],
     targets: [
         .target(name: "AgentModels"),
         .target(name: "AgentTools", dependencies: ["AgentModels"]),
         .target(name: "AgentCore", dependencies: ["AgentModels", "AgentTools"]),
         .target(name: "AgentProviders", dependencies: ["AgentModels"]),
+        .target(name: "AgentAppleProvider", dependencies: ["AgentModels"]),
         .testTarget(name: "ArchitectureTests"),
         .testTarget(name: "AgentModelsTests", dependencies: ["AgentModels"]),
         .testTarget(name: "AgentToolsTests", dependencies: ["AgentTools", "AgentModels"]),
         .testTarget(name: "AgentCoreTests", dependencies: ["AgentCore", "AgentTools", "AgentModels"]),
+        .testTarget(name: "AgentAppleProviderTests", dependencies: ["AgentAppleProvider", "AgentModels", "AgentTools", "AgentCore"]),
     ],
     swiftLanguageModes: [.v6]
 )

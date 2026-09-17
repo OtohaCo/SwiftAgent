@@ -6,10 +6,12 @@ enum DependencyGuard {
         "AgentTools": ["AgentModels"],
         "AgentCore": ["AgentModels", "AgentTools"],
         "AgentProviders": ["AgentModels"],
+        "AgentAppleProvider": ["AgentModels"],
     ]
 
     static func violations(_ source: String, module: String) -> [String] {
-        let allowed = (dependencies[module] ?? []).union(["Foundation", "Swift"])
+        var allowed = (dependencies[module] ?? []).union(["Foundation", "Swift"])
+        if module == "AgentAppleProvider" { allowed.insert("FoundationModels") }
         let pattern = #"\bimport\s+(?:(?:typealias|struct|class|enum|protocol|let|var|func)\s+)?([A-Za-z_][A-Za-z_0-9]*)"#
         let regex = try! NSRegularExpression(pattern: pattern)
         let ns = source as NSString
