@@ -4,8 +4,15 @@ import XCTest
 final class DependencyGuardTests: XCTestCase {
     func testNetworkSDKIsLimitedToHTTPProviders() {
         XCTAssertEqual(DependencyGuard.violations("import FoundationNetworking", module: "AgentProviders"), [])
-        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentAppleProvider"] {
+        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentAppleProvider", "WorkspaceAgent"] {
             XCTAssertFalse(DependencyGuard.violations("import FoundationNetworking", module: module).isEmpty)
+        }
+    }
+
+    func testCryptoKitIsLimitedToWorkspaceHost() {
+        XCTAssertEqual(DependencyGuard.violations("import CryptoKit", module: "WorkspaceAgent"), [])
+        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider"] {
+            XCTAssertFalse(DependencyGuard.violations("import CryptoKit", module: module).isEmpty)
         }
     }
 
@@ -84,7 +91,7 @@ final class DependencyGuardTests: XCTestCase {
     func testRejectsDomainAndActorLeaks() {
         for source in [
             "struct OtohaRequest {}", "let item: MusicTrack", "typealias T = PlaybackState",
-            "struct AIDiscoveryResult {}", "@MainActor final class Loop {}",
+            "struct PlaylistItem {}", "struct AIDiscoveryResult {}", "@MainActor final class Loop {}",
             "let executor: MainActor.Type", "// music example", "let track = 1",
         ] {
             XCTAssertFalse(DependencyGuard.violations(source, module: "AgentCore").isEmpty, source)

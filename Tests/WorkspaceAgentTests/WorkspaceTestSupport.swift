@@ -1,0 +1,97 @@
+import AgentCore
+import AgentModels
+import AgentProviders
+import AgentTools
+import Foundation
+import WorkspaceAgent
+
+let workspaceModel = ModelID(provider: "fixture", name: "workspace")
+
+struct ScriptedProvider: ModelProvider {
+    var descriptor = ModelProviderDescriptor(
+        id: "fixture",
+        capabilities: [.streaming, .multiTurn, .tools, .structuredOutput]
+    )
+    let log = RequestLog()
+    let respond: @Sendable (ModelRequest, Int) async throws -> [ModelEvent]
+
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            let turn = await log.record()
+            for event in try await respond(request, turn) { try emit(event) }
+        }
+    }
+}
+
+actor RequestLog {
+    private var count = 0
+    func record() -> Int {
+        count += 1
+        return count
+    }
+}
+
+func textResponse(_ request: ModelRequest, _ text: String) -> [ModelEvent] {
+    let info = ResponseInfo(id: "response", model: request.model)
+    return [
+        .responseStarted(info),
+        .textDelta(text),
+        .responseCompleted(.init(info: info, content: [.text(text)], stopReason: .endTurn)),
+    ]
+}
+
+func toolResponse(_ request: ModelRequest, _ calls: [ToolCall]) -> [ModelEvent] {
+    let info = ResponseInfo(id: "response", model: request.model)
+    var events: [ModelEvent] = [.responseStarted(info)]
+    for call in calls {
+        events.append(.toolCallStarted(call.id, name: call.name))
+        events.append(.toolCallArgumentsDelta(call.id, call.argumentsJSON))
+        events.append(.toolCallCompleted(call))
+    }
+    events.append(.responseCompleted(.init(info: info, toolCalls: calls, stopReason: .toolCalls)))
+    return events
+}
+
+func encodeJSON(_ object: [String: Any]) -> String {
+    String(data: try! JSONSerialization.data(withJSONObject: object), encoding: .utf8)!
+}
+
+func toolCall(_ name: String, id: String, _ arguments: [String: Any]) -> ToolCall {
+    .init(id: .init(rawValue: id), name: name, argumentsJSON: encodeJSON(arguments), completeness: .complete)
+}
+
+func makeSandbox(_ files: [String: String] = [:]) throws -> URL {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("WorkspaceAgent-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    for (path, content) in files {
+        let url = path.split(separator: "/").reduce(root) { $0.appendingPathComponent(String($1)) }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(content.utf8).write(to: url)
+    }
+    return root
+}
+
+func makeJournal() throws -> (AgentJournal, URL) {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("WorkspaceJournal-\(UUID().uuidString).log")
+    return (try AgentJournal(persistenceURL: url), url)
+}
+
+actor ManualGate {
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            if released { continuation.resume() } else { waiters.append(continuation) }
+        }
+    }
+
+    func open() {
+        released = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
+    }
+}
+
+enum SimulatedCrash: Error { case beforeMutation, afterMutation }

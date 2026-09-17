@@ -27,9 +27,12 @@ the task acceptance records.
 | AgentCore | AgentModels, AgentTools | The single agent loop, sessions and runs |
 | AgentProviders | AgentModels | Native request and event conversion |
 | AgentAppleProvider | AgentModels | Apple on-device structured planning; platform SDK isolation |
+| WorkspaceAgent | AgentModels, AgentTools, AgentCore, AgentProviders | Non-player Reference Host for a sandbox file agent |
 
 Providers receive model data, never a host tool executor. Execution belongs to
-AgentCore and AgentTools. Domain policies remain in host adapters.
+AgentCore and AgentTools. Domain policies remain in host adapters. WorkspaceAgent
+is a second consumer of the public API; it must not feed file or path types back
+into AgentCore.
 
 `swift test` runs [DependencyGuardTests](Tests/ArchitectureTests/DependencyGuardTests.swift).
 The guard checks the resolved package graph and scans Swift sources, including
@@ -85,6 +88,10 @@ operation/target/revision binding and the remaining mutation admission requireme
 durable checkpoints, crash-tail recovery and fail-closed persistence behavior.
 It also defines durable mutation admission and explicit reconciliation without
 automatic executor replay.
+
+The [Workspace File Agent](../docs/guides/swift-agent-workspace-host.md) is a second
+Reference Host. It uses the same public Agent/Session/Run API with Anthropic or any
+other conforming provider, and keeps sandbox file identity out of AgentCore.
 
 [Apple Foundation Models](../docs/guides/swift-agent-apple-provider.md) documents
 the on-device planning adapter, execution boundary and opt-in live verification.
