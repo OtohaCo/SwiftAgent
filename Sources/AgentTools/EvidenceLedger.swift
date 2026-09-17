@@ -32,9 +32,15 @@ public actor EvidenceLedger: Equatable {
     }
 
     public func validate(_ requirements: [EvidenceRequirement], sessionID: UUID, runID: UUID, deadline: ContinuousClock.Instant? = nil) throws {
+        _ = try resolve(requirements, sessionID: sessionID, runID: runID, deadline: deadline)
+    }
+
+    /// Returns a validated snapshot in requirement order, or throws without returning a partial batch.
+    public func resolve(_ requirements: [EvidenceRequirement], sessionID: UUID, runID: UUID, deadline: ContinuousClock.Instant? = nil) throws -> [Evidence] {
         try checkActive(deadline)
         try Self.checkRequirements(requirements)
         let instant = try currentTime()
+        var resolved: [Evidence] = []
         for requirement in requirements {
             guard let entry = entries[Key(sessionID: sessionID, reference: requirement.reference)],
                   requirement.scope == .sameSession || entry.runID == runID,
@@ -46,8 +52,10 @@ public actor EvidenceLedger: Equatable {
                   }) else {
                 throw EvidenceError.unavailable(requirement.reference)
             }
+            resolved.append(entry.evidence)
         }
         try checkActive(deadline)
+        return resolved
     }
 
     package nonisolated static func checkRequirements(_ requirements: [EvidenceRequirement]) throws {

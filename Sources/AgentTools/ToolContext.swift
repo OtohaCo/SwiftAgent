@@ -34,9 +34,15 @@ public struct ToolContext: Sendable, Equatable {
 
     /// Read-only validation bound to this invocation's identity and deadline.
     public func requireEvidence(_ requirements: [EvidenceRequirement]) async throws {
+        _ = try await resolveEvidence(requirements)
+    }
+
+    /// Reads trusted observations using this invocation's scope, metadata constraints and deadline.
+    public func resolveEvidence(_ requirements: [EvidenceRequirement]) async throws -> [Evidence] {
         try checkActive()
         guard let evidenceLedger else { throw ToolInvocationError.evidenceUnavailable }
-        try await evidenceLedger.validate(requirements, sessionID: sessionID, runID: runID, deadline: deadline)
+        let resolved = try await evidenceLedger.resolve(requirements, sessionID: sessionID, runID: runID, deadline: deadline)
         try checkActive()
+        return resolved
     }
 }
