@@ -41,7 +41,16 @@ struct AgentEventTests {
         let info = ResponseInfo(id: "response", model: fixtureModel)
         let sum = ToolResultMessage(callID: calls[0].id, content: [.json(.object(["sum": .number(5)]))], isError: false)
         let search = ToolResultMessage(callID: calls[1].id, content: [.json(.object(["references": .array([.string("resource")])]))], isError: false)
-        #expect(events == [
+        let completions = events.compactMap { if case .toolCompleted(let result) = $0 { result } else { nil } }
+        #expect(Set(completions) == Set([sum, search]))
+        #expect(completions.count == 2)
+        let nextTurn = try #require(events.firstIndex(of: .turnStarted(2)))
+        for call in calls {
+            let started = try #require(events.firstIndex(of: .toolStarted(call)))
+            let completed = try #require(events.firstIndex { if case .toolCompleted(let result) = $0 { result.callID == call.id } else { false } })
+            #expect(started < completed && completed < nextTurn)
+        }
+        #expect(events.filter { if case .toolCompleted = $0 { false } else { true } } == [
             .runStarted(.init(sessionID: sessionID, runID: runID, model: fixtureModel)), .turnStarted(1),
             .model(.responseStarted(info)),
             .model(.toolCallStarted(calls[0].id, name: "add")), .model(.toolCallArgumentsDelta(calls[0].id, calls[0].argumentsJSON)),
@@ -49,7 +58,7 @@ struct AgentEventTests {
             .model(.toolCallStarted(calls[1].id, name: "search")), .model(.toolCallArgumentsDelta(calls[1].id, calls[1].argumentsJSON)),
             .model(.toolCallCompleted(calls[1])),
             .model(.responseCompleted(.init(info: info, toolCalls: calls, stopReason: .toolCalls))),
-            .toolStarted(calls[0]), .toolCompleted(sum), .toolStarted(calls[1]), .toolCompleted(search),
+            .toolStarted(calls[0]), .toolStarted(calls[1]),
             .turnStarted(2), .model(.responseStarted(info)), .model(.textDelta("Done")),
             .model(.responseCompleted(.init(info: info, content: [.text("Done")], stopReason: .endTurn))),
             .runFinished(.result(result)),

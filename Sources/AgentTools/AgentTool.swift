@@ -9,6 +9,7 @@ public protocol AgentTool: Sendable {
     var policy: ToolPolicy { get }
 
     func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement]
+    func resourceRequirements(for input: Input) throws -> [ToolResource]
     func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation?
     func authorize(_ input: Input, context: ToolContext) async throws -> ToolAuthorization
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output>
@@ -18,6 +19,7 @@ public enum ToolAuthorization: Sendable { case allowed, denied }
 
 extension AgentTool {
     public func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement] { [] }
+    public func resourceRequirements(for input: Input) throws -> [ToolResource] { [.global] }
     public func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation? { nil }
     public func authorize(_ input: Input, context: ToolContext) async throws -> ToolAuthorization { .denied }
 }

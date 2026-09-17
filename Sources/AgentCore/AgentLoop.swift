@@ -7,11 +7,13 @@ public struct AgentLoop: Sendable {
     private let model: ModelID
     private let provider: any ModelProvider
     private let tools: ToolRegistry
+    private let scheduler: ToolScheduler
 
-    public init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry) {
+    public init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
         self.model = model
         self.provider = provider
         self.tools = tools
+        self.scheduler = scheduler
     }
 
     public func run(
@@ -143,39 +145,22 @@ public struct AgentLoop: Sendable {
                 return try tools.prepare(call, context: ToolContext(sessionID: sessionID, runID: runID,
                     callID: call.id, deadline: budget.deadline, idempotencyKey: "\(runID.uuidString)/\(call.id.rawValue)", evidenceLedger: evidenceLedger))
             }
-            let prefixCount = history.count
-            history.append(.assistant(content: response.content, toolCalls: response.toolCalls))
-            for (index, call) in prepared.enumerated() {
-                try budget.checkActive()
-                try await emitter?.send(.toolStarted(call.call))
-                try budget.checkActive()
-                let now = ContinuousClock.now
-                let remaining = now.duration(to: budget.deadline)
-                let timeout = min(call.policy.timeout, remaining)
-                let toolDeadline = now.advanced(by: timeout)
-                let timeoutError: AgentLoopError = timeout == remaining ? .deadlineExceeded : .toolTimedOut(call.call.id)
-                let result = try await withAgentDeadline(toolDeadline, timeoutError: timeoutError) {
-                    try await call.invoke(deadline: toolDeadline)
-                }
-                try budget.checkActive()
-                toolCalls += 1
-                let message = ToolResultMessage(callID: call.call.id, content: [.json(result.output)], isError: false)
-                history.append(.tool(message))
-                if let lifecycle {
-                    let completed = Array(response.toolCalls.prefix(index + 1))
-                    let content = checkpointContent(response, retainingToolCalls: completed.count)
-                    let checkpoint = Array(history.prefix(prefixCount))
-                        + [.assistant(content: content, toolCalls: completed)]
-                        + Array(history.suffix(index + 1))
-                    try await lifecycle.checkpoint(checkpoint, [])
-                }
-                if let receipt = result.receipt {
-                    let validated = AgentToolReceipt(callID: call.call.id, effect: call.policy.effect, receipt: receipt)
-                    receipts.append(validated)
-                    try await emitter?.send(.toolReceiptValidated(validated))
-                }
-                try await emitter?.send(.toolCompleted(message))
-            }
+            let progress = AgentToolBatchProgress(prefix: history, response: response, budget: budget,
+                                                  lifecycle: lifecycle, emitter: emitter)
+            do {
+                try await scheduler.execute(prepared, deadline: budget.deadline, onStarted: { call in
+                    try budget.checkActive()
+                    try await emitter?.send(.toolStarted(call.call))
+                }, onCompleted: { index, call, result in
+                    try await progress.record(index: index, call: call, result: result)
+                }, onFailed: { call, error in
+                    try await emitter?.failIfActive(call.call.id, failure: AgentFailure(Self.toolError(error)))
+                })
+            } catch { throw Self.toolError(error) }
+            let completed = await progress.completed()
+            history = completed.history
+            receipts.append(contentsOf: completed.receipts)
+            toolCalls += completed.count
         }
     }
 
@@ -191,6 +176,14 @@ public struct AgentLoop: Sendable {
     private func requireConfiguredModel(_ responseModel: ModelID) throws {
         guard responseModel.provider.utf8.elementsEqual(model.provider.utf8),
               responseModel.name.utf8.elementsEqual(model.name.utf8) else { throw AgentLoopError.modelMismatch }
+    }
+
+    private static func toolError(_ error: any Error) -> any Error {
+        guard let error = error as? ToolSchedulerError else { return error }
+        switch error {
+        case .deadlineExceeded: return AgentLoopError.deadlineExceeded
+        case .toolTimedOut(let id): return AgentLoopError.toolTimedOut(id)
+        }
     }
 
     private func checkpointContent(_ response: ModelResponse, retainingToolCalls count: Int) -> [ModelContent] {

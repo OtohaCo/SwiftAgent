@@ -88,14 +88,14 @@ struct AgentLoopContractTests {
         }
     }
 
-    @Test func executorErrorStopsBatchWithoutAnotherProviderTurn() async throws {
+    @Test func executorErrorStopsSequentialBatchWithoutAnotherProviderTurn() async throws {
         let log = EffectLog()
         let overflow = ToolCall(id: .init(rawValue: "overflow"), name: "add",
                                 argumentsJSON: "{\"lhs\":\(Int.max),\"rhs\":1}", completeness: .complete)
         let provider = ScriptedProvider { request, turn in
             turn == 1 ? toolResponse(request, [overflow, addition("after")]) : textResponse(request, "Unexpected")
         }
-        let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: [AnyAgentTool(AddTool(log: log))]))
+        let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: [AnyAgentTool(AddTool(log: log, execution: .sequential))]))
         await #expect(throws: FixtureError.self) { try await loop.run(messages: [], sessionID: UUID(), budget: testBudget()) }
         #expect(await log.names == ["add"])
         #expect(await provider.log.requests.count == 1)

@@ -51,8 +51,8 @@ public struct ToolRegistry: Sendable {
         catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidArguments(error) }
         let invocation = try registration.tool.prepare(arguments: arguments)
         try context.checkActive()
-        return PreparedToolCall(call: call, policy: registration.tool.policy, context: context) { executionContext in
-            let result = try await invocation(executionContext)
+        return PreparedToolCall(call: call, policy: registration.tool.policy, resources: invocation.resources, context: context) { executionContext in
+            let result = try await invocation.invoke(executionContext)
             do { try registration.output.validate(result.output) }
             catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidOutput(error) }
             try executionContext.checkActive()
@@ -70,12 +70,14 @@ public struct ToolRegistry: Sendable {
 public struct PreparedToolCall: Sendable {
     public let call: ToolCall
     public let policy: ToolPolicy
+    public let resources: [ToolResource]
     private let context: ToolContext
     private let operation: AnyAgentTool.Invocation
 
-    fileprivate init(call: ToolCall, policy: ToolPolicy, context: ToolContext, operation: @escaping AnyAgentTool.Invocation) {
+    fileprivate init(call: ToolCall, policy: ToolPolicy, resources: [ToolResource], context: ToolContext, operation: @escaping AnyAgentTool.Invocation) {
         self.call = call
         self.policy = policy
+        self.resources = resources
         self.context = context
         self.operation = operation
     }

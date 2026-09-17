@@ -40,7 +40,8 @@ struct AgentLoopTests {
         #expect(result.history == requests[1].messages + [.assistant(content: [.text("Found building; total 5")], toolCalls: [])])
         #expect(result.modelTurns == 2)
         #expect(result.toolCalls == 2)
-        #expect(await log.names == ["add", "search"])
+        #expect(await Set(log.names) == Set(["add", "search"]))
+        #expect(await log.names.count == 2)
         #expect(await log.contexts.allSatisfy { $0.sessionID == sessionID && $0.runID == runID })
     }
 }

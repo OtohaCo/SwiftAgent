@@ -12,11 +12,12 @@ public struct Agent: Sendable {
     public init(
         model: ModelID, provider: any ModelProvider, tools: [any AgentTool] = [], instructions: String = "",
         structuredOutput: StructuredOutputSchema? = nil,
-        maxModelTurns: Int = 8, maxToolCalls: Int = 16, runTimeout: Duration = .seconds(30)
+        maxModelTurns: Int = 8, maxToolCalls: Int = 16, runTimeout: Duration = .seconds(30),
+        scheduler: ToolScheduler = .init()
     ) throws {
         guard runTimeout > .zero else { throw AgentLoopError.invalidBudget }
         _ = try AgentBudget(maxModelTurns: maxModelTurns, maxToolCalls: maxToolCalls, deadline: .now)
-        loop = AgentLoop(model: model, provider: provider, tools: try ToolRegistry(tools: tools.map { try AnyAgentTool($0) }))
+        loop = AgentLoop(model: model, provider: provider, tools: try ToolRegistry(tools: tools.map { try AnyAgentTool($0) }), scheduler: scheduler)
         self.instructions = instructions
         self.structuredOutput = structuredOutput
         self.maxModelTurns = maxModelTurns

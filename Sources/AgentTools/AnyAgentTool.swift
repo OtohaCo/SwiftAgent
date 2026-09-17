@@ -7,7 +7,11 @@ public struct AnyAgentTool: Sendable {
     public let definition: ModelToolDefinition
     public let policy: ToolPolicy
     package typealias Invocation = @Sendable (ToolContext) async throws -> ToolResult<JSONValue>
-    private let decode: @Sendable (JSONValue) throws -> Invocation
+    package struct PreparedInvocation: Sendable {
+        let resources: [ToolResource]
+        let invoke: Invocation
+    }
+    private let decode: @Sendable (JSONValue) throws -> PreparedInvocation
 
     public init<T: AgentTool>(_ tool: T) throws {
         guard !T.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -27,13 +31,15 @@ public struct AnyAgentTool: Sendable {
                 throw ToolInvocationError.invalidArguments
             }
             let requirements = policy.evidence == .required ? try tool.evidenceRequirements(for: input) : []
+            let resources = try tool.resourceRequirements(for: input)
+            try ToolResource.validate(resources)
             if policy.evidence == .required { try EvidenceLedger.checkRequirements(requirements) }
             let receiptExpectation = try tool.receiptExpectation(for: input)
             let requiresReceipt = policy.effect == .mutation || policy.idempotency == .requiresReceipt || receiptExpectation != nil
             if policy.effect == .readOnly && requiresReceipt && receiptExpectation == nil {
                 throw ToolInvocationError.receiptValidationUnavailable
             }
-            return { context in
+            return PreparedInvocation(resources: resources) { context in
                 try context.checkActive()
                 guard policy.effect == .readOnly else { throw ToolInvocationError.mutationIntegrityUnavailable }
                 if policy.idempotency == .keyed || requiresReceipt {
@@ -75,13 +81,13 @@ public struct AnyAgentTool: Sendable {
         try await context.requireEvidence(requirements)
     }
 
-    package func prepare(arguments: JSONValue) throws -> Invocation {
+    package func prepare(arguments: JSONValue) throws -> PreparedInvocation {
         try decode(arguments)
     }
 
     package func invoke(arguments: JSONValue, context: ToolContext) async throws -> ToolResult<JSONValue> {
         try context.checkActive()
-        return try await prepare(arguments: arguments)(context)
+        return try await prepare(arguments: arguments).invoke(context)
     }
 }
 

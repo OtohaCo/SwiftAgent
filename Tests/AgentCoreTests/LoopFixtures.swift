@@ -65,9 +65,9 @@ struct AddTool: AgentTool {
     static let outputSchema = ToolSchema.object(properties: ["sum": .integer], required: ["sum"])
     let log: EffectLog
     let policy: ToolPolicy
-    init(log: EffectLog) throws {
+    init(log: EffectLog, execution: ToolPolicy.Execution = .parallel) throws {
         self.log = log
-        policy = try ToolPolicy(effect: .readOnly, execution: .parallel, idempotency: .safe,
+        policy = try ToolPolicy(effect: .readOnly, execution: execution, idempotency: .safe,
                                 timeout: .seconds(2), authorization: .notRequired)
     }
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
