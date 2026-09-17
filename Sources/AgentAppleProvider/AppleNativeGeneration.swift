@@ -96,10 +96,11 @@ private enum AppleNativeGeneration {
             case .assistant(let content, let calls): parts = content; toolCalls = calls.map(PromptCall.init)
             case .tool(let result): parts = result.content; callID = result.callID.rawValue; isError = result.isError
             }
-            content = try parts.map { part in
+            content = try parts.compactMap { part -> String? in
                 switch part {
                 case .text(let text), .reasoning(let text): return text
                 case .json(let value): return String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+                case .providerContinuation: return nil
                 }
             }.joined(separator: "\n")
         }

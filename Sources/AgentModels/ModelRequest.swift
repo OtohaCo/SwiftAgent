@@ -7,6 +7,15 @@ public struct ModelID: Hashable, Sendable, Codable {
         self.provider = provider
         self.name = name
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.provider.utf8.elementsEqual(rhs.provider.utf8) && lhs.name.utf8.elementsEqual(rhs.name.utf8)
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(Array(provider.utf8))
+        hasher.combine(Array(name.utf8))
+    }
 }
 
 /// A declaration visible to the model. Execution policy belongs to the tool runtime.

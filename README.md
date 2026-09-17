@@ -80,3 +80,6 @@ operation/target/revision binding and the remaining mutation admission requireme
 
 [Apple Foundation Models](../docs/guides/swift-agent-apple-provider.md) documents
 the on-device planning adapter, execution boundary and opt-in live verification.
+
+[Anthropic Messages](../docs/guides/swift-agent-anthropic-provider.md) covers cloud
+streaming, signed continuation, structured answers and opt-in gateway verification.

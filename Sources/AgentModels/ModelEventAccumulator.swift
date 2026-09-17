@@ -83,6 +83,12 @@ public struct ModelEventAccumulator: Sendable {
                 return current >= 0 && (previous.map { current >= $0 } ?? true)
             }) else { throw ModelStreamError.invalidUsage }
             usage = merged
+        case .providerContinuation(let value):
+            guard value.model.provider.utf8.elementsEqual(info.model.provider.utf8),
+                  value.model.name.utf8.elementsEqual(info.model.name.utf8),
+                  !value.format.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !value.payload.isEmpty else { throw ModelStreamError.invalidContinuation }
+            content.append(.providerContinuation(value))
         case .responseCompleted(let response):
             guard response.info == info, response.content == content, response.usage == usage,
                   response.toolCalls == callOrder.compactMap({ calls[$0] }) else {
@@ -127,6 +133,7 @@ public enum ModelStreamError: Error, Equatable, Sendable {
     case eventAfterTerminal
     case responseMismatch
     case invalidUsage
+    case invalidContinuation
     case unknownToolCall(ToolCallID)
     case duplicateToolCall(ToolCallID)
     case toolAlreadyCompleted(ToolCallID)

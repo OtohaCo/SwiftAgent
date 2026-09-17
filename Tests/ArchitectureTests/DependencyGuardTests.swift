@@ -2,6 +2,13 @@ import Foundation
 import XCTest
 
 final class DependencyGuardTests: XCTestCase {
+    func testNetworkSDKIsLimitedToHTTPProviders() {
+        XCTAssertEqual(DependencyGuard.violations("import FoundationNetworking", module: "AgentProviders"), [])
+        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentAppleProvider"] {
+            XCTAssertFalse(DependencyGuard.violations("import FoundationNetworking", module: module).isEmpty)
+        }
+    }
+
     func testPlatformSDKIsAllowedOnlyInItsDedicatedAdapter() {
         XCTAssertEqual(DependencyGuard.violations("import FoundationModels\nimport AgentModels", module: "AgentAppleProvider"), [])
         for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders"] {

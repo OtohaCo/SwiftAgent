@@ -130,7 +130,8 @@ public struct AgentLoop: Sendable {
                 default: outcome = .incomplete(response.stopReason)
                 }
                 // Unexecuted proposals stay in the terminal response, not model-ready history.
-                if !response.content.isEmpty { history.append(.assistant(content: response.content, toolCalls: [])) }
+                let content = checkpointContent(response, retainingToolCalls: 0)
+                if !content.isEmpty { history.append(.assistant(content: content, toolCalls: [])) }
                 try await lifecycle?.checkpoint(history, [])
                 return AgentLoopResult(response: response, history: history, outcome: outcome,
                                        modelTurns: modelTurns, toolCalls: toolCalls, receipts: receipts)
@@ -162,8 +163,9 @@ public struct AgentLoop: Sendable {
                 history.append(.tool(message))
                 if let lifecycle {
                     let completed = Array(response.toolCalls.prefix(index + 1))
+                    let content = checkpointContent(response, retainingToolCalls: completed.count)
                     let checkpoint = Array(history.prefix(prefixCount))
-                        + [.assistant(content: response.content, toolCalls: completed)]
+                        + [.assistant(content: content, toolCalls: completed)]
                         + Array(history.suffix(index + 1))
                     try await lifecycle.checkpoint(checkpoint, [])
                 }
@@ -189,6 +191,15 @@ public struct AgentLoop: Sendable {
     private func requireConfiguredModel(_ responseModel: ModelID) throws {
         guard responseModel.provider.utf8.elementsEqual(model.provider.utf8),
               responseModel.name.utf8.elementsEqual(model.name.utf8) else { throw AgentLoopError.modelMismatch }
+    }
+
+    private func checkpointContent(_ response: ModelResponse, retainingToolCalls count: Int) -> [ModelContent] {
+        // Opaque state describes the whole response, so discarding proposals invalidates it.
+        guard count != response.toolCalls.count else { return response.content }
+        return response.content.filter {
+            if case .providerContinuation = $0 { return false }
+            return true
+        }
     }
 }
 

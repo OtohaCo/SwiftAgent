@@ -6,6 +6,7 @@ public enum ModelContent: Hashable, Sendable, Codable {
     case text(String)
     case reasoning(String)
     case json(JSONValue)
+    case providerContinuation(ModelProviderContinuation)
 }
 
 /// Canonical message data. Tool results have their own role and call identity.
