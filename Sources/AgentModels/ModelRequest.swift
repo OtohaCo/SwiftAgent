@@ -1,0 +1,60 @@
+public struct ModelID: Hashable, Sendable, Codable {
+    /// An open namespace, not an enumeration of supported vendors.
+    public let provider: String
+    public let name: String
+
+    public init(provider: String, name: String) {
+        self.provider = provider
+        self.name = name
+    }
+}
+
+/// A declaration visible to the model. Execution policy belongs to the tool runtime.
+public struct ModelToolDefinition: Hashable, Sendable, Codable {
+    public let name: String
+    public let description: String
+    public let inputSchema: JSONValue
+    public let outputSchema: JSONValue?
+
+    public init(name: String, description: String, inputSchema: JSONValue, outputSchema: JSONValue? = nil) {
+        self.name = name
+        self.description = description
+        self.inputSchema = inputSchema
+        self.outputSchema = outputSchema
+    }
+}
+
+/// A requested JSON Schema contract; providers must report unsupported constraints.
+public struct StructuredOutputSchema: Hashable, Sendable, Codable {
+    public let name: String
+    public let description: String?
+    public let schema: JSONValue
+    public let strict: Bool
+
+    public init(name: String, description: String? = nil, schema: JSONValue, strict: Bool = true) {
+        self.name = name
+        self.description = description
+        self.schema = schema
+        self.strict = strict
+    }
+}
+
+/// One model turn. Run budgets, tool executors and retries belong to the caller.
+public struct ModelRequest: Hashable, Sendable, Codable {
+    public let model: ModelID
+    public let messages: [ModelMessage]
+    public let tools: [ModelToolDefinition]
+    public let structuredOutput: StructuredOutputSchema?
+
+    public init(
+        model: ModelID,
+        messages: [ModelMessage],
+        tools: [ModelToolDefinition] = [],
+        structuredOutput: StructuredOutputSchema? = nil
+    ) {
+        self.model = model
+        self.messages = messages
+        self.tools = tools
+        self.structuredOutput = structuredOutput
+    }
+}

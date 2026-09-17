@@ -15,6 +15,7 @@ let package = Package(
         .target(name: "AgentCore", dependencies: ["AgentModels", "AgentTools"]),
         .target(name: "AgentProviders", dependencies: ["AgentModels"]),
         .testTarget(name: "ArchitectureTests"),
+        .testTarget(name: "AgentModelsTests", dependencies: ["AgentModels"]),
     ],
     swiftLanguageModes: [.v6]
 )

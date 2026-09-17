@@ -35,3 +35,21 @@ MainActor are rejected in the portable modules, including comments and fixtures.
 Import rules are a conservative source guard, not a Swift parser or a proof of loop
 ownership; architectural review remains required. New platform adapter imports
 must be added explicitly with matching guard tests.
+
+## Model Data
+
+Start with [ModelRequest](Sources/AgentModels/ModelRequest.swift) and
+[ModelMessage](Sources/AgentModels/ModelMessage.swift). Messages retain ordered
+content parts, assistant tool calls and result-to-call identities. Requests carry
+tool declarations and structured output schemas; run budgets and execution
+callbacks belong to orchestration.
+
+All model values are Sendable and Codable. Their Codable representation is package
+data, not a provider wire format or a frozen journal format. Provider adapters own
+wire conversion. `JSONValue` emits native JSON and uses Foundation Decimal's
+precision and range; raw tool arguments preserve their original text.
+
+Tool call completeness records transport state only. A complete call still needs
+registry validation and authorization. `ToolResultMessage` is model-facing content,
+not an execution receipt. Usage fields distinguish unreported counts from zero;
+see [ModelMetadata](Sources/AgentModels/ModelMetadata.swift) for accounting semantics.
