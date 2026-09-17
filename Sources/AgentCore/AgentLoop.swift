@@ -39,20 +39,23 @@ public struct AgentLoop: Sendable {
         }
     }
 
-    private func execute(
+    func execute(
         messages: [ModelMessage], sessionID: UUID, runID: UUID, budget: AgentBudget,
-        structuredOutput: StructuredOutputSchema?, emitter: AgentEventEmitter?, cancelledAtCreation: Bool = false
+        structuredOutput: StructuredOutputSchema?, emitter: AgentEventEmitter?, cancelledAtCreation: Bool = false,
+        lifecycle: AgentLoopLifecycle? = nil
     ) async throws -> AgentLoopResult {
         await emitter?.start(.init(sessionID: sessionID, runID: runID, model: model))
         do {
             if cancelledAtCreation { throw CancellationError() }
             let result = try await withAgentDeadline(budget.deadline) {
                 try await runBody(messages: messages, sessionID: sessionID, runID: runID,
-                                  budget: budget, structuredOutput: structuredOutput, emitter: emitter)
+                                  budget: budget, structuredOutput: structuredOutput, emitter: emitter, lifecycle: lifecycle)
             }
+            await lifecycle?.beforeFinish()
             await emitter?.finish(.result(result))
             return result
         } catch {
+            await lifecycle?.beforeFinish()
             await emitter?.finish(error is CancellationError ? .cancelled : .failed(AgentFailure(error)))
             throw error
         }
@@ -60,7 +63,7 @@ public struct AgentLoop: Sendable {
 
     private func runBody(
         messages: [ModelMessage], sessionID: UUID, runID: UUID, budget: AgentBudget,
-        structuredOutput: StructuredOutputSchema?, emitter: AgentEventEmitter?
+        structuredOutput: StructuredOutputSchema?, emitter: AgentEventEmitter?, lifecycle: AgentLoopLifecycle?
     ) async throws -> AgentLoopResult {
         try budget.checkActive()
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else { throw AgentLoopError.providerMismatch }
@@ -84,6 +87,13 @@ public struct AgentLoop: Sendable {
         while true {
             try budget.checkActive()
             guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
+            if let lifecycle {
+                let inputs = try await lifecycle.control.takeSteering(atTermination: false)
+                try await applySteering(inputs, to: &history, lifecycle: lifecycle, emitter: emitter)
+            }
+            if modelTurns > 0 && !provider.descriptor.capabilities.contains(.multiTurn) {
+                throw AgentLoopError.unsupportedCapabilities(.multiTurn)
+            }
             modelTurns += 1
             try await emitter?.send(.turnStarted(modelTurns))
             try budget.checkActive()
@@ -100,6 +110,15 @@ public struct AgentLoop: Sendable {
             let response = try accumulator.finish()
             try requireConfiguredModel(response.info.model)
             try await emitter?.send(.model(.responseCompleted(response)))
+            if response.stopReason == .cancelled { throw CancellationError() }
+            if let lifecycle {
+                let inputs = try await lifecycle.control.takeSteering(atTermination: response.stopReason != .toolCalls)
+                if !inputs.isEmpty {
+                    guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
+                    try await applySteering(inputs, to: &history, lifecycle: lifecycle, emitter: emitter)
+                    continue
+                }
+            }
             if response.stopReason != .toolCalls {
                 let outcome: AgentLoopOutcome
                 switch response.stopReason {
@@ -110,6 +129,7 @@ public struct AgentLoop: Sendable {
                 }
                 // Unexecuted proposals stay in the terminal response, not model-ready history.
                 if !response.content.isEmpty { history.append(.assistant(content: response.content, toolCalls: [])) }
+                try await lifecycle?.checkpoint(history, [])
                 return AgentLoopResult(response: response, history: history, outcome: outcome,
                                        modelTurns: modelTurns, toolCalls: toolCalls)
             }
@@ -120,8 +140,9 @@ public struct AgentLoop: Sendable {
                 return try tools.prepare(call, context: ToolContext(sessionID: sessionID, runID: runID,
                     callID: call.id, deadline: budget.deadline, idempotencyKey: "\(runID.uuidString)/\(call.id.rawValue)"))
             }
+            let prefixCount = history.count
             history.append(.assistant(content: response.content, toolCalls: response.toolCalls))
-            for call in prepared {
+            for (index, call) in prepared.enumerated() {
                 try budget.checkActive()
                 try await emitter?.send(.toolStarted(call.call))
                 try budget.checkActive()
@@ -137,9 +158,25 @@ public struct AgentLoop: Sendable {
                 toolCalls += 1
                 let message = ToolResultMessage(callID: call.call.id, content: [.json(result.output)], isError: false)
                 history.append(.tool(message))
+                if let lifecycle {
+                    let completed = Array(response.toolCalls.prefix(index + 1))
+                    let checkpoint = Array(history.prefix(prefixCount))
+                        + [.assistant(content: response.content, toolCalls: completed)]
+                        + Array(history.suffix(index + 1))
+                    try await lifecycle.checkpoint(checkpoint, [])
+                }
                 try await emitter?.send(.toolCompleted(message))
             }
         }
+    }
+
+    private func applySteering(_ inputs: [AgentSteeringInput], to history: inout [ModelMessage],
+                               lifecycle: AgentLoopLifecycle, emitter: AgentEventEmitter?) async throws {
+        guard !inputs.isEmpty else { return }
+        history.append(contentsOf: inputs.map { .user([.text($0.text)]) })
+        try await lifecycle.checkpoint(history, inputs)
+        await lifecycle.control.acknowledge(inputs)
+        for input in inputs { try await emitter?.send(.steeringApplied(id: input.id, text: input.text)) }
     }
 
     private func requireConfiguredModel(_ responseModel: ModelID) throws {

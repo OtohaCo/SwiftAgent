@@ -67,3 +67,6 @@ The [Agent Loop Contract](../docs/guides/swift-agent-loop.md) covers multi-turn 
 feedback, terminal outcomes, budgets, deadlines and run isolation.
 
 For progress rendering, use the [Agent Event Stream](../docs/guides/swift-agent-events.md).
+
+Use [Agent, Session and Run](../docs/guides/swift-agent-sessions.md) for conversation
+history, independent sessions and explicit cancel/steer/wait control.

@@ -2,11 +2,13 @@ import AgentModels
 
 actor AgentEventEmitter {
     private let continuation: AsyncStream<AgentEvent>.Continuation
+    private let requiresConsumer: Bool
     private var finished = false
     private var activeTool: ToolCallID?
 
-    init(_ continuation: AsyncStream<AgentEvent>.Continuation) {
+    init(_ continuation: AsyncStream<AgentEvent>.Continuation, requiresConsumer: Bool = true) {
         self.continuation = continuation
+        self.requiresConsumer = requiresConsumer
     }
 
     func start(_ info: AgentRunInfo) {
@@ -21,7 +23,7 @@ actor AgentEventEmitter {
         case .toolCompleted, .toolFailed: activeTool = nil
         default: break
         }
-        if case .terminated = continuation.yield(event) { throw CancellationError() }
+        if case .terminated = continuation.yield(event), requiresConsumer { throw CancellationError() }
     }
 
     func finish(_ termination: AgentRunTermination) {

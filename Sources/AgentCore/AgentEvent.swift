@@ -22,6 +22,7 @@ public enum AgentEvent: Equatable, Sendable {
     case toolStarted(ToolCall)
     case toolCompleted(ToolResultMessage)
     case toolFailed(ToolCallID, AgentFailure)
+    case steeringApplied(id: UUID, text: String)
     case runFinished(AgentRunTermination)
 }
 
