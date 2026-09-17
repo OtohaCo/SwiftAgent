@@ -1,4 +1,5 @@
 import AgentModels
+import AgentTools
 import Foundation
 
 public actor AgentSession {
@@ -6,6 +7,7 @@ public actor AgentSession {
     public private(set) var history: [ModelMessage]
     public private(set) var activeRunID: UUID?
     private let loop: AgentLoop
+    private let evidenceLedger = EvidenceLedger()
     private let structuredOutput: StructuredOutputSchema?
     private let maxModelTurns: Int
     private let maxToolCalls: Int
@@ -43,6 +45,7 @@ public actor AgentSession {
                          emitter: AgentEventEmitter, control: AgentRunControl) async -> Result<AgentLoopResult, Error> {
         let lifecycle = AgentLoopLifecycle(
             control: control,
+            evidenceLedger: evidenceLedger,
             checkpoint: { messages, steering in try await self.record(messages, steering: steering, runID: runID, budget: budget) },
             beforeFinish: {
                 let pending = await control.beginFinish()

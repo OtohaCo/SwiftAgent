@@ -26,6 +26,8 @@ public struct AnyAgentTool: Sendable {
             } catch {
                 throw ToolInvocationError.invalidArguments
             }
+            let requirements = policy.evidence == .required ? try tool.evidenceRequirements(for: input) : []
+            if policy.evidence == .required { try EvidenceLedger.checkRequirements(requirements) }
             return { context in
                 try context.checkActive()
                 guard policy.effect == .readOnly else { throw ToolInvocationError.mutationIntegrityUnavailable }
@@ -36,10 +38,12 @@ public struct AnyAgentTool: Sendable {
                         throw ToolInvocationError.missingIdempotencyKey
                     }
                 }
+                try await Self.validateEvidence(requirements, context: context)
                 if policy.authorization == .required {
                     let authorization = try await tool.authorize(input, context: context)
                     try context.checkActive()
                     guard authorization == .allowed else { throw ToolInvocationError.authorizationDenied }
+                    try await Self.validateEvidence(requirements, context: context)
                 }
                 let result = try await tool.execute(input, context: context)
                 try context.checkActive()
@@ -52,9 +56,14 @@ public struct AnyAgentTool: Sendable {
                     throw ToolInvocationError.invalidOutput
                 }
                 try context.checkActive()
-                return ToolResult(output: output)
+                return ToolResult(output: output, evidence: result.evidence)
             }
         }
+    }
+
+    private static func validateEvidence(_ requirements: [EvidenceRequirement], context: ToolContext) async throws {
+        guard !requirements.isEmpty else { return }
+        try await context.requireEvidence(requirements)
     }
 
     package func prepare(arguments: JSONValue) throws -> Invocation {
@@ -76,4 +85,5 @@ public enum ToolInvocationError: Error, Equatable, Sendable {
     case authorizationDenied
     case mutationIntegrityUnavailable
     case receiptValidationUnavailable
+    case evidenceUnavailable
 }

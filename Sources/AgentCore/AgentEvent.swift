@@ -39,6 +39,7 @@ public enum AgentFailure: Error, Equatable, Sendable {
     case modelStream(ModelStreamError)
     case toolRegistry(ToolRegistryError)
     case toolInvocation(ToolInvocationError)
+    case evidence(EvidenceError)
     case cancelled
     case unclassified
 
@@ -50,6 +51,7 @@ public enum AgentFailure: Error, Equatable, Sendable {
         case let error as ModelStreamError: self = .modelStream(error)
         case let error as ToolRegistryError: self = .toolRegistry(error)
         case let error as ToolInvocationError: self = .toolInvocation(error)
+        case let error as EvidenceError: self = .evidence(error)
         default: self = .unclassified
         }
     }

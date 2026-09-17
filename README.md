@@ -70,3 +70,6 @@ For progress rendering, use the [Agent Event Stream](../docs/guides/swift-agent-
 
 Use [Agent, Session and Run](../docs/guides/swift-agent-sessions.md) for conversation
 history, independent sessions and explicit cancel/steer/wait control.
+
+[Evidence](../docs/guides/swift-agent-evidence.md) defines trusted resource
+observations, run/session scope, expiry and tool requirement binding.

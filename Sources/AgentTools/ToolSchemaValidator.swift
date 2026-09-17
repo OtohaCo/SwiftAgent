@@ -124,11 +124,11 @@ public struct ToolSchemaValidator: Sendable {
         if let maximum = rules["max" + suffix]?.numberValue, Decimal(count) > maximum { throw violation(path, "max" + suffix) }
     }
 
-    private static func exactValue(_ object: [String: JSONValue], _ key: String) -> JSONValue? {
+    static func exactValue(_ object: [String: JSONValue], _ key: String) -> JSONValue? {
         object.first(where: { $0.key.utf8.elementsEqual(key.utf8) })?.value
     }
 
-    private static func jsonEqual(_ lhs: JSONValue, _ rhs: JSONValue) -> Bool {
+    static func jsonEqual(_ lhs: JSONValue, _ rhs: JSONValue) -> Bool {
         switch (lhs, rhs) {
         case (.null, .null): return true
         case (.bool(let a), .bool(let b)): return a == b

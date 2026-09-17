@@ -7,19 +7,22 @@ public struct ToolContext: Sendable, Equatable {
     public let callID: ToolCallID
     public let deadline: ContinuousClock.Instant?
     public let idempotencyKey: String?
+    package let evidenceLedger: EvidenceLedger?
 
     public init(
         sessionID: UUID,
         runID: UUID,
         callID: ToolCallID,
         deadline: ContinuousClock.Instant? = nil,
-        idempotencyKey: String? = nil
+        idempotencyKey: String? = nil,
+        evidenceLedger: EvidenceLedger? = nil
     ) {
         self.sessionID = sessionID
         self.runID = runID
         self.callID = callID
         self.deadline = deadline
         self.idempotencyKey = idempotencyKey
+        self.evidenceLedger = evidenceLedger
     }
 
     package func checkActive() throws {
@@ -27,5 +30,13 @@ public struct ToolContext: Sendable, Equatable {
         if let deadline, ContinuousClock.now >= deadline {
             throw ToolInvocationError.deadlineExceeded
         }
+    }
+
+    /// Read-only validation bound to this invocation's identity and deadline.
+    public func requireEvidence(_ requirements: [EvidenceRequirement]) async throws {
+        try checkActive()
+        guard let evidenceLedger else { throw ToolInvocationError.evidenceUnavailable }
+        try await evidenceLedger.validate(requirements, sessionID: sessionID, runID: runID, deadline: deadline)
+        try checkActive()
     }
 }

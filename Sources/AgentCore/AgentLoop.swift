@@ -45,11 +45,12 @@ public struct AgentLoop: Sendable {
         lifecycle: AgentLoopLifecycle? = nil
     ) async throws -> AgentLoopResult {
         await emitter?.start(.init(sessionID: sessionID, runID: runID, model: model))
+        let evidenceLedger = lifecycle?.evidenceLedger ?? EvidenceLedger()
         do {
             if cancelledAtCreation { throw CancellationError() }
             let result = try await withAgentDeadline(budget.deadline) {
                 try await runBody(messages: messages, sessionID: sessionID, runID: runID,
-                                  budget: budget, structuredOutput: structuredOutput, emitter: emitter, lifecycle: lifecycle)
+                                  budget: budget, structuredOutput: structuredOutput, emitter: emitter, lifecycle: lifecycle, evidenceLedger: evidenceLedger)
             }
             await lifecycle?.beforeFinish()
             await emitter?.finish(.result(result))
@@ -63,7 +64,7 @@ public struct AgentLoop: Sendable {
 
     private func runBody(
         messages: [ModelMessage], sessionID: UUID, runID: UUID, budget: AgentBudget,
-        structuredOutput: StructuredOutputSchema?, emitter: AgentEventEmitter?, lifecycle: AgentLoopLifecycle?
+        structuredOutput: StructuredOutputSchema?, emitter: AgentEventEmitter?, lifecycle: AgentLoopLifecycle?, evidenceLedger: EvidenceLedger
     ) async throws -> AgentLoopResult {
         try budget.checkActive()
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else { throw AgentLoopError.providerMismatch }
@@ -138,7 +139,7 @@ public struct AgentLoop: Sendable {
             let prepared = try response.toolCalls.map { call in
                 guard usedCallIDs.insert(call.id).inserted else { throw AgentLoopError.reusedToolCallID(call.id) }
                 return try tools.prepare(call, context: ToolContext(sessionID: sessionID, runID: runID,
-                    callID: call.id, deadline: budget.deadline, idempotencyKey: "\(runID.uuidString)/\(call.id.rawValue)"))
+                    callID: call.id, deadline: budget.deadline, idempotencyKey: "\(runID.uuidString)/\(call.id.rawValue)", evidenceLedger: evidenceLedger))
             }
             let prefixCount = history.count
             history.append(.assistant(content: response.content, toolCalls: response.toolCalls))

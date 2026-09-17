@@ -56,6 +56,12 @@ public struct ToolRegistry: Sendable {
             do { try registration.output.validate(result.output) }
             catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidOutput(error) }
             try executionContext.checkActive()
+            if !result.evidence.isEmpty {
+                guard let ledger = executionContext.evidenceLedger else { throw ToolInvocationError.evidenceUnavailable }
+                try await ledger.record(result.evidence, sessionID: executionContext.sessionID, runID: executionContext.runID,
+                                        deadline: executionContext.deadline)
+                try executionContext.checkActive()
+            }
             return result
         }
     }
@@ -79,7 +85,7 @@ public struct PreparedToolCall: Sendable {
         if let current = context.deadline, let deadline { effectiveDeadline = min(current, deadline) }
         else { effectiveDeadline = context.deadline ?? deadline }
         let executionContext = ToolContext(sessionID: context.sessionID, runID: context.runID, callID: context.callID,
-            deadline: effectiveDeadline, idempotencyKey: context.idempotencyKey)
+            deadline: effectiveDeadline, idempotencyKey: context.idempotencyKey, evidenceLedger: context.evidenceLedger)
         return try await operation(executionContext)
     }
 }
