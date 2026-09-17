@@ -65,3 +65,5 @@ for Swift input/output types, schema declarations, authorization and execution p
 
 The [Agent Loop Contract](../docs/guides/swift-agent-loop.md) covers multi-turn tool
 feedback, terminal outcomes, budgets, deadlines and run isolation.
+
+For progress rendering, use the [Agent Event Stream](../docs/guides/swift-agent-events.md).

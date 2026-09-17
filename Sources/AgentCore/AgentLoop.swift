@@ -18,15 +18,49 @@ public struct AgentLoop: Sendable {
         messages: [ModelMessage], sessionID: UUID, runID: UUID = UUID(), budget: AgentBudget,
         structuredOutput: StructuredOutputSchema? = nil
     ) async throws -> AgentLoopResult {
-        try await withAgentDeadline(budget.deadline) {
-            try await runBody(messages: messages, sessionID: sessionID, runID: runID,
-                              budget: budget, structuredOutput: structuredOutput)
+        try await execute(messages: messages, sessionID: sessionID, runID: runID, budget: budget,
+                          structuredOutput: structuredOutput, emitter: nil)
+    }
+
+    public func events(
+        messages: [ModelMessage], sessionID: UUID, runID: UUID = UUID(), budget: AgentBudget,
+        structuredOutput: StructuredOutputSchema? = nil
+    ) -> AsyncStream<AgentEvent> {
+        let cancelledAtCreation = Task.isCancelled
+        return AsyncStream { continuation in
+            let emitter = AgentEventEmitter(continuation)
+            let worker = Task {
+                do {
+                    _ = try await execute(messages: messages, sessionID: sessionID, runID: runID, budget: budget,
+                        structuredOutput: structuredOutput, emitter: emitter, cancelledAtCreation: cancelledAtCreation)
+                } catch { /* execute publishes the terminal error event. */ }
+            }
+            continuation.onTermination = { @Sendable _ in worker.cancel() }
+        }
+    }
+
+    private func execute(
+        messages: [ModelMessage], sessionID: UUID, runID: UUID, budget: AgentBudget,
+        structuredOutput: StructuredOutputSchema?, emitter: AgentEventEmitter?, cancelledAtCreation: Bool = false
+    ) async throws -> AgentLoopResult {
+        await emitter?.start(.init(sessionID: sessionID, runID: runID, model: model))
+        do {
+            if cancelledAtCreation { throw CancellationError() }
+            let result = try await withAgentDeadline(budget.deadline) {
+                try await runBody(messages: messages, sessionID: sessionID, runID: runID,
+                                  budget: budget, structuredOutput: structuredOutput, emitter: emitter)
+            }
+            await emitter?.finish(.result(result))
+            return result
+        } catch {
+            await emitter?.finish(error is CancellationError ? .cancelled : .failed(AgentFailure(error)))
+            throw error
         }
     }
 
     private func runBody(
         messages: [ModelMessage], sessionID: UUID, runID: UUID, budget: AgentBudget,
-        structuredOutput: StructuredOutputSchema?
+        structuredOutput: StructuredOutputSchema?, emitter: AgentEventEmitter?
     ) async throws -> AgentLoopResult {
         try budget.checkActive()
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else { throw AgentLoopError.providerMismatch }
@@ -51,18 +85,21 @@ public struct AgentLoop: Sendable {
             try budget.checkActive()
             guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
             modelTurns += 1
+            try await emitter?.send(.turnStarted(modelTurns))
+            try budget.checkActive()
             let request = ModelRequest(model: model, messages: history, tools: tools.definitions, structuredOutput: structuredOutput)
             var accumulator = ModelEventAccumulator()
             for try await event in provider.stream(request: request) {
                 try budget.checkActive()
                 try accumulator.append(event)
+                if case .responseStarted(let info) = event { try requireConfiguredModel(info.model) }
+                if case .responseCompleted = event { continue }
+                try await emitter?.send(.model(event))
             }
             try budget.checkActive()
             let response = try accumulator.finish()
-            guard response.info.model.provider.utf8.elementsEqual(model.provider.utf8),
-                  response.info.model.name.utf8.elementsEqual(model.name.utf8) else {
-                throw AgentLoopError.modelMismatch
-            }
+            try requireConfiguredModel(response.info.model)
+            try await emitter?.send(.model(.responseCompleted(response)))
             if response.stopReason != .toolCalls {
                 let outcome: AgentLoopOutcome
                 switch response.stopReason {
@@ -86,6 +123,8 @@ public struct AgentLoop: Sendable {
             history.append(.assistant(content: response.content, toolCalls: response.toolCalls))
             for call in prepared {
                 try budget.checkActive()
+                try await emitter?.send(.toolStarted(call.call))
+                try budget.checkActive()
                 let now = ContinuousClock.now
                 let remaining = now.duration(to: budget.deadline)
                 let timeout = min(call.policy.timeout, remaining)
@@ -96,9 +135,16 @@ public struct AgentLoop: Sendable {
                 }
                 try budget.checkActive()
                 toolCalls += 1
-                history.append(.tool(.init(callID: call.call.id, content: [.json(result.output)], isError: false)))
+                let message = ToolResultMessage(callID: call.call.id, content: [.json(result.output)], isError: false)
+                history.append(.tool(message))
+                try await emitter?.send(.toolCompleted(message))
             }
         }
+    }
+
+    private func requireConfiguredModel(_ responseModel: ModelID) throws {
+        guard responseModel.provider.utf8.elementsEqual(model.provider.utf8),
+              responseModel.name.utf8.elementsEqual(model.name.utf8) else { throw AgentLoopError.modelMismatch }
     }
 }
 
@@ -108,7 +154,7 @@ public enum AgentLoopOutcome: Equatable, Sendable {
     case incomplete(StopReason)
 }
 
-public struct AgentLoopResult: Sendable {
+public struct AgentLoopResult: Equatable, Sendable {
     public let response: ModelResponse
     public let history: [ModelMessage]
     public let outcome: AgentLoopOutcome
