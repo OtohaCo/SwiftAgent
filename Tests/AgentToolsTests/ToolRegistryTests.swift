@@ -97,7 +97,9 @@ struct ToolRegistryTests {
         let call = ToolCall(id: context.callID, name: "recording", argumentsJSON: #"{"value":7}"#, completeness: .complete)
         let prepared = try registry.prepare(call, context: limited)
         try await ContinuousClock().sleep(until: deadline)
-        await #expect(throws: ToolInvocationError.deadlineExceeded) { try await prepared.invoke() }
+        await #expect(throws: ToolInvocationError.deadlineExceeded) {
+            try await prepared.invoke(deadline: .now.advanced(by: .seconds(30)))
+        }
         #expect(await log.contexts.isEmpty)
     }
 

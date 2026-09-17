@@ -49,12 +49,13 @@ public struct ToolRegistry: Sendable {
         catch { throw ToolRegistryError.invalidJSON }
         do { try registration.input.validate(arguments) }
         catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidArguments(error) }
+        let invocation = try registration.tool.prepare(arguments: arguments)
         try context.checkActive()
-        return PreparedToolCall(call: call, policy: registration.tool.policy) {
-            let result = try await registration.tool.invoke(arguments: arguments, context: context)
+        return PreparedToolCall(call: call, policy: registration.tool.policy, context: context) { executionContext in
+            let result = try await invocation(executionContext)
             do { try registration.output.validate(result.output) }
             catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidOutput(error) }
-            try context.checkActive()
+            try executionContext.checkActive()
             return result
         }
     }
@@ -63,16 +64,23 @@ public struct ToolRegistry: Sendable {
 public struct PreparedToolCall: Sendable {
     public let call: ToolCall
     public let policy: ToolPolicy
-    private let operation: @Sendable () async throws -> ToolResult<JSONValue>
+    private let context: ToolContext
+    private let operation: AnyAgentTool.Invocation
 
-    fileprivate init(call: ToolCall, policy: ToolPolicy, operation: @escaping @Sendable () async throws -> ToolResult<JSONValue>) {
+    fileprivate init(call: ToolCall, policy: ToolPolicy, context: ToolContext, operation: @escaping AnyAgentTool.Invocation) {
         self.call = call
         self.policy = policy
+        self.context = context
         self.operation = operation
     }
 
-    package func invoke() async throws -> ToolResult<JSONValue> {
-        try await operation()
+    package func invoke(deadline: ContinuousClock.Instant? = nil) async throws -> ToolResult<JSONValue> {
+        let effectiveDeadline: ContinuousClock.Instant?
+        if let current = context.deadline, let deadline { effectiveDeadline = min(current, deadline) }
+        else { effectiveDeadline = context.deadline ?? deadline }
+        let executionContext = ToolContext(sessionID: context.sessionID, runID: context.runID, callID: context.callID,
+            deadline: effectiveDeadline, idempotencyKey: context.idempotencyKey)
+        return try await operation(executionContext)
     }
 }
 

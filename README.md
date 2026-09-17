@@ -62,3 +62,6 @@ under which the agent loop may consider a tool batch for execution.
 
 Tool authors can start with the [Typed Tool Contract](../docs/guides/swift-agent-tools.md)
 for Swift input/output types, schema declarations, authorization and execution policy.
+
+The [Agent Loop Contract](../docs/guides/swift-agent-loop.md) covers multi-turn tool
+feedback, terminal outcomes, budgets, deadlines and run isolation.
