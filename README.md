@@ -59,3 +59,6 @@ see [ModelMetadata](Sources/AgentModels/ModelMetadata.swift) for accounting sema
 For streaming, follow the [Model Event Contract](../docs/guides/swift-agent-model-events.md).
 It defines event ordering, cumulative usage, terminal validation and the conditions
 under which the agent loop may consider a tool batch for execution.
+
+Tool authors can start with the [Typed Tool Contract](../docs/guides/swift-agent-tools.md)
+for Swift input/output types, schema declarations, authorization and execution policy.
