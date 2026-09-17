@@ -53,3 +53,7 @@ Tool call completeness records transport state only. A complete call still needs
 registry validation and authorization. `ToolResultMessage` is model-facing content,
 not an execution receipt. Usage fields distinguish unreported counts from zero;
 see [ModelMetadata](Sources/AgentModels/ModelMetadata.swift) for accounting semantics.
+
+For streaming, follow the [Model Event Contract](../docs/guides/swift-agent-model-events.md).
+It defines event ordering, cumulative usage, terminal validation and the conditions
+under which the agent loop may consider a tool batch for execution.
