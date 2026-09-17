@@ -2,21 +2,22 @@ import AgentModels
 import AgentTools
 import Foundation
 
-/// Sole owner of model turns and tool-result feedback. Run state is local to each invocation.
-public struct AgentLoop: Sendable {
+/// Package orchestration for one model → tool → model loop. SDK users go through
+/// `Agent`, `AgentSession` and `AgentRun`.
+package struct AgentLoop: Sendable {
     private let model: ModelID
     private let provider: any ModelProvider
     private let tools: ToolRegistry
     private let scheduler: ToolScheduler
 
-    public init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
+    package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
         self.model = model
         self.provider = provider
         self.tools = tools
         self.scheduler = scheduler
     }
 
-    public func run(
+    package func run(
         messages: [ModelMessage], sessionID: UUID, runID: UUID = UUID(), budget: AgentBudget,
         structuredOutput: StructuredOutputSchema? = nil, operationID: String? = nil
     ) async throws -> AgentLoopResult {
@@ -24,7 +25,7 @@ public struct AgentLoop: Sendable {
                           structuredOutput: structuredOutput, operationID: operationID, emitter: nil)
     }
 
-    public func events(
+    package func events(
         messages: [ModelMessage], sessionID: UUID, runID: UUID = UUID(), budget: AgentBudget,
         structuredOutput: StructuredOutputSchema? = nil, operationID: String? = nil
     ) -> AsyncStream<AgentEvent> {
@@ -42,7 +43,7 @@ public struct AgentLoop: Sendable {
         }
     }
 
-    public func waitForRunToDrain(sessionID: UUID, runID: UUID) async {
+    package func waitForRunToDrain(sessionID: UUID, runID: UUID) async {
         async let providerDrain = waitForProviderToDrain(sessionID: sessionID, runID: runID)
         async let toolDrain = scheduler.waitForRunToDrain(sessionID: sessionID, runID: runID)
         await providerDrain

@@ -68,7 +68,7 @@ struct ProviderFallbackTests {
         let journal = try AgentJournal(persistenceURL: url)
         let agent = try Agent(model: .init(provider: "fixture", name: "test"), provider: route,
                               tools: [try RouteMutationTool()], runTimeout: .seconds(2))
-        let session = agent.makeSession(journal: journal)
+        let session = try agent.makeSession(journal: journal)
         let run = try await session.run("Update the listing")
 
         do {

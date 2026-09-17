@@ -223,7 +223,7 @@ final class WorkspaceAgentTests: XCTestCase {
         let host = try WorkspaceAgentHost(
             store: store, provider: provider, model: workspaceModel, journal: journal, tools: tools
         )
-        let session = host.makeSession()
+        let session = try host.makeSession()
         do {
             _ = try await session.run("Update the note").wait()
             XCTFail("Invalid receipts must fail closed")
@@ -475,8 +475,8 @@ final class WorkspaceAgentTests: XCTestCase {
         }
         let first = try host("notes/todo.txt")
         let second = try host("notes/ideas.txt")
-        async let runA = first.makeSession().run("A")
-        async let runB = second.makeSession().run("B")
+        async let runA = try first.makeSession().run("A")
+        async let runB = try second.makeSession().run("B")
         let startedA = try await runA
         let startedB = try await runB
         for _ in 0..<30 {

@@ -24,7 +24,7 @@ struct AgentIsolationTests {
         } else {
             await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await run.wait() }
         }
-        let sessionB = b.makeSession()
+        let sessionB = try b.makeSession()
         await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "B"))) { try await sessionB.run("B").wait() }
         #expect(await probe.labels == ["A"])
         await gate.open()
@@ -65,7 +65,7 @@ struct AgentIsolationTests {
             ),
             providerProbe: providerProbe
         )
-        let session = agent.makeSession()
+        let session = try agent.makeSession()
         let first = try await session.run("A")
 
         #expect(await providerProbe.waitUntilStarted("A"))
@@ -119,7 +119,7 @@ struct AgentIsolationTests {
             return textResponse(request, "Done")
         }
         let agent = try Agent(model: fixtureModel, provider: provider, tools: [tool], scheduler: scheduler)
-        let session = agent.makeSession()
+        let session = try agent.makeSession()
         let first = try await session.run("A")
 
         #expect(await XCTWaiter.fulfillment(of: [enteredA, enteredB], timeout: 1) == .completed)

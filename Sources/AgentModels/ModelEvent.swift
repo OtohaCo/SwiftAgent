@@ -39,6 +39,8 @@ public struct ModelResponse: Hashable, Sendable, Codable {
     }
 }
 
+/// Provider-neutral stream events. Unknown future stop reasons belong on
+/// `StopReason.unknown`; do not encode vendor finish reasons here.
 public enum ModelEvent: Hashable, Sendable, Codable {
     case responseStarted(ResponseInfo)
     case textDelta(String)

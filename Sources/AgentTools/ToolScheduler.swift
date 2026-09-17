@@ -2,6 +2,9 @@ import AgentModels
 import Foundation
 
 /// Share one scheduler wherever agents operate on the same host resources.
+/// Two Sessions that can mutate the same player, workspace, or other unique
+/// object must use the same instance. Isolation is per scheduler, not per
+/// Session.
 public struct ToolScheduler: Sendable {
     private let coordinator = ToolResourceCoordinator()
     private let drain = ToolExecutionDrain()

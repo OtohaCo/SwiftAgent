@@ -38,28 +38,23 @@ struct AgentReceiptTests {
     }
 
     @Test func invalidOutputAndUnavailableMutationCannotPublishReceiptSuccess() async throws {
-        for mutation in [false, true] {
-            let log = EffectLog()
-            let tool = try ReceiptProbe(log: log, invalidOutput: !mutation, effect: mutation ? .mutation : .readOnly)
-            let provider = ScriptedProvider { request, _ in toolResponse(request, [receiptCall()]) }
-            let run = try await Agent(model: fixtureModel, provider: provider, tools: [tool]).makeSession().run("work")
-            let events = await collectEvents(run.events)
-            if mutation {
-                await #expect(throws: ToolInvocationError.mutationIntegrityUnavailable) { try await run.wait() }
-                #expect(events.last == .runFinished(.failed(.toolInvocation(.mutationIntegrityUnavailable))))
-            } else {
-                await #expect(throws: ToolRegistryError.self) { try await run.wait() }
-                guard case .runFinished(.failed(.toolRegistry(.invalidOutput(let issue)))) = events.last else {
-                    Issue.record("Wrong invalid-output failure"); continue
-                }
-                #expect(issue.path == "/status")
-                #expect(issue.keyword == "type")
-            }
-            #expect(!events.contains { if case .toolReceiptValidated = $0 { true } else { false } })
-            #expect(!events.contains { if case .toolCompleted = $0 { true } else { false } })
-            #expect(await log.names.count == (mutation ? 0 : 1))
-            #expect(await provider.log.requests.count == 1)
+        let invalidOutput = try ReceiptProbe(log: EffectLog(), invalidOutput: true)
+        let invalidProvider = ScriptedProvider { request, _ in toolResponse(request, [receiptCall()]) }
+        let invalidRun = try await Agent(model: fixtureModel, provider: invalidProvider, tools: [invalidOutput]).makeSession().run("work")
+        let invalidEvents = await collectEvents(invalidRun.events)
+        await #expect(throws: ToolRegistryError.self) { try await invalidRun.wait() }
+        guard case .runFinished(.failed(.toolRegistry(.invalidOutput(let issue)))) = invalidEvents.last else {
+            Issue.record("Wrong invalid-output failure"); return
         }
+        #expect(issue.path == "/status")
+        #expect(issue.keyword == "type")
+        #expect(!invalidEvents.contains { if case .toolReceiptValidated = $0 { true } else { false } })
+        #expect(!invalidEvents.contains { if case .toolCompleted = $0 { true } else { false } })
+        #expect(await invalidProvider.log.requests.count == 1)
+
+        let mutation = try ReceiptProbe(log: EffectLog(), effect: .mutation)
+        let mutationAgent = try Agent(model: fixtureModel, provider: ScriptedProvider { request, _ in toolResponse(request, [receiptCall()]) }, tools: [mutation])
+        #expect(throws: AgentSessionError.durableJournalRequired) { try mutationAgent.makeSession() }
     }
 
     @Test func modelTextClaimingAnEffectDoesNotCreateAReceipt() async throws {

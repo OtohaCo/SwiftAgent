@@ -93,12 +93,39 @@ final class DependencyGuardTests: XCTestCase {
             "struct OtohaRequest {}", "let item: MusicTrack", "typealias T = PlaybackState",
             "struct PlaylistItem {}", "struct AIDiscoveryResult {}", "@MainActor final class Loop {}",
             "let executor: MainActor.Type", "// music example", "let track = 1",
+            "struct WorkspaceFileStore {}", "import WorkspaceAgent",
         ] {
             XCTAssertFalse(DependencyGuard.violations(source, module: "AgentCore").isEmpty, source)
         }
         XCTAssertTrue(DependencyGuard.violations(
             "struct SearchResult {}\nactor Calculator {}", module: "AgentCore"
         ).isEmpty)
+    }
+
+    func testProvidersAndCoreCannotImportEachOtherOrTheWorkspaceHost() {
+        XCTAssertFalse(DependencyGuard.violations("import AgentProviders", module: "AgentCore").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentAppleProvider", module: "AgentCore").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import WorkspaceAgent", module: "AgentCore").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentCore", module: "AgentProviders").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentTools", module: "AgentProviders").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import WorkspaceAgent", module: "AgentProviders").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentCore", module: "AgentAppleProvider").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentTools", module: "AgentModels").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentCore", module: "AgentTools").isEmpty)
+        XCTAssertTrue(DependencyGuard.violations(
+            "import Foundation\nimport AgentModels\nimport AgentTools\nimport AgentCore\nimport AgentProviders",
+            module: "WorkspaceAgent"
+        ).isEmpty)
+    }
+
+    func testPublicAPIContractFixtureStaysOnThePublishedSurface() throws {
+        let url = packageRoot.appendingPathComponent("Tests/AgentCoreTests/PublicAPIContractTests.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(source.contains("@testable"))
+        XCTAssertFalse(source.contains("AgentLoop("))
+        XCTAssertFalse(source.contains("EvidenceLedger("))
+        XCTAssertFalse(source.contains("ToolMutationAdmission"))
+        XCTAssertTrue(source.contains("import AgentCore"))
     }
 
     func testRejectsForbiddenImportsIncludingInactiveAndScopedImports() {

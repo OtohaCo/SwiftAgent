@@ -14,10 +14,10 @@ struct AgentEvidenceTests {
             return toolResponse(request, [.init(id: .init(rawValue: name), name: name, argumentsJSON: "{}", completeness: .complete)])
         }
         let agent = try Agent(model: fixtureModel, provider: provider, tools: [ResourceDiscovery(), ResourceUse(scope: .sameSession)])
-        let session = agent.makeSession()
+        let session = try agent.makeSession()
         _ = try await session.run("discover").wait()
         #expect(try await session.run("use").wait().outcome == .completed)
-        let other = agent.makeSession()
+        let other = try agent.makeSession()
         await #expect(throws: EvidenceError.self) { try await other.run("use").wait() }
     }
 
@@ -33,7 +33,7 @@ struct AgentEvidenceTests {
             return toolResponse(request, [.init(id: .init(rawValue: "later"), name: "use_resource", argumentsJSON: "{}", completeness: .complete)])
         }
         let agent = try Agent(model: fixtureModel, provider: provider, tools: [ResourceDiscovery(), ResourceUse(scope: .sameRun)])
-        let session = agent.makeSession()
+        let session = try agent.makeSession()
         #expect(try await session.run("both").wait().toolCalls == 2)
         await #expect(throws: EvidenceError.self) { try await session.run("later").wait() }
     }

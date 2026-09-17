@@ -18,6 +18,136 @@ providers may impose higher availability requirements within their adapters.
 Apple/Linux portability is a design constraint; platform validation results live in
 the task acceptance records.
 
+## Quick Start
+
+These examples use only public types.
+
+### 1. Read-only Agent
+
+```swift
+import AgentCore
+import AgentModels
+import AgentProviders
+import AgentTools
+
+let agent = try Agent(
+    model: ModelID(provider: "anthropic", name: "claude-sonnet-4-6"),
+    provider: try AnthropicProvider(apiKey: apiKey),
+    configuration: AgentConfiguration(instructions: "Be concise.")
+)
+let session = try agent.makeSession()
+let run = try await session.run("Summarize the last message.")
+for await event in run.events {
+    if case .model(.textDelta(let delta)) = event { print(delta, terminator: "") }
+}
+_ = try await run.wait()
+```
+
+Read-only Agents may omit a journal. Mutation tools cannot.
+
+### 2. Typed Tool
+
+```swift
+struct SearchTool: AgentTool {
+    struct Input: Codable, Sendable { let query: String }
+    struct Output: Codable, Sendable { let results: [String] }
+
+    static let name = "search"
+    static let description = "Search public records"
+    static let inputSchema = ToolSchema.object(properties: ["query": .string], required: ["query"])
+    static let outputSchema = ToolSchema.object(
+        properties: ["results": .array(items: .string)], required: ["results"]
+    )
+    let search: @Sendable (String) async throws -> [String]
+    let policy: ToolPolicy
+
+    init(search: @escaping @Sendable (String) async throws -> [String]) throws {
+        self.search = search
+        policy = try .readOnly(authorization: .notRequired)
+    }
+
+    func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
+        ToolResult(output: Output(results: try await search(input.query)))
+    }
+}
+```
+
+The runtime erases JSON for the model. Tool code decodes `Input` and returns
+`Output`. Do not build argument dictionaries by hand.
+
+### 3. Mutation Tool
+
+```swift
+struct UpdateListingTool: AgentTool {
+    struct Input: Codable, Sendable { let id: String }
+    struct Output: Codable, Sendable { let updated: Bool }
+
+    static let name = "update_listing"
+    static let description = "Update a listing"
+    static let inputSchema = ToolSchema.object(properties: ["id": .string], required: ["id"])
+    static let outputSchema = ToolSchema.object(properties: ["updated": .boolean], required: ["updated"])
+    let policy: ToolPolicy
+
+    init() throws {
+        policy = try .mutation()
+    }
+
+    func resourceRequirements(for input: Input) throws -> [ToolResource] {
+        [.named(.init(namespace: "listing", id: input.id))]
+    }
+
+    func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement] {
+        [.init(reference: .init(namespace: "listing", id: input.id), scope: .sameSession)]
+    }
+
+    func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation? {
+        try .init(targets: [.init(namespace: "listing", id: input.id)], revision: .present)
+    }
+
+    func authorize(_ input: Input, context: ToolContext) async throws -> ToolAuthorization {
+        .allowed
+    }
+
+    func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
+        let receipt = ToolReceipt(
+            operationID: context.idempotencyKey ?? "missing",
+            status: .succeeded,
+            confirmedTargets: [.init(namespace: "listing", id: input.id)],
+            revision: "v2"
+        )
+        return ToolResult(output: .init(updated: true), receipt: receipt)
+    }
+}
+```
+
+`.mutation()` is exclusive, receipt-backed, and Evidence-required. Existing
+resources should be observed in an earlier tool result before this runs.
+
+### 4. Durable Session
+
+```swift
+let scheduler = ToolScheduler()
+let journal = try AgentJournal(persistenceURL: journalURL)
+let agent = try Agent(
+    model: model,
+    provider: provider,
+    tools: [try UpdateListingTool()],
+    configuration: AgentConfiguration(scheduler: scheduler)
+)
+let session = try agent.makeSession(id: sessionID, journal: journal)
+_ = try await session.run("Update the listing").wait()
+
+let restarted = try AgentJournal.load(from: journalURL)
+for pending in await restarted.pendingMutations(sessionID: sessionID) {
+    if pending.state == .needsReconciliation {
+        try await restarted.abortMutation(pending)
+    }
+}
+```
+
+Two Sessions that mutate the same listing, player, or file store must share
+`scheduler`. Crash recovery never replays a tool; the host reconciles or aborts.
+
 ## Module Boundaries
 
 | Module | Internal dependencies | Responsibility |
@@ -89,9 +219,21 @@ durable checkpoints, crash-tail recovery and fail-closed persistence behavior.
 It also defines durable mutation admission and explicit reconciliation without
 automatic executor replay.
 
+[Errors](../docs/guides/swift-agent-errors.md) lists the typed failure taxonomy.
+Do not match `localizedDescription`.
+
+[Concurrency](../docs/guides/swift-agent-concurrency.md) records the Swift 6.4
+isolation audit. Core does not use MainActor.
+
+[Versioning](../docs/guides/swift-agent-versioning.md) is the 1.0 compatibility
+policy. Adding a public enum case is a source break.
+
 The [Workspace File Agent](../docs/guides/swift-agent-workspace-host.md) is a second
 Reference Host. It uses the same public Agent/Session/Run API with Anthropic or any
 other conforming provider, and keeps sandbox file identity out of AgentCore.
+
+The [public API audit](../docs/reviews/2026-09-18-swift-agent-public-api-audit.md)
+is the freeze record for this branch.
 
 [Apple Foundation Models](../docs/guides/swift-agent-apple-provider.md) documents
 the on-device planning adapter, execution boundary and opt-in live verification.

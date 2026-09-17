@@ -82,7 +82,7 @@ public struct WorkspaceAgentHost: Sendable {
         )
     }
 
-    public func makeSession(id: UUID = UUID()) -> AgentSession {
-        agent.makeSession(id: id, journal: journal)
+    public func makeSession(id: UUID = UUID()) throws -> AgentSession {
+        try agent.makeSession(id: id, journal: journal)
     }
 }

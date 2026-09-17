@@ -2,17 +2,17 @@ import AgentModels
 import Foundation
 
 /// A supported subset of JSON Schema. Unsupported constraints must fail registration.
-public struct ToolSchemaValidator: Sendable {
+package struct ToolSchemaValidator: Sendable {
     private let schema: JSONValue
 
-    public init(schema: ToolSchema) throws {
+    package init(schema: ToolSchema) throws {
         do { _ = try JSONEncoder().encode(schema.json) }
         catch { throw ToolSchemaValidationError(kind: .invalidSchema, path: "", keyword: "JSON") }
         try Self.checkSchema(schema.json, path: "")
         self.schema = schema.json
     }
 
-    public func validate(_ value: JSONValue) throws {
+    package func validate(_ value: JSONValue) throws {
         do { _ = try JSONEncoder().encode(value) }
         catch { throw Self.violation("", "JSON") }
         try Self.validate(value, schema: schema, path: "")

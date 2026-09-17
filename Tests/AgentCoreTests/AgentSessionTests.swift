@@ -9,7 +9,7 @@ struct AgentSessionTests {
     @Test func sequentialRunsReuseSessionHistoryAndAgentInstructions() async throws {
         let provider = ScriptedProvider { request, turn in textResponse(request, "answer \(turn)") }
         let agent = try Agent(model: fixtureModel, provider: provider, instructions: "Be precise.")
-        let session = agent.makeSession()
+        let session = try agent.makeSession()
         let first = try await session.run("first")
         let result = try await first.wait()
         #expect(result.history == [.system("Be precise."), .user([.text("first")]), .assistant(content: [.text("answer 1")], toolCalls: [])])
@@ -34,7 +34,7 @@ struct AgentSessionTests {
             return textResponse(request, "Done")
         }
         let agent = try Agent(model: fixtureModel, provider: provider)
-        let a = agent.makeSession(), b = agent.makeSession()
+        let a = try agent.makeSession(), b = try agent.makeSession()
         let first = try await a.run("A")
         #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
         await #expect(throws: AgentSessionError.runInProgress) { try await a.run("conflict") }
@@ -50,7 +50,7 @@ struct AgentSessionTests {
         let provider = ScriptedProvider { request, _ in textResponse(request, "Unexpected") }
         let agent = try Agent(model: fixtureModel, provider: provider, instructions: "System")
         for text in ["", " \n"] {
-            let session = agent.makeSession()
+            let session = try agent.makeSession()
             await #expect(throws: AgentSessionError.emptyInput) { try await session.run(text) }
             #expect(await session.history == [.system("System")])
         }

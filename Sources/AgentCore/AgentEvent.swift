@@ -2,6 +2,8 @@ import AgentModels
 import AgentTools
 import Foundation
 
+/// Identity of one Run. Events from different Runs must not be interleaved
+/// on the same stream.
 public struct AgentRunInfo: Equatable, Sendable {
     public let sessionID: UUID
     public let runID: UUID
@@ -14,11 +16,20 @@ public struct AgentRunInfo: Equatable, Sendable {
     }
 }
 
+/// Session-facing lifecycle stream. Cases are frozen business semantics, not
+/// scheduler internals. `toolStarted` means the runtime admitted a call; it is
+/// not a lease-acquired or executor-started signal. Future telemetry may add
+/// diagnostic events without redefining this case.
+///
+/// Ordering: `runStarted` exactly once, then zero or more turns, then exactly
+/// one `runFinished`. Model deltas arrive only inside `model`. A tool that
+/// starts also ends with `toolCompleted`, `toolFailed`, or a terminal
+/// `runFinished` that synthesizes failure for still-active tools.
 public enum AgentEvent: Equatable, Sendable {
     case runStarted(AgentRunInfo)
     case turnStarted(Int)
     case model(ModelEvent)
-    /// Begins a runtime attempt, including authorization; not proof of an external effect.
+    /// Runtime admission, including authorization. Not proof of an external effect.
     case toolStarted(ToolCall)
     case toolCompleted(ToolResultMessage)
     case toolReceiptValidated(AgentToolReceipt)
@@ -33,9 +44,12 @@ public enum AgentRunTermination: Equatable, Sendable {
     case cancelled
 }
 
-/// Typed event diagnostics. Unknown host errors do not expose raw payloads or descriptions.
+/// Typed failure for events and host switches. Match the enum; do not parse
+/// `localizedDescription`. Unknown host errors collapse to `unclassified`
+/// without leaking payloads.
 public enum AgentFailure: Error, Equatable, Sendable {
     case loop(AgentLoopError)
+    case session(AgentSessionError)
     case provider(ModelProviderError)
     case modelStream(ModelStreamError)
     case toolRegistry(ToolRegistryError)
@@ -43,6 +57,7 @@ public enum AgentFailure: Error, Equatable, Sendable {
     case evidence(EvidenceError)
     case receipt(ToolReceiptError)
     case resource(ToolResourceError)
+    case scheduler(ToolSchedulerError)
     case journal(AgentJournalError)
     case cancelled
     case unclassified
@@ -51,6 +66,7 @@ public enum AgentFailure: Error, Equatable, Sendable {
         switch error {
         case is CancellationError: self = .cancelled
         case let error as AgentLoopError: self = .loop(error)
+        case let error as AgentSessionError: self = .session(error)
         case let error as ModelProviderError: self = .provider(error)
         case let error as ModelStreamError: self = .modelStream(error)
         case let error as ToolRegistryError: self = .toolRegistry(error)
@@ -58,6 +74,7 @@ public enum AgentFailure: Error, Equatable, Sendable {
         case let error as EvidenceError: self = .evidence(error)
         case let error as ToolReceiptError: self = .receipt(error)
         case let error as ToolResourceError: self = .resource(error)
+        case let error as ToolSchedulerError: self = .scheduler(error)
         case let error as AgentJournalError: self = .journal(error)
         default: self = .unclassified
         }

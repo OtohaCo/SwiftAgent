@@ -1,6 +1,9 @@
 import AgentModels
 import Foundation
 
+/// Typed tool implemented by hosts. Authors declare Codable input/output and
+/// a policy. The runtime erases JSON for the model; tool code should not
+/// build argument dictionaries by hand.
 public protocol AgentTool: Sendable {
     associatedtype Input: Codable & Sendable
     associatedtype Output: Codable & Sendable
@@ -19,21 +22,21 @@ public protocol AgentTool: Sendable {
 }
 
 /// Trusted runtime admission required immediately before a mutation executor runs.
-public protocol ToolMutationAdmission: Sendable {
+package protocol ToolMutationAdmission: Sendable {
     func admit(_ request: ToolMutationAdmissionRequest) async throws
 }
 
-public struct ToolMutationAdmissionRequest: Codable, Equatable, Sendable {
-    public let sessionID: UUID
-    public let runID: UUID
-    public let callID: ToolCallID
-    public let name: String
-    public let argumentsJSON: String
-    public let resources: [ToolResource]
-    public let idempotencyKey: String
-    public let receiptExpectation: ToolReceiptExpectation?
+package struct ToolMutationAdmissionRequest: Codable, Equatable, Sendable {
+    package let sessionID: UUID
+    package let runID: UUID
+    package let callID: ToolCallID
+    package let name: String
+    package let argumentsJSON: String
+    package let resources: [ToolResource]
+    package let idempotencyKey: String
+    package let receiptExpectation: ToolReceiptExpectation?
 
-    public init(
+    package init(
         sessionID: UUID,
         runID: UUID,
         callID: ToolCallID,

@@ -2,6 +2,12 @@ import AgentModels
 import AgentTools
 import Foundation
 
+/// One isolated conversation. Canonical history lives here. Only one Run may
+/// be active; overlapping `run` calls fail with `runInProgress`.
+///
+/// History is readable and not assignable. Restoration uses the journal
+/// checkpoint, never a caller-supplied array. Share the Agent's scheduler
+/// when another Session can mutate the same host resources.
 public actor AgentSession {
     public nonisolated let id: UUID
     public private(set) var history: [ModelMessage]
@@ -30,6 +36,9 @@ public actor AgentSession {
         self.journal = journal
     }
 
+    /// Starts one Run. Empty input, an already-active Run, a cancelled caller
+    /// and an expired budget do not append history. Mutation tools require a
+    /// journal supplied at Session creation.
     public func run(
         _ text: String,
         budget: AgentBudget? = nil,
@@ -223,4 +232,5 @@ private actor AgentSessionIdentityRegistry {
 public enum AgentSessionError: Error, Equatable, Sendable {
     case emptyInput
     case runInProgress
+    case durableJournalRequired
 }

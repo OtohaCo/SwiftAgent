@@ -26,4 +26,20 @@ struct ToolPolicyTests {
             }
         }
     }
+
+    @Test func factoriesEncodeTheSafeDefaults() throws {
+        let read = try ToolPolicy.readOnly()
+        #expect(read.effect == .readOnly)
+        #expect(read.execution == .parallel)
+        #expect(read.idempotency == .safe)
+        #expect(read.authorization == .required)
+        #expect(read.evidence == .none)
+
+        let mutation = try ToolPolicy.mutation()
+        #expect(mutation.effect == .mutation)
+        #expect(mutation.execution == .exclusive)
+        #expect(mutation.idempotency == .requiresReceipt)
+        #expect(mutation.authorization == .required)
+        #expect(mutation.evidence == .required)
+    }
 }

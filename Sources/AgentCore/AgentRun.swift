@@ -1,5 +1,11 @@
 import Foundation
 
+/// One execution owned by a Session. The public surface is events, cancel,
+/// steer and wait. The backing Task and scheduler handles are not exposed.
+///
+/// `events` is a single-consumer stream. Cancelling the observer does not
+/// cancel the Run; call `cancel()` to stop execution. `wait()` may be used
+/// by several callers and returns the same terminal result.
 public struct AgentRun: Sendable {
     public let id: UUID
     public let sessionID: UUID

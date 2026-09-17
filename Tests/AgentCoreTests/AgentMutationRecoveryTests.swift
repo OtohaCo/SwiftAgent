@@ -40,13 +40,11 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let call = mutationCall()
         let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
         let agent = try Agent(model: fixtureModel, provider: provider, tools: [tool])
-        let run = try await agent.makeSession().run("Update the listing")
-
         do {
-            _ = try await run.wait()
-            XCTFail("Mutation without durable admission should fail closed")
+            _ = try agent.makeSession()
+            XCTFail("Mutation without a journal should fail before a run starts")
         } catch {
-            XCTAssertEqual(error as? ToolInvocationError, .mutationIntegrityUnavailable)
+            XCTAssertEqual(error as? AgentSessionError, .durableJournalRequired)
         }
         let executionCount = await probe.count
         XCTAssertEqual(executionCount, 0)
@@ -102,6 +100,46 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let otherSession = UUID()
         try await restarted.admit(mutationRequest(sessionID: otherSession, runID: UUID(), callID: .init(rawValue: "call-2")))
         try await restarted.admit(mutationRequest(sessionID: sessionID, runID: UUID(), callID: .init(rawValue: "call-1")))
+    }
+
+    func testAbortMutationRequiresQuarantineAndDoesNotSettleArbitraryJSON() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let journal = try AgentJournal(persistenceURL: url)
+        let sessionID = UUID()
+        let runID = UUID()
+        let request = mutationRequest(sessionID: sessionID, runID: runID, callID: .init(rawValue: "call-abort"))
+        try await journal.admit(request)
+        let pendingBefore = await journal.pendingMutations()
+        let intent = try XCTUnwrap(pendingBefore.first)
+        XCTAssertEqual(intent.state, .intent)
+        do {
+            try await journal.abortMutation(intent)
+            XCTFail("An in-flight intent must not be aborted without recovery")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .mutationRequiresReconciliation)
+        }
+
+        let recovered = try await journal.recoverPendingMutations(sessionID: sessionID)
+        XCTAssertEqual(recovered.count, 1)
+        XCTAssertEqual(recovered[0].state, .needsReconciliation)
+        try await journal.abortMutation(recovered[0])
+        let remaining = await journal.pendingMutations()
+        XCTAssertTrue(remaining.isEmpty)
+
+        do {
+            try await journal.abortMutation(recovered[0])
+            XCTFail("A settled abort must not be repeated")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .mutationRequiresReconciliation)
+        }
+        let fakeReceipt = validReceipt(operationID: request.idempotencyKey)
+        do {
+            try await journal.reconcileMutation(recovered[0], receipt: fakeReceipt)
+            XCTFail("Abort must close the intent against later settlement")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .mutationRequiresReconciliation)
+        }
     }
 
     func testReceiptMismatchLeavesPendingMutationForRecovery() async throws {
@@ -414,8 +452,8 @@ final class AgentMutationRecoveryTests: XCTestCase {
         }
         let agent = try Agent(model: fixtureModel, provider: provider)
         let sessionID = UUID()
-        let first = agent.makeSession(id: sessionID)
-        let second = agent.makeSession(id: sessionID)
+        let first = try agent.makeSession(id: sessionID)
+        let second = try agent.makeSession(id: sessionID)
         let run = try await first.run("first")
         let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 1)
         XCTAssertEqual(enteredResult, .completed)
@@ -484,13 +522,13 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let sessionID = UUID()
         let operationID = "queue-operation-1"
 
-        let first = agent.makeSession(id: sessionID, journal: journal)
+        let first = try agent.makeSession(id: sessionID, journal: journal)
         _ = try await first.run("Update the listing", operationID: operationID).wait()
         let firstCount = await probe.count
         XCTAssertEqual(firstCount, 1)
 
         let restartedJournal = try AgentJournal.load(from: url)
-        let restarted = agent.makeSession(id: sessionID, journal: restartedJournal)
+        let restarted = try agent.makeSession(id: sessionID, journal: restartedJournal)
         do {
             _ = try await restarted.run("Update the listing", operationID: operationID).wait()
             XCTFail("A settled operation must not be replayed after restart")
@@ -511,11 +549,11 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let agent = try Agent(model: fixtureModel, provider: provider, instructions: "Be concise.")
         let sessionID = UUID()
 
-        let first = agent.makeSession(id: sessionID, journal: journal)
+        let first = try agent.makeSession(id: sessionID, journal: journal)
         _ = try await first.run("first request").wait()
 
         let restartedJournal = try AgentJournal.load(from: url)
-        let restarted = agent.makeSession(id: sessionID, journal: restartedJournal)
+        let restarted = try agent.makeSession(id: sessionID, journal: restartedJournal)
         _ = try await restarted.run("second request").wait()
 
         let requests = await provider.log.requests
@@ -561,7 +599,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
 
         let provider = ScriptedProvider { request, _ in textResponse(request, "Done") }
         let agent = try Agent(model: fixtureModel, provider: provider)
-        let session = agent.makeSession(id: sessionID, journal: sessionJournal)
+        let session = try agent.makeSession(id: sessionID, journal: sessionJournal)
 
         do {
             _ = try await session.run("blocked")

@@ -86,7 +86,7 @@ struct AgentRunTests {
             return textResponse(request, "A2")
         }
         let agent = try Agent(model: fixtureModel, provider: provider)
-        let a = agent.makeSession(), b = agent.makeSession()
+        let a = try agent.makeSession(), b = try agent.makeSession()
         let firstA = try await a.run("A"), firstB = try await b.run("B")
         #expect(await XCTWaiter.fulfillment(of: [enteredA, enteredB], timeout: 1) == .completed)
         await firstA.cancel()

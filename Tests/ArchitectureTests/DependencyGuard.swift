@@ -22,12 +22,15 @@ enum DependencyGuard {
             let imported = ns.substring(with: $0.range(at: 1))
             return allowed.contains(imported) ? nil : "\(module) cannot import \(imported)"
         }
-        if module != "AgentProviders" {
-            let forbidden = #"(?i)\b(?:Otoha|Tingting|Music|Track|Playback|Playlist|AppleMusic|Podcast|Station|AIDiscovery|MainActor)\w*"#
-            let domain = try! NSRegularExpression(pattern: forbidden)
-            failures += domain.matches(in: source, range: NSRange(location: 0, length: ns.length)).map {
-                "\(module) contains forbidden token \(ns.substring(with: $0.range))"
-            }
+        let domainPattern: String
+        if module == "WorkspaceAgent" {
+            domainPattern = #"(?i)\b(?:Otoha|Tingting|Music|Track|Playback|Playlist|AppleMusic|Podcast|Station|AIDiscovery|MainActor)\w*"#
+        } else {
+            domainPattern = #"(?i)\b(?:Otoha|Tingting|Music|Track|Playback|Playlist|AppleMusic|Podcast|Station|AIDiscovery|MainActor|WorkspaceAgent|WorkspaceFile|WorkspacePath)\w*"#
+        }
+        let domain = try! NSRegularExpression(pattern: domainPattern)
+        failures += domain.matches(in: source, range: NSRange(location: 0, length: ns.length)).map {
+            "\(module) contains forbidden token \(ns.substring(with: $0.range))"
         }
         return failures
     }

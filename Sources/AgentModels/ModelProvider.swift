@@ -1,6 +1,12 @@
 import Foundation
 
 /// A single model-turn adapter. It must never execute host tools or own an agent loop.
+///
+/// Event contract: `responseStarted` once, then deltas, then exactly one
+/// `responseCompleted` on a clean stream. After a thrown `ModelProviderError`
+/// there is no terminal event. Usage snapshots are cumulative; a nil field
+/// leaves the previous count unchanged. Cancelling the consumer must cancel
+/// the producer and the underlying request.
 public protocol ModelProvider: Sendable {
     var descriptor: ModelProviderDescriptor { get }
 

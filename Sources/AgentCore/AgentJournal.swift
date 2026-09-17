@@ -157,7 +157,7 @@ public enum AgentJournalRecovery: Equatable, Sendable {
     case truncatedTail
 }
 
-public enum AgentJournalDurability: Sendable {
+package enum AgentJournalDurability: Sendable {
     case memory
     case durable
 }
@@ -198,7 +198,13 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     }
 }
 
-/// A single-writer, typed append-only journal. Durable frames are fsync'ed before memory is advanced.
+/// Durable typed lifecycle log. Mutation success is settlement from a trusted
+/// receipt, never an executor that merely returned. Hosts inspect pending
+/// work, recover after a crash, reconcile or abort. They cannot append a
+/// settlement event directly.
+///
+/// Read-only Agents may omit a journal. Mutation tools require one at
+/// Session creation. Crash recovery needs `init(persistenceURL:)`.
 public actor AgentJournal {
     private struct JournalFrame: Codable {
         let schemaVersion: Int
@@ -269,7 +275,7 @@ public actor AgentJournal {
     /// Holds an OS-backed lease for one persistent Session identity. The file
     /// descriptor remains open for the lifetime of the lease, so a crashed
     /// process cannot strand the lease behind a stale marker file.
-    public func acquireSessionLease(sessionID: UUID) throws {
+    package func acquireSessionLease(sessionID: UUID) throws {
         guard let persistenceURL else { return }
         guard sessionLeases[sessionID] == nil else {
             throw AgentJournalError.sessionLeaseUnavailable
@@ -311,7 +317,7 @@ public actor AgentJournal {
         sessionLeases[sessionID] = handle
     }
 
-    public func releaseSessionLease(sessionID: UUID) {
+    package func releaseSessionLease(sessionID: UUID) {
         guard let handle = sessionLeases.removeValue(forKey: sessionID) else { return }
         #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Linux)
         _ = swiftAgentFlock(handle.fileDescriptor, SwiftAgentFileLockOperation.unlock)
@@ -335,7 +341,7 @@ public actor AgentJournal {
     public var recovery: AgentJournalRecovery { recoveryState }
 
     @discardableResult
-    public func append(
+    package func append(
         _ event: AgentJournalEvent,
         sessionID: UUID,
         runID: UUID? = nil,
@@ -352,7 +358,7 @@ public actor AgentJournal {
     }
 
     @discardableResult
-    public func appendCheckpoint(
+    package func appendCheckpoint(
         _ events: [AgentJournalEvent],
         sessionID: UUID,
         runID: UUID? = nil,
@@ -423,7 +429,7 @@ public actor AgentJournal {
     }
 
     /// Records that a mutation executor was reached without a trusted successful receipt.
-    public func markMutationNeedsReconciliation(sessionID: UUID, runID: UUID, callID: ToolCallID) throws {
+    package func markMutationNeedsReconciliation(sessionID: UUID, runID: UUID, callID: ToolCallID) throws {
         let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
         guard let record = mutationRecords[key] else { return }
         guard record.state == .intent else { return }
@@ -432,7 +438,7 @@ public actor AgentJournal {
     }
 
     /// Settles an executor-reported receipt only after it validates against the durable intent.
-    public func settleMutation(sessionID: UUID, runID: UUID, callID: ToolCallID, receipt: ToolReceipt) throws {
+    package func settleMutation(sessionID: UUID, runID: UUID, callID: ToolCallID, receipt: ToolReceipt) throws {
         let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
         guard let record = mutationRecords[key] else { throw AgentJournalError.mutationNotFound }
         guard record.state == .intent else { throw AgentJournalError.mutationRequiresReconciliation }
@@ -455,7 +461,7 @@ public actor AgentJournal {
     /// resulting canonical history checkpoint in the same durable frame.
     /// If persistence fails, the in-memory intent remains unsettled so a later
     /// recovery pass can quarantine it instead of replaying the mutation.
-    public func commitMutation(
+    package func commitMutation(
         sessionID: UUID,
         runID: UUID,
         callID: ToolCallID,
@@ -520,6 +526,23 @@ public actor AgentJournal {
         _ = try appendCheckpoint(events,
                                  sessionID: pending.sessionID, runID: pending.runID, timestamp: Date(),
                                  durability: .durable, allowMutationSettlement: true)
+    }
+
+    /// Closes a quarantined intent without executing the original tool.
+    public func abortMutation(_ pending: PendingMutationRecovery) throws {
+        let key = MutationKey(sessionID: pending.sessionID, runID: pending.runID, callID: pending.intent.call.id)
+        guard let record = mutationRecords[key], record.intent == pending.intent else {
+            throw AgentJournalError.mutationIntentConflict
+        }
+        guard record.state == .needsReconciliation, pending.state == .needsReconciliation else {
+            throw AgentJournalError.mutationRequiresReconciliation
+        }
+        _ = try append(
+            .mutationAborted(callID: pending.intent.call.id),
+            sessionID: pending.sessionID,
+            runID: pending.runID,
+            durability: .durable
+        )
     }
 
     private func applying(
@@ -947,7 +970,7 @@ public actor AgentJournal {
 }
 
 extension AgentJournal: ToolMutationAdmission {
-    public func admit(_ request: ToolMutationAdmissionRequest) async throws {
+    package func admit(_ request: ToolMutationAdmissionRequest) async throws {
         guard !request.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !request.callID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !request.argumentsJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

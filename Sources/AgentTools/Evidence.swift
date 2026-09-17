@@ -25,6 +25,9 @@ public struct EvidenceReference: Hashable, Sendable, Codable {
     }
 }
 
+/// A trusted observation of a host resource. Namespace and id form identity;
+/// metadata may carry a version such as a content hash. The model cannot mint
+/// Evidence; only tools and hosts record it.
 public struct Evidence: Hashable, Sendable, Codable {
     public let namespace: String
     public let id: String

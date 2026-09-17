@@ -3,6 +3,8 @@ public struct AgentBudget: Sendable {
     public let maxToolCalls: Int
     public let deadline: ContinuousClock.Instant
 
+    /// Finite per-run limits. Model turns must be positive; tool calls may be zero.
+
     public init(maxModelTurns: Int, maxToolCalls: Int, deadline: ContinuousClock.Instant) throws {
         guard maxModelTurns > 0, maxToolCalls >= 0 else { throw AgentLoopError.invalidBudget }
         self.maxModelTurns = maxModelTurns

@@ -33,9 +33,9 @@ struct AppleExecutionBoundaryTests {
         }
         let agent = try Agent(model: AppleFoundationProvider.modelID, provider: provider,
                                tools: [BoundaryTool(probe: probe, effect: .mutation)])
-        await #expect(throws: ToolInvocationError.mutationIntegrityUnavailable) { try await agent.makeSession().run("Change").wait() }
+        #expect(throws: AgentSessionError.durableJournalRequired) { try agent.makeSession() }
         #expect(await probe.executions == 0)
-        #expect(await probe.requests.count == 1)
+        #expect(await probe.requests.isEmpty)
     }
 
     @Test func cancelledNativeWorkCannotPublishALateToolPlan() async throws {

@@ -1,3 +1,5 @@
+/// Scheduling and integrity rules for one tool. Prefer `readOnly()` and
+/// `mutation()` unless a read tool must run sequentially.
 public struct ToolPolicy: Hashable, Codable, Sendable {
     public enum Effect: String, Hashable, Codable, Sendable { case readOnly, mutation }
     public enum Execution: String, Hashable, Codable, Sendable { case parallel, sequential, exclusive }
@@ -31,6 +33,32 @@ public struct ToolPolicy: Hashable, Codable, Sendable {
         self.timeout = timeout
         self.authorization = authorization
         self.evidence = evidence
+    }
+
+    /// Parallel, retry-safe observation. Authorization still defaults to required.
+    public static func readOnly(
+        timeout: Duration = .seconds(5),
+        authorization: Authorization = .required,
+        evidence: EvidencePolicy = .none
+    ) throws -> ToolPolicy {
+        try ToolPolicy(
+            effect: .readOnly, execution: .parallel, idempotency: .safe,
+            timeout: timeout, authorization: authorization, evidence: evidence
+        )
+    }
+
+    /// Exclusive mutation. Existing files and other unique targets should also
+    /// declare Evidence and a receipt expectation on the tool itself.
+    public static func mutation(
+        idempotency: Idempotency = .requiresReceipt,
+        timeout: Duration = .seconds(5),
+        authorization: Authorization = .required,
+        evidence: EvidencePolicy = .required
+    ) throws -> ToolPolicy {
+        try ToolPolicy(
+            effect: .mutation, execution: .exclusive, idempotency: idempotency,
+            timeout: timeout, authorization: authorization, evidence: evidence
+        )
     }
 }
 

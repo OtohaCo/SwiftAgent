@@ -1,6 +1,7 @@
 import Foundation
 
-/// Confirmation supplied by a trusted executor, not decoded from model-facing output.
+/// Confirmation supplied by a trusted executor, not decoded from model-facing
+/// output. A missing or mismatched receipt is not success.
 public struct ToolReceipt: Codable, Equatable, Hashable, Sendable {
     public enum Status: String, Codable, Sendable { case succeeded, failed, indeterminate }
     public enum Failure: String, Codable, Sendable { case rejected, conflict, unavailable, unknown }
