@@ -77,6 +77,7 @@ public struct AgentLoop: Sendable {
         var history = messages
         var modelTurns = 0
         var toolCalls = 0
+        var receipts: [AgentToolReceipt] = []
         var usedCallIDs = Set<ToolCallID>()
         for message in messages {
             switch message {
@@ -132,7 +133,7 @@ public struct AgentLoop: Sendable {
                 if !response.content.isEmpty { history.append(.assistant(content: response.content, toolCalls: [])) }
                 try await lifecycle?.checkpoint(history, [])
                 return AgentLoopResult(response: response, history: history, outcome: outcome,
-                                       modelTurns: modelTurns, toolCalls: toolCalls)
+                                       modelTurns: modelTurns, toolCalls: toolCalls, receipts: receipts)
             }
             guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
             guard response.toolCalls.count <= budget.maxToolCalls - toolCalls else { throw AgentLoopError.toolCallLimitReached }
@@ -166,6 +167,11 @@ public struct AgentLoop: Sendable {
                         + Array(history.suffix(index + 1))
                     try await lifecycle.checkpoint(checkpoint, [])
                 }
+                if let receipt = result.receipt {
+                    let validated = AgentToolReceipt(callID: call.call.id, effect: call.policy.effect, receipt: receipt)
+                    receipts.append(validated)
+                    try await emitter?.send(.toolReceiptValidated(validated))
+                }
                 try await emitter?.send(.toolCompleted(message))
             }
         }
@@ -198,6 +204,7 @@ public struct AgentLoopResult: Equatable, Sendable {
     public let outcome: AgentLoopOutcome
     public let modelTurns: Int
     public let toolCalls: Int
+    public let receipts: [AgentToolReceipt]
 }
 
 public enum AgentLoopError: Error, Equatable, Sendable {

@@ -73,3 +73,6 @@ history, independent sessions and explicit cancel/steer/wait control.
 
 [Evidence](../docs/guides/swift-agent-evidence.md) defines trusted resource
 observations, run/session scope, expiry and tool requirement binding.
+
+[Receipts](../docs/guides/swift-agent-receipts.md) defines executor confirmations,
+operation/target/revision binding and the remaining mutation admission requirements.

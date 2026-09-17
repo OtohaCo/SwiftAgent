@@ -21,6 +21,7 @@ public enum AgentEvent: Equatable, Sendable {
     /// Begins a runtime attempt, including authorization; not proof of an external effect.
     case toolStarted(ToolCall)
     case toolCompleted(ToolResultMessage)
+    case toolReceiptValidated(AgentToolReceipt)
     case toolFailed(ToolCallID, AgentFailure)
     case steeringApplied(id: UUID, text: String)
     case runFinished(AgentRunTermination)
@@ -40,6 +41,7 @@ public enum AgentFailure: Error, Equatable, Sendable {
     case toolRegistry(ToolRegistryError)
     case toolInvocation(ToolInvocationError)
     case evidence(EvidenceError)
+    case receipt(ToolReceiptError)
     case cancelled
     case unclassified
 
@@ -52,7 +54,15 @@ public enum AgentFailure: Error, Equatable, Sendable {
         case let error as ToolRegistryError: self = .toolRegistry(error)
         case let error as ToolInvocationError: self = .toolInvocation(error)
         case let error as EvidenceError: self = .evidence(error)
+        case let error as ToolReceiptError: self = .receipt(error)
         default: self = .unclassified
         }
     }
+}
+
+/// A receipt accepted by the runtime, with the declared effect of its tool.
+public struct AgentToolReceipt: Equatable, Sendable {
+    public let callID: ToolCallID
+    public let effect: ToolPolicy.Effect
+    public let receipt: ToolReceipt
 }

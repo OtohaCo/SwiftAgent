@@ -28,11 +28,15 @@ public struct AnyAgentTool: Sendable {
             }
             let requirements = policy.evidence == .required ? try tool.evidenceRequirements(for: input) : []
             if policy.evidence == .required { try EvidenceLedger.checkRequirements(requirements) }
+            let receiptExpectation = try tool.receiptExpectation(for: input)
+            let requiresReceipt = policy.effect == .mutation || policy.idempotency == .requiresReceipt || receiptExpectation != nil
+            if policy.effect == .readOnly && requiresReceipt && receiptExpectation == nil {
+                throw ToolInvocationError.receiptValidationUnavailable
+            }
             return { context in
                 try context.checkActive()
                 guard policy.effect == .readOnly else { throw ToolInvocationError.mutationIntegrityUnavailable }
-                guard policy.idempotency != .requiresReceipt else { throw ToolInvocationError.receiptValidationUnavailable }
-                if policy.idempotency == .keyed {
+                if policy.idempotency == .keyed || requiresReceipt {
                     guard let key = context.idempotencyKey,
                           !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw ToolInvocationError.missingIdempotencyKey
@@ -47,6 +51,11 @@ public struct AnyAgentTool: Sendable {
                 }
                 let result = try await tool.execute(input, context: context)
                 try context.checkActive()
+                if requiresReceipt || result.receipt != nil {
+                    guard let receiptExpectation else { throw ToolReceiptError.unexpectedReceipt }
+                    guard let operationID = context.idempotencyKey else { throw ToolInvocationError.missingIdempotencyKey }
+                    try ToolReceiptValidator.validate(result.receipt, operationID: operationID, expectation: receiptExpectation)
+                }
                 let output: JSONValue
                 do {
                     output = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(result.output))
@@ -56,7 +65,7 @@ public struct AnyAgentTool: Sendable {
                     throw ToolInvocationError.invalidOutput
                 }
                 try context.checkActive()
-                return ToolResult(output: output, evidence: result.evidence)
+                return ToolResult(output: output, evidence: result.evidence, receipt: result.receipt)
             }
         }
     }
