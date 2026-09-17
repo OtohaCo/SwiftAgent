@@ -13,6 +13,8 @@ swift test
 ```
 
 The package has no external dependencies and does not require the host Xcode project.
+Apple deployment minimums are declared in [Package.swift](Package.swift). Platform
+providers may impose higher availability requirements within their adapters.
 Apple/Linux portability is a design constraint; platform validation results live in
 the task acceptance records.
 

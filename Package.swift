@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "SwiftAgent",
+    platforms: [.macOS(.v13), .iOS(.v16)],
     products: [
         .library(name: "AgentModels", targets: ["AgentModels"]),
         .library(name: "AgentTools", targets: ["AgentTools"]),
