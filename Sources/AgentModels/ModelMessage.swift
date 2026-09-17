@@ -33,6 +33,14 @@ public struct ToolCallID: RawRepresentable, Hashable, Sendable, Codable {
     public init(rawValue: String) {
         self.rawValue = rawValue
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.rawValue.utf8.elementsEqual(rhs.rawValue.utf8)
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(Array(rawValue.utf8))
+    }
 }
 
 public struct ToolCall: Hashable, Sendable, Codable {
@@ -57,6 +65,19 @@ public struct ToolCall: Hashable, Sendable, Codable {
         self.name = name
         self.argumentsJSON = argumentsJSON
         self.completeness = completeness
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id && lhs.completeness == rhs.completeness
+            && lhs.name.utf8.elementsEqual(rhs.name.utf8)
+            && lhs.argumentsJSON.utf8.elementsEqual(rhs.argumentsJSON.utf8)
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(completeness)
+        hasher.combine(Array(name.utf8))
+        hasher.combine(Array(argumentsJSON.utf8))
     }
 }
 

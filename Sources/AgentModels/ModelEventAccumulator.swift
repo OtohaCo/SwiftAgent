@@ -58,8 +58,8 @@ public struct ModelEventAccumulator: Sendable {
         case .toolCallCompleted(let call):
             guard let pending = calls[call.id] else { throw ModelStreamError.unknownToolCall(call.id) }
             guard pending.completeness == .incomplete else { throw ModelStreamError.toolAlreadyCompleted(call.id) }
-            guard call.completeness == .complete, call.name == pending.name,
-                  call.argumentsJSON == pending.argumentsJSON else {
+            guard call.completeness == .complete, call.name.utf8.elementsEqual(pending.name.utf8),
+                  call.argumentsJSON.utf8.elementsEqual(pending.argumentsJSON.utf8) else {
                 throw ModelStreamError.toolCallMismatch(call.id)
             }
             guard (try? JSONValue.decodeToolArguments(call.argumentsJSON)) != nil else {
@@ -67,23 +67,34 @@ public struct ModelEventAccumulator: Sendable {
             }
             calls[call.id] = call
         case .usage(let newer):
-            let counts = [newer.inputTokens, newer.outputTokens, newer.cachedInputTokens,
-                          newer.cacheWriteInputTokens, newer.reasoningTokens]
-            guard counts.compactMap({ $0 }).allSatisfy({ $0 >= 0 }) else {
-                throw ModelStreamError.invalidUsage
-            }
-            usage = ModelUsage(
+            let merged = ModelUsage(
                 inputTokens: newer.inputTokens ?? usage.inputTokens,
                 outputTokens: newer.outputTokens ?? usage.outputTokens,
                 cachedInputTokens: newer.cachedInputTokens ?? usage.cachedInputTokens,
                 cacheWriteInputTokens: newer.cacheWriteInputTokens ?? usage.cacheWriteInputTokens,
                 reasoningTokens: newer.reasoningTokens ?? usage.reasoningTokens
             )
+            let counts = [(usage.inputTokens, merged.inputTokens), (usage.outputTokens, merged.outputTokens),
+                          (usage.cachedInputTokens, merged.cachedInputTokens),
+                          (usage.cacheWriteInputTokens, merged.cacheWriteInputTokens),
+                          (usage.reasoningTokens, merged.reasoningTokens)]
+            guard counts.allSatisfy({ previous, current in
+                guard let current else { return true }
+                return current >= 0 && (previous.map { current >= $0 } ?? true)
+            }) else { throw ModelStreamError.invalidUsage }
+            usage = merged
         case .responseCompleted(let response):
             guard response.info == info, response.content == content, response.usage == usage,
                   response.toolCalls == callOrder.compactMap({ calls[$0] }) else {
                 throw ModelStreamError.responseMismatch
             }
+            // Providers may deliver totals after subsets; seal consistency at the terminal boundary.
+            let subsets = [(usage.inputTokens, usage.cachedInputTokens), (usage.inputTokens, usage.cacheWriteInputTokens),
+                           (usage.outputTokens, usage.reasoningTokens)]
+            guard subsets.allSatisfy({ total, subset in
+                guard let total, let subset else { return true }
+                return subset <= total
+            }) else { throw ModelStreamError.invalidUsage }
             switch response.stopReason {
             case .toolCalls:
                 guard !calls.isEmpty, calls.values.allSatisfy({ $0.completeness == .complete }) else {
