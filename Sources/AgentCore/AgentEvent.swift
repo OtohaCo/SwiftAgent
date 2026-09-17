@@ -43,6 +43,7 @@ public enum AgentFailure: Error, Equatable, Sendable {
     case evidence(EvidenceError)
     case receipt(ToolReceiptError)
     case resource(ToolResourceError)
+    case journal(AgentJournalError)
     case cancelled
     case unclassified
 
@@ -57,6 +58,7 @@ public enum AgentFailure: Error, Equatable, Sendable {
         case let error as EvidenceError: self = .evidence(error)
         case let error as ToolReceiptError: self = .receipt(error)
         case let error as ToolResourceError: self = .resource(error)
+        case let error as AgentJournalError: self = .journal(error)
         default: self = .unclassified
         }
     }

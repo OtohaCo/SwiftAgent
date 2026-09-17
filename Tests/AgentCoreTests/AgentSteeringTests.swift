@@ -85,10 +85,10 @@ struct AgentSteeringTests {
         let checkpoint: [ModelMessage] = [.user([.text("original")]), .assistant(content: [], toolCalls: [call]),
             .tool(.init(callID: call.id, content: [.json(.object(["sum": .number(5)]))], isError: false)), .user([.text("remember")])]
         #expect(await session.history == checkpoint)
-        let next = try await session.run("continue")
-        _ = try await next.wait()
         await gate.open()
         #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        let next = try await session.run("continue")
+        _ = try await next.wait()
         #expect(await session.history == checkpoint + [.user([.text("continue")]), .assistant(content: [.text("Next")], toolCalls: [])])
         await #expect(throws: AgentRunError.finished) { try await run.steer("late") }
     }

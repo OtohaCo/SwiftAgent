@@ -9,6 +9,7 @@ public struct AnyAgentTool: Sendable {
     package typealias Invocation = @Sendable (ToolContext) async throws -> ToolResult<JSONValue>
     package struct PreparedInvocation: Sendable {
         let resources: [ToolResource]
+        let receiptExpectation: ToolReceiptExpectation?
         let invoke: Invocation
     }
     private let decode: @Sendable (JSONValue) throws -> PreparedInvocation
@@ -39,9 +40,13 @@ public struct AnyAgentTool: Sendable {
             if policy.effect == .readOnly && requiresReceipt && receiptExpectation == nil {
                 throw ToolInvocationError.receiptValidationUnavailable
             }
-            return PreparedInvocation(resources: resources) { context in
+            return PreparedInvocation(resources: resources, receiptExpectation: receiptExpectation) { context in
                 try context.checkActive()
-                guard policy.effect == .readOnly else { throw ToolInvocationError.mutationIntegrityUnavailable }
+                if policy.effect == .mutation {
+                    guard context.mutationAdmission != nil, context.argumentsJSON != nil else {
+                        throw ToolInvocationError.mutationIntegrityUnavailable
+                    }
+                }
                 if policy.idempotency == .keyed || requiresReceipt {
                     guard let key = context.idempotencyKey,
                           !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -54,6 +59,21 @@ public struct AnyAgentTool: Sendable {
                     try context.checkActive()
                     guard authorization == .allowed else { throw ToolInvocationError.authorizationDenied }
                     try await Self.validateEvidence(requirements, context: context)
+                }
+                if policy.effect == .mutation {
+                    let mutationAdmission = context.mutationAdmission!
+                    let argumentsJSON = context.argumentsJSON!
+                    try await mutationAdmission.admit(.init(
+                        sessionID: context.sessionID,
+                        runID: context.runID,
+                        callID: context.callID,
+                        name: T.name,
+                        argumentsJSON: argumentsJSON,
+                        resources: resources,
+                        idempotencyKey: context.idempotencyKey ?? "",
+                        receiptExpectation: receiptExpectation
+                    ))
+                    try context.checkActive()
                 }
                 let result = try await tool.execute(input, context: context)
                 try context.checkActive()

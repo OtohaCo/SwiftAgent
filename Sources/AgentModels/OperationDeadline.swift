@@ -3,17 +3,29 @@
 package func withOperationDeadline<Value: Sendable>(
     _ deadline: ContinuousClock.Instant,
     timeoutError: any Error,
-    operation: @escaping @Sendable () async throws -> Value
+    operation: @escaping @Sendable () async throws -> Value,
+    onOperationFinished: @escaping @Sendable () async -> Void = {}
 ) async throws -> Value {
-    try Task.checkCancellation()
-    guard ContinuousClock.now < deadline else { throw timeoutError }
+    do {
+        try Task.checkCancellation()
+        guard ContinuousClock.now < deadline else { throw timeoutError }
+    } catch {
+        // The caller may have registered the operation before this preflight.
+        await onOperationFinished()
+        throw error
+    }
     let race = OperationDeadlineResult<Value>()
     let worker = Task {
         do {
             try Task.checkCancellation()
             guard ContinuousClock.now < deadline else { throw timeoutError }
-            await race.resolve(.success(try await operation()))
-        } catch { await race.resolve(.failure(error)) }
+            let value = try await operation()
+            await onOperationFinished()
+            await race.resolve(.success(value))
+        } catch {
+            await onOperationFinished()
+            await race.resolve(.failure(error))
+        }
     }
     let timer = Task {
         do {

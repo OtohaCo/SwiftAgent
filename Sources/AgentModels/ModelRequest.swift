@@ -1,3 +1,5 @@
+import Foundation
+
 public struct ModelID: Hashable, Sendable, Codable {
     /// An open namespace, not an enumeration of supported vendors.
     public let provider: String
@@ -54,16 +56,23 @@ public struct ModelRequest: Hashable, Sendable, Codable {
     public let messages: [ModelMessage]
     public let tools: [ModelToolDefinition]
     public let structuredOutput: StructuredOutputSchema?
+    /// Optional caller identity used by cross-turn infrastructure such as fallback guards.
+    public let sessionID: UUID?
+    public let runID: UUID?
 
     public init(
         model: ModelID,
         messages: [ModelMessage],
         tools: [ModelToolDefinition] = [],
-        structuredOutput: StructuredOutputSchema? = nil
+        structuredOutput: StructuredOutputSchema? = nil,
+        sessionID: UUID? = nil,
+        runID: UUID? = nil
     ) {
         self.model = model
         self.messages = messages
         self.tools = tools
         self.structuredOutput = structuredOutput
+        self.sessionID = sessionID
+        self.runID = runID
     }
 }

@@ -21,19 +21,35 @@ actor AgentToolBatchProgress {
     }
 
     func record(index: Int, call: PreparedToolCall, result: ToolResult<JSONValue>) async throws {
-        try budget.checkActive()
-        let message = ToolResultMessage(callID: call.call.id, content: [.json(result.output)], isError: false)
-        try await emitter?.reserveCompletion(call.call.id)
-        var proposed = results
-        proposed[index] = message
         do {
-            try await lifecycle?.checkpoint(history(proposed), [])
+            try budget.checkActive()
+            let message = ToolResultMessage(callID: call.call.id, content: [.json(result.output)], isError: false)
+            try await emitter?.reserveCompletion(call.call.id)
+            var proposed = results
+            proposed[index] = message
+            let committedHistory = history(proposed)
+            if call.policy.effect == .mutation {
+                guard let receipt = result.receipt else { throw ToolReceiptError.missing }
+                if let commitMutation = lifecycle?.commitMutation {
+                    try await commitMutation(call.call.id, receipt, committedHistory, [])
+                } else {
+                    try await lifecycle?.recordMutationReceipt(call.call.id, receipt)
+                    try await lifecycle?.checkpoint(committedHistory, [])
+                }
+            } else {
+                try await lifecycle?.checkpoint(committedHistory, [])
+            }
             results = proposed
             let receipt = result.receipt.map { AgentToolReceipt(callID: call.call.id, effect: call.policy.effect, receipt: $0) }
             if let receipt { receipts.append(receipt) }
             // A committed checkpoint must be reflected in events even if cancellation arrived afterward.
             try await emitter?.commitCompletion(message, receipt: receipt)
         } catch {
+            // The executor already returned. Any failure while settling or committing
+            // must quarantine a mutation before the run reports its failure.
+            if call.policy.effect == .mutation {
+                try await lifecycle?.markMutationNeedsReconciliation(call.call.id)
+            }
             await emitter?.abortCompletion(call.call.id, failure: AgentFailure(error))
             throw error
         }

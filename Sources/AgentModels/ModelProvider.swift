@@ -1,3 +1,5 @@
+import Foundation
+
 /// A single model-turn adapter. It must never execute host tools or own an agent loop.
 public protocol ModelProvider: Sendable {
     var descriptor: ModelProviderDescriptor { get }
@@ -5,6 +7,20 @@ public protocol ModelProvider: Sendable {
     /// Emit the Model Event Contract and finish, or throw a classified failure.
     /// Consumer cancellation must cancel the underlying request and producer task.
     func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error>
+}
+
+/// Optional host hook for providers whose cancelled transport can outlive the
+/// model event consumer. Hosts that must replace a run before starting another
+/// one can await this hook without changing the responsive `AgentRun.cancel()`
+/// contract.
+public protocol ModelProviderRunDrain: Sendable {
+    func waitForRunToDrain(sessionID: UUID, runID: UUID) async
+}
+
+/// Optional hook for a route that must stop switching providers after an external effect is reached.
+public protocol ModelProviderMutationBoundary: Sendable {
+    func markMutationBoundary(sessionID: UUID, runID: UUID) async
+    func clearMutationBoundary(sessionID: UUID, runID: UUID) async
 }
 
 public struct ModelProviderDescriptor: Hashable, Sendable, Codable {
@@ -31,6 +47,7 @@ public struct ModelProviderError: Error, Equatable, Sendable {
         case unavailable
         case transport
         case invalidResponse
+        case fallbackBlocked
     }
 
     public let kind: Kind

@@ -83,6 +83,8 @@ operation/target/revision binding and the remaining mutation admission requireme
 
 [Journal](../docs/guides/swift-agent-journal.md) defines typed lifecycle records,
 durable checkpoints, crash-tail recovery and fail-closed persistence behavior.
+It also defines durable mutation admission and explicit reconciliation without
+automatic executor replay.
 
 [Apple Foundation Models](../docs/guides/swift-agent-apple-provider.md) documents
 the on-device planning adapter, execution boundary and opt-in live verification.

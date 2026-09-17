@@ -1,3 +1,6 @@
+import AgentModels
+import Foundation
+
 public protocol AgentTool: Sendable {
     associatedtype Input: Codable & Sendable
     associatedtype Output: Codable & Sendable
@@ -13,6 +16,42 @@ public protocol AgentTool: Sendable {
     func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation?
     func authorize(_ input: Input, context: ToolContext) async throws -> ToolAuthorization
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output>
+}
+
+/// Trusted runtime admission required immediately before a mutation executor runs.
+public protocol ToolMutationAdmission: Sendable {
+    func admit(_ request: ToolMutationAdmissionRequest) async throws
+}
+
+public struct ToolMutationAdmissionRequest: Codable, Equatable, Sendable {
+    public let sessionID: UUID
+    public let runID: UUID
+    public let callID: ToolCallID
+    public let name: String
+    public let argumentsJSON: String
+    public let resources: [ToolResource]
+    public let idempotencyKey: String
+    public let receiptExpectation: ToolReceiptExpectation?
+
+    public init(
+        sessionID: UUID,
+        runID: UUID,
+        callID: ToolCallID,
+        name: String,
+        argumentsJSON: String,
+        resources: [ToolResource],
+        idempotencyKey: String,
+        receiptExpectation: ToolReceiptExpectation?
+    ) {
+        self.sessionID = sessionID
+        self.runID = runID
+        self.callID = callID
+        self.name = name
+        self.argumentsJSON = argumentsJSON
+        self.resources = resources
+        self.idempotencyKey = idempotencyKey
+        self.receiptExpectation = receiptExpectation
+    }
 }
 
 public enum ToolAuthorization: Sendable { case allowed, denied }

@@ -4,8 +4,15 @@ import Foundation
 /// Share one scheduler wherever agents operate on the same host resources.
 public struct ToolScheduler: Sendable {
     private let coordinator = ToolResourceCoordinator()
+    private let drain = ToolExecutionDrain()
 
     public init() {}
+
+    /// Wait until all work belonging to one run has returned from its host
+    /// executor, including work that outlived a timeout or cancellation.
+    public func waitForRunToDrain(sessionID: UUID, runID: UUID) async {
+        await drain.wait(.init(sessionID: sessionID, runID: runID))
+    }
 
     package func execute(
         _ calls: [PreparedToolCall], deadline: ContinuousClock.Instant,
@@ -48,6 +55,11 @@ public struct ToolScheduler: Sendable {
                 let toolDeadline = min(deadline, ContinuousClock.now.advanced(by: call.policy.timeout))
                 try await onStarted(call)
                 group.addTask {
+                    let drainKey = ToolExecutionDrain.Key(
+                        sessionID: call.contextSessionID,
+                        runID: call.contextRunID
+                    )
+                    await drain.begin(drainKey)
                     do {
                         let timeoutError: ToolSchedulerError = toolDeadline == deadline ? .deadlineExceeded : .toolTimedOut(call.call.id)
                         let result = try await withOperationDeadline(toolDeadline, timeoutError: timeoutError) {
@@ -62,6 +74,8 @@ public struct ToolScheduler: Sendable {
                                 await coordinator.release(lease)
                                 throw error
                             }
+                        } onOperationFinished: {
+                            await drain.end(drainKey)
                         }
                         return Completion(index: index, call: call, result: .success(result))
                     } catch { return Completion(index: index, call: call, result: .failure(error)) }
@@ -88,6 +102,42 @@ public struct ToolScheduler: Sendable {
 
     private func isParallel(_ call: PreparedToolCall) -> Bool {
         call.policy.effect == .readOnly && call.policy.execution == .parallel
+    }
+}
+
+private actor ToolExecutionDrain {
+    struct Key: Hashable, Sendable {
+        let sessionID: UUID
+        let runID: UUID
+    }
+
+    private var active: [Key: Int] = [:]
+    private var waiters: [Key: [CheckedContinuation<Void, Never>]] = [:]
+
+    func begin(_ key: Key) {
+        active[key, default: 0] += 1
+    }
+
+    func end(_ key: Key) {
+        guard let count = active[key] else { return }
+        guard count == 1 else {
+            active[key] = count - 1
+            return
+        }
+        active.removeValue(forKey: key)
+        let continuations = waiters.removeValue(forKey: key) ?? []
+        continuations.forEach { $0.resume() }
+    }
+
+    func wait(_ key: Key) async {
+        guard active[key] != nil else { return }
+        await withCheckedContinuation { continuation in
+            if active[key] != nil {
+                waiters[key, default: []].append(continuation)
+            } else {
+                continuation.resume()
+            }
+        }
     }
 }
 

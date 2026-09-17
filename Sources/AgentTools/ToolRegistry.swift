@@ -51,7 +51,8 @@ public struct ToolRegistry: Sendable {
         catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidArguments(error) }
         let invocation = try registration.tool.prepare(arguments: arguments)
         try context.checkActive()
-        return PreparedToolCall(call: call, policy: registration.tool.policy, resources: invocation.resources, context: context) { executionContext in
+        return PreparedToolCall(call: call, policy: registration.tool.policy, resources: invocation.resources,
+                                receiptExpectation: invocation.receiptExpectation, context: context) { executionContext in
             let result = try await invocation.invoke(executionContext)
             do { try registration.output.validate(result.output) }
             catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidOutput(error) }
@@ -71,13 +72,17 @@ public struct PreparedToolCall: Sendable {
     public let call: ToolCall
     public let policy: ToolPolicy
     public let resources: [ToolResource]
+    package var contextSessionID: UUID { context.sessionID }
+    package var contextRunID: UUID { context.runID }
+    package let receiptExpectation: ToolReceiptExpectation?
     private let context: ToolContext
     private let operation: AnyAgentTool.Invocation
 
-    fileprivate init(call: ToolCall, policy: ToolPolicy, resources: [ToolResource], context: ToolContext, operation: @escaping AnyAgentTool.Invocation) {
+    fileprivate init(call: ToolCall, policy: ToolPolicy, resources: [ToolResource], receiptExpectation: ToolReceiptExpectation?, context: ToolContext, operation: @escaping AnyAgentTool.Invocation) {
         self.call = call
         self.policy = policy
         self.resources = resources
+        self.receiptExpectation = receiptExpectation
         self.context = context
         self.operation = operation
     }
@@ -87,7 +92,8 @@ public struct PreparedToolCall: Sendable {
         if let current = context.deadline, let deadline { effectiveDeadline = min(current, deadline) }
         else { effectiveDeadline = context.deadline ?? deadline }
         let executionContext = ToolContext(sessionID: context.sessionID, runID: context.runID, callID: context.callID,
-            deadline: effectiveDeadline, idempotencyKey: context.idempotencyKey, evidenceLedger: context.evidenceLedger)
+            deadline: effectiveDeadline, idempotencyKey: context.idempotencyKey, argumentsJSON: context.argumentsJSON,
+            evidenceLedger: context.evidenceLedger, mutationAdmission: context.mutationAdmission)
         return try await operation(executionContext)
     }
 }

@@ -151,6 +151,22 @@ final class AgentJournalTests: XCTestCase {
         }
     }
 
+    func testExistingRegularLockFileDoesNotPreventALaterDurableAppend() async throws {
+        let url = temporaryURL()
+        let lockURL = URL(fileURLWithPath: url.path + ".lock")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: lockURL)
+        }
+        let journal = try AgentJournal(persistenceURL: url)
+        XCTAssertTrue(FileManager.default.createFile(atPath: lockURL.path, contents: Data("stale".utf8)))
+
+        _ = try await journal.append(.sessionCreated, sessionID: UUID(), durability: .durable)
+
+        let records = await journal.snapshot()
+        XCTAssertEqual(records.count, 1)
+    }
+
     private func temporaryURL() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("swift-agent-journal-\(UUID().uuidString).log")
     }

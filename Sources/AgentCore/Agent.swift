@@ -1,4 +1,5 @@
 import AgentModels
+import Foundation
 import AgentTools
 
 public struct Agent: Sendable {
@@ -25,8 +26,8 @@ public struct Agent: Sendable {
         self.runTimeout = runTimeout
     }
 
-    public func makeSession() -> AgentSession {
-        AgentSession(loop: loop, instructions: instructions, structuredOutput: structuredOutput, maxModelTurns: maxModelTurns,
-                     maxToolCalls: maxToolCalls, runTimeout: runTimeout)
+    public func makeSession(id: UUID = UUID(), journal: AgentJournal? = nil) -> AgentSession {
+        AgentSession(id: id, loop: loop, instructions: instructions, structuredOutput: structuredOutput, maxModelTurns: maxModelTurns,
+                     maxToolCalls: maxToolCalls, runTimeout: runTimeout, journal: journal)
     }
 }

@@ -18,15 +18,15 @@ public struct AgentLoop: Sendable {
 
     public func run(
         messages: [ModelMessage], sessionID: UUID, runID: UUID = UUID(), budget: AgentBudget,
-        structuredOutput: StructuredOutputSchema? = nil
+        structuredOutput: StructuredOutputSchema? = nil, operationID: String? = nil
     ) async throws -> AgentLoopResult {
         try await execute(messages: messages, sessionID: sessionID, runID: runID, budget: budget,
-                          structuredOutput: structuredOutput, emitter: nil)
+                          structuredOutput: structuredOutput, operationID: operationID, emitter: nil)
     }
 
     public func events(
         messages: [ModelMessage], sessionID: UUID, runID: UUID = UUID(), budget: AgentBudget,
-        structuredOutput: StructuredOutputSchema? = nil
+        structuredOutput: StructuredOutputSchema? = nil, operationID: String? = nil
     ) -> AsyncStream<AgentEvent> {
         let cancelledAtCreation = Task.isCancelled
         return AsyncStream { continuation in
@@ -34,16 +34,30 @@ public struct AgentLoop: Sendable {
             let worker = Task {
                 do {
                     _ = try await execute(messages: messages, sessionID: sessionID, runID: runID, budget: budget,
-                        structuredOutput: structuredOutput, emitter: emitter, cancelledAtCreation: cancelledAtCreation)
+                        structuredOutput: structuredOutput, operationID: operationID, emitter: emitter,
+                        cancelledAtCreation: cancelledAtCreation)
                 } catch { /* execute publishes the terminal error event. */ }
             }
             continuation.onTermination = { @Sendable _ in worker.cancel() }
         }
     }
 
+    public func waitForRunToDrain(sessionID: UUID, runID: UUID) async {
+        async let providerDrain = waitForProviderToDrain(sessionID: sessionID, runID: runID)
+        async let toolDrain = scheduler.waitForRunToDrain(sessionID: sessionID, runID: runID)
+        await providerDrain
+        await toolDrain
+    }
+
+    private func waitForProviderToDrain(sessionID: UUID, runID: UUID) async {
+        guard let provider = provider as? any ModelProviderRunDrain else { return }
+        await provider.waitForRunToDrain(sessionID: sessionID, runID: runID)
+    }
+
     func execute(
         messages: [ModelMessage], sessionID: UUID, runID: UUID, budget: AgentBudget,
-        structuredOutput: StructuredOutputSchema?, emitter: AgentEventEmitter?, cancelledAtCreation: Bool = false,
+        structuredOutput: StructuredOutputSchema?, operationID: String? = nil,
+        emitter: AgentEventEmitter?, cancelledAtCreation: Bool = false,
         lifecycle: AgentLoopLifecycle? = nil
     ) async throws -> AgentLoopResult {
         await emitter?.start(.init(sessionID: sessionID, runID: runID, model: model))
@@ -52,13 +66,16 @@ public struct AgentLoop: Sendable {
             if cancelledAtCreation { throw CancellationError() }
             let result = try await withAgentDeadline(budget.deadline) {
                 try await runBody(messages: messages, sessionID: sessionID, runID: runID,
-                                  budget: budget, structuredOutput: structuredOutput, emitter: emitter, lifecycle: lifecycle, evidenceLedger: evidenceLedger)
+                                  budget: budget, structuredOutput: structuredOutput, operationID: operationID,
+                                  emitter: emitter, lifecycle: lifecycle, evidenceLedger: evidenceLedger)
             }
             await lifecycle?.beforeFinish()
+            await clearMutationBoundary(sessionID: sessionID, runID: runID)
             await emitter?.finish(.result(result))
             return result
         } catch {
             await lifecycle?.beforeFinish()
+            await clearMutationBoundary(sessionID: sessionID, runID: runID)
             await emitter?.finish(error is CancellationError ? .cancelled : .failed(AgentFailure(error)))
             throw error
         }
@@ -66,7 +83,8 @@ public struct AgentLoop: Sendable {
 
     private func runBody(
         messages: [ModelMessage], sessionID: UUID, runID: UUID, budget: AgentBudget,
-        structuredOutput: StructuredOutputSchema?, emitter: AgentEventEmitter?, lifecycle: AgentLoopLifecycle?, evidenceLedger: EvidenceLedger
+        structuredOutput: StructuredOutputSchema?, operationID: String?, emitter: AgentEventEmitter?,
+        lifecycle: AgentLoopLifecycle?, evidenceLedger: EvidenceLedger
     ) async throws -> AgentLoopResult {
         try budget.checkActive()
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else { throw AgentLoopError.providerMismatch }
@@ -101,7 +119,8 @@ public struct AgentLoop: Sendable {
             modelTurns += 1
             try await emitter?.send(.turnStarted(modelTurns))
             try budget.checkActive()
-            let request = ModelRequest(model: model, messages: history, tools: tools.definitions, structuredOutput: structuredOutput)
+            let request = ModelRequest(model: model, messages: history, tools: tools.definitions,
+                                       structuredOutput: structuredOutput, sessionID: sessionID, runID: runID)
             var accumulator = ModelEventAccumulator()
             for try await event in provider.stream(request: request) {
                 try budget.checkActive()
@@ -143,7 +162,10 @@ public struct AgentLoop: Sendable {
             let prepared = try response.toolCalls.map { call in
                 guard usedCallIDs.insert(call.id).inserted else { throw AgentLoopError.reusedToolCallID(call.id) }
                 return try tools.prepare(call, context: ToolContext(sessionID: sessionID, runID: runID,
-                    callID: call.id, deadline: budget.deadline, idempotencyKey: "\(runID.uuidString)/\(call.id.rawValue)", evidenceLedger: evidenceLedger))
+                    callID: call.id, deadline: budget.deadline,
+                    idempotencyKey: Self.idempotencyKey(operationID: operationID, runID: runID, call: call),
+                    argumentsJSON: call.argumentsJSON, evidenceLedger: evidenceLedger,
+                    mutationAdmission: lifecycle?.mutationAdmission))
             }
             let progress = AgentToolBatchProgress(prefix: history, response: response, budget: budget,
                                                   lifecycle: lifecycle, emitter: emitter)
@@ -154,14 +176,33 @@ public struct AgentLoop: Sendable {
                 }, onCompleted: { index, call, result in
                     try await progress.record(index: index, call: call, result: result)
                 }, onFailed: { call, error in
+                    if call.policy.effect == .mutation {
+                        try await lifecycle?.markMutationNeedsReconciliation(call.call.id)
+                    }
                     try await emitter?.failIfActive(call.call.id, failure: AgentFailure(Self.toolError(error)))
                 })
+                for call in prepared where call.policy.effect == .mutation {
+                    // The scheduler has completed authorization, evidence validation,
+                    // durable admission and executor work before the next model turn.
+                    await markMutationBoundaryIfNeeded(call, sessionID: sessionID, runID: runID)
+                }
             } catch { throw Self.toolError(error) }
             let completed = await progress.completed()
             history = completed.history
             receipts.append(contentsOf: completed.receipts)
             toolCalls += completed.count
         }
+    }
+
+    private func markMutationBoundaryIfNeeded(_ call: PreparedToolCall, sessionID: UUID, runID: UUID) async {
+        guard call.policy.effect == .mutation,
+              let boundary = provider as? any ModelProviderMutationBoundary else { return }
+        await boundary.markMutationBoundary(sessionID: sessionID, runID: runID)
+    }
+
+    private func clearMutationBoundary(sessionID: UUID, runID: UUID) async {
+        guard let boundary = provider as? any ModelProviderMutationBoundary else { return }
+        await boundary.clearMutationBoundary(sessionID: sessionID, runID: runID)
     }
 
     private func applySteering(_ inputs: [AgentSteeringInput], to history: inout [ModelMessage],
@@ -193,6 +234,31 @@ public struct AgentLoop: Sendable {
             if case .providerContinuation = $0 { return false }
             return true
         }
+    }
+
+    private static func idempotencyKey(
+        operationID: String?,
+        runID: UUID,
+        call: ToolCall
+    ) -> String {
+        guard let operationID = operationID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !operationID.isEmpty else {
+            return "\(runID.uuidString)/\(call.id.rawValue)"
+        }
+
+        let arguments: String
+        if let value = try? JSONValue.decodeToolArguments(call.argumentsJSON) {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            if let data = try? encoder.encode(value) {
+                arguments = String(decoding: data, as: UTF8.self)
+            } else {
+                arguments = call.argumentsJSON
+            }
+        } else {
+            arguments = call.argumentsJSON
+        }
+        return "\(operationID)/\(call.name)/\(arguments)"
     }
 }
 
