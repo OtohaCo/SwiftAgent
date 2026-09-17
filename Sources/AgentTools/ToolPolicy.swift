@@ -1,9 +1,9 @@
-public struct ToolPolicy: Hashable, Sendable {
-    public enum Effect: Sendable { case readOnly, mutation }
-    public enum Execution: Sendable { case parallel, sequential, exclusive }
-    public enum Idempotency: Sendable { case safe, keyed, requiresReceipt }
-    public enum Authorization: Sendable { case required, notRequired }
-    public enum EvidencePolicy: Sendable { case none, required }
+public struct ToolPolicy: Hashable, Codable, Sendable {
+    public enum Effect: String, Hashable, Codable, Sendable { case readOnly, mutation }
+    public enum Execution: String, Hashable, Codable, Sendable { case parallel, sequential, exclusive }
+    public enum Idempotency: String, Hashable, Codable, Sendable { case safe, keyed, requiresReceipt }
+    public enum Authorization: String, Hashable, Codable, Sendable { case required, notRequired }
+    public enum EvidencePolicy: String, Hashable, Codable, Sendable { case none, required }
 
     public let effect: Effect
     public let execution: Execution

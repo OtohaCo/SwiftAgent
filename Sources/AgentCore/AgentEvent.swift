@@ -63,8 +63,14 @@ public enum AgentFailure: Error, Equatable, Sendable {
 }
 
 /// A receipt accepted by the runtime, with the declared effect of its tool.
-public struct AgentToolReceipt: Equatable, Sendable {
+public struct AgentToolReceipt: Codable, Equatable, Hashable, Sendable {
     public let callID: ToolCallID
     public let effect: ToolPolicy.Effect
     public let receipt: ToolReceipt
+
+    public init(callID: ToolCallID, effect: ToolPolicy.Effect, receipt: ToolReceipt) {
+        self.callID = callID
+        self.effect = effect
+        self.receipt = receipt
+    }
 }

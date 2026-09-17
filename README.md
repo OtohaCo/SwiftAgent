@@ -81,6 +81,9 @@ observations, run/session scope, expiry and tool requirement binding.
 [Receipts](../docs/guides/swift-agent-receipts.md) defines executor confirmations,
 operation/target/revision binding and the remaining mutation admission requirements.
 
+[Journal](../docs/guides/swift-agent-journal.md) defines typed lifecycle records,
+durable checkpoints, crash-tail recovery and fail-closed persistence behavior.
+
 [Apple Foundation Models](../docs/guides/swift-agent-apple-provider.md) documents
 the on-device planning adapter, execution boundary and opt-in live verification.
 

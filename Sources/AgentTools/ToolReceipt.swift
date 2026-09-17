@@ -1,7 +1,7 @@
 import Foundation
 
 /// Confirmation supplied by a trusted executor, not decoded from model-facing output.
-public struct ToolReceipt: Codable, Equatable, Sendable {
+public struct ToolReceipt: Codable, Equatable, Hashable, Sendable {
     public enum Status: String, Codable, Sendable { case succeeded, failed, indeterminate }
     public enum Failure: String, Codable, Sendable { case rejected, conflict, unavailable, unknown }
 
@@ -27,8 +27,8 @@ public struct ToolReceipt: Codable, Equatable, Sendable {
     }
 }
 
-public struct ToolReceiptExpectation: Sendable {
-    public enum Revision: Sendable {
+public struct ToolReceiptExpectation: Codable, Equatable, Hashable, Sendable {
+    public enum Revision: Codable, Equatable, Hashable, Sendable {
         case optional
         case present
         case exact(String)
