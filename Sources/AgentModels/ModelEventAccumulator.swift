@@ -62,9 +62,7 @@ public struct ModelEventAccumulator: Sendable {
                   call.argumentsJSON == pending.argumentsJSON else {
                 throw ModelStreamError.toolCallMismatch(call.id)
             }
-            guard !Self.containsTrailingComma(call.argumentsJSON),
-                  let json = try? JSONDecoder().decode(JSONValue.self, from: Data(call.argumentsJSON.utf8)),
-                  case .object = json else {
+            guard (try? JSONValue.decodeToolArguments(call.argumentsJSON)) != nil else {
                 throw ModelStreamError.invalidToolArguments(call.id)
             }
             calls[call.id] = call
@@ -109,30 +107,6 @@ public struct ModelEventAccumulator: Sendable {
         return terminal
     }
 
-    // Foundation accepts trailing commas. Check only that extension here;
-    // JSONDecoder remains responsible for the rest of the JSON grammar.
-    private static func containsTrailingComma(_ json: String) -> Bool {
-        var insideString = false
-        var escaped = false
-        var previous: UInt8?
-        for byte in json.utf8 {
-            if insideString {
-                if escaped { escaped = false }
-                else if byte == 0x5C { escaped = true }
-                else if byte == 0x22 { insideString = false }
-                continue
-            }
-            switch byte {
-            case 0x20, 0x09, 0x0A, 0x0D: continue
-            case 0x22: insideString = true
-            case 0x5D, 0x7D:
-                if previous == 0x2C { return true }
-            default: break
-            }
-            previous = byte
-        }
-        return false
-    }
 }
 
 public enum ModelStreamError: Error, Equatable, Sendable {

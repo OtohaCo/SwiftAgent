@@ -53,7 +53,8 @@ final class ModelToolEventTests: XCTestCase {
     func testCompleteEventDoesNotBlessMalformedOrNonObjectArguments() throws {
         for raw in [#"{"query":"oops"#, "", "[]", "null", "12", #""string""#,
                     #"{"a":1,}"#, #"{"a":[1,]}"#, #"{"a":{"b":2, }}"#,
-                    #"{"a":01}"#, #"{"a":+1}"#, #"{/*comment*/"a":1}"#] {
+                    #"{"a":01}"#, #"{"a":+1}"#, #"{/*comment*/"a":1}"#,
+                    #"{"a":1,"a":2}"#, #"{"nested":{"\u00e9":1,"e\u0301":2}}"#] {
             var accumulator = ModelEventAccumulator()
             try accumulator.append(.responseStarted(info))
             try accumulator.append(.toolCallStarted(first.id, name: first.name))
@@ -149,6 +150,20 @@ final class ModelToolEventTests: XCTestCase {
             try accumulator.append(.toolCallCompleted(call))
             try accumulator.append(.responseCompleted(.init(info: info, toolCalls: [call], stopReason: .toolCalls)))
             XCTAssertEqual(try accumulator.finish().toolCalls.first?.argumentsJSON, raw)
+        }
+    }
+
+    func testRepeatedKeysInSeparateObjectsAreNotAmbiguous() throws {
+        for raw in [#"{"a":1,"nested":{"a":2},"items":[{"a":3},{"a":4}]}"#,
+                    #"{"text":"\"a\":1, \"a\":2","escaped\\key":1}"#] {
+            let call = ToolCall(id: first.id, name: first.name, argumentsJSON: raw, completeness: .complete)
+            var accumulator = ModelEventAccumulator()
+            for event: ModelEvent in [.responseStarted(info), .toolCallStarted(call.id, name: call.name),
+                                      .toolCallArgumentsDelta(call.id, raw), .toolCallCompleted(call),
+                                      .responseCompleted(.init(info: info, toolCalls: [call], stopReason: .toolCalls))] {
+                try accumulator.append(event)
+            }
+            XCTAssertEqual(try accumulator.finish().toolCalls, [call])
         }
     }
 }
