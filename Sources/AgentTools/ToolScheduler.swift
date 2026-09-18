@@ -17,6 +17,14 @@ public struct ToolScheduler: Sendable {
         await drain.wait(.init(sessionID: sessionID, runID: runID))
     }
 
+    package func pendingWaiterCount() async -> Int {
+        await coordinator.pendingWaiterCount
+    }
+
+    package func waitUntilPendingWaiterCountEquals(_ expected: Int) async {
+        await coordinator.waitUntilPendingWaiterCountEquals(expected)
+    }
+
     package func execute(
         _ calls: [PreparedToolCall], deadline: ContinuousClock.Instant,
         onStarted: @escaping @Sendable (PreparedToolCall) async throws -> Void,

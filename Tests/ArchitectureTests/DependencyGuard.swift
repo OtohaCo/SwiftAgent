@@ -17,6 +17,8 @@ enum DependencyGuard {
         if module == "WorkspaceAgent" {
             allowed.insert("CryptoKit")
             allowed.insert("Crypto")
+            allowed.insert("Darwin")
+            allowed.insert("Glibc")
         }
         let pattern = #"\bimport\s+(?:(?:typealias|struct|class|enum|protocol|let|var|func)\s+)?([A-Za-z_][A-Za-z_0-9]*)"#
         let regex = try! NSRegularExpression(pattern: pattern)

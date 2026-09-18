@@ -471,6 +471,277 @@ final class AgentMutationRecoveryTests: XCTestCase {
         XCTAssertEqual(pending[0].state, .needsReconciliation)
     }
 
+    func testCancellationWhileWaitingForResourcesDoesNotStartExecutor() async throws {
+        let scheduler = ToolScheduler()
+        let gate = ManualGate()
+        let firstEntered = expectation(description: "first mutation executor entered")
+        let secondEntered = expectation(description: "waiting mutation must not reach the executor")
+        secondEntered.isInverted = true
+        let firstURL = temporaryURL()
+        let secondURL = temporaryURL()
+        defer { cleanup(firstURL); cleanup(secondURL) }
+        let firstJournal = try AgentJournal(persistenceURL: firstURL)
+        let secondJournal = try AgentJournal(persistenceURL: secondURL)
+        let firstTool = try BlockingMutationTool(gate: gate, entered: firstEntered)
+        let secondProbe = MutationProbe()
+        let secondTool = try MutationTool(probe: secondProbe, entered: secondEntered)
+        let firstCall = blockingMutationCall()
+        let waitingCall = mutationCall(id: "waiting-call")
+        let firstAgent = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, turn in
+                turn == 1 ? toolResponse(request, [firstCall]) : textResponse(request, "Done")
+            },
+            tools: [firstTool],
+            configuration: AgentConfiguration(scheduler: scheduler)
+        )
+        let secondAgent = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, _ in toolResponse(request, [waitingCall]) },
+            tools: [secondTool],
+            configuration: AgentConfiguration(scheduler: scheduler)
+        )
+        let firstRun = try await firstAgent.makeSession(journal: firstJournal).run("Change the listing")
+        let enteredResult = await XCTWaiter.fulfillment(of: [firstEntered], timeout: 1)
+        XCTAssertEqual(enteredResult, .completed)
+
+        let secondRun = try await secondAgent.makeSession(journal: secondJournal).run("Change another listing")
+        await scheduler.waitUntilPendingWaiterCountEquals(1)
+        await secondRun.cancel()
+        let skipped = await XCTWaiter.fulfillment(of: [secondEntered], timeout: 0.3)
+        XCTAssertEqual(skipped, .completed)
+        await gate.open()
+        _ = try await firstRun.wait()
+        do {
+            _ = try await secondRun.wait()
+            XCTFail("Cancelled waiter must not complete")
+        } catch is CancellationError {
+        }
+        let skippedCount = await secondProbe.count
+        XCTAssertEqual(skippedCount, 0)
+        let pending = await secondJournal.pendingMutations()
+        XCTAssertTrue(pending.isEmpty)
+        let events = await secondJournal.snapshot().map(\.event)
+        XCTAssertFalse(events.contains { if case .pendingMutation = $0 { true } else { false } })
+        XCTAssertFalse(events.contains { if case .mutationSettled = $0 { true } else { false } })
+    }
+
+    func testDurableIntentWriteFailureAfterSessionStartDoesNotCallExecutor() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let journal = try AgentJournal(persistenceURL: url)
+        let probe = MutationProbe()
+        let tool = try MutationTool(probe: probe, journalURL: url)
+        let call = mutationCall()
+        let provider = ScriptedProvider { request, turn in
+            turn == 1 ? textResponse(request, "Ready") : toolResponse(request, [call])
+        }
+        let agent = try Agent(model: fixtureModel, provider: provider, tools: [tool])
+        let session = try agent.makeSession(journal: journal)
+        let warmup = try await session.run("hello")
+        _ = try await warmup.wait()
+        await session.waitForRunToDrain(runID: warmup.id)
+
+        try FileManager.default.removeItem(at: url)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        do {
+            _ = try await session.run("Update the listing").wait()
+            XCTFail("A journal that can no longer persist must fail closed")
+        } catch is AgentJournalError {
+        }
+        let executionCount = await probe.count
+        XCTAssertEqual(executionCount, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.appendingPathComponent("not-a-marker").path))
+    }
+
+    func testTimeoutAfterExecutorSideEffectDoesNotReplayMutation() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let gate = ManualGate()
+        let entered = expectation(description: "mutation executor entered")
+        let probe = MutationProbe()
+        let journal = try AgentJournal(persistenceURL: url)
+        let tool = try BlockingMutationTool(gate: gate, entered: entered, timeout: .milliseconds(50), probe: probe)
+        let call = blockingMutationCall()
+        let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
+        let agent = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            tools: [tool],
+            configuration: AgentConfiguration(runTimeout: .seconds(2))
+        )
+        let sessionID = UUID()
+        let session = try agent.makeSession(id: sessionID, journal: journal)
+        let run = try await session.run("Change the listing")
+        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 1)
+        XCTAssertEqual(enteredResult, .completed)
+        try await Task.sleep(for: .milliseconds(120))
+        await gate.open()
+        do {
+            _ = try await run.wait()
+            XCTFail("Timed out mutation must not complete")
+        } catch {
+            XCTAssertEqual(error as? AgentLoopError, .toolTimedOut(call.id))
+        }
+        await session.waitForRunToDrain(runID: run.id)
+        let firstCount = await probe.count
+        XCTAssertEqual(firstCount, 1)
+
+        let restarted = try AgentJournal.load(from: url)
+        let recovered = try await restarted.recoverPendingMutations(sessionID: sessionID)
+        XCTAssertEqual(recovered.count, 1)
+        XCTAssertEqual(recovered[0].state, .needsReconciliation)
+        let replayProbe = MutationProbe()
+        let replayTool = try MutationTool(probe: replayProbe)
+        let replayCall = mutationCall(id: "replay")
+        let replayAgent = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, _ in toolResponse(request, [replayCall]) },
+            tools: [replayTool]
+        )
+        do {
+            _ = try await replayAgent.makeSession(id: sessionID, journal: restarted).run("Try again").wait()
+            XCTFail("Restart must not replay a quarantined mutation")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .mutationRequiresReconciliation)
+        }
+        let afterCount = await probe.count
+        let replayCount = await replayProbe.count
+        XCTAssertEqual(afterCount, 1)
+        XCTAssertEqual(replayCount, 0)
+        let remaining = await restarted.pendingMutations()
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertEqual(remaining[0].state, .needsReconciliation)
+    }
+
+    func testReceiptAndCancellationDoNotDoubleSettle() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let gate = ManualGate()
+        let entered = expectation(description: "mutation executor entered")
+        let probe = MutationProbe()
+        let journal = try AgentJournal(persistenceURL: url)
+        let tool = try BlockingMutationTool(gate: gate, entered: entered, probe: probe)
+        let call = blockingMutationCall()
+        let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
+        let agent = try Agent(model: fixtureModel, provider: provider, tools: [tool])
+        let sessionID = UUID()
+        let session = try agent.makeSession(id: sessionID, journal: journal)
+        let run = try await session.run("Change the listing")
+        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 1)
+        XCTAssertEqual(enteredResult, .completed)
+
+        async let cancelled: Void = run.cancel()
+        async let released: Void = gate.open()
+        _ = await (cancelled, released)
+
+        var terminalError: (any Error)?
+        do {
+            _ = try await run.wait()
+        } catch {
+            terminalError = error
+        }
+        await session.waitForRunToDrain(runID: run.id)
+        let events = await journal.snapshot().map(\.event)
+        let settled = events.filter { if case .mutationSettled = $0 { true } else { false } }
+        let quarantined = events.filter {
+            if case .mutationNeedsReconciliation(let callID) = $0 { return callID == call.id }
+            return false
+        }
+        XCTAssertLessThanOrEqual(settled.count, 1)
+        XCTAssertTrue(settled.isEmpty || quarantined.isEmpty, "A call must not both settle and enter reconciliation")
+        if settled.isEmpty {
+            XCTAssertTrue(terminalError is CancellationError || terminalError is AgentLoopError)
+            let pending = await journal.pendingMutations()
+            XCTAssertEqual(pending.count, 1)
+            XCTAssertEqual(pending[0].state, .needsReconciliation)
+            XCTAssertEqual(quarantined.count, 1)
+        } else {
+            let leftover = await journal.pendingMutations()
+            XCTAssertTrue(leftover.isEmpty)
+            XCTAssertEqual(settled.count, 1)
+        }
+        let sideEffects = await probe.count
+        XCTAssertEqual(sideEffects, 1)
+
+        let restarted = try AgentJournal.load(from: url)
+        if settled.isEmpty {
+            _ = try await restarted.recoverPendingMutations(sessionID: sessionID)
+        }
+        let replayProbe = MutationProbe()
+        let replayCall = mutationCall(id: "replay")
+        let replayAgent = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, _ in toolResponse(request, [replayCall]) },
+            tools: [try MutationTool(probe: replayProbe)]
+        )
+        if settled.isEmpty {
+            do {
+                _ = try await replayAgent.makeSession(id: sessionID, journal: restarted).run("Try again").wait()
+                XCTFail("A quarantined mutation must not be replayed")
+            } catch {
+                XCTAssertEqual(error as? AgentJournalError, .mutationRequiresReconciliation)
+            }
+            let replayCount = await replayProbe.count
+            XCTAssertEqual(replayCount, 0)
+        }
+        let settledAfter = await restarted.snapshot().map(\.event).filter {
+            if case .mutationSettled = $0 { true } else { false }
+        }
+        XCTAssertEqual(settledAfter.count, settled.count)
+    }
+
+    func testPendingMutationBlocksSameSessionAcrossResourcesNotOtherSessions() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let journal = try AgentJournal(persistenceURL: url)
+        let sessionA = UUID()
+        let sessionB = UUID()
+        try await journal.admit(mutationRequest(sessionID: sessionA, runID: UUID(), callID: .init(rawValue: "call-a1")))
+        let recovered = try await journal.recoverPendingMutations(sessionID: sessionA)
+        XCTAssertEqual(recovered.count, 1)
+        XCTAssertEqual(recovered[0].state, .needsReconciliation)
+
+        let blockedProbe = MutationProbe()
+        let blockedCall = mutationCall(id: "call-a2", listing: "listing-2")
+        let blockedAgent = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, _ in
+                toolResponse(request, [blockedCall])
+            },
+            tools: [try MutationTool(probe: blockedProbe)]
+        )
+        do {
+            _ = try await blockedAgent.makeSession(id: sessionA, journal: journal).run("Update another listing").wait()
+            XCTFail("A quarantined session must not start another mutation, even on a disjoint resource")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .mutationRequiresReconciliation)
+        }
+        let blockedCount = await blockedProbe.count
+        XCTAssertEqual(blockedCount, 0)
+
+        let otherProbe = MutationProbe()
+        let otherCall = mutationCall(id: "call-b", listing: "listing-2")
+        let otherAgent = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, turn in
+                turn == 1
+                    ? toolResponse(request, [otherCall])
+                    : textResponse(request, "Done")
+            },
+            tools: [try MutationTool(probe: otherProbe)]
+        )
+        let result = try await otherAgent.makeSession(id: sessionB, journal: journal).run("Update a disjoint listing").wait()
+        XCTAssertEqual(result.outcome, .completed)
+        let otherCount = await otherProbe.count
+        XCTAssertEqual(otherCount, 1)
+        let remaining = await journal.pendingMutations()
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertEqual(remaining[0].sessionID, sessionA)
+    }
+
     func testExplicitlyReusedSessionIDCannotRunConcurrently() async throws {
         let gate = ManualGate()
         let entered = expectation(description: "first session entered")
@@ -647,29 +918,35 @@ final class AgentMutationRecoveryTests: XCTestCase {
         await verifier.releaseSessionLease(sessionID: sessionID)
     }
 
-    private func mutationRequest(sessionID: UUID, runID: UUID, callID: ToolCallID) -> ToolMutationAdmissionRequest {
+    private func mutationRequest(
+        sessionID: UUID,
+        runID: UUID,
+        callID: ToolCallID,
+        listing: String = "listing-1",
+        idempotencyKey: String? = nil
+    ) -> ToolMutationAdmissionRequest {
         ToolMutationAdmissionRequest(
             sessionID: sessionID,
             runID: runID,
             callID: callID,
             name: MutationTool.name,
-            argumentsJSON: #"{"id":"listing-1"}"#,
-            resources: [.named(.init(namespace: "property.listing", id: "listing-1"))],
-            idempotencyKey: "\(runID.uuidString)/\(callID.rawValue)",
+            argumentsJSON: #"{"id":"\#(listing)"}"#,
+            resources: [.named(.init(namespace: "property.listing", id: listing))],
+            idempotencyKey: idempotencyKey ?? "\(runID.uuidString)/\(callID.rawValue)",
             receiptExpectation: try? ToolReceiptExpectation(
-                targets: [.init(namespace: "property.listing", id: "listing-1")], revision: .present
+                targets: [.init(namespace: "property.listing", id: listing)], revision: .present
             )
         )
     }
 
-    private func validReceipt(operationID: String) -> ToolReceipt {
+    private func validReceipt(operationID: String, listing: String = "listing-1") -> ToolReceipt {
         ToolReceipt(operationID: operationID, status: .succeeded,
-                    confirmedTargets: [.init(namespace: "property.listing", id: "listing-1")], revision: "v2")
+                    confirmedTargets: [.init(namespace: "property.listing", id: listing)], revision: "v2")
     }
 
-    private func mutationCall() -> ToolCall {
-        .init(id: .init(rawValue: "call-1"), name: MutationTool.name,
-              argumentsJSON: #"{"id":"listing-1"}"#, completeness: .complete)
+    private func mutationCall(id: String = "call-1", listing: String = "listing-1") -> ToolCall {
+        .init(id: .init(rawValue: id), name: MutationTool.name,
+              argumentsJSON: #"{"id":"\#(listing)"}"#, completeness: .complete)
     }
 
     private func temporaryURL() -> URL {
@@ -720,12 +997,19 @@ private struct MutationTool: AgentTool {
     let probe: MutationProbe
     let journalURL: URL?
     let receiptOperationID: String?
+    let entered: XCTestExpectation?
     let policy: ToolPolicy
 
-    init(probe: MutationProbe, journalURL: URL? = nil, receiptOperationID: String? = nil) throws {
+    init(
+        probe: MutationProbe,
+        journalURL: URL? = nil,
+        receiptOperationID: String? = nil,
+        entered: XCTestExpectation? = nil
+    ) throws {
         self.probe = probe
         self.journalURL = journalURL
         self.receiptOperationID = receiptOperationID
+        self.entered = entered
         policy = try ToolPolicy(effect: .mutation, execution: .exclusive, idempotency: .requiresReceipt,
                                 timeout: .seconds(2), authorization: .notRequired)
     }
@@ -739,6 +1023,7 @@ private struct MutationTool: AgentTool {
     }
 
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
+        entered?.fulfill()
         await probe.record(journalURL: journalURL, context: context)
         let receipt = ToolReceipt(operationID: receiptOperationID ?? context.idempotencyKey ?? "missing", status: .succeeded,
                                   confirmedTargets: [.init(namespace: "property.listing", id: input.id)], revision: "v2")
@@ -816,11 +1101,18 @@ private struct BlockingMutationTool: AgentTool {
 
     let gate: ManualGate
     let entered: XCTestExpectation
+    let probe: MutationProbe?
     let policy: ToolPolicy
 
-    init(gate: ManualGate, entered: XCTestExpectation, timeout: Duration = .seconds(2)) throws {
+    init(
+        gate: ManualGate,
+        entered: XCTestExpectation,
+        timeout: Duration = .seconds(2),
+        probe: MutationProbe? = nil
+    ) throws {
         self.gate = gate
         self.entered = entered
+        self.probe = probe
         policy = try ToolPolicy(effect: .mutation, execution: .exclusive, idempotency: .requiresReceipt,
                                 timeout: timeout, authorization: .notRequired)
     }
@@ -835,6 +1127,9 @@ private struct BlockingMutationTool: AgentTool {
 
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
         entered.fulfill()
+        if let probe {
+            await probe.record(journalURL: nil, context: context)
+        }
         await gate.wait()
         let receipt = ToolReceipt(operationID: context.idempotencyKey ?? "missing", status: .succeeded,
                                   confirmedTargets: [.init(namespace: "property.listing", id: "listing-1")], revision: "v2")

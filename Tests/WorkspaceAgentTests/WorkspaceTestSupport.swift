@@ -94,4 +94,65 @@ actor ManualGate {
     }
 }
 
+actor RaceBarrier {
+    private var reached = false
+    private var reachedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var released = false
+    private var holdWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitForOperation() async {
+        reached = true
+        let waiting = reachedWaiters
+        reachedWaiters.removeAll()
+        for waiter in waiting { waiter.resume() }
+        if released { return }
+        await withCheckedContinuation { holdWaiters.append($0) }
+    }
+
+    func waitUntilReached() async {
+        if reached { return }
+        await withCheckedContinuation { reachedWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiting = holdWaiters
+        holdWaiters.removeAll()
+        for waiter in waiting { waiter.resume() }
+    }
+}
+
+func writeFromAnotherProcess(to url: URL, content: String) throws -> Int32 {
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", "printf '%s' \"$1\" > \"$2\"", "workspace-external-writer", content, url.path]
+    try process.run()
+    let pid = process.processIdentifier
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        throw FixtureProcessError.nonzeroStatus(process.terminationStatus)
+    }
+    return pid
+}
+
+func replaceWithSymlinkFromAnotherProcess(at url: URL, destination: URL) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [
+        "-c",
+        "rm -rf \"$1\" && ln -s \"$2\" \"$1\"",
+        "workspace-external-symlink",
+        url.path,
+        destination.path,
+    ]
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        throw FixtureProcessError.nonzeroStatus(process.terminationStatus)
+    }
+}
+
+enum FixtureProcessError: Error { case nonzeroStatus(Int32) }
+
 enum SimulatedCrash: Error { case beforeMutation, afterMutation }

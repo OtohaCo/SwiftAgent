@@ -22,8 +22,22 @@ package actor ToolResourceCoordinator {
 
     private var active: [UUID: Request] = [:]
     private var waiters: [Waiter] = []
+    private var waiterCountObservers: [(Int, CheckedContinuation<Void, Never>)] = []
 
     package init() {}
+
+    package var pendingWaiterCount: Int { waiters.count }
+
+    package func waitUntilPendingWaiterCountEquals(_ expected: Int) async {
+        if waiters.count == expected { return }
+        await withCheckedContinuation { continuation in
+            if waiters.count == expected {
+                continuation.resume()
+            } else {
+                waiterCountObservers.append((expected, continuation))
+            }
+        }
+    }
 
     package func acquire(resources: [ToolResource], effect: ToolPolicy.Effect,
                          execution: ToolPolicy.Execution) async throws -> UUID {
@@ -75,5 +89,19 @@ package actor ToolResourceCoordinator {
             }
         }
         waiters = blocked
+        notifyWaiterCountObservers()
+    }
+
+    private func notifyWaiterCountObservers() {
+        let count = waiters.count
+        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
+        for observer in waiterCountObservers {
+            if observer.0 == count {
+                observer.1.resume()
+            } else {
+                remaining.append(observer)
+            }
+        }
+        waiterCountObservers = remaining
     }
 }

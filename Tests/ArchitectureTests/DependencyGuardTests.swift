@@ -18,6 +18,15 @@ final class DependencyGuardTests: XCTestCase {
         }
     }
 
+    func testPosixIsLimitedToWorkspaceHost() {
+        XCTAssertEqual(DependencyGuard.violations("import Darwin", module: "WorkspaceAgent"), [])
+        XCTAssertEqual(DependencyGuard.violations("import Glibc", module: "WorkspaceAgent"), [])
+        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider"] {
+            XCTAssertFalse(DependencyGuard.violations("import Darwin", module: module).isEmpty)
+            XCTAssertFalse(DependencyGuard.violations("import Glibc", module: module).isEmpty)
+        }
+    }
+
     func testPlatformSDKIsAllowedOnlyInItsDedicatedAdapter() {
         XCTAssertEqual(DependencyGuard.violations("import FoundationModels\nimport AgentModels", module: "AgentAppleProvider"), [])
         for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders"] {

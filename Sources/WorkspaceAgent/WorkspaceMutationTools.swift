@@ -48,10 +48,10 @@ struct WorkspaceWriteFileTool: AgentTool {
 
     func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation? {
         let path = try WorkspacePath.parse(input.path, root: store.root)
-        if let expectedHash = input.expectedHash {
-            return try .init(targets: [WorkspaceEvidence.fileReference(path)], revision: .changed(from: expectedHash))
-        }
-        return try .init(targets: [WorkspaceEvidence.fileReference(path)], revision: .present)
+        return try .init(
+            targets: [WorkspaceEvidence.fileReference(path)],
+            revision: .exact(WorkspaceContentHash.hex(input.content))
+        )
     }
 
     func authorize(_ input: Input, context: ToolContext) async throws -> ToolAuthorization {

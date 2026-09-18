@@ -45,4 +45,23 @@ public struct WorkspacePath: Hashable, Sendable {
             throw WorkspaceFileError.rejectedPath(url.path)
         }
     }
+
+    static func isSymbolicLink(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+    }
+
+    static func rejectSymlinkedPath(_ path: WorkspacePath, root: URL) throws {
+        let resolvedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+        if isSymbolicLink(resolvedRoot) {
+            throw WorkspaceFileError.rejectedPath(resolvedRoot.path)
+        }
+        guard path.relativePath != "." else { return }
+        var current = resolvedRoot
+        for segment in path.relativePath.split(separator: "/") {
+            current = current.appendingPathComponent(String(segment), isDirectory: false)
+            if isSymbolicLink(current) {
+                throw WorkspaceFileError.rejectedPath(current.path)
+            }
+        }
+    }
 }

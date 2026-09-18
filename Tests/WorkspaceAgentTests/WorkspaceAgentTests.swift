@@ -63,6 +63,48 @@ final class WorkspaceAgentTests: XCTestCase {
         XCTAssertEqual(result.response.content, [.text("Listed, read, and searched the workspace.")])
     }
 
+    func testSameContentWriteSettlesThenExactModificationMatchesNewContent() async throws {
+        let env = try await makeEnvironment(files: ["notes/todo.txt": "buy milk"])
+        defer { env.cleanup() }
+        let original = "buy milk"
+        let originalHash = WorkspaceContentHash.hex(original)
+        let updated = "buy oat milk"
+        let updatedHash = WorkspaceContentHash.hex(updated)
+        let provider = ScriptedProvider { request, turn in
+            switch turn {
+            case 1:
+                return toolResponse(request, [toolCall("read_file", id: "read", ["path": "notes/todo.txt"])])
+            case 2:
+                return toolResponse(request, [toolCall("write_file", id: "same", [
+                    "path": "notes/todo.txt",
+                    "content": original,
+                    "expectedHash": originalHash,
+                ])])
+            case 3:
+                return toolResponse(request, [toolCall("write_file", id: "change", [
+                    "path": "notes/todo.txt",
+                    "content": updated,
+                    "expectedHash": originalHash,
+                ])])
+            default:
+                return textResponse(request, "Rewrote then updated the note.")
+            }
+        }
+        let result = try await run(env, provider: provider, prompt: "Rewrite then update the note")
+        XCTAssertEqual(result.outcome, .completed)
+        XCTAssertEqual(result.receipts.count, 2)
+        XCTAssertEqual(result.receipts[0].receipt.revision, originalHash)
+        XCTAssertEqual(result.receipts[1].receipt.revision, updatedHash)
+        XCTAssertNotEqual(result.receipts[1].receipt.revision, originalHash)
+        let pending = await env.journal.pendingMutations()
+        XCTAssertTrue(pending.isEmpty)
+        XCTAssertFalse(pending.contains { $0.state == .needsReconciliation })
+        XCTAssertEqual(
+            try String(contentsOf: env.root.appendingPathComponent("notes/todo.txt"), encoding: .utf8),
+            updated
+        )
+    }
+
     func testWriteAndMoveUseReceiptsAndUpdateFiles() async throws {
         let env = try await makeEnvironment(files: ["notes/todo.txt": "buy milk"])
         defer { env.cleanup() }
@@ -118,6 +160,7 @@ final class WorkspaceAgentTests: XCTestCase {
         let result = try await run(env, provider: provider, prompt: "Add a done file")
         XCTAssertEqual(result.outcome, .completed)
         XCTAssertEqual(result.receipts.count, 1)
+        XCTAssertEqual(result.receipts[0].receipt.revision, WorkspaceContentHash.hex("all done"))
         XCTAssertEqual(try String(contentsOf: env.root.appendingPathComponent("notes/done.txt"), encoding: .utf8), "all done")
     }
 
@@ -579,7 +622,7 @@ final class WorkspaceAgentTests: XCTestCase {
     }
 }
 
-private struct WorkspaceTestEnvironment {
+struct WorkspaceTestEnvironment {
     let root: URL
     let store: WorkspaceFileStore
     let journal: AgentJournal
