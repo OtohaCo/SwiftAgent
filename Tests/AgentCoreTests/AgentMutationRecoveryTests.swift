@@ -526,7 +526,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
         XCTAssertFalse(events.contains { if case .mutationSettled = $0 { true } else { false } })
     }
 
-    func testDurableIntentWriteFailureAfterSessionStartDoesNotCallExecutor() async throws {
+    func testRunStartPersistenceFailureDoesNotCallExecutor() async throws {
         let url = temporaryURL()
         defer { cleanup(url) }
         let journal = try AgentJournal(persistenceURL: url)
@@ -541,6 +541,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let warmup = try await session.run("hello")
         _ = try await warmup.wait()
         await session.waitForRunToDrain(runID: warmup.id)
+        let warmupRequests = await provider.log.requests.count
 
         try FileManager.default.removeItem(at: url)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -552,8 +553,46 @@ final class AgentMutationRecoveryTests: XCTestCase {
         } catch is AgentJournalError {
         }
         let executionCount = await probe.count
+        let authorizationCount = await probe.authorizationCount
+        let requests = await provider.log.requests
         XCTAssertEqual(executionCount, 0)
+        XCTAssertEqual(authorizationCount, 0)
+        XCTAssertEqual(requests.count, warmupRequests)
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.appendingPathComponent("not-a-marker").path))
+    }
+
+    func testDurableIntentWriteFailureAfterAuthorizationDoesNotCallExecutor() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let journal = try AgentJournal(persistenceURL: url)
+        let probe = MutationProbe()
+        let tool = try MutationTool(probe: probe, journalURL: url) {
+            await probe.markAuthorized()
+            try FileManager.default.removeItem(at: url)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        }
+        let call = mutationCall()
+        let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
+        let agent = try Agent(model: fixtureModel, provider: provider, tools: [tool])
+        let session = try agent.makeSession(journal: journal)
+
+        do {
+            _ = try await session.run("Update the listing").wait()
+            XCTFail("Durable intent persistence failure must fail closed")
+        } catch is AgentJournalError {
+        }
+        let executionCount = await probe.count
+        let authorizationCount = await probe.authorizationCount
+        let requests = await provider.log.requests
+        XCTAssertEqual(executionCount, 0)
+        XCTAssertEqual(authorizationCount, 1)
+        XCTAssertGreaterThanOrEqual(requests.count, 1)
+        let pending = await journal.pendingMutations()
+        XCTAssertTrue(pending.isEmpty)
+        let events = await journal.snapshot().map(\.event)
+        XCTAssertTrue(events.contains { if case .userMessage = $0 { true } else { false } })
+        XCTAssertFalse(events.contains { if case .pendingMutation = $0 { true } else { false } })
+        XCTAssertFalse(events.contains { if case .mutationSettled = $0 { true } else { false } })
     }
 
     func testTimeoutAfterExecutorSideEffectDoesNotReplayMutation() async throws {
@@ -966,7 +1005,12 @@ final class AgentMutationRecoveryTests: XCTestCase {
 
 private actor MutationProbe {
     private(set) var count = 0
+    private(set) var authorizationCount = 0
     private(set) var sawDurableIntent = false
+
+    func markAuthorized() {
+        authorizationCount += 1
+    }
 
     func record(journalURL: URL?, context: ToolContext) async {
         count += 1
@@ -998,20 +1042,33 @@ private struct MutationTool: AgentTool {
     let journalURL: URL?
     let receiptOperationID: String?
     let entered: XCTestExpectation?
+    let onAuthorize: (@Sendable () async throws -> Void)?
     let policy: ToolPolicy
 
     init(
         probe: MutationProbe,
         journalURL: URL? = nil,
         receiptOperationID: String? = nil,
-        entered: XCTestExpectation? = nil
+        entered: XCTestExpectation? = nil,
+        onAuthorize: (@Sendable () async throws -> Void)? = nil
     ) throws {
         self.probe = probe
         self.journalURL = journalURL
         self.receiptOperationID = receiptOperationID
         self.entered = entered
-        policy = try ToolPolicy(effect: .mutation, execution: .exclusive, idempotency: .requiresReceipt,
-                                timeout: .seconds(2), authorization: .notRequired)
+        self.onAuthorize = onAuthorize
+        policy = try ToolPolicy(
+            effect: .mutation,
+            execution: .exclusive,
+            idempotency: .requiresReceipt,
+            timeout: .seconds(2),
+            authorization: onAuthorize == nil ? .notRequired : .required
+        )
+    }
+
+    func authorize(_ input: Input, context: ToolContext) async throws -> ToolAuthorization {
+        try await onAuthorize?()
+        return .allowed
     }
 
     func resourceRequirements(for input: Input) throws -> [ToolResource] {

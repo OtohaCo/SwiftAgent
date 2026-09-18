@@ -50,7 +50,10 @@ Sessions use the same sandbox.
 
 Paths are canonical, relative, and confined to the sandbox. `.` segments, `..`,
 absolute paths, symlink escape, and symlink replacement of the root or an
-intermediate directory are rejected. There is no shell tool.
+intermediate directory are rejected. The host pins the authorized root's
+directory identity at construction and checks the original directory entry on
+later reads and writes; it does not re-resolve the root into a different
+directory. There is no shell tool.
 
 ## Mutation path
 
@@ -88,7 +91,7 @@ Three writers are not the same:
 | --- | --- |
 | Cooperative Sessions sharing one scheduler and one store | Mutations do not overlap. Same-file writers see each other's committed hashes. |
 | A test or operator using the injected post-check barrier | Detected hash, existence, and symlink conflicts fail closed and do not publish a success Receipt. |
-| An arbitrary external process | Best-effort fail-closed at the last hash or existence check, `O_EXCL` create, and post-write hash verification. Not a linearizable compare-and-swap. |
+| An arbitrary external process | Best-effort fail-closed at the last hash or existence check, `O_EXCL` create, post-write hash verification, and a pinned root directory identity. Not a linearizable compare-and-swap. |
 
 Atomic replace is not a hash-conditioned commit. Checking the path or hash again
 does not prove the remaining window has closed. A create that loses a race must

@@ -29,6 +29,7 @@ public struct WorkspaceFileRevision: Sendable, Equatable {
 
 public actor WorkspaceFileStore {
     public nonisolated let root: URL
+    private let rootIdentity: WorkspaceRootIdentity
     package private(set) var mutationCount = 0
     package private(set) var peakConcurrentMutations = 0
     package private(set) var peakConcurrentReads = 0
@@ -45,7 +46,9 @@ public actor WorkspaceFileStore {
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             throw WorkspaceFileError.rootUnavailable
         }
-        self.root = root.standardizedFileURL.resolvingSymlinksInPath()
+        let canonical = root.standardizedFileURL.resolvingSymlinksInPath()
+        self.root = canonical
+        self.rootIdentity = try WorkspacePath.captureDirectoryIdentity(canonical)
     }
 
     package func setMutationHold(_ hold: (@Sendable () async -> Void)?) { mutationHold = hold }
@@ -55,13 +58,13 @@ public actor WorkspaceFileStore {
     package func setAfterPreconditionHold(_ hold: (@Sendable () async -> Void)?) { afterPreconditionHold = hold }
 
     func location(_ raw: String) throws -> WorkspacePath {
-        try WorkspacePath.parse(raw, root: root)
+        try WorkspacePath.parse(raw, root: root, identity: rootIdentity)
     }
 
     func list(directory raw: String) async throws -> (directory: WorkspacePath, files: [WorkspaceListedFile], listingHash: String) {
-        let directory = try WorkspacePath.parse(raw, root: root)
+        let directory = try WorkspacePath.parse(raw, root: root, identity: rootIdentity)
         return try await withReadLease {
-            try WorkspacePath.validate(directory.url, root: root)
+            try WorkspacePath.validate(directory.url, root: root, identity: rootIdentity)
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: directory.url.path, isDirectory: &isDirectory),
                   isDirectory.boolValue else {
@@ -76,7 +79,7 @@ public actor WorkspaceFileStore {
     }
 
     func read(_ raw: String) async throws -> (file: WorkspaceListedFile, content: String) {
-        let path = try WorkspacePath.parse(raw, root: root)
+        let path = try WorkspacePath.parse(raw, root: root, identity: rootIdentity)
         return try await withReadLease {
             let snapshot = try snapshot(path)
             guard let content = snapshot.content else { throw WorkspaceFileError.notUnicode(path.relativePath) }
@@ -85,9 +88,9 @@ public actor WorkspaceFileStore {
     }
 
     func search(query: String, directory raw: String) async throws -> [WorkspaceSearchMatch] {
-        let directory = try WorkspacePath.parse(raw, root: root)
+        let directory = try WorkspacePath.parse(raw, root: root, identity: rootIdentity)
         return try await withReadLease {
-            try WorkspacePath.validate(directory.url, root: root)
+            try WorkspacePath.validate(directory.url, root: root, identity: rootIdentity)
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: directory.url.path, isDirectory: &isDirectory),
                   isDirectory.boolValue else {
@@ -108,7 +111,7 @@ public actor WorkspaceFileStore {
     }
 
     func write(path raw: String, content: String, expectedHash: String?) async throws -> WorkspaceFileRevision {
-        let path = try WorkspacePath.parse(raw, root: root)
+        let path = try WorkspacePath.parse(raw, root: root, identity: rootIdentity)
         return try await withMutationLease {
             try evaluateWritePreconditions(path: path, expectedHash: expectedHash, afterHold: false)
             await afterPreconditionHold?()
@@ -130,8 +133,8 @@ public actor WorkspaceFileStore {
     }
 
     func move(from sourceRaw: String, to destinationRaw: String, expectedHash: String) async throws -> WorkspaceFileRevision {
-        let source = try WorkspacePath.parse(sourceRaw, root: root)
-        let destination = try WorkspacePath.parse(destinationRaw, root: root)
+        let source = try WorkspacePath.parse(sourceRaw, root: root, identity: rootIdentity)
+        let destination = try WorkspacePath.parse(destinationRaw, root: root, identity: rootIdentity)
         return try await withMutationLease {
             try evaluateMovePreconditions(source: source, destination: destination, expectedHash: expectedHash)
             await afterPreconditionHold?()
@@ -155,7 +158,7 @@ public actor WorkspaceFileStore {
     }
 
     func currentHash(_ raw: String) throws -> String? {
-        let path = try WorkspacePath.parse(raw, root: root)
+        let path = try WorkspacePath.parse(raw, root: root, identity: rootIdentity)
         guard FileManager.default.fileExists(atPath: path.url.path) else { return nil }
         return try snapshot(path).hash
     }
@@ -171,7 +174,7 @@ public actor WorkspaceFileStore {
             let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
             if values.isDirectory == true { continue }
             guard values.isRegularFile == true else { continue }
-            try WorkspacePath.validate(url, root: root)
+            try WorkspacePath.validate(url, root: root, identity: rootIdentity)
             let relative = try relativePath(for: url)
             let path = WorkspacePath(relativePath: relative, url: url)
             files.append(.init(path: path, hash: try snapshot(path).hash))
@@ -185,8 +188,8 @@ public actor WorkspaceFileStore {
     }
 
     private func snapshot(_ path: WorkspacePath) throws -> FileSnapshot {
-        try WorkspacePath.rejectSymlinkedPath(path, root: root)
-        try WorkspacePath.validate(path.url, root: root)
+        try WorkspacePath.rejectSymlinkedPath(path, root: root, identity: rootIdentity)
+        try WorkspacePath.validate(path.url, root: root, identity: rootIdentity)
         guard FileManager.default.fileExists(atPath: path.url.path) else {
             throw WorkspaceFileError.notFound(path.relativePath)
         }
@@ -195,8 +198,8 @@ public actor WorkspaceFileStore {
     }
 
     private func evaluateWritePreconditions(path: WorkspacePath, expectedHash: String?, afterHold: Bool) throws {
-        try WorkspacePath.rejectSymlinkedPath(path, root: root)
-        try WorkspacePath.validate(path.url, root: root)
+        try WorkspacePath.rejectSymlinkedPath(path, root: root, identity: rootIdentity)
+        try WorkspacePath.validate(path.url, root: root, identity: rootIdentity)
         let existed = FileManager.default.fileExists(atPath: path.url.path)
         if let expectedHash {
             guard existed else { throw WorkspaceFileError.notFound(path.relativePath) }
@@ -216,10 +219,10 @@ public actor WorkspaceFileStore {
         destination: WorkspacePath,
         expectedHash: String
     ) throws {
-        try WorkspacePath.rejectSymlinkedPath(source, root: root)
-        try WorkspacePath.rejectSymlinkedPath(destination, root: root)
-        try WorkspacePath.validate(source.url, root: root)
-        try WorkspacePath.validate(destination.url, root: root)
+        try WorkspacePath.rejectSymlinkedPath(source, root: root, identity: rootIdentity)
+        try WorkspacePath.rejectSymlinkedPath(destination, root: root, identity: rootIdentity)
+        try WorkspacePath.validate(source.url, root: root, identity: rootIdentity)
+        try WorkspacePath.validate(destination.url, root: root, identity: rootIdentity)
         let current = try snapshot(source)
         guard current.hash == expectedHash else { throw WorkspaceFileError.staleEvidence(source.relativePath) }
         if FileManager.default.fileExists(atPath: destination.url.path) || WorkspacePath.isSymbolicLink(destination.url) {
@@ -230,14 +233,15 @@ public actor WorkspaceFileStore {
 
     private func requireParent(of path: WorkspacePath) throws {
         let parent = path.url.deletingLastPathComponent()
-        try WorkspacePath.validate(parent, root: root)
+        try WorkspacePath.validate(parent, root: root, identity: rootIdentity)
         if path.parentRelativePath != "." {
             try WorkspacePath.rejectSymlinkedPath(
                 WorkspacePath(relativePath: path.parentRelativePath, url: parent),
-                root: root
+                root: root,
+                identity: rootIdentity
             )
-        } else if WorkspacePath.isSymbolicLink(root) {
-            throw WorkspaceFileError.rejectedPath(root.path)
+        } else {
+            try WorkspacePath.ensureAuthorizedRoot(root, identity: rootIdentity)
         }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: parent.path, isDirectory: &isDirectory), isDirectory.boolValue else {
@@ -275,9 +279,9 @@ public actor WorkspaceFileStore {
     }
 
     private func relativePath(for url: URL) throws -> String {
-        try WorkspacePath.validate(url, root: root)
+        try WorkspacePath.validate(url, root: root, identity: rootIdentity)
         let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let path = url.standardizedFileURL.path
         if path == root.path { return "." }
         return String(path.dropFirst(rootPath.count))
     }

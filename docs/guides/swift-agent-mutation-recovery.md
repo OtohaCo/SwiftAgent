@@ -26,8 +26,11 @@ deadline has a drain callback, so timeout or cancellation returns control to the
 caller without pretending that an uncooperative host executor has already
 stopped. The late executor cannot publish a successful tool result after
 cancellation or timeout. A cancelled waiter that never acquired a lease does
-not admit a mutation intent and does not call the executor. If the executor
-already produced a side effect, restart recovery still does not replay it.
+not admit a mutation intent and does not call the executor. A run that cannot
+persist its opening user message never reaches the model. If authorization has
+already succeeded and the durable intent write then fails, the executor is not
+called. If the executor already produced a side effect, restart recovery still
+does not replay it.
 
 ## Restart
 

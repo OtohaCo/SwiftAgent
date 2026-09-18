@@ -140,6 +140,146 @@ final class WorkspaceFileRaceTests: XCTestCase {
         assertEquals(await store.mutationCount, 0)
     }
 
+    func testRootReplacedWithSymlinkRejectsReadAndWriteAndLeavesOutsideUnchanged() async throws {
+        let files = ["notes/todo.txt": "buy milk"]
+        let root = try makeSandbox(files)
+        let outside = try makeSandbox(files)
+        let backup = root.deletingLastPathComponent().appendingPathComponent("WorkspaceRootBackup-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+            try? FileManager.default.removeItem(at: backup)
+        }
+        let store = try WorkspaceFileStore(root: root)
+        let originalHash = WorkspaceContentHash.hex("buy milk")
+        let barrier = RaceBarrier()
+        await store.setAfterPreconditionHold { await barrier.waitForOperation() }
+        let write = Task {
+            try await store.write(
+                path: "notes/todo.txt",
+                content: "buy oat milk",
+                expectedHash: originalHash
+            )
+        }
+        await barrier.waitUntilReached()
+        try moveAsideAndReplaceWithSymlinkFromAnotherProcess(at: root, destination: outside, backup: backup)
+        await barrier.release()
+        do {
+            _ = try await write.value
+            XCTFail("A root symlink swap must not return a revision")
+        } catch {
+            XCTAssertEqual(error as? WorkspaceFileError, .rejectedPath(root.path))
+        }
+        assertEquals(await store.mutationCount, 0)
+        XCTAssertEqual(
+            try String(contentsOf: outside.appendingPathComponent("notes/todo.txt"), encoding: .utf8),
+            "buy milk"
+        )
+        XCTAssertEqual(
+            try String(contentsOf: backup.appendingPathComponent("notes/todo.txt"), encoding: .utf8),
+            "buy milk"
+        )
+        do {
+            _ = try await store.read("notes/todo.txt")
+            XCTFail("A root symlink swap must also reject later reads")
+        } catch {
+            XCTAssertEqual(error as? WorkspaceFileError, .rejectedPath(root.path))
+        }
+        XCTAssertEqual(
+            try String(contentsOf: outside.appendingPathComponent("notes/todo.txt"), encoding: .utf8),
+            "buy milk"
+        )
+    }
+
+    func testAncestorReplacedWithSymlinkRejectsWriteAndLeavesOutsideUnchanged() async throws {
+        let container = FileManager.default.temporaryDirectory.appendingPathComponent("WorkspaceAncestor-\(UUID().uuidString)")
+        let root = container.appendingPathComponent("workspace")
+        let outsideContainer = FileManager.default.temporaryDirectory.appendingPathComponent("WorkspaceAncestorOutside-\(UUID().uuidString)")
+        let outside = outsideContainer.appendingPathComponent("workspace")
+        let backup = container.deletingLastPathComponent().appendingPathComponent("WorkspaceAncestorBackup-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: container)
+            try? FileManager.default.removeItem(at: outsideContainer)
+            try? FileManager.default.removeItem(at: backup)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        try Data("buy milk".utf8).write(to: root.appendingPathComponent("notes/todo.txt"))
+        try FileManager.default.createDirectory(at: outside.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        try Data("buy milk".utf8).write(to: outside.appendingPathComponent("notes/todo.txt"))
+        let store = try WorkspaceFileStore(root: root)
+        let barrier = RaceBarrier()
+        await store.setAfterPreconditionHold { await barrier.waitForOperation() }
+        let write = Task {
+            try await store.write(
+                path: "notes/todo.txt",
+                content: "buy oat milk",
+                expectedHash: WorkspaceContentHash.hex("buy milk")
+            )
+        }
+        await barrier.waitUntilReached()
+        try moveAsideAndReplaceWithSymlinkFromAnotherProcess(
+            at: container,
+            destination: outsideContainer,
+            backup: backup
+        )
+        await barrier.release()
+        do {
+            _ = try await write.value
+            XCTFail("An ancestor symlink swap must not return a revision")
+        } catch is WorkspaceFileError {
+        }
+        assertEquals(await store.mutationCount, 0)
+        XCTAssertEqual(
+            try String(contentsOf: outside.appendingPathComponent("notes/todo.txt"), encoding: .utf8),
+            "buy milk"
+        )
+    }
+
+    func testAgentWriteAfterRootSymlinkSwapDoesNotSettleOrChangeOutside() async throws {
+        let files = ["notes/todo.txt": "buy milk"]
+        let env = try makeAgentEnvironment(files: files)
+        let outside = try makeSandbox(files)
+        let backup = env.root.deletingLastPathComponent().appendingPathComponent("WorkspaceRootBackup-\(UUID().uuidString)")
+        defer {
+            env.cleanup()
+            try? FileManager.default.removeItem(at: outside)
+            try? FileManager.default.removeItem(at: backup)
+        }
+        let originalHash = WorkspaceContentHash.hex("buy milk")
+        let barrier = RaceBarrier()
+        await env.store.setAfterPreconditionHold { await barrier.waitForOperation() }
+        let provider = ScriptedProvider { request, turn in
+            turn == 1
+                ? toolResponse(request, [toolCall("read_file", id: "read", ["path": "notes/todo.txt"])])
+                : toolResponse(request, [toolCall("write_file", id: "write", [
+                    "path": "notes/todo.txt",
+                    "content": "buy oat milk",
+                    "expectedHash": originalHash,
+                ])])
+        }
+        let session = try env.host(provider: provider).makeSession()
+        let run = try await session.run("Update the note")
+        await barrier.waitUntilReached()
+        try moveAsideAndReplaceWithSymlinkFromAnotherProcess(at: env.root, destination: outside, backup: backup)
+        await barrier.release()
+        do {
+            _ = try await run.wait()
+            XCTFail("The root swap must not settle")
+        } catch {
+            XCTAssertEqual(error as? WorkspaceFileError, .rejectedPath(env.root.path))
+        }
+        let pending = await env.journal.pendingMutations()
+        XCTAssertFalse(pending.contains { $0.state == .settled })
+        let events = await env.journal.snapshot().map(\.event)
+        XCTAssertFalse(events.contains { if case .mutationSettled = $0 { true } else { false } })
+        XCTAssertFalse(events.contains { if case .toolReceipt = $0 { true } else { false } })
+        XCTAssertEqual(
+            try String(contentsOf: outside.appendingPathComponent("notes/todo.txt"), encoding: .utf8),
+            "buy milk"
+        )
+    }
+
     func testAgentWriteRaceLeavesReconciliationAndNoSuccessReceipt() async throws {
         let env = try makeAgentEnvironment(files: ["notes/todo.txt": "buy milk"])
         defer { env.cleanup() }

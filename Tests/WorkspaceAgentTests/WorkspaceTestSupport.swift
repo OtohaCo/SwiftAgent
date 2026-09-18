@@ -153,6 +153,24 @@ func replaceWithSymlinkFromAnotherProcess(at url: URL, destination: URL) throws 
     }
 }
 
+func moveAsideAndReplaceWithSymlinkFromAnotherProcess(at url: URL, destination: URL, backup: URL) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [
+        "-c",
+        "mkdir -p \"$(dirname \"$3\")\" && mv \"$1\" \"$3\" && ln -s \"$2\" \"$1\"",
+        "workspace-root-symlink",
+        url.path,
+        destination.path,
+        backup.path,
+    ]
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        throw FixtureProcessError.nonzeroStatus(process.terminationStatus)
+    }
+}
+
 enum FixtureProcessError: Error { case nonzeroStatus(Int32) }
 
 enum SimulatedCrash: Error { case beforeMutation, afterMutation }
