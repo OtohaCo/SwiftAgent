@@ -6,8 +6,8 @@ struct AgentLoopLifecycle: Sendable {
     let evidenceLedger: EvidenceLedger
     let mutationAdmission: (any ToolMutationAdmission)?
     let checkpoint: @Sendable ([ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage]
-    let recordMutationReceipt: @Sendable (ToolCallID, ToolReceipt) async throws -> Void
-    let commitMutation: (@Sendable (ToolCallID, ToolReceipt, [ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage])?
+    let recordMutationReceipt: @Sendable (ToolCallID, ToolReceipt, JSONValue) async throws -> Void
+    let commitMutation: (@Sendable (ToolCallID, ToolReceipt, JSONValue, [ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage])?
     let markMutationNeedsReconciliation: @Sendable (ToolCallID) async throws -> Void
     let beforeFinish: @Sendable () async -> Void
 
@@ -16,8 +16,8 @@ struct AgentLoopLifecycle: Sendable {
         evidenceLedger: EvidenceLedger,
         mutationAdmission: (any ToolMutationAdmission)? = nil,
         checkpoint: @escaping @Sendable ([ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage],
-        recordMutationReceipt: @escaping @Sendable (ToolCallID, ToolReceipt) async throws -> Void = { _, _ in },
-        commitMutation: (@Sendable (ToolCallID, ToolReceipt, [ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage])? = nil,
+        recordMutationReceipt: @escaping @Sendable (ToolCallID, ToolReceipt, JSONValue) async throws -> Void = { _, _, _ in },
+        commitMutation: (@Sendable (ToolCallID, ToolReceipt, JSONValue, [ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage])? = nil,
         markMutationNeedsReconciliation: @escaping @Sendable (ToolCallID) async throws -> Void = { _ in },
         beforeFinish: @escaping @Sendable () async -> Void = {}
     ) {

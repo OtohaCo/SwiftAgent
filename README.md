@@ -134,6 +134,14 @@ struct UpdateListingTool: AgentTool {
 `.mutation()` is exclusive, receipt-backed, and Evidence-required. Existing
 resources should be observed in an earlier tool result before this runs.
 
+For Host retries, pass the same non-nil `operationID` to every attempt of one
+logical mutation. A shared durable journal deduplicates by operation ID, tool,
+and canonical arguments: pending or uncertain attempts fail closed, while a
+settled retry reuses the original receipt and durable schema-valid tool output
+without running the executor again.
+Generating a new operation ID for every HTTP or UI retry disables cross-run
+deduplication.
+
 ### 4. Durable Session
 
 ```swift

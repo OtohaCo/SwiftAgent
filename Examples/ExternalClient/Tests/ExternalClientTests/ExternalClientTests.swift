@@ -46,6 +46,26 @@ struct ExternalClientTests {
         #expect(await restarted.recovery == .clean)
         _ = try makeMutationAgent().makeSession(id: sessionID, journal: restarted)
     }
+
+    @Test func stableOperationIDReplaysASettledReceiptWithoutExecutingAgain() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-external-idempotency-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let probe = SideEffectProbe()
+        let journal = try AgentJournal(persistenceURL: url)
+        let session = try makeMutationAgent(probe: probe).makeSession(journal: journal)
+
+        let firstRun = try await session.run("Update the listing", operationID: "logical-update-1")
+        let first = try await firstRun.wait()
+        try await firstRun.waitForDrain()
+        let retry = try await session.run("Retry the update", operationID: "logical-update-1").wait()
+
+        #expect(probe.toolExecutions == 1)
+        #expect(retry.receipts.first?.receipt == first.receipts.first?.receipt)
+    }
 }
 
 private func makeReadOnlyAgent() throws -> Agent {
@@ -120,14 +140,14 @@ private struct MutationProvider: ModelProvider {
         ModelEventStream.make { emit in
             probe?.recordModel()
             let info = ResponseInfo(id: "mutation", model: request.model)
-            if request.messages.contains(where: { $0.role == .tool }) {
+            if request.messages.last?.role == .tool {
                 try emit(.responseStarted(info))
                 try emit(.textDelta("Done"))
                 try emit(.responseCompleted(.init(info: info, content: [.text("Done")], stopReason: .endTurn)))
                 return
             }
             let call = ToolCall(
-                id: .init(rawValue: "listing-1"),
+                id: .init(rawValue: "listing-\(probe?.modelStarts ?? 1)"),
                 name: ListingUpdateTool.name,
                 argumentsJSON: #"{"id":"listing-1"}"#,
                 completeness: .complete

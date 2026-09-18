@@ -146,10 +146,12 @@ public actor AgentSession {
             evidenceLedger: evidenceLedger,
             mutationAdmission: journal,
             checkpoint: { messages, steering in try await self.record(messages, steering: steering, runID: runID, budget: budget) },
-            recordMutationReceipt: { callID, receipt in
-                try await journal?.settleMutation(sessionID: self.id, runID: runID, callID: callID, receipt: receipt)
+            recordMutationReceipt: { callID, receipt, output in
+                try await journal?.settleMutation(
+                    sessionID: self.id, runID: runID, callID: callID, receipt: receipt, output: output
+                )
             },
-            commitMutation: { callID, receipt, messages, steering in
+            commitMutation: { callID, receipt, output, messages, steering in
                 guard let journal else {
                     throw AgentJournalError.persistenceUnavailable("mutation history cannot be committed without a journal")
                 }
@@ -167,6 +169,7 @@ public actor AgentSession {
                     runID: runID,
                     callID: callID,
                     receipt: receipt,
+                    output: output,
                     history: prepared.history,
                     steeringIDs: steering.map(\.id)
                 )

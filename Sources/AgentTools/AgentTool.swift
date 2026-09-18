@@ -23,7 +23,13 @@ public protocol AgentTool: Sendable {
 
 /// Trusted runtime admission required immediately before a mutation executor runs.
 package protocol ToolMutationAdmission: Sendable {
-    func admit(_ request: ToolMutationAdmissionRequest) async throws
+    @discardableResult
+    func admit(_ request: ToolMutationAdmissionRequest) async throws -> ToolMutationAdmissionResult
+}
+
+package enum ToolMutationAdmissionResult: Sendable {
+    case admitted
+    case settled(receipt: ToolReceipt, output: JSONValue)
 }
 
 package struct ToolMutationAdmissionRequest: Codable, Equatable, Sendable {
@@ -71,10 +77,19 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
     public let output: Output
     public let evidence: [Evidence]
     public let receipt: ToolReceipt?
+    package let isIdempotentReplay: Bool
 
     public init(output: Output, evidence: [Evidence] = [], receipt: ToolReceipt? = nil) {
         self.output = output
         self.evidence = evidence
         self.receipt = receipt
+        isIdempotentReplay = false
+    }
+
+    package init(output: Output, evidence: [Evidence] = [], receipt: ToolReceipt?, isIdempotentReplay: Bool) {
+        self.output = output
+        self.evidence = evidence
+        self.receipt = receipt
+        self.isIdempotentReplay = isIdempotentReplay
     }
 }

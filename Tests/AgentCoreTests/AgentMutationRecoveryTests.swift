@@ -178,7 +178,8 @@ final class AgentMutationRecoveryTests: XCTestCase {
 
         do {
             try await journal.settleMutation(sessionID: sessionID, runID: runID, callID: callID,
-                                             receipt: validReceipt(operationID: "wrong-operation"))
+                                             receipt: validReceipt(operationID: "wrong-operation"),
+                                             output: .object(["updated": .bool(true)]))
             XCTFail("Receipt binding must fail closed")
         } catch {
             XCTAssertEqual(error as? ToolReceiptError, .operationMismatch)
@@ -208,6 +209,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
                 runID: runID,
                 callID: request.callID,
                 receipt: validReceipt(operationID: request.idempotencyKey),
+                output: .object(["updated": .bool(true)]),
                 history: [.user([.text("Update the listing")])],
                 steeringIDs: []
             )
@@ -243,7 +245,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
             control: AgentRunControl(),
             evidenceLedger: EvidenceLedger(),
             checkpoint: { messages, _ in messages },
-            recordMutationReceipt: { _, _ in throw settlementFailure },
+            recordMutationReceipt: { _, _, _ in throw settlementFailure },
             markMutationNeedsReconciliation: { _ in throw quarantineFailure }
         )
         let progress = AgentToolBatchProgress(prefix: [], response: response, budget: try testBudget(),
@@ -605,7 +607,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let entered = expectation(description: "mutation executor entered")
         let probe = MutationProbe()
         let journal = try AgentJournal(persistenceURL: url)
-        let tool = try BlockingMutationTool(gate: gate, entered: entered, timeout: .milliseconds(50), probe: probe)
+        let tool = try BlockingMutationTool(gate: gate, entered: entered, timeout: .milliseconds(500), probe: probe)
         let call = blockingMutationCall()
         let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
         let agent = try Agent(
@@ -617,16 +619,15 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let sessionID = UUID()
         let session = try agent.makeSession(id: sessionID, journal: journal)
         let run = try await session.run("Change the listing")
-        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 1)
+        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 2)
         XCTAssertEqual(enteredResult, .completed)
-        try await Task.sleep(for: .milliseconds(120))
-        await gate.open()
         do {
             _ = try await run.wait()
             XCTFail("Timed out mutation must not complete")
         } catch {
             XCTAssertEqual(error as? AgentLoopError, .toolTimedOut(call.id))
         }
+        await gate.open()
         await session.waitForRunToDrain(runID: run.id)
         let firstCount = await probe.count
         XCTAssertEqual(firstCount, 1)
@@ -810,7 +811,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
         _ = try await run.wait()
     }
 
-    func testSameIdempotencyKeyAcrossSessionsDoesNotConflict() async throws {
+    func testPendingIdempotencyKeyConflictsAcrossSessionsInOneJournalDomain() async throws {
         let url = temporaryURL()
         defer { cleanup(url) }
         let journal = try AgentJournal(persistenceURL: url)
@@ -840,12 +841,17 @@ final class AgentMutationRecoveryTests: XCTestCase {
         )
 
         try await journal.admit(firstWithSharedKey)
-        try await journal.admit(second)
+        do {
+            try await journal.admit(second)
+            XCTFail("A pending logical mutation must be exclusive across the journal domain")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .mutationPending)
+        }
         let pending = await journal.pendingMutations()
-        XCTAssertEqual(pending.count, 2)
+        XCTAssertEqual(pending.count, 1)
     }
 
-    func testSettledMutationCannotBeRepeatedAfterSessionRestartWithSameOperationID() async throws {
+    func testSettledMutationReplaysAfterSessionRestartWithSameOperationID() async throws {
         let url = temporaryURL()
         defer { cleanup(url) }
         let journal = try AgentJournal(persistenceURL: url)
@@ -873,14 +879,10 @@ final class AgentMutationRecoveryTests: XCTestCase {
 
         let restartedJournal = try AgentJournal.load(from: url)
         let restarted = try agent.makeSession(id: sessionID, journal: restartedJournal)
-        do {
-            _ = try await restarted.run("Update the listing", operationID: operationID).wait()
-            XCTFail("A settled operation must not be replayed after restart")
-        } catch {
-            XCTAssertEqual(error as? AgentJournalError, .mutationIntentConflict)
-        }
+        let retry = try await restarted.run("Update the listing", operationID: operationID).wait()
         let secondCount = await probe.count
         XCTAssertEqual(secondCount, 1)
+        XCTAssertEqual(retry.receipts.first?.callID, .init(rawValue: "call-2"))
     }
 
     func testSessionRestartRestoresCanonicalHistoryBeforeNextRun() async throws {
@@ -1031,7 +1033,7 @@ private actor MutationProbe {
 }
 
 private struct NoopMutationAdmission: ToolMutationAdmission {
-    func admit(_ request: ToolMutationAdmissionRequest) async throws {}
+    func admit(_ request: ToolMutationAdmissionRequest) async throws -> ToolMutationAdmissionResult { .admitted }
 }
 
 private struct MutationTool: AgentTool {
@@ -1188,10 +1190,10 @@ private struct BlockingMutationTool: AgentTool {
     }
 
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
-        entered.fulfill()
         if let probe {
             await probe.record(journalURL: nil, context: context)
         }
+        entered.fulfill()
         await gate.wait()
         let receipt = ToolReceipt(operationID: context.idempotencyKey ?? "missing", status: .succeeded,
                                   confirmedTargets: [.init(namespace: "property.listing", id: "listing-1")], revision: "v2")

@@ -355,7 +355,8 @@ final class AgentJournalTests: XCTestCase {
         let receipt = ToolReceipt(operationID: "settled-key", status: .succeeded,
                                   confirmedTargets: [.init(namespace: "property.listing", id: "listing-1")], revision: "v2")
         try await journal.settleMutation(sessionID: sessionID, runID: runID,
-                                         callID: intent.call.id, receipt: receipt)
+                                         callID: intent.call.id, receipt: receipt,
+                                         output: .object(["updated": .bool(true)]))
         _ = try await journal.compactIfNeeded(maxJournalBytes: 1)
         let restored = try AgentJournal.load(from: url)
 

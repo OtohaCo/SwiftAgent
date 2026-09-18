@@ -47,6 +47,43 @@ Share the Agent's `ToolScheduler` whenever another Session can mutate the same
 host resources. Two Agents that control one player or one file store must be
 constructed with the same scheduler value.
 
+## Operation Identity and Mutation Retries
+
+`session.run(_:budget:operationID:)` accepts a logical operation identity. Reuse
+the same non-nil `operationID` for attempts that mean "perform this same mutation
+once." Within a shared durable `AgentJournal`, mutation deduplication is shared
+across Sessions and Runs. Its key combines the stable operation ID, tool name,
+and canonical semantic JSON arguments; it excludes tool call ID, Session ID, and
+Run ID. JSON objects with different key ordering, equivalent numeric spellings,
+and equivalent JSON string escapes are the same identity.
+
+Passing nil or blank `operationID` uses a per-call identity. That keeps one call
+internally coherent but intentionally provides no cross-run deduplication.
+
+The journal lifecycle controls retry admission:
+
+| Latest state | Retry behavior |
+| --- | --- |
+| `intent` | Fails closed with `AgentJournalError.mutationPending` |
+| `needsReconciliation` | Fails closed with `AgentJournalError.mutationRequiresReconciliation` |
+| `settled` | Reuses the original receipt and does not invoke the executor |
+| `aborted` | Starts a new durable lifecycle for the same logical operation |
+
+`aborted` is not a synonym for cancelled or unknown. The trusted Host may call
+the abort path only after explicitly confirming that no external side effect
+occurred. Settled and aborted identities are retained indefinitely in the shared
+journal domain.
+
+Authorization and Evidence requirements are currently checked before replay
+admission. A settled retry therefore still must satisfy current policy. On a
+settled replay, the runtime returns the original durable canonical JSON output,
+validates it against the current tool output schema, records the original
+receipt, and uses the current tool call ID in the transcript and run result.
+Hosts reconciling an uncertain mutation should provide that output through the
+reconciliation overload when future replay is required. Older settlements that
+do not contain output fail closed with
+`AgentJournalError.mutationReplayUnavailable`; they are never re-executed.
+
 ## Ownership and History
 
 A Session rejects overlapping requests with `AgentSessionError.runInProgress`.

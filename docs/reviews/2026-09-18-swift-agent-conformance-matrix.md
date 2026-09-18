@@ -3,7 +3,7 @@
 last-verified: 2026-09-18
 
 Pi reference: `earendil-works/pi` `5901446094988aa5cd8e11efdaa131c3949106f1` (main, 2026-09-18).
-SwiftAgent baseline: `8cf2373ca14b19d9463451c3f3e01c86ca4f6ba9` (SAI-043) plus this SAI-044 delta.
+SwiftAgent baseline: `8cf2373ca14b19d9463451c3f3e01c86ca4f6ba9` (SAI-043) plus the SAI-040 and SAI-044 deltas on this branch.
 
 Pi tests are a catalog, not a porting checklist. Each row answers: SwiftAgent has the concept? Should it? Already tested? Stronger? Not applicable?
 
@@ -17,13 +17,15 @@ Action values: `Covered` · `Add test` · `Existing backlog` · `New backlog` ·
 | --- | --- | --- |
 | 1 Core Loop | single turn, tool loop, failure, cancel, events | Covered |
 | 2 Stateful Agent | multi-run, steering, context, continuation, compaction | Covered |
-| 3 Durable Agent | journal, restart, mutation, receipt, reconciliation | Partial |
+| 3 Durable Agent | journal, restart, mutation, receipt, reconciliation | Covered |
 | 4 Provider | streaming, encoding, tool calls, reasoning, usage, errors | Partial |
 | 5 Host Integration | ExternalClient, WorkspaceAgent, Otoha adapter | Partial |
 
 Level 2 is Covered for the declared contract: next `session.run` after `wait()`, in-run `steer`, fail-closed default compaction. Pi's first-class follow-up *queue* is Host responsibility (SAI-045), not a silent gap in the current API.
 
-Level 3 is Partial only because settled `operationID` retry semantics are still SAI-040. Recovery, receipts, and replay prevention are otherwise stronger than Pi.
+Level 3 is Covered for the declared contract. SAI-040 adds journal-wide durable
+deduplication, typed pending/reconciliation failures, receipt-backed settled
+replay without executor invocation, and explicit Host-confirmed abort restart.
 
 Level 4 is Partial because SwiftAgent ships Anthropic + Apple planning adapters, not Pi's multi-cloud catalog. Live cloud/on-device tests remain opt-in skips.
 
@@ -236,8 +238,16 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 | Durable intent, crash windows, receipt, reconcile, abort, lease | `AgentMutationRecoveryTests` | SwiftAgent stronger |
 | F1 hang: settlement + quarantine both fail | `AgentSessionHangTests` | Covered |
 | Unicode checkpoint round-trip | **SAI-044** `AgentJournalUnicodeTests` | Covered |
-| Idempotency: never executed / intent / needsReconciliation / abort | recovery tests | Covered |
-| Idempotency: settled retry returns receipt without re-execute | currently rejects same key | Existing backlog SAI-040 |
+| Identity scope: stable operation ID + tool + canonical semantic JSON args; excludes call/session/run | `AgentMutationIdempotencyTests`, recovery cross-session test | Covered |
+| Nil operation ID is per-call only, with no cross-run deduplication | loop idempotency-key contract | Covered |
+| `intent` retry fails closed with typed `mutationPending` | `intentRetryReturnsTypedPendingWithoutCreatingAnotherIntent` | Covered |
+| `needsReconciliation` retry fails closed | `needsReconciliationRetryFailsClosed` | Covered |
+| Settled retry returns the original receipt without executor invocation | `settledRetryReturnsExistingReceiptWithoutExecutingAgain`, restart recovery test | Covered |
+| Settled replay emits the original schema-valid output and uses the current tool call ID | `settledRetryReturnsExistingReceiptWithoutExecutingAgain` | Covered |
+| Abort permits a new lifecycle only after trusted Host confirmation of no side effect | `confirmedAbortedMutationCanCreateANewDurableIntent` | Covered |
+| Authorization and Evidence are checked before replay admission | mutation authorization/evidence ordering tests | Covered |
+| Legacy settlement without durable output fails closed | `legacySettlementWithoutDurableOutputFailsClosed` | Covered |
+| Terminal identities retained indefinitely; schema v3 reads v1/v2 | journal recovery and rollover contract | Covered |
 
 ---
 
@@ -308,7 +318,7 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 | R Synthetic summary | Covered |
 | S Journal | SwiftAgent stronger (rollover → SAI-042) |
 | T Mutation | SwiftAgent stronger |
-| U Idempotency | Partial → SAI-040 |
+| U Idempotency | Covered (SAI-040) |
 | V Evidence | Covered |
 | W Retry/fallback | Covered declared route |
 | X Subscribers | Covered |

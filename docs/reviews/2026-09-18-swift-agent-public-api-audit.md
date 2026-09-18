@@ -112,7 +112,7 @@ Input/Output. Internal runtime erasure still uses JSONValue.
 | AgentJournalRecovery | public | KEEP | Crash-tail signal | No |
 | AgentJournalStorage | public | KEEP | Durable mutation capability | Additive |
 | AgentJournalDurability | package | PACKAGE | Write-path detail | Yes |
-| AgentJournalError / AgentJournal | public | KEEP | Hosts load, inspect, recover, reconcile, abort | Write APIs package |
+| AgentJournalError / AgentJournal | public | KEEP | Hosts load, inspect, recover, reconcile, abort; SAI-040 adds pending/replay-unavailable cases and output-aware reconciliation | Write APIs package; enum expansion is source-breaking |
 | AgentLoop | package | PACKAGE | Orchestration detail | Yes |
 | AgentLoopOutcome / AgentLoopResult / AgentLoopError | public | KEEP | Run result and limits | No |
 | AgentRun / AgentRunError | public | KEEP | events / cancel / steer / wait / waitForDrain | Additive `waitForDrain` |
@@ -304,3 +304,36 @@ Conversation context is a 1.0-pre contract:
    restart are separate contracts.
 
 Do not add host-domain fields such as last search results to AgentCore.
+
+## SAI-040 compatibility freeze
+
+Durable mutation deduplication is a 1.0-pre contract. It adds public
+`AgentJournalError.mutationPending` and `mutationReplayUnavailable` cases plus
+output-aware `reconcileMutation` overloads. Public enum expansion is
+source-breaking for exhaustive switches. No new public type is added. The
+journal schema advances from version 2 to version 3; version 1 and version 2
+records remain readable.
+
+The deduplication domain is one shared durable `AgentJournal`. A non-nil
+`operationID` is the logical operation identity reused across retry attempts.
+The durable key combines that stable operation ID, the tool name, and canonical
+semantic JSON arguments. Tool call ID, Session ID, and Run ID are not part of
+the key. Nil or blank `operationID` retains per-call behavior and provides no
+cross-run deduplication.
+
+Admission follows the latest durable state:
+
+1. `intent` fails closed with `AgentJournalError.mutationPending`.
+2. `needsReconciliation` fails closed with
+   `AgentJournalError.mutationRequiresReconciliation`.
+3. `settled` revalidates and returns the original receipt without invoking the
+   executor. The original canonical JSON output is durable and is validated
+   against the current tool output schema. Transcript and `AgentToolReceipt`
+   use the current tool call ID. Legacy settlements without output fail closed
+   with `mutationReplayUnavailable`.
+4. `aborted` allows a new durable lifecycle only after the trusted Host has
+   explicitly confirmed that the previous attempt produced no side effect.
+
+Authorization and Evidence currently run before replay admission. Settled and
+aborted identities remain durable indefinitely; there is no expiry or terminal
+identity pruning in this contract.

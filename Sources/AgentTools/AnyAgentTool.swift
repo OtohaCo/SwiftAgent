@@ -63,7 +63,7 @@ package struct AnyAgentTool: Sendable {
                 if policy.effect == .mutation {
                     let mutationAdmission = context.mutationAdmission!
                     let argumentsJSON = context.argumentsJSON!
-                    try await mutationAdmission.admit(.init(
+                    let admission = try await mutationAdmission.admit(.init(
                         sessionID: context.sessionID,
                         runID: context.runID,
                         callID: context.callID,
@@ -74,6 +74,18 @@ package struct AnyAgentTool: Sendable {
                         receiptExpectation: receiptExpectation
                     ))
                     try context.checkActive()
+                    if case .settled(let receipt, let output) = admission {
+                        guard let receiptExpectation else { throw ToolReceiptError.unexpectedReceipt }
+                        guard let operationID = context.idempotencyKey else {
+                            throw ToolInvocationError.missingIdempotencyKey
+                        }
+                        try ToolReceiptValidator.validate(
+                            receipt,
+                            operationID: operationID,
+                            expectation: receiptExpectation
+                        )
+                        return ToolResult(output: output, receipt: receipt, isIdempotentReplay: true)
+                    }
                 }
                 let result = try await tool.execute(input, context: context)
                 try context.checkActive()

@@ -10,6 +10,7 @@ actor AgentToolBatchProgress {
     private let emitter: AgentEventEmitter?
     private var results: [Int: ToolResultMessage] = [:]
     private var receipts: [AgentToolReceipt] = []
+    private var executedMutation = false
     private var canonicalHistory: [ModelMessage]?
 
     init(prefix: [ModelMessage], response: ModelResponse, budget: AgentBudget,
@@ -33,15 +34,20 @@ actor AgentToolBatchProgress {
             let committedHistory = history(proposed)
             if call.policy.effect == .mutation {
                 guard let receipt = result.receipt else { throw ToolReceiptError.missing }
-                if let commitMutation = lifecycle?.commitMutation {
-                    let canonical = try await commitMutation(call.call.id, receipt, committedHistory, [])
+                if result.isIdempotentReplay, let lifecycle {
+                    let canonical = try await lifecycle.checkpoint(committedHistory, [])
                     updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+                } else if let commitMutation = lifecycle?.commitMutation {
+                    let canonical = try await commitMutation(call.call.id, receipt, result.output, committedHistory, [])
+                    updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+                    executedMutation = true
                 } else {
-                    try await lifecycle?.recordMutationReceipt(call.call.id, receipt)
+                    try await lifecycle?.recordMutationReceipt(call.call.id, receipt, result.output)
                     if let lifecycle {
                         let canonical = try await lifecycle.checkpoint(committedHistory, [])
                         updateCanonicalPrefix(canonical, committedHistory: committedHistory)
                     }
+                    executedMutation = true
                 }
             } else {
                 if let lifecycle {
@@ -58,7 +64,7 @@ actor AgentToolBatchProgress {
             // The executor already returned. Quarantine persistence must not
             // pin the emitter's reserved completion, or finish() waits forever.
             let exposed: any Error
-            if call.policy.effect == .mutation {
+            if call.policy.effect == .mutation, !result.isIdempotentReplay {
                 let mark = lifecycle?.markMutationNeedsReconciliation
                 let callID = call.call.id
                 exposed = await AgentMutationPersistenceError.capturing(settlement: error) {
@@ -74,8 +80,8 @@ actor AgentToolBatchProgress {
         }
     }
 
-    func completed() -> (history: [ModelMessage], receipts: [AgentToolReceipt], count: Int) {
-        (canonicalHistory ?? history(results), receipts, results.count)
+    func completed() -> (history: [ModelMessage], receipts: [AgentToolReceipt], count: Int, executedMutation: Bool) {
+        (canonicalHistory ?? history(results), receipts, results.count, executedMutation)
     }
 
     private func history(_ results: [Int: ToolResultMessage]) -> [ModelMessage] {

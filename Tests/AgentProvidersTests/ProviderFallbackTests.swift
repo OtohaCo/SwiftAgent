@@ -147,6 +147,66 @@ struct ProviderFallbackTests {
         #expect(await secondProbe.requests.isEmpty)
     }
 
+    @Test func fallbackProviderReplaysSettledMutationWithoutExecutingAgain() async throws {
+        let firstProbe = RouteProviderProbe()
+        let secondProbe = RouteProviderProbe()
+        let executorProbe = RouteMutationExecutorProbe()
+        let primaryCall = ToolCall(
+            id: .init(rawValue: "primary-call"),
+            name: RouteMutationTool.name,
+            argumentsJSON: #"{"id":"listing-1"}"#,
+            completeness: .complete
+        )
+        let fallbackCall = ToolCall(
+            id: .init(rawValue: "fallback-call"),
+            name: RouteMutationTool.name,
+            argumentsJSON: #"{"id":"listing-1"}"#,
+            completeness: .complete
+        )
+        let first = RouteFixtureProvider(probe: firstProbe) { request, turn, emit in
+            switch turn {
+            case 1: try emitContents(toolEvents(request, [primaryCall]), emit: emit)
+            case 2: try emitContents(textEvents(request, "first complete"), emit: emit)
+            default: throw ModelProviderError(kind: .unavailable, message: "primary unavailable")
+            }
+        }
+        let second = RouteFixtureProvider(probe: secondProbe) { request, turn, emit in
+            if turn == 1 {
+                try emitContents(toolEvents(request, [fallbackCall]), emit: emit)
+            } else {
+                try emitContents(textEvents(request, "retry complete"), emit: emit)
+            }
+        }
+        let route = try ModelProviderRoute(
+            id: "fixture",
+            candidates: [first, second],
+            policy: .init(maxAttempts: 2)
+        )
+        let url = temporaryJournalURL()
+        defer { cleanupJournal(url) }
+        let journal = try AgentJournal(persistenceURL: url)
+        let agent = try Agent(
+            model: .init(provider: "fixture", name: "test"),
+            provider: route,
+            tools: [try RouteMutationTool(probe: executorProbe)],
+            configuration: AgentConfiguration(runTimeout: .seconds(2))
+        )
+        let session = try agent.makeSession(journal: journal)
+
+        let firstRun = try await session.run("Update", operationID: "fallback-operation")
+        let firstResult = try await firstRun.wait()
+        try await firstRun.waitForDrain()
+        let retryResult = try await session.run("Retry", operationID: "fallback-operation").wait()
+
+        #expect(await executorProbe.count == 1)
+        #expect(firstResult.receipts.first?.callID == primaryCall.id)
+        #expect(retryResult.receipts.first?.callID == fallbackCall.id)
+        #expect(retryResult.receipts.first?.receipt == firstResult.receipts.first?.receipt)
+        #expect(await firstProbe.requests.count == 4)
+        #expect(await secondProbe.requests.count == 2)
+        #expect(await journal.pendingMutations().isEmpty)
+    }
+
     @Test func fallbackPolicyRejectsNonTransientErrorKinds() {
         for kind in [ModelProviderError.Kind.authentication, .permissionDenied, .invalidRequest,
                      .invalidResponse, .fallbackBlocked] {
@@ -206,6 +266,12 @@ private actor RouteProviderProbe {
     }
 }
 
+private actor RouteMutationExecutorProbe {
+    private(set) var count = 0
+
+    func record() { count += 1 }
+}
+
 private struct RouteFixtureProvider: ModelProvider {
     let descriptor = ModelProviderDescriptor(id: "fixture", capabilities: [.streaming, .multiTurn, .tools])
     let probe: RouteProviderProbe
@@ -261,9 +327,11 @@ private struct RouteMutationTool: AgentTool {
     static let description = "Update a property listing"
     static let inputSchema = ToolSchema.object(properties: ["id": .string], required: ["id"])
     static let outputSchema = ToolSchema.object(properties: ["updated": .boolean], required: ["updated"])
+    let probe: RouteMutationExecutorProbe?
     let policy: ToolPolicy
 
-    init() throws {
+    init(probe: RouteMutationExecutorProbe? = nil) throws {
+        self.probe = probe
         policy = try ToolPolicy(effect: .mutation, execution: .exclusive, idempotency: .requiresReceipt,
                                 timeout: .seconds(1), authorization: .notRequired)
     }
@@ -277,6 +345,7 @@ private struct RouteMutationTool: AgentTool {
     }
 
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
+        await probe?.record()
         let receipt = ToolReceipt(operationID: context.idempotencyKey ?? "missing", status: .succeeded,
                                   confirmedTargets: [.init(namespace: "property.listing", id: input.id)], revision: "v2")
         return ToolResult(output: .init(updated: true), receipt: receipt)

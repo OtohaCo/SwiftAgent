@@ -188,22 +188,21 @@ package struct AgentLoop: Sendable {
                     try await emitter?.failIfActive(call.call.id, failure: AgentFailure(exposed))
                     throw exposed
                 })
-                for call in prepared where call.policy.effect == .mutation {
-                    // The scheduler has completed authorization, evidence validation,
-                    // durable admission and executor work before the next model turn.
-                    await markMutationBoundaryIfNeeded(call, sessionID: sessionID, runID: runID)
-                }
             } catch { throw Self.toolError(error) }
             let completed = await progress.completed()
+            if completed.executedMutation {
+                // Only a newly executed side effect creates a provider fallback boundary.
+                // A settled replay is a result lookup, not another mutation execution.
+                await markMutationBoundaryIfNeeded(sessionID: sessionID, runID: runID)
+            }
             history = completed.history
             receipts.append(contentsOf: completed.receipts)
             toolCalls += completed.count
         }
     }
 
-    private func markMutationBoundaryIfNeeded(_ call: PreparedToolCall, sessionID: UUID, runID: UUID) async {
-        guard call.policy.effect == .mutation,
-              let boundary = provider as? any ModelProviderMutationBoundary else { return }
+    private func markMutationBoundaryIfNeeded(sessionID: UUID, runID: UUID) async {
+        guard let boundary = provider as? any ModelProviderMutationBoundary else { return }
         await boundary.markMutationBoundary(sessionID: sessionID, runID: runID)
     }
 

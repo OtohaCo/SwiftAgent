@@ -38,6 +38,46 @@ Restart recovery moves unsettled intents to `needsReconciliation`. The SDK
 does not replay the host executor and does not infer success from the crash
 tail. The host reconciles with a trusted receipt or aborts.
 
+## Durable deduplication is journal-wide
+
+Mutation deduplication is scoped to one shared durable `AgentJournal`, not to a
+Session or Run. `operationID` names the logical operation and must stay stable
+across retry attempts. For a non-nil `operationID`, the durable identity combines:
+
+- The stable `operationID`
+- The tool name
+- The canonical semantic JSON arguments
+
+Tool call ID, Session ID, and Run ID are excluded. Equivalent JSON object key
+ordering, numeric spellings such as `1` and `1.0`, and equivalent JSON string
+escapes therefore resolve to the same identity. Changing the tool or semantic
+arguments creates a different identity and cannot reuse the prior settlement. A
+nil or blank `operationID` falls back to a per-call identity and provides no
+cross-run deduplication.
+
+Admission fails closed according to the latest durable lifecycle:
+
+- `intent` throws `AgentJournalError.mutationPending`; a second intent is not
+  created and the executor does not run.
+- `needsReconciliation` throws
+  `AgentJournalError.mutationRequiresReconciliation`; the executor does not run.
+- `settled` validates and reuses the original receipt without invoking the
+  executor. Executor settlements durably preserve the canonical JSON tool
+  output, so replay remains valid against the declared output schema.
+  Transcript and run receipt records use the current tool call ID, not the
+  original attempt's call ID.
+- `aborted` permits a new lifecycle for the same logical identity. Abort means
+  the trusted Host explicitly confirmed that the prior attempt produced no
+  external side effect; cancellation or uncertainty alone is not an abort.
+
+Authorization and Evidence checks currently run before durable replay admission,
+so a settled receipt does not bypass current policy. Reconciliation should
+provide the original canonical JSON output when later replay is required; a
+legacy settlement without durable output fails closed with
+`AgentJournalError.mutationReplayUnavailable`. Terminal identities are retained
+indefinitely in the journal domain. The journal schema is version 3 and remains
+backward-readable for version 1 and version 2 records.
+
 ## Provider fallback cannot replay an uncertain mutation
 
 Once a mutation boundary is crossed, switching provider candidates for that

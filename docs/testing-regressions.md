@@ -19,6 +19,9 @@ long-term map so a later bug does not require moving files.
 | Journal rollover must preserve recovery and reject stale writers | `testCompactionShrinksHistoryAndPreservesLatestCheckpointAcrossRestart`, `testStaleWriterFailsClosedAfterCompaction`, `testDirectorySyncFailureAdoptsTheAlreadyReplacedJournal` | `Tests/AgentCoreTests/AgentJournalTests.swift` |
 | Cancelling one drain waiter must not cancel physical drain | `multipleDrainWaitersSharePhysicalRelease` | `Tests/AgentCoreTests/AgentRunTests.swift` |
 | Anthropic terminal/trailing and event/data mismatch must fail closed | `unknownSemanticEventAfterMessageStopFailsClosed`, `mismatchedNamedEventAndDataTypeFailClosed` | `Tests/AgentProvidersTests/AnthropicUnknownEventTests.swift` |
+| Settled mutation retry must reuse the original receipt and schema-valid output without executing again | `settledRetryReturnsExistingReceiptWithoutExecutingAgain`, `settledRetryWorksAfterSessionRestart`, `journalCompactionPreservesSettledReplayIdentity`, `legacySettlementWithoutDurableOutputFailsClosed` | `Tests/AgentCoreTests/AgentMutationIdempotencyTests.swift` |
+| Concurrent duplicate mutation admission must execute only one side effect | `concurrentDuplicateAdmissionExecutesOnce` | `Tests/AgentCoreTests/AgentMutationIdempotencyTests.swift` |
+| Provider fallback must not replay a previously settled mutation | `fallbackProviderReplaysSettledMutationWithoutExecutingAgain` | `Tests/AgentProvidersTests/ProviderFallbackTests.swift` |
 
 When a new production bug lands, add a row here and a focused test next to the
 domain tests. Prefer a precise name over a `Regressions/` directory move.

@@ -85,6 +85,7 @@ public enum AgentJournalEvent: Codable, Equatable, Sendable {
     case pendingMutation(PendingMutationIntent)
     case mutationReceiptExpectation(callID: ToolCallID, expectation: ToolReceiptExpectation)
     case mutationNeedsReconciliation(callID: ToolCallID)
+    case mutationOutput(callID: ToolCallID, output: JSONValue)
     case mutationSettled(callID: ToolCallID, receipt: ToolReceipt, source: AgentMutationSettlementSource)
     case mutationAborted(callID: ToolCallID)
     case checkpoint(history: [ModelMessage], steeringIDs: [UUID])
@@ -133,7 +134,7 @@ public struct PendingMutationIntent: Codable, Equatable, Sendable {
 }
 
 public struct AgentJournalRecord: Codable, Equatable, Sendable {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
 
     public let id: UUID
     public let sequence: UInt64
@@ -192,6 +193,8 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     case concurrentWriter
     case invalidMutationIntent
     case mutationIntentConflict
+    case mutationPending
+    case mutationReplayUnavailable
     case mutationRequiresReconciliation
     case mutationNotFound
     case mutationReceiptInvalid
@@ -210,6 +213,8 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
         case .concurrentWriter: "Agent journal changed outside this instance."
         case .invalidMutationIntent: "Mutation intent is incomplete or invalid."
         case .mutationIntentConflict: "Mutation intent conflicts with an existing operation."
+        case .mutationPending: "An earlier attempt for this mutation is still pending."
+        case .mutationReplayUnavailable: "The settled mutation does not contain a durable tool result for replay."
         case .mutationRequiresReconciliation: "An earlier mutation requires reconciliation before another mutation can run."
         case .mutationNotFound: "The mutation intent was not found in the journal."
         case .mutationReceiptInvalid: "The mutation receipt cannot be bound to the durable intent."
@@ -282,7 +287,7 @@ public actor AgentJournal {
     public static let maximumFrameSize = 16 * 1024 * 1024
     package static let defaultCompactionThreshold = 32 * 1024 * 1024
     private static let header = Data("SWIFTAGENT-JOURNAL-1".utf8)
-    private static let supportedSchemaVersions: Set<Int> = [1, AgentJournalRecord.schemaVersion]
+    private static let supportedSchemaVersions: Set<Int> = [1, 2, AgentJournalRecord.schemaVersion]
 
     private var records: [AgentJournalRecord]
     private var nextSequence: UInt64
@@ -307,9 +312,12 @@ public actor AgentJournal {
         var intent: PendingMutationIntent
         let sequence: UInt64
         var state: AgentMutationState
+        var receipt: ToolReceipt?
+        var output: JSONValue?
     }
 
     private var mutationRecords: [MutationKey: MutationRecord]
+    private var mutationIdentityIndex: [String: MutationKey]
 
     public init() {
         records = []
@@ -318,6 +326,7 @@ public actor AgentJournal {
         recoveryState = .clean
         sessionLeases = [:]
         mutationRecords = [:]
+        mutationIdentityIndex = [:]
         storageBox = AgentJournalStorageBox(.memory)
     }
 
@@ -329,7 +338,9 @@ public actor AgentJournal {
         self.persistenceURL = persistenceURL
         recoveryState = loaded.recovery
         sessionLeases = [:]
-        mutationRecords = try Self.buildMutationRecords(from: loaded.records)
+        let mutationState = try Self.buildMutationState(from: loaded.records)
+        mutationRecords = mutationState.records
+        mutationIdentityIndex = mutationState.identityIndex
         storageBox = AgentJournalStorageBox(.durable)
     }
 
@@ -475,7 +486,7 @@ public actor AgentJournal {
            events.contains(where: Self.isMutationLifecycleEvent) {
             throw AgentJournalError.persistenceUnavailable("mutation lifecycle events require durable persistence")
         }
-        let updatedMutationRecords = try applying(events, sessionID: sessionID, runID: runID)
+        let updatedMutationState = try applying(events, sessionID: sessionID, runID: runID)
         let checkpointID = UUID()
         let committed = events.enumerated().map { offset, event in
             AgentJournalRecord(
@@ -491,7 +502,8 @@ public actor AgentJournal {
         records.append(contentsOf: committed)
         nextSequence += UInt64(committed.count)
         recoveryState = .clean
-        mutationRecords = updatedMutationRecords
+        mutationRecords = updatedMutationState.records
+        mutationIdentityIndex = updatedMutationState.identityIndex
         return committed
     }
 
@@ -528,7 +540,13 @@ public actor AgentJournal {
     }
 
     /// Settles an executor-reported receipt only after it validates against the durable intent.
-    package func settleMutation(sessionID: UUID, runID: UUID, callID: ToolCallID, receipt: ToolReceipt) throws {
+    package func settleMutation(
+        sessionID: UUID,
+        runID: UUID,
+        callID: ToolCallID,
+        receipt: ToolReceipt,
+        output: JSONValue
+    ) throws {
         let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
         guard let record = mutationRecords[key] else { throw AgentJournalError.mutationNotFound }
         guard record.state == .intent else { throw AgentJournalError.mutationRequiresReconciliation }
@@ -542,6 +560,7 @@ public actor AgentJournal {
         }
         let accepted = AgentToolReceipt(callID: callID, effect: .mutation, receipt: receipt)
         _ = try appendCheckpoint([.toolReceipt(accepted),
+                                  .mutationOutput(callID: callID, output: output),
                                   .mutationSettled(callID: callID, receipt: receipt, source: .executor)],
                                  sessionID: sessionID, runID: runID, timestamp: Date(), durability: .durable,
                                  allowMutationSettlement: true)
@@ -556,6 +575,7 @@ public actor AgentJournal {
         runID: UUID,
         callID: ToolCallID,
         receipt: ToolReceipt,
+        output: JSONValue,
         history: [ModelMessage],
         steeringIDs: [UUID]
     ) throws {
@@ -570,6 +590,7 @@ public actor AgentJournal {
         _ = try appendCheckpoint(
             [
                 .toolReceipt(accepted),
+                .mutationOutput(callID: callID, output: output),
                 .mutationSettled(callID: callID, receipt: receipt, source: .executor),
                 .checkpoint(history: history, steeringIDs: steeringIDs),
             ],
@@ -583,13 +604,41 @@ public actor AgentJournal {
 
     /// Settles a quarantined intent from an explicit trusted reconciliation result; it never invokes the original tool.
     public func reconcileMutation(_ pending: PendingMutationRecovery, receipt: ToolReceipt) throws {
-        try reconcileMutation(pending, receipt: receipt, receiptExpectation: nil)
+        try reconcileMutationState(pending, receipt: receipt, receiptExpectation: nil, output: nil)
+    }
+
+    /// Reconciles a mutation and preserves the original model-facing result for later idempotent replay.
+    public func reconcileMutation(
+        _ pending: PendingMutationRecovery,
+        receipt: ToolReceipt,
+        output: JSONValue
+    ) throws {
+        try reconcileMutationState(pending, receipt: receipt, receiptExpectation: nil, output: output)
     }
 
     /// Reconciles a legacy intent that predates persisted receipt expectations.
     /// The supplied expectation is persisted together with the receipt before settlement.
     public func reconcileMutation(_ pending: PendingMutationRecovery, receipt: ToolReceipt,
                                   receiptExpectation: ToolReceiptExpectation?) throws {
+        try reconcileMutationState(pending, receipt: receipt, receiptExpectation: receiptExpectation, output: nil)
+    }
+
+    /// Reconciles a legacy intent and preserves the model-facing result for later idempotent replay.
+    public func reconcileMutation(
+        _ pending: PendingMutationRecovery,
+        receipt: ToolReceipt,
+        receiptExpectation: ToolReceiptExpectation?,
+        output: JSONValue
+    ) throws {
+        try reconcileMutationState(pending, receipt: receipt, receiptExpectation: receiptExpectation, output: output)
+    }
+
+    private func reconcileMutationState(
+        _ pending: PendingMutationRecovery,
+        receipt: ToolReceipt,
+        receiptExpectation: ToolReceiptExpectation?,
+        output: JSONValue?
+    ) throws {
         let key = MutationKey(sessionID: pending.sessionID, runID: pending.runID, callID: pending.intent.call.id)
         guard let record = mutationRecords[key], record.intent == pending.intent else {
             throw AgentJournalError.mutationIntentConflict
@@ -610,6 +659,9 @@ public actor AgentJournal {
         if record.intent.receiptExpectation == nil {
             events.append(.mutationReceiptExpectation(callID: pending.intent.call.id, expectation: expectation))
         }
+        if let output {
+            events.append(.mutationOutput(callID: pending.intent.call.id, output: output))
+        }
         events.append(contentsOf: [.toolReceipt(accepted),
                                    .mutationSettled(callID: pending.intent.call.id, receipt: receipt,
                                                     source: .reconciliation)])
@@ -618,7 +670,10 @@ public actor AgentJournal {
                                  durability: .durable, allowMutationSettlement: true)
     }
 
-    /// Closes a quarantined intent without executing the original tool.
+    /// Confirms that a quarantined intent produced no external side effect.
+    ///
+    /// This trusted Host decision permits a later admission with the same
+    /// logical idempotency identity to start a new durable lifecycle.
     public func abortMutation(_ pending: PendingMutationRecovery) throws {
         let key = MutationKey(sessionID: pending.sessionID, runID: pending.runID, callID: pending.intent.call.id)
         guard let record = mutationRecords[key], record.intent == pending.intent else {
@@ -635,32 +690,41 @@ public actor AgentJournal {
         )
     }
 
+    private struct MutationState {
+        var records: [MutationKey: MutationRecord]
+        var identityIndex: [String: MutationKey]
+    }
+
     private func applying(
         _ events: [AgentJournalEvent], sessionID: UUID, runID: UUID?
-    ) throws -> [MutationKey: MutationRecord] {
+    ) throws -> MutationState {
         var updated = mutationRecords
+        var updatedIndex = mutationIdentityIndex
         for (offset, event) in events.enumerated() {
             try Self.applyMutationEvent(event, sessionID: sessionID, runID: runID,
                                         sequence: nextSequence + UInt64(offset),
                                         schemaVersion: AgentJournalRecord.schemaVersion,
-                                        records: &updated)
+                                        records: &updated,
+                                        identityIndex: &updatedIndex)
         }
-        return updated
+        return MutationState(records: updated, identityIndex: updatedIndex)
     }
 
-    private static func buildMutationRecords(from records: [AgentJournalRecord]) throws -> [MutationKey: MutationRecord] {
+    private static func buildMutationState(from records: [AgentJournalRecord]) throws -> MutationState {
         var mutationRecords: [MutationKey: MutationRecord] = [:]
+        var mutationIdentityIndex: [String: MutationKey] = [:]
         do {
             for record in records {
                 try applyMutationEvent(record.event, sessionID: record.sessionID, runID: record.runID,
                                        sequence: record.sequence, schemaVersion: record.schemaVersion,
                                        allowLegacyMissingReceiptExpectation: record.schemaVersion == 1,
-                                       records: &mutationRecords)
+                                       records: &mutationRecords,
+                                       identityIndex: &mutationIdentityIndex)
             }
         } catch {
             throw AgentJournalError.invalidRecord
         }
-        return mutationRecords
+        return MutationState(records: mutationRecords, identityIndex: mutationIdentityIndex)
     }
 
     private static func applyMutationEvent(
@@ -670,7 +734,8 @@ public actor AgentJournal {
         sequence: UInt64,
         schemaVersion: Int,
         allowLegacyMissingReceiptExpectation: Bool = false,
-        records: inout [MutationKey: MutationRecord]
+        records: inout [MutationKey: MutationRecord],
+        identityIndex: inout [String: MutationKey]
     ) throws {
         switch event {
         case .pendingMutation(let intent):
@@ -682,18 +747,20 @@ public actor AgentJournal {
             }) else {
                 throw AgentJournalError.mutationRequiresReconciliation
             }
+            let latestMatchingIdentity = identityIndex[intent.idempotencyKey].flatMap { records[$0] }
             guard records[key] == nil,
-                  !records.values.contains(where: {
-                      $0.key.sessionID == sessionID && $0.intent.idempotencyKey == intent.idempotencyKey
-                  }) else {
+                  latestMatchingIdentity == nil || latestMatchingIdentity?.state == .aborted else {
                 throw AgentJournalError.mutationIntentConflict
             }
             records[key] = MutationRecord(
                 key: key,
                 intent: intent,
                 sequence: sequence,
-                state: intent.receiptExpectation == nil ? .needsReconciliation : .intent
+                state: intent.receiptExpectation == nil ? .needsReconciliation : .intent,
+                receipt: nil,
+                output: nil
             )
+            identityIndex[intent.idempotencyKey] = key
 
         case .mutationReceiptExpectation(let callID, let expectation):
             guard let runID else { throw AgentJournalError.invalidRecord }
@@ -720,6 +787,17 @@ public actor AgentJournal {
             updated.state = .needsReconciliation
             records[key] = updated
 
+        case .mutationOutput(let callID, let output):
+            guard let runID else { throw AgentJournalError.invalidRecord }
+            let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
+            guard let record = records[key], record.state == .intent || record.state == .needsReconciliation,
+                  record.output == nil else {
+                throw AgentJournalError.mutationIntentConflict
+            }
+            var updated = record
+            updated.output = output
+            records[key] = updated
+
         case .mutationSettled(let callID, let receipt, let source):
             guard let runID else { throw AgentJournalError.invalidRecord }
             let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
@@ -732,6 +810,7 @@ public actor AgentJournal {
             case (.intent, .executor), (.needsReconciliation, .reconciliation):
                 var updated = record
                 updated.state = .settled
+                updated.receipt = receipt
                 records[key] = updated
             default:
                 throw AgentJournalError.mutationIntentConflict
@@ -754,7 +833,8 @@ public actor AgentJournal {
 
     private static func isMutationLifecycleEvent(_ event: AgentJournalEvent) -> Bool {
         switch event {
-        case .pendingMutation, .mutationReceiptExpectation, .mutationNeedsReconciliation, .mutationSettled, .mutationAborted:
+        case .pendingMutation, .mutationReceiptExpectation, .mutationNeedsReconciliation, .mutationOutput,
+             .mutationSettled, .mutationAborted:
             true
         default:
             false
@@ -831,7 +911,7 @@ public actor AgentJournal {
         let expectedRecords = records
         let compacted = Self.canonicalRecoveryRecords(from: records)
         let data = try Self.encodeFile(records: compacted)
-        let compactedMutationRecords = try Self.buildMutationRecords(from: compacted)
+        let compactedMutationState = try Self.buildMutationState(from: compacted)
         let minimumReclaimBytes = max(1, min(4 * 1024 * 1024, maxJournalBytes / 4))
         guard size - data.count >= minimumReclaimBytes else { return false }
         var replaced = false
@@ -870,14 +950,16 @@ public actor AgentJournal {
                 records = compacted
                 nextSequence = UInt64(compacted.count) + 1
                 recoveryState = .clean
-                mutationRecords = compactedMutationRecords
+                mutationRecords = compactedMutationState.records
+                mutationIdentityIndex = compactedMutationState.identityIndex
             }
             throw error is AgentJournalError ? error : AgentJournalError.persistenceUnavailable(error.localizedDescription)
         }
         records = compacted
         nextSequence = UInt64(compacted.count) + 1
         recoveryState = .clean
-        mutationRecords = compactedMutationRecords
+        mutationRecords = compactedMutationState.records
+        mutationIdentityIndex = compactedMutationState.identityIndex
         return true
     }
 
@@ -1219,7 +1301,8 @@ public actor AgentJournal {
 }
 
 extension AgentJournal: ToolMutationAdmission {
-    package func admit(_ request: ToolMutationAdmissionRequest) async throws {
+    @discardableResult
+    package func admit(_ request: ToolMutationAdmissionRequest) async throws -> ToolMutationAdmissionResult {
         guard !request.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !request.callID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !request.argumentsJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -1229,12 +1312,32 @@ extension AgentJournal: ToolMutationAdmission {
         guard request.receiptExpectation != nil else {
             throw AgentJournalError.mutationMissingReceiptExpectation
         }
+        let arguments: JSONValue
         do {
-            _ = try JSONValue.decodeToolArguments(request.argumentsJSON)
+            arguments = try JSONValue.decodeToolArguments(request.argumentsJSON)
         } catch {
             throw AgentJournalError.invalidMutationIntent
         }
         try ToolResource.validate(request.resources)
+        if let key = mutationIdentityIndex[request.idempotencyKey],
+           let existing = mutationRecords[key] {
+            guard existing.intent.call.name == request.name,
+                  try JSONValue.decodeToolArguments(existing.intent.call.argumentsJSON) == arguments else {
+                throw AgentJournalError.mutationIntentConflict
+            }
+            switch existing.state {
+            case .settled:
+                guard let receipt = existing.receipt else { throw AgentJournalError.mutationIntentConflict }
+                guard let output = existing.output else { throw AgentJournalError.mutationReplayUnavailable }
+                return .settled(receipt: receipt, output: output)
+            case .intent:
+                throw AgentJournalError.mutationPending
+            case .needsReconciliation:
+                throw AgentJournalError.mutationRequiresReconciliation
+            case .aborted:
+                break
+            }
+        }
         let call = ToolCall(id: request.callID, name: request.name,
                             argumentsJSON: request.argumentsJSON, completeness: .complete)
         let intent = try PendingMutationIntent(call: call, resources: request.resources,
@@ -1242,5 +1345,6 @@ extension AgentJournal: ToolMutationAdmission {
                                                receiptExpectation: request.receiptExpectation)
         _ = try append(.pendingMutation(intent), sessionID: request.sessionID, runID: request.runID,
                        durability: .durable)
+        return .admitted
     }
 }
