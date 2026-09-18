@@ -44,7 +44,7 @@ struct AgentEventContractTests {
         try expectSingleLifecycle(events)
         #expect(events.last == .runFinished(.cancelled))
         await gate.open()
-        await run.waitForDrain()
+        try await run.waitForDrain()
     }
 
     @Test func waitMatchesTheSingleTerminalEventOnProviderFailure() async throws {
@@ -58,7 +58,7 @@ struct AgentEventContractTests {
         let events = await collectEvents(run.events)
         try expectSingleLifecycle(events)
         #expect(events.last == .runFinished(.failed(.provider(failure))))
-        await run.waitForDrain()
+        try await run.waitForDrain()
     }
 }
 
@@ -78,7 +78,7 @@ private func verifySessionTerminal(
         Issue.record("wait() outcome did not match runFinished")
         return
     }
-    await run.waitForDrain()
+    try await run.waitForDrain()
 }
 
 private func expectSingleLifecycle(_ events: [AgentEvent]) throws {

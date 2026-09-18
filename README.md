@@ -50,7 +50,7 @@ for await event in run.events {
     if case .model(.textDelta(let delta)) = event { print(delta, terminator: "") }
 }
 _ = try await run.wait()
-await run.waitForDrain()
+try await run.waitForDrain()
 ```
 
 Read-only Agents may omit a journal. Mutation tools cannot. A memory-only
@@ -148,7 +148,7 @@ let agent = try Agent(
 let session = try agent.makeSession(id: sessionID, journal: journal)
 let run = try await session.run("Update the listing")
 _ = try await run.wait()
-await run.waitForDrain()
+try await run.waitForDrain()
 
 let restarted = try AgentJournal.load(from: journalURL)
 for pending in await restarted.pendingMutations(sessionID: sessionID) {

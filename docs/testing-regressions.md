@@ -14,6 +14,11 @@ long-term map so a later bug does not require moving files.
 | Receipt / cancel race | `lateValidReceiptAfterTimeoutOrCancellationCannotBecomeSuccess` | `Tests/AgentCoreTests/AgentReceiptTests.swift` |
 | Current instructions vs restored conversation | `restartUsesCurrentInstructionsAndKeepsToolHistory` | `Tests/AgentCoreTests/AgentConversationContextTests.swift` |
 | Default compaction must not invent semantic memory | `defaultPolicyFailsClosedInsteadOfInventingASemanticSummary` | `Tests/AgentCoreTests/AgentConversationContextTests.swift` |
+| Mid-run compaction must replace AgentLoop's stale history | `midRunToolCheckpointFeedsCompactedHistoryIntoTheNextModelRequest`, `zeroRetainedTurnsPreservesCanonicalSummaryAcrossAMultiToolBatch` | `Tests/AgentCoreTests/AgentContextPolicyTests.swift` |
+| Executor failure plus quarantine failure must share one typed terminal | `testExecutorAndQuarantineFailureUseOneTypedTerminalWithoutReplay` | `Tests/AgentCoreTests/AgentSessionHangTests.swift` |
+| Journal rollover must preserve recovery and reject stale writers | `testCompactionShrinksHistoryAndPreservesLatestCheckpointAcrossRestart`, `testStaleWriterFailsClosedAfterCompaction`, `testDirectorySyncFailureAdoptsTheAlreadyReplacedJournal` | `Tests/AgentCoreTests/AgentJournalTests.swift` |
+| Cancelling one drain waiter must not cancel physical drain | `multipleDrainWaitersSharePhysicalRelease` | `Tests/AgentCoreTests/AgentRunTests.swift` |
+| Anthropic terminal/trailing and event/data mismatch must fail closed | `unknownSemanticEventAfterMessageStopFailsClosed`, `mismatchedNamedEventAndDataTypeFailClosed` | `Tests/AgentProvidersTests/AnthropicUnknownEventTests.swift` |
 
 When a new production bug lands, add a row here and a focused test next to the
 domain tests. Prefer a precise name over a `Regressions/` directory move.

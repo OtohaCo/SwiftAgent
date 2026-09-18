@@ -6,6 +6,18 @@ import Foundation
 @_silgen_name("flock")
 private func swiftAgentFlock(_ fileDescriptor: Int32, _ operation: Int32) -> Int32
 
+@_silgen_name("rename")
+private func swiftAgentRename(_ oldPath: UnsafePointer<CChar>, _ newPath: UnsafePointer<CChar>) -> Int32
+
+@_silgen_name("open")
+private func swiftAgentOpen(_ path: UnsafePointer<CChar>, _ flags: Int32) -> Int32
+
+@_silgen_name("fsync")
+private func swiftAgentFSync(_ fileDescriptor: Int32) -> Int32
+
+@_silgen_name("close")
+private func swiftAgentClose(_ fileDescriptor: Int32) -> Int32
+
 private enum SwiftAgentFileLockOperation {
     static let exclusiveNonBlocking: Int32 = 2 | 4
     static let unlock: Int32 = 8
@@ -165,6 +177,13 @@ package enum AgentJournalDurability: Sendable {
     case durable
 }
 
+package enum AgentJournalCompactionFault: Sendable {
+    case temporaryWrite
+    case temporarySync
+    case replace
+    case directorySync
+}
+
 public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     case invalidHeader
     case invalidFrame
@@ -261,6 +280,7 @@ public actor AgentJournal {
     }
 
     public static let maximumFrameSize = 16 * 1024 * 1024
+    package static let defaultCompactionThreshold = 32 * 1024 * 1024
     private static let header = Data("SWIFTAGENT-JOURNAL-1".utf8)
     private static let supportedSchemaVersions: Set<Int> = [1, AgentJournalRecord.schemaVersion]
 
@@ -268,7 +288,6 @@ public actor AgentJournal {
     private var nextSequence: UInt64
     private var persistenceURL: URL?
     private var recoveryState: AgentJournalRecovery
-    private var validByteLength: Int
     private var sessionLeases: [UUID: FileHandle]
     private nonisolated let storageBox: AgentJournalStorageBox
 
@@ -297,7 +316,6 @@ public actor AgentJournal {
         nextSequence = 1
         persistenceURL = nil
         recoveryState = .clean
-        validByteLength = 0
         sessionLeases = [:]
         mutationRecords = [:]
         storageBox = AgentJournalStorageBox(.memory)
@@ -310,7 +328,6 @@ public actor AgentJournal {
         nextSequence = (loaded.records.last?.sequence ?? 0) + 1
         self.persistenceURL = persistenceURL
         recoveryState = loaded.recovery
-        validByteLength = loaded.validLength
         sessionLeases = [:]
         mutationRecords = try Self.buildMutationRecords(from: loaded.records)
         storageBox = AgentJournalStorageBox(.durable)
@@ -401,13 +418,12 @@ public actor AgentJournal {
             recoveryState = .clean
             return
         }
-        let repairedLength = try Self.withFileLock(for: url) {
+        _ = try Self.withFileLock(for: url) {
             let current = try Self.read(from: url)
             guard current.recovery == .corruptTail else { return current.validLength }
             try Self.createOrTruncateTail(at: url, to: current.validLength)
             return current.validLength
         }
-        validByteLength = repairedLength
         recoveryState = .clean
     }
 
@@ -773,6 +789,7 @@ public actor AgentJournal {
         let data = try Self.encodeFile(records: records)
         try Self.withFileLock(for: url) {
             let existing = try Self.read(from: url)
+            if existing.recovery == .corruptTail { throw AgentJournalError.repairRequired }
             guard !existing.exists || existing.records == records else {
                 throw AgentJournalError.concurrentWriter
             }
@@ -797,6 +814,71 @@ public actor AgentJournal {
         persistenceURL = url
         recoveryState = .clean
         storageBox.current = .durable
+    }
+
+    /// Rewrites durable history to the minimum state needed for Session restore
+    /// and mutation safety. Terminal mutation identities remain as tombstones so
+    /// current idempotency conflicts survive restart.
+    package func compactIfNeeded(
+        maxJournalBytes: Int = AgentJournal.defaultCompactionThreshold,
+        fault: AgentJournalCompactionFault? = nil
+    ) throws -> Bool {
+        guard let url = persistenceURL else { return false }
+        let size = try Self.fileSize(at: url)
+        guard size > maxJournalBytes else { return false }
+        guard recoveryState != .corruptTail else { throw AgentJournalError.repairRequired }
+
+        let expectedRecords = records
+        let compacted = Self.canonicalRecoveryRecords(from: records)
+        let data = try Self.encodeFile(records: compacted)
+        let compactedMutationRecords = try Self.buildMutationRecords(from: compacted)
+        let minimumReclaimBytes = max(1, min(4 * 1024 * 1024, maxJournalBytes / 4))
+        guard size - data.count >= minimumReclaimBytes else { return false }
+        var replaced = false
+        do {
+            try Self.withFileLock(for: url) {
+                let current = try Self.read(from: url)
+                if current.recovery == .corruptTail { throw AgentJournalError.repairRequired }
+                guard current.records == expectedRecords else { throw AgentJournalError.concurrentWriter }
+                let temporary = url.deletingLastPathComponent()
+                    .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).compact.tmp")
+                defer { try? FileManager.default.removeItem(at: temporary) }
+                if fault == .temporaryWrite {
+                    throw AgentJournalError.persistenceUnavailable("injected compact temporary write failure")
+                }
+                try Self.writeAndSync(data, to: temporary)
+                if fault == .temporarySync {
+                    throw AgentJournalError.persistenceUnavailable("injected compact temporary sync failure")
+                }
+                if fault == .replace {
+                    throw AgentJournalError.persistenceUnavailable("injected compact replace failure")
+                }
+                let renamed = temporary.path.withCString { oldPath in
+                    url.path.withCString { newPath in swiftAgentRename(oldPath, newPath) }
+                }
+                guard renamed == 0 else {
+                    throw AgentJournalError.persistenceUnavailable("cannot atomically replace compacted journal")
+                }
+                replaced = true
+                if fault == .directorySync {
+                    throw AgentJournalError.persistenceUnavailable("injected compact directory sync failure")
+                }
+                try Self.syncDirectory(url.deletingLastPathComponent())
+            }
+        } catch {
+            if replaced {
+                records = compacted
+                nextSequence = UInt64(compacted.count) + 1
+                recoveryState = .clean
+                mutationRecords = compactedMutationRecords
+            }
+            throw error is AgentJournalError ? error : AgentJournalError.persistenceUnavailable(error.localizedDescription)
+        }
+        records = compacted
+        nextSequence = UInt64(compacted.count) + 1
+        recoveryState = .clean
+        mutationRecords = compactedMutationRecords
+        return true
     }
 
     private func commit(_ committed: [AgentJournalRecord], durability: AgentJournalDurability) throws {
@@ -831,6 +913,35 @@ public actor AgentJournal {
             start = end
         }
         return data
+    }
+
+    private static func canonicalRecoveryRecords(from records: [AgentJournalRecord]) -> [AgentJournalRecord] {
+        var latestCheckpointIndex: [UUID: Int] = [:]
+        var firstSessionCreatedIndex: [UUID: Int] = [:]
+        for (index, record) in records.enumerated() {
+            switch record.event {
+            case .sessionCreated:
+                if firstSessionCreatedIndex[record.sessionID] == nil { firstSessionCreatedIndex[record.sessionID] = index }
+            case .checkpoint:
+                latestCheckpointIndex[record.sessionID] = index
+            default:
+                break
+            }
+        }
+        let retained = Set(latestCheckpointIndex.values).union(firstSessionCreatedIndex.values)
+        let selected = records.enumerated().filter { index, record in
+            retained.contains(index) || isMutationLifecycleEvent(record.event)
+        }.map(\.element)
+        return selected.enumerated().map { offset, record in
+            AgentJournalRecord(
+                sequence: UInt64(offset + 1),
+                timestamp: record.timestamp,
+                sessionID: record.sessionID,
+                runID: record.runID,
+                checkpointID: UUID(),
+                event: record.event
+            )
+        }
     }
 
     private static func encodeFrame(records: [AgentJournalRecord]) throws -> Data {
@@ -1001,6 +1112,27 @@ public actor AgentJournal {
 
     private static func sync(_ handle: FileHandle) throws {
         try handle.synchronize()
+    }
+
+    private static func syncDirectory(_ url: URL) throws {
+        let descriptor = url.path.withCString { swiftAgentOpen($0, 0) }
+        guard descriptor >= 0 else {
+            throw AgentJournalError.persistenceUnavailable("cannot open journal directory for sync")
+        }
+        defer { _ = swiftAgentClose(descriptor) }
+        guard swiftAgentFSync(descriptor) == 0 else {
+            throw AgentJournalError.persistenceUnavailable("cannot sync journal directory")
+        }
+    }
+
+    private static func fileSize(at url: URL) throws -> Int {
+        guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            return (attributes[.size] as? NSNumber)?.intValue ?? 0
+        } catch {
+            throw AgentJournalError.persistenceUnavailable(error.localizedDescription)
+        }
     }
 
     private static func withFileLock<T>(for url: URL, _ body: () throws -> T) throws -> T {

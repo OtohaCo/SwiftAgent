@@ -22,7 +22,8 @@ public struct AgentRetainedTurnCompactor: AgentContextCompactor {
 
     public func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
         let droppedTurns = droppedConversation.reduce(into: 0) { count, message in
-            if case .user = message { count += 1 }
+            if case .user = message,
+               !AgentContextWindow.isSyntheticConversationSummary(message) { count += 1 }
         }
         return AgentCompactionSummary(
             goal: "Continue the existing conversation.",
@@ -86,6 +87,8 @@ public struct AgentContextPolicy: Sendable {
 }
 
 enum AgentContextWindow {
+    static let conversationSummaryPrefix = "Conversation summary:"
+
     struct Split {
         var runtime: [ModelMessage]
         var dropped: [ModelMessage]
@@ -115,7 +118,7 @@ enum AgentContextWindow {
     /// with runtime system/developer configuration. This is not a real user
     /// utterance; the prefix identifies it across providers.
     static func summaryMessage(_ summary: AgentCompactionSummary) -> ModelMessage {
-        var lines = ["Conversation summary:"]
+        var lines = [conversationSummaryPrefix]
         if !summary.goal.isEmpty { lines.append("Goal: \(summary.goal)") }
         if !summary.constraints.isEmpty {
             lines.append("Constraints: \(summary.constraints.joined(separator: "; "))")
@@ -127,6 +130,12 @@ enum AgentContextWindow {
             lines.append("Open work: \(summary.openWork.joined(separator: "; "))")
         }
         return .user([.text(lines.joined(separator: "\n"))])
+    }
+
+    static func isSyntheticConversationSummary(_ message: ModelMessage) -> Bool {
+        guard case .user(let content) = message,
+              case .text(let text)? = content.first else { return false }
+        return text.hasPrefix(conversationSummaryPrefix)
     }
 
     static func split(_ history: [ModelMessage], retainingRecentTurns: Int) -> Split {
@@ -160,7 +169,8 @@ enum AgentContextWindow {
         guard count > 0 else { return conversation.count }
         var seen = 0
         for index in conversation.indices.reversed() {
-            if conversation[index].role == .user {
+            if conversation[index].role == .user,
+               !isSyntheticConversationSummary(conversation[index]) {
                 seen += 1
                 if seen == count { return index }
             }

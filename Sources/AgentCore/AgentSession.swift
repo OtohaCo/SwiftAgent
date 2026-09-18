@@ -85,7 +85,7 @@ public actor AgentSession {
     /// identity is released. Same owner as `AgentRun.waitForDrain()`.
     public func waitForRunToDrain(runID: UUID) async {
         if let drain = drainHandles[runID] {
-            await drain.wait()
+            _ = try? await Task { try await drain.wait() }.value
             return
         }
         await loop.waitForRunToDrain(sessionID: id, runID: runID)
@@ -170,7 +170,9 @@ public actor AgentSession {
                     history: prepared.history,
                     steeringIDs: steering.map(\.id)
                 )
+                _ = try? await journal.compactIfNeeded()
                 await self.applyCommittedHistory(prepared.history, steering: steering, runID: runID)
+                return prepared.history
             },
             markMutationNeedsReconciliation: { callID in
                 try await journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
@@ -190,7 +192,7 @@ public actor AgentSession {
         }
     }
 
-    private func record(_ messages: [ModelMessage], steering: [AgentSteeringInput], runID: UUID, budget: AgentBudget) async throws {
+    private func record(_ messages: [ModelMessage], steering: [AgentSteeringInput], runID: UUID, budget: AgentBudget) async throws -> [ModelMessage] {
         try budget.checkActive()
         guard activeRunID == runID else { throw CancellationError() }
         let prepared = try await prepareCheckpoint(messages)
@@ -206,9 +208,11 @@ public actor AgentSession {
                 runID: runID,
                 durability: journal.storage == .durable ? .durable : .memory
             )
+            _ = try? await journal.compactIfNeeded()
         }
         history = prepared.history
         appliedSteeringIDs.formUnion(steering.map(\.id))
+        return prepared.history
     }
 
     private func applyCommittedHistory(_ messages: [ModelMessage], steering: [AgentSteeringInput], runID: UUID) {
@@ -276,6 +280,7 @@ public actor AgentSession {
                 runID: runID,
                 durability: journal.storage == .durable ? .durable : .memory
             )
+            _ = try? await journal.compactIfNeeded()
         }
         history = prepared.history
     }

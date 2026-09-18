@@ -1,6 +1,7 @@
 import AgentModels
 import Foundation
 import Testing
+import XCTest
 @testable import AgentCore
 
 struct AgentContextPolicyTests {
@@ -22,7 +23,7 @@ struct AgentContextPolicyTests {
         let original = try first.makeSession(id: sessionID, journal: journal)
         let firstRun = try await original.run("remember this")
         _ = try await firstRun.wait()
-        await firstRun.waitForDrain()
+        try await firstRun.waitForDrain()
 
         let restartedJournal = try AgentJournal.load(from: url)
         let secondProvider = ScriptedProvider { request, _ in textResponse(request, "v2-ack") }
@@ -34,7 +35,7 @@ struct AgentContextPolicyTests {
         let restored = try second.makeSession(id: sessionID, journal: restartedJournal)
         let continued = try await restored.run("continue")
         _ = try await continued.wait()
-        await continued.waitForDrain()
+        try await continued.waitForDrain()
         let request = try #require(await secondProvider.log.requests.first)
         #expect(request.messages.first == .system("Version two."))
         #expect(request.messages.filter { $0.role == .system } == [.system("Version two.")])
@@ -70,7 +71,7 @@ struct AgentContextPolicyTests {
         for index in 1...8 {
             let run = try await session.run(String(repeating: "turn-\(index)-payload-", count: 8))
             _ = try await run.wait()
-            await run.waitForDrain()
+            try await run.waitForDrain()
         }
         #expect(await spy.count >= 1)
         let last = try #require(await provider.log.requests.last)
@@ -94,7 +95,7 @@ struct AgentContextPolicyTests {
         )
         let restoredRun = try await restoredAgent.makeSession(id: sessionID, journal: restartedJournal).run("after compact")
         _ = try await restoredRun.wait()
-        await restoredRun.waitForDrain()
+        try await restoredRun.waitForDrain()
         let restoredRequest = try #require(await restoredProvider.log.requests.first)
         #expect(restoredRequest.messages.first == .system("Stay in role."))
         #expect(restoredRequest.messages.contains(.user([.text("after compact")])))
@@ -126,7 +127,7 @@ struct AgentContextPolicyTests {
         #expect(await journal.snapshot().isEmpty)
         let run = try await session.run("small")
         #expect(try await run.wait().outcome == .completed)
-        await run.waitForDrain()
+        try await run.waitForDrain()
     }
 
     @Test func contextWindowKeepsUnresolvedToolPairs() {
@@ -148,6 +149,211 @@ struct AgentContextPolicyTests {
             return false
         })
         #expect(split.retained.contains(.user([.text("open work")])))
+    }
+
+    @Test func syntheticSummaryDoesNotCountAsARecentUserTurn() {
+        let summary = AgentContextWindow.summaryMessage(.init(goal: "Earlier work"))
+        let oldUser = ModelMessage.user([.text("real old turn")])
+        let history: [ModelMessage] = [
+            summary,
+            oldUser,
+            .assistant(content: [.text("old answer")], toolCalls: []),
+            .user([.text("recent turn")]),
+        ]
+
+        let split = AgentContextWindow.split(history, retainingRecentTurns: 2)
+
+        #expect(split.dropped == [summary])
+        #expect(split.retained.first == oldUser)
+    }
+
+    @Test func lossyCompactorDoesNotCountASyntheticSummaryAsAUserTurn() async throws {
+        let summary = AgentContextWindow.summaryMessage(.init(goal: "Earlier work"))
+        let compacted = try await AgentRetainedTurnCompactor().summarize(droppedConversation: [
+            summary,
+            .user([.text("real turn")]),
+            .assistant(content: [.text("answer")], toolCalls: []),
+        ])
+
+        #expect(compacted.openWork == ["1 earlier user turn(s) were compacted."])
+    }
+
+    @Test func midRunToolCheckpointFeedsCompactedHistoryIntoTheNextModelRequest() async throws {
+        let spy = SpyCompactor()
+        let policy = AgentContextPolicy(
+            maxInputUTF8Bytes: 4_096,
+            maxActiveHistoryUTF8Bytes: 900,
+            retainedRecentTurnCount: 1,
+            compactor: spy
+        )
+        let call = addition("compact-mid-run")
+        let provider = ScriptedProvider { request, turn in
+            switch turn {
+            case 1:
+                return textResponse(request, String(repeating: "old-answer-", count: 18))
+            case 2:
+                return toolResponse(request, [call])
+            default:
+                #expect(request.messages.contains { AgentContextWindow.isSyntheticConversationSummary($0) })
+                #expect(!request.messages.contains(.user([.text(String(repeating: "old-user-", count: 18))])))
+                #expect(request.messages.contains(.assistant(content: [], toolCalls: [call])))
+                #expect(request.messages.contains(.tool(.init(
+                    callID: call.id,
+                    content: [.json(.object(["sum": .number(5)]))],
+                    isError: false
+                ))))
+                return textResponse(request, "done")
+            }
+        }
+        let session = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            tools: [AddTool(log: EffectLog())],
+            configuration: AgentConfiguration(contextPolicy: policy)
+        ).makeSession()
+
+        _ = try await session.run(String(repeating: "old-user-", count: 18)).wait()
+        let result = try await session.run(String(repeating: "new-user-", count: 18)).wait()
+
+        #expect(result.outcome == AgentLoopOutcome.completed)
+        #expect(await spy.count == 1)
+        let sessionHistory = await session.history
+        #expect(result.history == sessionHistory)
+    }
+
+    @Test func zeroRetainedTurnsDoesNotRecreateAToolTranscriptDroppedByCompaction() async throws {
+        let spy = SpyCompactor()
+        let policy = AgentContextPolicy(
+            maxInputUTF8Bytes: 4_096,
+            maxActiveHistoryUTF8Bytes: 900,
+            retainedRecentTurnCount: 0,
+            compactor: spy
+        )
+        let call = addition("compact-drop-tool")
+        let provider = ScriptedProvider { request, turn in
+            if turn == 1 { return toolResponse(request, [call]) }
+            #expect(request.messages.contains { AgentContextWindow.isSyntheticConversationSummary($0) })
+            #expect(!request.messages.contains { message in
+                if case .assistant(_, let calls) = message { return calls.contains(call) }
+                if case .tool(let result) = message { return result.callID == call.id }
+                return false
+            })
+            return textResponse(request, "done")
+        }
+        let session = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            tools: [AddTool(log: EffectLog())],
+            configuration: .init(contextPolicy: policy)
+        ).makeSession()
+
+        let result = try await session.run(String(repeating: "large-user-", count: 80)).wait()
+
+        #expect(result.outcome == .completed)
+        #expect(await spy.count == 1)
+        let canonical = await session.history
+        #expect(result.history == canonical)
+    }
+
+    @Test func zeroRetainedTurnsPreservesCanonicalSummaryAcrossAMultiToolBatch() async throws {
+        let spy = SpyCompactor()
+        let policy = AgentContextPolicy(
+            maxInputUTF8Bytes: 4_096,
+            maxActiveHistoryUTF8Bytes: 900,
+            retainedRecentTurnCount: 0,
+            compactor: spy
+        )
+        let first = addition("compact-first")
+        let second = ToolCall(
+            id: .init(rawValue: "compact-second"),
+            name: first.name,
+            argumentsJSON: first.argumentsJSON,
+            completeness: first.completeness
+        )
+        let provider = ScriptedProvider { request, turn in
+            if turn == 1 { return toolResponse(request, [first, second]) }
+            #expect(request.messages.first == .system("Keep the canonical summary."))
+            #expect(request.messages.contains { AgentContextWindow.isSyntheticConversationSummary($0) })
+            return textResponse(request, "done")
+        }
+        let session = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            tools: [AddTool(log: EffectLog())],
+            configuration: .init(
+                instructions: "Keep the canonical summary.",
+                contextPolicy: policy
+            )
+        ).makeSession()
+
+        let result = try await session.run(String(repeating: "large-user-", count: 80)).wait()
+
+        #expect(result.outcome == .completed)
+        #expect(await spy.count >= 1)
+        let canonical = await session.history
+        #expect(result.history == canonical)
+    }
+
+    @Test func steeringAfterMidRunCompactionIsAppliedExactlyOnce() async throws {
+        let gate = ManualGate()
+        let entered = XCTestExpectation(description: "Tool entered")
+        let returned = XCTestExpectation(description: "Tool returned")
+        let tool = try BlockingTool(gate: gate, entered: entered, returned: returned, timeout: .seconds(5))
+        let spy = SpyCompactor()
+        let policy = AgentContextPolicy(maxInputUTF8Bytes: 4_096, maxActiveHistoryUTF8Bytes: 900,
+                                        retainedRecentTurnCount: 1, compactor: spy)
+        let provider = ScriptedProvider { request, turn in
+            switch turn {
+            case 1:
+                return textResponse(request, String(repeating: "old-answer-", count: 18))
+            case 2:
+                return toolResponse(request, [blockingCall])
+            default:
+                #expect(request.messages.contains { AgentContextWindow.isSyntheticConversationSummary($0) })
+                #expect(request.messages.filter { $0 == .user([.text("also do X")]) }.count == 1)
+                #expect(request.messages.last == .user([.text("also do X")]))
+                return textResponse(request, "done")
+            }
+        }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [tool],
+                                configuration: .init(contextPolicy: policy)).makeSession()
+        _ = try await session.run(String(repeating: "old-user-", count: 18)).wait()
+        let run = try await session.run(String(repeating: "new-user-", count: 18))
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        _ = try await run.steer("also do X")
+        await gate.open()
+
+        let result = try await run.wait()
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(result.history.filter { $0 == .user([.text("also do X")]) }.count == 1)
+        #expect(await spy.count == 1)
+        let canonical = await session.history
+        #expect(result.history == canonical)
+    }
+
+    @Test func oversizedCompactorOutputFailsOnceAsHistoryTooLarge() async throws {
+        let compactor = OversizedCompactor()
+        let policy = AgentContextPolicy(
+            maxInputUTF8Bytes: 4_096,
+            maxActiveHistoryUTF8Bytes: 500,
+            retainedRecentTurnCount: 1,
+            compactor: compactor
+        )
+        let provider = ScriptedProvider { request, _ in
+            textResponse(request, String(repeating: "answer-", count: 20))
+        }
+        let session = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            configuration: AgentConfiguration(contextPolicy: policy)
+        ).makeSession()
+        _ = try await session.run(String(repeating: "first-", count: 20)).wait()
+
+        await #expect(throws: AgentContextError.self) {
+            _ = try await session.run(String(repeating: "second-", count: 20)).wait()
+        }
+        #expect(await compactor.count == 1)
+        #expect(await session.activeRunID == nil)
     }
 
     @Test func uncompactableRetainedWindowFailsAsHistoryTooLarge() async throws {
@@ -240,7 +446,7 @@ struct AgentContextPolicyTests {
             do {
                 let run = try await session.run(String(repeating: "payload-\(index)-", count: 6))
                 _ = try await run.wait()
-                await run.waitForDrain()
+                try await run.waitForDrain()
             } catch is CompactorFixtureError {
                 sawCompactorError = true
                 break
@@ -271,5 +477,14 @@ struct CompactorFixtureError: Error {}
 struct ThrowingCompactor: AgentContextCompactor {
     func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
         throw CompactorFixtureError()
+    }
+}
+
+actor OversizedCompactor: AgentContextCompactor {
+    private(set) var count = 0
+
+    func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
+        count += 1
+        return AgentCompactionSummary(goal: String(repeating: "oversized", count: 200))
     }
 }

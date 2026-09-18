@@ -284,6 +284,163 @@ final class AgentJournalTests: XCTestCase {
         }
     }
 
+    func testCompactionShrinksHistoryAndPreservesLatestCheckpointAcrossRestart() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        for index in 0..<40 {
+            _ = try await journal.appendCheckpoint([
+                .userMessage(String(repeating: "audit-\(index)-", count: 20)),
+                .checkpoint(history: [.user([.text("checkpoint-\(index)")])], steeringIDs: []),
+            ], sessionID: sessionID, runID: UUID(), durability: .durable)
+        }
+        let before = try fileSize(url)
+
+        let compacted = try await journal.compactIfNeeded(maxJournalBytes: 1)
+        XCTAssertTrue(compacted)
+
+        let after = try fileSize(url)
+        XCTAssertLessThan(after, before / 4)
+        let restored = try AgentJournal.load(from: url)
+        let checkpoint = await restored.latestCheckpoint(sessionID: sessionID)
+        XCTAssertEqual(checkpoint?.history, [.user([.text("checkpoint-39")])])
+    }
+
+    func testCompactionWaitsForMeaningfulReclaimInsteadOfRewritingEveryCheckpoint() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let journal = try AgentJournal(persistenceURL: url)
+        let sessionID = UUID()
+        for _ in 0..<30 {
+            _ = try await journal.append(.sessionCreated, sessionID: UUID(), durability: .durable)
+        }
+        _ = try await journal.append(.checkpoint(history: [.user([.text("first")])], steeringIDs: []),
+                                     sessionID: sessionID, durability: .durable)
+        _ = try await journal.append(.checkpoint(history: [.user([.text("second")])], steeringIDs: []),
+                                     sessionID: sessionID, durability: .durable)
+
+        let compacted = try await journal.compactIfNeeded(maxJournalBytes: 4_096)
+
+        XCTAssertFalse(compacted)
+    }
+
+    func testCompactionPreservesPendingMutationAndRecoveryDoesNotReplay() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let journal = try AgentJournal(persistenceURL: url)
+        let sessionID = UUID(), runID = UUID()
+        try await appendCompactionHistory(to: journal, sessionID: sessionID)
+        let intent = try mutationIntent(idempotencyKey: "compact-pending")
+        _ = try await journal.append(.pendingMutation(intent), sessionID: sessionID, runID: runID, durability: .durable)
+
+        let compacted = try await journal.compactIfNeeded(maxJournalBytes: 1)
+        XCTAssertTrue(compacted)
+        let restored = try AgentJournal.load(from: url)
+        let beforeRecovery = await restored.pendingMutations().map(\.state)
+        let recovered = try await restored.recoverPendingMutations().map(\.state)
+        let pendingCount = await restored.pendingMutations().count
+        XCTAssertEqual(beforeRecovery, [.intent])
+        XCTAssertEqual(recovered, [.needsReconciliation])
+        XCTAssertEqual(pendingCount, 1)
+    }
+
+    func testCompactionPreservesSettledIdempotencyConflict() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let journal = try AgentJournal(persistenceURL: url)
+        let sessionID = UUID(), runID = UUID()
+        let intent = try mutationIntent(idempotencyKey: "settled-key")
+        _ = try await journal.append(.pendingMutation(intent), sessionID: sessionID, runID: runID, durability: .durable)
+        let receipt = ToolReceipt(operationID: "settled-key", status: .succeeded,
+                                  confirmedTargets: [.init(namespace: "property.listing", id: "listing-1")], revision: "v2")
+        try await journal.settleMutation(sessionID: sessionID, runID: runID,
+                                         callID: intent.call.id, receipt: receipt)
+        _ = try await journal.compactIfNeeded(maxJournalBytes: 1)
+        let restored = try AgentJournal.load(from: url)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await restored.append(.pendingMutation(try self.mutationIntent(idempotencyKey: "settled-key")),
+                                          sessionID: sessionID, runID: UUID(), durability: .durable)
+        } verify: { error in
+            XCTAssertEqual(error as? AgentJournalError, .mutationIntentConflict)
+        }
+    }
+
+    func testStaleWriterFailsClosedAfterCompaction() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let compacting = try AgentJournal(persistenceURL: url)
+        try await appendCompactionHistory(to: compacting, sessionID: sessionID)
+        _ = try await compacting.append(.sessionCreated, sessionID: sessionID, durability: .durable)
+        _ = try await compacting.append(.checkpoint(history: [.user([.text("latest")])], steeringIDs: []),
+                                         sessionID: sessionID, durability: .durable)
+        let stale = try AgentJournal.load(from: url)
+
+        let compacted = try await compacting.compactIfNeeded(maxJournalBytes: 1)
+        XCTAssertTrue(compacted)
+        await XCTAssertThrowsErrorAsync {
+            _ = try await stale.append(.userMessage("stale"), sessionID: sessionID, durability: .durable)
+        } verify: { error in
+            XCTAssertEqual(error as? AgentJournalError, .concurrentWriter)
+        }
+    }
+
+    func testCompactionFailuresLeaveTheExistingJournalLoadable() async throws {
+        for fault in [AgentJournalCompactionFault.temporaryWrite, .temporarySync, .replace] {
+            let url = temporaryURL()
+            defer { cleanup(url) }
+            let sessionID = UUID()
+            let journal = try AgentJournal(persistenceURL: url)
+            try await appendCompactionHistory(to: journal, sessionID: sessionID)
+            _ = try await journal.append(.checkpoint(history: [.user([.text("keep")])], steeringIDs: []),
+                                         sessionID: sessionID, durability: .durable)
+            await XCTAssertThrowsErrorAsync {
+                _ = try await journal.compactIfNeeded(maxJournalBytes: 1, fault: fault)
+            }
+            let restored = try AgentJournal.load(from: url)
+            let history = await restored.latestCheckpoint(sessionID: sessionID)?.history
+            XCTAssertEqual(history, [.user([.text("keep")])])
+        }
+    }
+
+    func testDirectorySyncFailureAdoptsTheAlreadyReplacedJournal() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        try await appendCompactionHistory(to: journal, sessionID: sessionID)
+        _ = try await journal.append(.checkpoint(history: [.user([.text("keep")])], steeringIDs: []),
+                                     sessionID: sessionID, durability: .durable)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await journal.compactIfNeeded(maxJournalBytes: 1, fault: .directorySync)
+        }
+        _ = try await journal.append(.userMessage("after sync failure"), sessionID: sessionID, durability: .durable)
+        let restored = try AgentJournal.load(from: url)
+        let checkpoint = await restored.latestCheckpoint(sessionID: sessionID)
+        XCTAssertEqual(checkpoint?.history, [.user([.text("keep")])])
+    }
+
+    func testCompactionRejectsCorruptTailUntilExplicitRepair() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        _ = try await journal.append(.sessionCreated, sessionID: sessionID, durability: .durable)
+        try append(Data(repeating: 0, count: 64), to: url)
+        let restored = try AgentJournal.load(from: url)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await restored.compactIfNeeded(maxJournalBytes: 1)
+        } verify: { error in
+            XCTAssertEqual(error as? AgentJournalError, .repairRequired)
+        }
+        let recovery = await restored.recovery
+        XCTAssertEqual(recovery, .corruptTail)
+    }
+
     func testExistingRegularLockFileDoesNotPreventALaterDurableAppend() async throws {
         let url = temporaryURL()
         let lockURL = URL(fileURLWithPath: url.path + ".lock")
@@ -307,6 +464,31 @@ final class AgentJournalTests: XCTestCase {
     private func cleanup(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
         try? FileManager.default.removeItem(atPath: url.path + ".lock")
+    }
+
+    private func fileSize(_ url: URL) throws -> Int {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return try XCTUnwrap((attributes[.size] as? NSNumber)?.intValue)
+    }
+
+    private func mutationIntent(idempotencyKey: String) throws -> PendingMutationIntent {
+        let call = ToolCall(id: .init(rawValue: "compact-call"), name: "update_listing",
+                            argumentsJSON: #"{"id":"listing-1"}"#, completeness: .complete)
+        return try PendingMutationIntent(
+            call: call,
+            resources: [.named(.init(namespace: "property.listing", id: "listing-1"))],
+            idempotencyKey: idempotencyKey,
+            receiptExpectation: .init(targets: [.init(namespace: "property.listing", id: "listing-1")], revision: .present)
+        )
+    }
+
+    private func appendCompactionHistory(to journal: AgentJournal, sessionID: UUID) async throws {
+        for index in 0..<8 {
+            _ = try await journal.appendCheckpoint([
+                .userMessage(String(repeating: "history-\(index)-", count: 8)),
+                .checkpoint(history: [.user([.text("checkpoint-\(index)")])], steeringIDs: []),
+            ], sessionID: sessionID, runID: UUID(), durability: .durable)
+        }
     }
 
     private func append(_ data: Data, to url: URL) throws {
@@ -357,6 +539,18 @@ final class AgentJournalTests: XCTestCase {
             }
         }
         return checksum ^ 0xffffffff
+    }
+}
+
+private func XCTAssertThrowsErrorAsync(
+    _ expression: () async throws -> Void,
+    verify: (Error) -> Void = { _ in }
+) async {
+    do {
+        try await expression()
+        XCTFail("Expected error")
+    } catch {
+        verify(error)
     }
 }
 

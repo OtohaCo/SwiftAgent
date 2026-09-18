@@ -3,13 +3,14 @@ import AgentTools
 
 /// Serial result commits keep canonical history independent of executor completion order.
 actor AgentToolBatchProgress {
-    private let prefix: [ModelMessage]
+    private var prefix: [ModelMessage]
     private let response: ModelResponse
     private let budget: AgentBudget
     private let lifecycle: AgentLoopLifecycle?
     private let emitter: AgentEventEmitter?
     private var results: [Int: ToolResultMessage] = [:]
     private var receipts: [AgentToolReceipt] = []
+    private var canonicalHistory: [ModelMessage]?
 
     init(prefix: [ModelMessage], response: ModelResponse, budget: AgentBudget,
          lifecycle: AgentLoopLifecycle?, emitter: AgentEventEmitter?) {
@@ -33,13 +34,20 @@ actor AgentToolBatchProgress {
             if call.policy.effect == .mutation {
                 guard let receipt = result.receipt else { throw ToolReceiptError.missing }
                 if let commitMutation = lifecycle?.commitMutation {
-                    try await commitMutation(call.call.id, receipt, committedHistory, [])
+                    let canonical = try await commitMutation(call.call.id, receipt, committedHistory, [])
+                    updateCanonicalPrefix(canonical, committedHistory: committedHistory)
                 } else {
                     try await lifecycle?.recordMutationReceipt(call.call.id, receipt)
-                    try await lifecycle?.checkpoint(committedHistory, [])
+                    if let lifecycle {
+                        let canonical = try await lifecycle.checkpoint(committedHistory, [])
+                        updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+                    }
                 }
             } else {
-                try await lifecycle?.checkpoint(committedHistory, [])
+                if let lifecycle {
+                    let canonical = try await lifecycle.checkpoint(committedHistory, [])
+                    updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+                }
             }
             results = proposed
             let receipt = result.receipt.map { AgentToolReceipt(callID: call.call.id, effect: call.policy.effect, receipt: $0) }
@@ -67,7 +75,7 @@ actor AgentToolBatchProgress {
     }
 
     func completed() -> (history: [ModelMessage], receipts: [AgentToolReceipt], count: Int) {
-        (history(results), receipts, results.count)
+        (canonicalHistory ?? history(results), receipts, results.count)
     }
 
     private func history(_ results: [Int: ToolResultMessage]) -> [ModelMessage] {
@@ -79,5 +87,16 @@ actor AgentToolBatchProgress {
             return true
         }
         return prefix + [.assistant(content: content, toolCalls: calls)] + indices.compactMap { results[$0].map(ModelMessage.tool) }
+    }
+
+    private func updateCanonicalPrefix(_ history: [ModelMessage], committedHistory: [ModelMessage]) {
+        canonicalHistory = history
+        let transcript = Array(committedHistory.dropFirst(prefix.count))
+        guard !transcript.isEmpty, history.count >= transcript.count,
+              history.suffix(transcript.count).elementsEqual(transcript) else {
+            prefix = history
+            return
+        }
+        prefix = Array(history.dropLast(transcript.count))
     }
 }

@@ -26,6 +26,7 @@ struct AgentCompletionCommitTests {
                 try Task.checkCancellation()
                 await history.record(messages)
             }
+            return messages
         }, beforeFinish: {})
         let response = ModelResponse(info: .init(id: "response", model: fixtureModel), toolCalls: [call], stopReason: .toolCalls)
         let progress = AgentToolBatchProgress(prefix: [], response: response, budget: budget, lifecycle: lifecycle, emitter: emitter)
@@ -72,6 +73,7 @@ struct AgentCompletionCommitTests {
         let history = FailingCompletionHistory()
         let lifecycle = AgentLoopLifecycle(control: AgentRunControl(), evidenceLedger: EvidenceLedger(), checkpoint: { messages, _ in
             try await history.record(messages)
+            return messages
         }, beforeFinish: {})
         let response = ModelResponse(info: .init(id: "response", model: fixtureModel), toolCalls: calls, stopReason: .toolCalls)
         let progress = AgentToolBatchProgress(prefix: [], response: response, budget: budget, lifecycle: lifecycle, emitter: emitter)

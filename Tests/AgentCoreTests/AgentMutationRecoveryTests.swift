@@ -242,7 +242,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let lifecycle = AgentLoopLifecycle(
             control: AgentRunControl(),
             evidenceLedger: EvidenceLedger(),
-            checkpoint: { _, _ in },
+            checkpoint: { messages, _ in messages },
             recordMutationReceipt: { _, _ in throw settlementFailure },
             markMutationNeedsReconciliation: { _ in throw quarantineFailure }
         )
@@ -867,7 +867,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let first = try agent.makeSession(id: sessionID, journal: journal)
         let firstRun = try await first.run("Update the listing", operationID: operationID)
         _ = try await firstRun.wait()
-        await firstRun.waitForDrain()
+        try await firstRun.waitForDrain()
         let firstCount = await probe.count
         XCTAssertEqual(firstCount, 1)
 

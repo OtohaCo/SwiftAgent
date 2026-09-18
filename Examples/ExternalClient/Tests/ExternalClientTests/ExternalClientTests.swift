@@ -37,7 +37,7 @@ struct ExternalClientTests {
         let sessionID = UUID()
         let run = try await makeMutationAgent().makeSession(id: sessionID, journal: journal).run("Update the listing")
         let result = try await run.wait()
-        await run.waitForDrain()
+        try await run.waitForDrain()
         #expect(result.receipts.count == 1)
         #expect(await journal.pendingMutations().isEmpty)
 

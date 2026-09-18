@@ -73,7 +73,7 @@ SAI-043 owns the `search_resource → Use the first one` contract. This round ad
 | During model turn / tool batch | inject after tools complete | Yes | correction during model turn; during tool batch | — | Yes | P0 | Covered |
 | Exactly once / late after finish | — | Yes | empty + finished errors; cancel races | — | Yes | P1 | Covered |
 | Budget exhaustion | — | Yes | `exhaustedBudgetRetainsAcceptedCorrectionsInOrder` | — | Yes | P2 | Covered |
-| Steering + compaction | coding-agent compact during response | No dedicated pair | — | Mid-run compact is SAI-042 | Yes | P2 | Existing backlog |
+| Steering + compaction | coding-agent compact during response | Yes | `steeringAfterMidRunCompactionIsAppliedExactlyOnce` | — | Yes | P2 | Covered |
 | Retry/fallback + steering | retry-events | Partial | fallback tests do not mix steer | Low | Yes | P3 | Not applicable |
 
 ---
@@ -98,7 +98,7 @@ Decision: **Host responsibility for 1.0.** Hosts `wait()` then `session.run`. A 
 | One read failure / mutation failure isolation | — | Yes | scheduling + mutation recovery | — | Yes | P0 | Covered |
 | Cancel / timeout / late completion | — | Yes | loop cancellation, event failure, evidence late-result | — | Yes | P0 | Covered |
 | Resource conflict / cross-session | — | Yes | `ToolResourceCoordinatorTests`, `AgentIsolationTests` | — | Yes | P0 | Covered |
-| Resource-wait timeout vs cancel | — | Partial | cancel-while-waiting covered | Dedicated lease timeout | Yes | P2 | Existing backlog |
+| Resource-wait timeout vs cancel | — | Yes | `timedOutOrCancelledExecutorKeepsItsLeaseUntilItActuallyReturns` | — | Yes | P2 | Covered |
 
 ---
 
@@ -165,7 +165,7 @@ Phases are covered across files, not one checklist suite.
 | Uncooperative tool blocks replacement Session | `waitReturnsBeforeAnUncooperativeToolDrainsAndBlocksAReplacementSession` | Covered |
 | Session-level and run-level drain, one owner | `sessionAndRunDrainShareOneOwner` | Covered |
 | Multiple drain waiters | **SAI-044** `multipleDrainWaitersSharePhysicalRelease` | Covered |
-| Drain waiter Task cancellation | Drain continuations have no cancel handler | Existing backlog SAI-042 |
+| Drain waiter Task cancellation | `multipleDrainWaitersSharePhysicalRelease` | Covered; cancelled observer throws while physical drain continues |
 
 ---
 
@@ -178,7 +178,7 @@ Phases are covered across files, not one checklist suite.
 | Unknown top-level Anthropic event ignored | anthropic-sse-parsing | Yes | `AnthropicUnknownEventTests` | Covered |
 | Thinking signature / tool input streaming / usage | anthropic thinking tests | Declared subset | `AnthropicProviderTests`, continuation tests | Covered |
 | Adaptive thinking, OAuth, Bedrock, Gemini, … | packages/ai/test catalog | No | — | Not applicable |
-| `event:` vs `data.type` mismatch after `message_stop` | — | Documented leftover | — | Existing backlog SAI-042 |
+| `event:` vs `data.type` mismatch after `message_stop` | — | Yes | `AnthropicUnknownEventTests` | Covered |
 
 ---
 
@@ -215,12 +215,12 @@ Do not normalize IDs in a way that breaks Receipt / Journal identity.
 | Exactly at encoded limit / one byte over | **SAI-044** `historyExactlyAtTheEncodedLimit…`, `oneByteOverTheEncodedLimit…` | Covered |
 | Compactor throws, Session does not hang | **SAI-044** `throwingCompactorFailsTheRunWithoutHangingTheSession` | Covered |
 | Unresolved tool span kept | `contextWindowKeepsUnresolvedToolPairs` | Covered |
-| Mid-run compaction writeback / journal file rollover | — | Existing backlog SAI-042 |
+| Mid-run compaction writeback / journal file rollover | SAI-042 context/journal tests | Covered |
 | Synthetic `.user` + `Conversation summary:` | conversation tests 13–14 | Covered |
 | Anthropic encoder: summary + follow-up (adjacent users merge to two text blocks) | **SAI-044** `AnthropicSyntheticSummaryTests` | Covered |
 | Apple prompt JSON: summary stays its own user row | **SAI-044** `ApplePromptEncodingTests` | Covered |
 | Generic/OpenAI-style: `ModelMessage` JSON round-trip | **SAI-044** `ModelMessageTests.testSyntheticSummaryRoundTripsAsAUserMessageBetweenTurns` | Covered |
-| Lossy retain counts synthetic summary as a user turn | source-reviewed | P2 leftover, not a new SAI |
+| Lossy retain counts synthetic summary as a user turn | `syntheticSummaryDoesNotCountAsARecentUserTurn` | Covered |
 
 Anthropic merging adjacent user messages is protocol-correct and is why a synthetic summary must not be `.system`.
 

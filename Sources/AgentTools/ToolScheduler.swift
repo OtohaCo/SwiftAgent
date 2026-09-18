@@ -99,7 +99,11 @@ public struct ToolScheduler: Sendable {
                     case .failure(let error):
                         if firstFailure == nil { firstFailure = error }
                         // Independent reads settle under their own deadlines; failure stops subsequent groups.
-                        try await onFailed(completion.call, error)
+                        do {
+                            try await onFailed(completion.call, error)
+                        } catch {
+                            firstFailure = error
+                        }
                     }
                 } catch {
                     if firstFailure == nil { firstFailure = error }

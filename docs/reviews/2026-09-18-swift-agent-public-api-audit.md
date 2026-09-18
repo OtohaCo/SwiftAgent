@@ -270,8 +270,11 @@ diagnostic channel later without redefining `toolStarted`.
 These belong in 1.0-pre. Exhaustive switches must update:
 
 1. `AgentRun.waitForDrain()` — physical provider/tool drain and Session identity
-   release. Same owner as `AgentSession.waitForRunToDrain(runID:)`. `wait()` is
-   only the logical terminal.
+   release. SAI-042 changed it from `async` to `async throws`: cancelling one
+   observer throws `CancellationError`, while the Session-owned physical drain
+   and other waiters continue. This is an intentional 1.0-pre source break;
+   callers add `try`. Same owner as `AgentSession.waitForRunToDrain(runID:)`.
+   `wait()` is only the logical terminal.
 2. `AgentJournalRecovery.corruptTail` and `AgentJournalError.repairRequired`.
    Hosts inspect the valid prefix, then call `discardCorruptTail()` before
    another durable write.
@@ -282,7 +285,8 @@ These belong in 1.0-pre. Exhaustive switches must update:
 
 Do not treat checkpoint `system` messages as active runtime configuration.
 Restore always applies the current Agent instructions. Physical journal
-rollover remains deferred; compaction bounds checkpoint payloads only.
+rollover is internal and automatic after safe checkpoints; it adds no public
+Journal mutation API.
 
 ## SAI-043 additive freeze
 
@@ -300,4 +304,3 @@ Conversation context is a 1.0-pre contract:
    restart are separate contracts.
 
 Do not add host-domain fields such as last search results to AgentCore.
-

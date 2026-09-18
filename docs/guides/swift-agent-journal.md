@@ -32,7 +32,7 @@ let journal = try AgentJournal(persistenceURL: journalURL)
 let session = try agent.makeSession(id: sessionID, journal: journal)
 let run = try await session.run("Update the listing")
 _ = try await run.wait()
-await run.waitForDrain()
+try await run.waitForDrain()
 
 let restarted = try AgentJournal.load(from: journalURL)
 let pending = try await restarted.recoverPendingMutations(sessionID: sessionID)
@@ -81,8 +81,23 @@ A checksum, sequence, or JSON error in a **middle** frame still fails the load.
 Core does not skip a hole and keep reading. Crash-tail recovery never replays
 tools or infers external success from model text.
 
-Compaction summaries recorded in the journal bound later checkpoint payloads.
-The file remains append-only; physical rollover is not performed on load.
+After a safe runtime checkpoint, a durable journal larger than the internal
+rollover threshold is rewritten to a canonical recovery snapshot. The snapshot
+keeps one Session creation marker and the latest checkpoint per Session, plus
+the lifecycle needed to reconstruct every mutation identity. Settled and
+aborted mutations remain as tombstones so the current idempotency-conflict
+contract survives restart; rollover does not redefine settled retry semantics.
+
+Rollover writes and synchronizes a same-directory temporary file, atomically
+renames it over the journal, then synchronizes the parent directory. The same
+OS lock and full-record stale-writer comparison used by append protect the
+rewrite. A truncated tail may be replaced from its validated prefix. A corrupt
+tail still throws `repairRequired` until `discardCorruptTail()` is called.
+Journal size is proportional to canonical recovery state rather than
+checkpoint/audit history; it is not a permanent event warehouse.
+Core also requires a meaningful reclaim window before rewriting, so a large
+canonical mutation tombstone set does not cause a full-file rewrite after every
+small checkpoint.
 
 ## Mutation Recovery
 

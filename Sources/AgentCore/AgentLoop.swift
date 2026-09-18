@@ -154,7 +154,7 @@ package struct AgentLoop: Sendable {
                 // Unexecuted proposals stay in the terminal response, not model-ready history.
                 let content = checkpointContent(response, retainingToolCalls: 0)
                 if !content.isEmpty { history.append(.assistant(content: content, toolCalls: [])) }
-                try await lifecycle?.checkpoint(history, [])
+                if let lifecycle { history = try await lifecycle.checkpoint(history, []) }
                 return AgentLoopResult(response: response, history: history, outcome: outcome,
                                        modelTurns: modelTurns, toolCalls: toolCalls, receipts: receipts)
             }
@@ -186,6 +186,7 @@ package struct AgentLoop: Sendable {
                         }
                     }
                     try await emitter?.failIfActive(call.call.id, failure: AgentFailure(exposed))
+                    throw exposed
                 })
                 for call in prepared where call.policy.effect == .mutation {
                     // The scheduler has completed authorization, evidence validation,
@@ -215,7 +216,7 @@ package struct AgentLoop: Sendable {
                                lifecycle: AgentLoopLifecycle, emitter: AgentEventEmitter?) async throws {
         guard !inputs.isEmpty else { return }
         history.append(contentsOf: inputs.map { .user([.text($0.text)]) })
-        try await lifecycle.checkpoint(history, inputs)
+        history = try await lifecycle.checkpoint(history, inputs)
         await lifecycle.control.acknowledge(inputs)
         for input in inputs { try await emitter?.send(.steeringApplied(id: input.id, text: input.text)) }
     }

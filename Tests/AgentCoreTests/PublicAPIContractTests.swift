@@ -99,7 +99,7 @@ struct PublicAPIContractTests {
         let journal = try AgentJournal(persistenceURL: url)
         let run = try await PublicAPIMutationClient.makeSession(journal: journal).run("Update the listing")
         let result = try await run.wait()
-        await run.waitForDrain()
+        try await run.waitForDrain()
         #expect(result.toolCalls == 1)
         #expect(result.receipts.count == 1)
         #expect(await journal.pendingMutations().isEmpty)

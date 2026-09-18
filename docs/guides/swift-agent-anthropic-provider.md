@@ -33,7 +33,9 @@ unfinished or oversized frames. The per-event limit is 1 MiB. Unknown top-level
 event types are ignored without emitting a ModelEvent and without closing an
 active content block. Known event types with illegal structure, including an
 unknown `delta.type` inside `content_block_delta`, still fail. `ping` is a
-no-op. `error` follows the existing error contract. A complete proposal still
+no-op. A non-default SSE `event:` name must match JSON `data.type`; mismatches
+fail closed. After `message_stop`, any further semantic event also fails closed
+(`ping` remains transport-level no-op). `error` follows the existing error contract. A complete proposal still
 needs a valid terminal response and clean EOF before Core can dispatch it.
 
 `AnthropicThinking` supports disabled, adaptive, or enabled with an explicit budget.

@@ -22,7 +22,7 @@ struct AgentMultiRunContextTests {
         for text in ["alpha-question", "beta-question", "gamma-question"] {
             let run = try await session.run(text)
             #expect(try await run.wait().outcome == .completed)
-            await run.waitForDrain()
+            try await run.waitForDrain()
         }
         let follow = try await session.run("What was the first question?")
         let result = try await follow.wait()
@@ -33,7 +33,7 @@ struct AgentMultiRunContextTests {
         #expect(recall.messages.contains(.user([.text("beta-question")])))
         #expect(recall.messages.contains(.user([.text("gamma-question")])))
         #expect(recall.messages.last == .user([.text("What was the first question?")]))
-        await follow.waitForDrain()
+        try await follow.waitForDrain()
     }
 
     @Test func replacementProviderReceivesPortableTranscriptWithoutRequiringOpaqueContinuation() async throws {
@@ -54,7 +54,7 @@ struct AgentMultiRunContextTests {
         let original = try first.makeSession(id: sessionID, journal: journal)
         let run = try await original.run("remember portable state")
         _ = try await run.wait()
-        await run.waitForDrain()
+        try await run.waitForDrain()
 
         let secondProvider = ScriptedProvider(
             descriptor: .init(id: "provider-b", capabilities: [.streaming, .multiTurn, .tools, .structuredOutput])
@@ -81,7 +81,7 @@ struct AgentMultiRunContextTests {
         #expect(request.messages.contains(.user([.text("remember portable state")])))
         #expect(request.messages.contains(.assistant(content: [.text("saved")], toolCalls: [])))
         #expect(request.messages.contains(.user([.text("continue elsewhere")])))
-        await follow.waitForDrain()
+        try await follow.waitForDrain()
     }
 }
 

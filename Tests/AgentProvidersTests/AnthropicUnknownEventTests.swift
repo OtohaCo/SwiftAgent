@@ -80,4 +80,48 @@ struct AnthropicUnknownEventTests {
             #expect((error as? ModelProviderError)?.kind == .invalidResponse)
         }
     }
+
+    @Test func matchingNamedEventAndDataTypePass() async throws {
+        let original = String(decoding: anthropicTextFixture, as: UTF8.self)
+        let named = original.replacingOccurrences(
+            of: #"data: {"type":"message_start""#,
+            with: "event: message_start\ndata: {\"type\":\"message_start\""
+        )
+        let provider = try AnthropicProvider(
+            apiKey: "fixture-key",
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [Data(named.utf8)])
+        )
+        let result = try await Agent(model: .init(provider: "anthropic", name: "fixture"), provider: provider)
+            .makeSession().run("Hi").wait()
+        #expect(result.outcome == .completed)
+    }
+
+    @Test func mismatchedNamedEventAndDataTypeFailClosed() async throws {
+        let original = String(decoding: anthropicTextFixture, as: UTF8.self)
+        let mismatched = original.replacingOccurrences(
+            of: #"data: {"type":"message_start""#,
+            with: "event: content_block_delta\ndata: {\"type\":\"message_start\""
+        )
+        try await expectInvalidResponse(mismatched)
+    }
+
+    @Test func unknownSemanticEventAfterMessageStopFailsClosed() async throws {
+        let original = String(decoding: anthropicTextFixture, as: UTF8.self)
+        let trailing = original + "event: future_event\ndata: {\"type\":\"future_event\"}\n\n"
+        try await expectInvalidResponse(trailing)
+    }
+
+    private func expectInvalidResponse(_ body: String) async throws {
+        let provider = try AnthropicProvider(
+            apiKey: "fixture-key",
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [Data(body.utf8)])
+        )
+        do {
+            _ = try await Agent(model: .init(provider: "anthropic", name: "fixture"), provider: provider)
+                .makeSession().run("Hi").wait()
+            Issue.record("Malformed named Anthropic event must fail")
+        } catch {
+            #expect((error as? ModelProviderError)?.kind == .invalidResponse)
+        }
+    }
 }

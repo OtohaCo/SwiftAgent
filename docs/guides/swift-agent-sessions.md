@@ -66,7 +66,7 @@ History is committed before `runFinished` is published. That is the logical
 terminal: `run.wait()` returns, and the event stream closes. It does not mean
 provider or tool work has exited, or that the Session identity is free.
 
-`await run.waitForDrain()` waits for that physical release. The same owner is
+`try await run.waitForDrain()` waits for that physical release. The same owner is
 exposed as `session.waitForRunToDrain(runID:)`. Do not start a second drain.
 A replacement Session with the same ID must wait until drain completes;
 `runInProgress` is the typed rejection if it tries to run earlier.
@@ -82,7 +82,7 @@ The public Run surface is `events`, `cancel()`, `steer(_:)`, `wait()`, and
 
 ```swift
 let result = try await run.wait()
-await run.waitForDrain()
+try await run.waitForDrain()
 ```
 
 `await run.cancel()` requests cancellation idempotently. Wait for `run.wait()`
@@ -94,6 +94,11 @@ may finish later; its result cannot advance the run or alter the Session.
 `try await run.wait()` returns the cached AgentLoopResult or throws the original
 error. Multiple callers can wait independently. Cancelling one waiter only ends
 that wait. The result still distinguishes completed, refused and incomplete.
+
+`try await run.waitForDrain()` follows the same observer rule: cancelling one
+waiter throws `CancellationError` only to that caller. Provider/tool drain,
+Session identity release, and other drain waiters continue under the Session's
+single physical owner.
 
 `run.events` is a single-consumer stream, not a replay or broadcast subscription.
 It may be consumed while the run executes or drained after it finishes. Cancelling

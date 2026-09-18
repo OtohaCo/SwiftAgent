@@ -101,7 +101,7 @@ struct AgentConversationContextTests {
         ).makeSession(id: sessionID, journal: journal)
         let firstRun = try await original.run(CatalogPrompt.find)
         let first = try await firstRun.wait()
-        await firstRun.waitForDrain()
+        try await firstRun.waitForDrain()
         ConversationTranscript.requireCanonicalSearchRound(first.history, instructions: CatalogPrompt.instructions)
 
         let restoredJournal = try AgentJournal.load(from: url)
@@ -148,7 +148,7 @@ struct AgentConversationContextTests {
         ).makeSession(id: sessionID, journal: journal)
         let firstRun = try await original.run(CatalogPrompt.find)
         let first = try await firstRun.wait()
-        await firstRun.waitForDrain()
+        try await firstRun.waitForDrain()
 
         let expected = AgentContextWindow.applyingCurrentInstructions(first.history, instructions: "Version two.")
         let committed = CommittedTranscript()

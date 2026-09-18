@@ -29,7 +29,7 @@ public struct AgentRun: Sendable {
     }
 
     public func wait() async throws -> AgentLoopResult { try await control.wait() }
-    public func waitForDrain() async { await drain.wait() }
+    public func waitForDrain() async throws { try await drain.wait() }
     public func cancel() async { await control.cancel() }
     @discardableResult
     public func steer(_ text: String) async throws -> UUID { try await control.enqueue(text) }
@@ -132,17 +132,30 @@ actor AgentRunControl {
 
 actor AgentRunDrain {
     private var completed = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
 
-    func wait() async {
+    func wait() async throws {
+        try Task.checkCancellation()
         if completed { return }
-        await withCheckedContinuation { continuation in
-            if completed {
-                continuation.resume()
-            } else {
-                waiters.append(continuation)
+        let waiterID = UUID()
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else if completed {
+                    continuation.resume()
+                } else {
+                    waiters[waiterID] = continuation
+                }
             }
-        }
+        }, onCancel: {
+            Task { await self.cancelWaiter(waiterID) }
+        })
+        try Task.checkCancellation()
+    }
+
+    private func cancelWaiter(_ id: UUID) {
+        waiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
     }
 
     func complete() {
@@ -150,6 +163,6 @@ actor AgentRunDrain {
         completed = true
         let pending = waiters
         waiters.removeAll()
-        for waiter in pending { waiter.resume() }
+        for waiter in pending.values { waiter.resume() }
     }
 }

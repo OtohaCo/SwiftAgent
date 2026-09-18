@@ -130,11 +130,11 @@ struct AgentRunTests {
         let session = try agent.makeSession(id: sessionID)
         let run = try await session.run("hello")
         #expect(try await run.wait().outcome == .completed)
-        await run.waitForDrain()
+        try await run.waitForDrain()
         let replacement = try agent.makeSession(id: sessionID)
         let next = try await replacement.run("again")
         #expect(try await next.wait().outcome == .completed)
-        await next.waitForDrain()
+        try await next.waitForDrain()
     }
 
     @Test func waitReturnsBeforeAnUncooperativeToolDrainsAndBlocksAReplacementSession() async throws {
@@ -160,12 +160,12 @@ struct AgentRunTests {
         }
 
         await gate.open()
-        await run.waitForDrain()
+        try await run.waitForDrain()
         #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
 
         let after = try await replacement.run("after drain")
         #expect(try await after.wait().outcome == .completed)
-        await after.waitForDrain()
+        try await after.waitForDrain()
     }
 
     @Test func sessionAndRunDrainShareOneOwner() async throws {
@@ -177,14 +177,14 @@ struct AgentRunTests {
         let run = try await session.run("hello")
         _ = try await run.wait()
         await session.waitForRunToDrain(runID: run.id)
-        await run.waitForDrain()
+        try await run.waitForDrain()
         let replacement = try Agent(
             model: fixtureModel,
             provider: ScriptedProvider { request, _ in textResponse(request, "ok") }
         ).makeSession(id: sessionID)
         let next = try await replacement.run("again")
         #expect(try await next.wait().outcome == .completed)
-        await next.waitForDrain()
+        try await next.waitForDrain()
     }
 
     @Test func multipleDrainWaitersSharePhysicalRelease() async throws {
@@ -203,15 +203,22 @@ struct AgentRunTests {
 
         let waiting = XCTestExpectation(description: "Drain waiters entered")
         waiting.expectedFulfillmentCount = 3
-        let a = Task { waiting.fulfill(); await run.waitForDrain() }
-        let b = Task { waiting.fulfill(); await run.waitForDrain() }
-        let c = Task { waiting.fulfill(); await run.waitForDrain() }
+        let a = Task { waiting.fulfill(); try await run.waitForDrain() }
+        let b = Task { waiting.fulfill(); try await run.waitForDrain() }
+        let c = Task { waiting.fulfill(); try await run.waitForDrain() }
         #expect(await XCTWaiter.fulfillment(of: [waiting], timeout: 1) == .completed)
         a.cancel()
+        await #expect(throws: CancellationError.self) { try await a.value }
+
+        let replacement = try Agent(model: fixtureModel, provider: provider, tools: [tool])
+            .makeSession(id: run.sessionID)
+        await #expect(throws: AgentSessionError.runInProgress) {
+            _ = try await replacement.run("still draining")
+        }
+
         await gate.open()
-        await b.value
-        await c.value
-        await a.value
+        try await b.value
+        try await c.value
         #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
         #expect(await session.activeRunID == nil)
     }
