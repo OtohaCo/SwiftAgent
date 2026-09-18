@@ -258,6 +258,11 @@ other conforming provider, and keeps sandbox file identity out of AgentCore.
 The [public API audit](docs/reviews/2026-09-18-swift-agent-public-api-audit.md)
 is the freeze record for this branch.
 
+The [conformance matrix](docs/reviews/2026-09-18-swift-agent-conformance-matrix.md)
+compares SwiftAgent to Pi's agent tests and records what is Covered, backlog, or
+not applicable. [Testing](docs/testing.md) is the command entry;
+[named regressions](docs/testing-regressions.md) index production bugs.
+
 [Apple Foundation Models](docs/guides/swift-agent-apple-provider.md) documents
 the on-device planning adapter, execution boundary and opt-in live verification.
 

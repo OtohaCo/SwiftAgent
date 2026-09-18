@@ -171,6 +171,90 @@ struct AgentContextPolicyTests {
             }
         }
     }
+
+    @Test func historyExactlyAtTheEncodedLimitIsAdmittedWithoutCompaction() async throws {
+        let first = "threshold-hello"
+        let reply = "threshold-ack"
+        let aligned = AgentContextWindow.applyingCurrentInstructions(
+            [.user([.text(first)]), .assistant(content: [.text(reply)], toolCalls: [])],
+            instructions: ""
+        )
+        let bytes = try AgentContextWindow.encodedByteCount(aligned)
+        let spy = SpyCompactor()
+        let policy = AgentContextPolicy(
+            maxInputUTF8Bytes: bytes + 64,
+            maxActiveHistoryUTF8Bytes: bytes,
+            retainedRecentTurnCount: 6,
+            compactor: spy
+        )
+        let session = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, _ in textResponse(request, reply) },
+            configuration: AgentConfiguration(contextPolicy: policy)
+        ).makeSession()
+        #expect(try await session.run(first).wait().outcome == .completed)
+        #expect(await spy.count == 0)
+        #expect(try AgentContextWindow.encodedByteCount(
+            AgentContextWindow.applyingCurrentInstructions(await session.history, instructions: "")
+        ) == bytes)
+    }
+
+    @Test func oneByteOverTheEncodedLimitFailsClosedWithoutACompactor() async throws {
+        let first = "over-hello"
+        let reply = "over-ack"
+        let aligned = AgentContextWindow.applyingCurrentInstructions(
+            [.user([.text(first)]), .assistant(content: [.text(reply)], toolCalls: [])],
+            instructions: ""
+        )
+        let bytes = try AgentContextWindow.encodedByteCount(aligned)
+        let policy = AgentContextPolicy(
+            maxInputUTF8Bytes: bytes + 64,
+            maxActiveHistoryUTF8Bytes: bytes - 1,
+            retainedRecentTurnCount: 6
+        )
+        let session = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, _ in textResponse(request, reply) },
+            configuration: AgentConfiguration(contextPolicy: policy)
+        ).makeSession()
+        await #expect(throws: AgentContextError.self) {
+            _ = try await session.run(first).wait()
+        }
+        #expect(await session.activeRunID == nil)
+    }
+
+    @Test func throwingCompactorFailsTheRunWithoutHangingTheSession() async throws {
+        let policy = AgentContextPolicy(
+            maxInputUTF8Bytes: 2_048,
+            maxActiveHistoryUTF8Bytes: 420,
+            retainedRecentTurnCount: 1,
+            compactor: ThrowingCompactor()
+        )
+        let session = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, turn in textResponse(request, "ack-\(turn)") },
+            configuration: AgentConfiguration(contextPolicy: policy)
+        ).makeSession()
+        var sawCompactorError = false
+        for index in 1...6 {
+            do {
+                let run = try await session.run(String(repeating: "payload-\(index)-", count: 6))
+                _ = try await run.wait()
+                await run.waitForDrain()
+            } catch is CompactorFixtureError {
+                sawCompactorError = true
+                break
+            }
+        }
+        #expect(sawCompactorError)
+        #expect(await session.activeRunID == nil)
+        let started = ContinuousClock.now
+        await #expect(throws: CompactorFixtureError.self) {
+            _ = try await session.run("small").wait()
+        }
+        #expect(ContinuousClock.now - started < .seconds(1))
+        #expect(await session.activeRunID == nil)
+    }
 }
 
 actor SpyCompactor: AgentContextCompactor {
@@ -179,5 +263,13 @@ actor SpyCompactor: AgentContextCompactor {
     func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
         count += 1
         return AgentCompactionSummary(goal: "Continue.", decisions: ["Keep recent turns"])
+    }
+}
+
+struct CompactorFixtureError: Error {}
+
+struct ThrowingCompactor: AgentContextCompactor {
+    func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
+        throw CompactorFixtureError()
     }
 }

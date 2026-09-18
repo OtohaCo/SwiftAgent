@@ -186,4 +186,33 @@ struct AgentRunTests {
         #expect(try await next.wait().outcome == .completed)
         await next.waitForDrain()
     }
+
+    @Test func multipleDrainWaitersSharePhysicalRelease() async throws {
+        let gate = ManualGate()
+        let entered = XCTestExpectation(description: "Tool entered")
+        let returned = XCTestExpectation(description: "Tool returned")
+        let tool = try BlockingTool(gate: gate, entered: entered, returned: returned, timeout: .seconds(30))
+        let provider = ScriptedProvider { request, turn in
+            turn == 1 ? toolResponse(request, [blockingCall]) : textResponse(request, "Done")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [tool]).makeSession()
+        let run = try await session.run("block")
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        await run.cancel()
+        await #expect(throws: CancellationError.self) { try await run.wait() }
+
+        let waiting = XCTestExpectation(description: "Drain waiters entered")
+        waiting.expectedFulfillmentCount = 3
+        let a = Task { waiting.fulfill(); await run.waitForDrain() }
+        let b = Task { waiting.fulfill(); await run.waitForDrain() }
+        let c = Task { waiting.fulfill(); await run.waitForDrain() }
+        #expect(await XCTWaiter.fulfillment(of: [waiting], timeout: 1) == .completed)
+        a.cancel()
+        await gate.open()
+        await b.value
+        await c.value
+        await a.value
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await session.activeRunID == nil)
+    }
 }

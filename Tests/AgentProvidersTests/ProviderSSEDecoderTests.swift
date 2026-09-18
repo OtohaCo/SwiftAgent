@@ -37,4 +37,25 @@ struct ProviderSSEDecoderTests {
         #expect(events.first?.name == "message_start")
         #expect(events.first?.data.utf8.elementsEqual("{\"type\":\n\"message_start\",\"text\":\"cafe\u{301}\"}".utf8) == true)
     }
+
+    @Test func chineseJapaneseEmojiSurviveUTF8ChunkBoundaries() throws {
+        var decoder = try ProviderSSEDecoder()
+        let text = "查找资源。検索する。🎯"
+        let wire = "event: content_block_delta\ndata: {\"text\":\(jsonString(text))}\n\n"
+        var events: [ProviderSSEEvent] = []
+        for byte in wire.utf8 {
+            events += try decoder.consume(Data([byte]))
+        }
+        try decoder.finish()
+        #expect(events.count == 1)
+        #expect(events.first?.name == "content_block_delta")
+        #expect(events.first?.data.contains("查找资源。") == true)
+        #expect(events.first?.data.contains("検索する。") == true)
+        #expect(events.first?.data.contains("🎯") == true)
+    }
+}
+
+private func jsonString(_ text: String) -> String {
+    let data = try! JSONEncoder().encode(text)
+    return String(decoding: data, as: UTF8.self)
 }

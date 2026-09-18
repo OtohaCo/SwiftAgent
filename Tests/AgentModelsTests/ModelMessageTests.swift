@@ -40,6 +40,24 @@ final class ModelMessageTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(ModelRole.self, from: Data(#""unexpected""#.utf8)))
     }
 
+    func testSyntheticSummaryRoundTripsAsAUserMessageBetweenTurns() throws {
+        let messages: [ModelMessage] = [
+            .system("Prefer identifiers from tool results."),
+            .user([.text("Find resources for project A")]),
+            .assistant(content: [.text("I found Alpha.")], toolCalls: []),
+            .user([.text("Conversation summary:\nGoal: Continue the existing conversation.")]),
+            .user([.text("Use the first one.")]),
+        ]
+        let restored = try JSONDecoder().decode([ModelMessage].self, from: JSONEncoder().encode(messages))
+        XCTAssertEqual(restored, messages)
+        XCTAssertEqual(restored.map(\.role), [.system, .user, .assistant, .user, .user])
+        guard case .user(let summary) = restored[3], case .text(let text)? = summary.first else {
+            return XCTFail("Synthetic summary must remain a user message")
+        }
+        XCTAssertTrue(text.hasPrefix("Conversation summary:"))
+        XCTAssertEqual(restored.last, .user([.text("Use the first one.")]))
+    }
+
     func testMissingCompletenessCannotDecodeAsAnExecutableCall() throws {
         let call = ToolCall(id: .init(rawValue: "c1"), name: "calculator", argumentsJSON: "{}", completeness: .complete)
         let encoded = try JSONEncoder().encode(call)
