@@ -36,5 +36,6 @@ matches the independent repository.
 ## Consequences
 
 - macOS CI runs WorkspaceAgent tests.
-- Linux CI may skip WorkspaceAgent until CryptoKit / Swift Crypto is decided.
+- Linux CI compiles WorkspaceAgent through `apple/swift-crypto` (`Crypto`) and
+  runs its tests. AgentCore does not depend on that package.
 - Otoha stays out of this repository.

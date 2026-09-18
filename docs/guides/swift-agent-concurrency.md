@@ -31,13 +31,29 @@ terminal model event; AgentCore still publishes exactly one `runFinished`.
 
 No `@preconcurrency` and no `nonisolated(unsafe)` in SwiftAgent sources.
 
-One `@unchecked Sendable` exists:
+Two `@unchecked Sendable` types exist. Neither is a warning-suppression shortcut.
 
-`ProviderHTTPSessionDelegate` in AgentProviders. `URLSession` callbacks and
-stream termination can race. Mutable lifecycle state is behind `NSLock`.
-Terminal paths nil out the continuation, session, and task before invoking
-callbacks. The annotation is required because `URLSessionDataDelegate` is not
-Sendable; it is not a warning-suppression shortcut.
+### ProviderHTTPSessionDelegate
+
+Lives in AgentProviders. `URLSession` callbacks and stream termination can race.
+Mutable lifecycle state is behind `NSLock`. Terminal paths nil out the
+continuation, session, and task before invoking callbacks. The annotation is
+required because `URLSessionDataDelegate` is not Sendable.
+
+### AgentJournalStorageBox
+
+Lives in AgentCore. `Agent.makeSession()` is synchronous and must read the
+journal's persistence mode without awaiting the `AgentJournal` actor.
+`storage` is therefore `nonisolated` and backed by this box.
+
+`value` is only read or written under `NSLock`. The actor's isolated methods
+set `.memory` in `init()`, `.durable` in `init(persistenceURL:)` / `load(from:)`,
+and upgrade `.memory` to `.durable` after a successful `persist(to:)` snapshot
+bind. Publishing `.durable` does not mean a later append cannot fail; it only
+changes the advertised mode that `makeSession` consults.
+
+Do not collapse these two annotations to keep a count of one. They protect
+different seams.
 
 Otoha’s Engine adapter is `@MainActor` because the conversation UI is. That
 isolation stays in the host. Core types remain usable off the main actor.

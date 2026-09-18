@@ -101,6 +101,8 @@ struct ProviderHTTPTransportTests {
         try await eventually { fixture.stopped }
     }
 
+#if !os(Linux)
+    // swift-corelibs-foundation URLSession fatals when a URLProtocol reports a redirect.
     @Test func rejectsSameAndCrossOriginRedirects() async throws {
         for destination in ["https://fixture.invalid/redirected", "https://other.invalid/redirected"] {
             let fixture = ProviderHTTPFixture()
@@ -125,6 +127,7 @@ struct ProviderHTTPTransportTests {
             #expect(target.startCount == 0)
         }
     }
+#endif
 
     @Test func alreadyCancelledCallerDoesNotStartRequest() async throws {
         let fixture = ProviderHTTPFixture()

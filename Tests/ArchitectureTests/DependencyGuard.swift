@@ -14,7 +14,10 @@ enum DependencyGuard {
         var allowed = (dependencies[module] ?? []).union(["Foundation", "Swift"])
         if module == "AgentAppleProvider" { allowed.insert("FoundationModels") }
         if module == "AgentProviders" { allowed.insert("FoundationNetworking") }
-        if module == "WorkspaceAgent" { allowed.insert("CryptoKit") }
+        if module == "WorkspaceAgent" {
+            allowed.insert("CryptoKit")
+            allowed.insert("Crypto")
+        }
         let pattern = #"\bimport\s+(?:(?:typealias|struct|class|enum|protocol|let|var|func)\s+)?([A-Za-z_][A-Za-z_0-9]*)"#
         let regex = try! NSRegularExpression(pattern: pattern)
         let ns = source as NSString

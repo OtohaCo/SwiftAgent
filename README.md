@@ -6,18 +6,26 @@ for development and the independent-repository plan.
 
 ## Build and Test
 
-From this directory, using a Swift 6 toolchain:
+Primary compiler: **Swift 6.4**. Jobs fail if `swift --version` is not 6.4.
+`// swift-tools-version: 6.0` only declares the Package.swift language used by
+the manifest, not the compiler CI must run.
+
+From this directory:
 
 ```sh
-swift build
-swift test
+bash Scripts/ci-macos.sh
 ```
 
-The package has no external dependencies and does not require the host Xcode project.
-Apple deployment minimums are declared in [Package.swift](Package.swift). Platform
-providers may impose higher availability requirements within their adapters.
-Apple/Linux portability is a design constraint; platform validation results live in
-the task acceptance records.
+AgentCore has no extra package dependencies. WorkspaceAgent uses
+[swift-crypto](https://github.com/apple/swift-crypto) for SHA-256 so Linux can
+compile the Reference Host without putting an encryption library in Core.
+Apple deployment minimums are declared in [Package.swift](Package.swift).
+Platform providers may impose higher availability requirements within their
+adapters.
+
+Until SwiftAgent is its own GitHub repository, Tingting runs
+`.github/workflows/swift-agent.yml`. After extraction, the package-root
+`SwiftAgent/.github/workflows/ci.yml` is the workflow GitHub will discover.
 
 ## Quick Start
 

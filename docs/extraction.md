@@ -107,14 +107,39 @@ in Tingting transports.
 
 ## CI matrix
 
+Primary compiler: **Swift 6.4**. Jobs must print the compiler and fail if it is
+not 6.4. `// swift-tools-version: 6.0` is the Package.swift manifest floor, not
+the CI toolchain.
+
+Apple jobs also print `xcodebuild -version` and SDK versions.
+
+Tingting cannot see `SwiftAgent/.github/workflows/`. Until the independent
+repository exists, `.github/workflows/swift-agent.yml` at the Tingting root
+runs the same scripts.
+
 | Job | Command | Live models |
 | --- | --- | --- |
-| macOS | `swift build`, `swift test`, `swift build --triple arm64-apple-ios16.0` | No |
-| Linux | Build `AgentModels` / `AgentTools` / `AgentCore` / `AgentProviders`; skip WorkspaceAgent and Apple tests if CryptoKit/FoundationModels block compile | No |
-| Apple provider | `swift test --filter AgentAppleProviderTests` on a Mac runner | No. `SWIFT_AGENT_APPLE_LIVE` stays operator-opt-in |
+| macOS | `Scripts/ci-macos.sh`: `swift build`, `swift test`, iOS triple, ExternalClient | No |
+| Linux | Install Swift 6.4 (release, or `6.4.x-snapshot` if no release), `swift build --target` Core modules, then `swift test` and ExternalClient | No |
+| Apple provider | `Scripts/ci-apple-provider.sh` | No. `SWIFT_AGENT_APPLE_LIVE` stays operator-opt-in |
+
+Local Linux proof (2026-09-18): Ubuntu 24.04 Docker, Swift 6.4
+(`swift-6.4-RELEASE`) installed with Swiftly, `Scripts/ci-linux.sh` exit 0.
+`--target` Core builds did not emit WorkspaceAgent or AgentAppleProvider
+modules. `swift test` ran Core (including journal, cancellation, recovery),
+WorkspaceAgent (swift-crypto), Architecture, and the ExternalClient package.
+
+The official `swift:6.4` Docker Hub tag did not exist at this date. CI installs
+the compiler with Swiftly and fails if `swift --version` is not 6.4. GitHub
+hosted runners still have to execute `.github/workflows/swift-agent.yml` after
+this lands.
+
+WorkspaceAgent SHA-256 uses `apple/swift-crypto` (`Crypto`) so Linux can compile
+the Reference Host. AgentCore does not take that dependency.
 
 GitHub-hosted runners may not run Foundation Models. Fixture and compile tests
-are the CI contract.
+are the CI contract. There is no Swift 6.0.3 job; older compilers are not a
+supported CI axis.
 
 ## Tingting dependency migration
 
@@ -159,15 +184,15 @@ Suggestions only. Do not rename modules yet.
 ## 1.0 RC readiness
 
 Ready for `1.0.0-rc.1` engineering work after the remote repository exists and
-Linux CI is proven. Not ready to tag `1.0.0` or merge `main`.
+Linux Swift 6.4 CI is green on GitHub. Not ready to tag `1.0.0` or merge `main`.
 
 ## Blockers before creating the remote repository
 
 1. Confirm the repository name with the owner.
 2. Confirm GitHub org permission to create `chainbow/SwiftAgent` (or the chosen
    name). This preparation did not create it.
-3. Prove Linux compile of Core products in CI. WorkspaceAgent + CryptoKit is
-   the likely Linux gap.
+3. GitHub-hosted Linux Swift 6.4 job must go green after this workflow lands.
+   Local Docker already ran `Scripts/ci-linux.sh` with Swift 6.4 RELEASE.
 4. Decide LICENSE copyright holder text if ChainBow is not the final imprint.
 5. Keep Tingting `project.pbxproj` local-package path until step 4 of the
    migration.

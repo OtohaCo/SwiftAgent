@@ -66,6 +66,10 @@ The SDK can:
 - Keep scheduler isolation for shared resources
 - Keep provider adapters from executing host tools
 
+`.durable` on a journal is configured persistence mode. The SDK still has to
+write the intent and can still fail that write. Hosts must handle persistence
+errors.
+
 The SDK cannot:
 
 - Make an untrusted host executor honest

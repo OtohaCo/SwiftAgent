@@ -4,42 +4,42 @@ on:
   push:
   pull_request:
 
+env:
+  SWIFT_AGENT_REQUIRED_SWIFT: "6.4"
+
 jobs:
   macos:
-    name: macOS build and test
+    name: macOS Swift 6.4
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        run: swift build
-      - name: Test
-        run: swift test --disable-sandbox --no-parallel
-      - name: iOS cross-build
-        run: swift build --triple arm64-apple-ios16.0
+      - name: Select Swift 6.4 Xcode
+        run: bash Scripts/select-apple-toolchain.sh
+      - name: Verify compiler, Xcode, and SDK
+        run: bash Scripts/require-toolchain.sh --apple
+      - name: Build, test, iOS cross-build, external client
+        run: bash Scripts/ci-macos.sh
 
   linux:
-    name: Linux Core products
+    name: Linux Swift 6.4
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: "6.0.3"
-      - name: Build portable products
-        run: |
-          swift build --product AgentModels
-          swift build --product AgentTools
-          swift build --product AgentCore
-          swift build --product AgentProviders
-      - name: Full tests run on macOS
-        run: echo "WorkspaceAgent imports CryptoKit; AgentAppleProvider needs FoundationModels. Linux CI builds Core products only."
+      - name: Install Swift 6.4
+        run: bash Scripts/install-linux-swift.sh
+      - name: Verify compiler
+        run: bash Scripts/require-toolchain.sh
+      - name: Core --target build, tests, external client
+        run: bash Scripts/ci-linux.sh
 
   apple-provider:
     name: Apple provider compile
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Compile Apple adapter and fixtures
-        run: swift test --filter AgentAppleProviderTests --disable-sandbox --no-parallel
-      - name: Live models are opt-in
-        run: echo "Do not set SWIFT_AGENT_APPLE_LIVE or SWIFT_AGENT_ANTHROPIC_API_KEY on this job."
+      - name: Select Swift 6.4 Xcode
+        run: bash Scripts/select-apple-toolchain.sh
+      - name: Verify compiler, Xcode, and SDK
+        run: bash Scripts/require-toolchain.sh --apple
+      - name: Apple adapter fixtures
+        run: bash Scripts/ci-apple-provider.sh

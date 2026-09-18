@@ -579,7 +579,9 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let sessionID = UUID()
 
         let first = try agent.makeSession(id: sessionID, journal: journal)
-        _ = try await first.run("first request").wait()
+        let firstRun = try await first.run("first request")
+        _ = try await firstRun.wait()
+        await first.waitForRunToDrain(runID: firstRun.id)
 
         let restartedJournal = try AgentJournal.load(from: url)
         let restarted = try agent.makeSession(id: sessionID, journal: restartedJournal)

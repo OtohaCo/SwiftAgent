@@ -163,9 +163,12 @@ public actor AgentJournal {
 
 `AgentJournal()` advertises `.memory`. `init(persistenceURL:)` and
 `load(from:)` advertise `.durable`. Successful `persist(to:)` upgrades
-`.memory` to `.durable`. The name is a guarantee, not `hasPersistenceURL`.
-A future database, remote, or encrypted journal should also advertise
-`.durable` when it can keep an admitted mutation intent across process death.
+`.memory` to `.durable`. The name is a capability, not `hasPersistenceURL`.
+`.durable` means persistence mode is configured so crash-tail recovery can be
+attempted. It does not mean every later write will succeed; intent appends can
+still throw. A future database, remote, or encrypted journal should also
+advertise `.durable` when it can keep an admitted mutation intent across
+process death.
 
 `makeSession` for a mutation Agent:
 

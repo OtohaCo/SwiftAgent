@@ -198,15 +198,18 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     }
 }
 
-/// Whether a journal can guarantee mutation durability across process death.
+/// Whether a journal is configured for durable mutation persistence.
 ///
-/// This is a capability, not a file-path check. A future database, remote, or
-/// encrypted journal should advertise `.durable` when it can survive a crash
-/// without losing an admitted mutation intent.
+/// This is a capability, not a file-path check. `.durable` means a persistence
+/// backend is bound so crash-tail recovery can be attempted. It does not mean
+/// every later write will succeed; appends can still throw
+/// `persistenceUnavailable`. A future database, remote, or encrypted journal
+/// should advertise `.durable` when it can keep an admitted mutation intent
+/// across process death.
 public enum AgentJournalStorage: Sendable, Equatable {
     /// In-process only. Sufficient for read-only sessions.
     case memory
-    /// Survives process death. Required before a mutation Session can be created.
+    /// Persistence mode is configured. Required before a mutation Session can be created.
     case durable
 }
 
@@ -263,8 +266,9 @@ public actor AgentJournal {
     private var sessionLeases: [UUID: FileHandle]
     private nonisolated let storageBox: AgentJournalStorageBox
 
-    /// Advertised durability guarantee. `persist(to:)` upgrades `.memory` to
-    /// `.durable` after a successful snapshot bind.
+    /// Configured persistence mode. `persist(to:)` upgrades `.memory` to
+    /// `.durable` after a successful snapshot bind. Later durable writes can
+    /// still fail.
     public nonisolated var storage: AgentJournalStorage { storageBox.current }
 
     private struct MutationKey: Hashable {

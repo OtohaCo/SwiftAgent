@@ -30,6 +30,8 @@ These source breaks happen before the first tagged 1.0:
 
 - Mutation Sessions require `journal.storage == .durable`. `AgentJournal()` is
   not durable. `persist(to:)` can upgrade a memory journal before `makeSession`.
+  `.durable` is configured persistence mode, not a guarantee that every later
+  write succeeds.
 - `Agent(model:provider:tools:configuration:)` is the advanced constructor.
   The only extra convenience is `instructions:`. Do not reintroduce a parallel
   list of limit parameters on `Agent`.

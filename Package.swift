@@ -12,6 +12,9 @@ let package = Package(
         .library(name: "AgentAppleProvider", targets: ["AgentAppleProvider"]),
         .library(name: "WorkspaceAgent", targets: ["WorkspaceAgent"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.10.0"),
+    ],
     targets: [
         .target(name: "AgentModels"),
         .target(name: "AgentTools", dependencies: ["AgentModels"]),
@@ -20,7 +23,13 @@ let package = Package(
         .target(name: "AgentAppleProvider", dependencies: ["AgentModels"]),
         .target(
             name: "WorkspaceAgent",
-            dependencies: ["AgentModels", "AgentTools", "AgentCore", "AgentProviders"]
+            dependencies: [
+                "AgentModels",
+                "AgentTools",
+                "AgentCore",
+                "AgentProviders",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ]
         ),
         .testTarget(name: "ArchitectureTests"),
         .testTarget(name: "AgentModelsTests", dependencies: ["AgentModels"]),

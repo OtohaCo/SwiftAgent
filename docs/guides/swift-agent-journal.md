@@ -16,6 +16,12 @@ Sessions use `AgentJournal(persistenceURL:)` (`storage == .durable`).
 snapshot bind. Do not infer this from a file URL; `AgentJournalStorage` is the
 capability.
 
+`.durable` is the configured persistence mode. It is not a promise that every
+later write will succeed. Mutation admission still has to write the durable
+intent, and `persistenceUnavailable` / `concurrentWriter` remain fail-closed
+errors. Hosts must handle those errors; they must not treat `makeSession`
+success as proof that the next append landed on disk.
+
 ## Host API
 
 Hosts do not append lifecycle frames. The runtime writes them. Public operations

@@ -11,8 +11,10 @@ final class DependencyGuardTests: XCTestCase {
 
     func testCryptoKitIsLimitedToWorkspaceHost() {
         XCTAssertEqual(DependencyGuard.violations("import CryptoKit", module: "WorkspaceAgent"), [])
+        XCTAssertEqual(DependencyGuard.violations("import Crypto", module: "WorkspaceAgent"), [])
         for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider"] {
             XCTAssertFalse(DependencyGuard.violations("import CryptoKit", module: module).isEmpty)
+            XCTAssertFalse(DependencyGuard.violations("import Crypto", module: module).isEmpty)
         }
     }
 
@@ -72,18 +74,34 @@ final class DependencyGuardTests: XCTestCase {
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
         let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual((manifest["dependencies"] as? [Any])?.count, 0)
+        let packages = try XCTUnwrap(manifest["dependencies"] as? [Any])
+        XCTAssertEqual(packages.count, 1)
+        let packageJSON = String(data: try JSONSerialization.data(withJSONObject: packages[0]), encoding: .utf8) ?? ""
+        XCTAssertTrue(packageJSON.contains("\"identity\":\"swift-crypto\""), packageJSON)
+        XCTAssertTrue(packageJSON.contains("swift-crypto.git"), packageJSON)
         let targets = try XCTUnwrap(manifest["targets"] as? [[String: Any]])
         let libraries = targets.filter { $0["type"] as? String == "regular" }
         XCTAssertEqual(Set(libraries.compactMap { $0["name"] as? String }), Set(DependencyGuard.dependencies.keys))
         for target in libraries {
             let name = try XCTUnwrap(target["name"] as? String)
             let deps = try XCTUnwrap(target["dependencies"] as? [[String: Any]])
-            let names = try deps.map { dep in
-                let value = try XCTUnwrap((dep["byName"] ?? dep["target"]) as? [Any])
-                return try XCTUnwrap(value.first as? String)
+            var moduleNames: Set<String> = []
+            var productNames: Set<String> = []
+            for dep in deps {
+                if let byName = dep["byName"] as? [Any], let module = byName.first as? String {
+                    moduleNames.insert(module)
+                } else if let product = dep["product"] as? [Any], let productName = product.first as? String {
+                    productNames.insert(productName)
+                } else {
+                    XCTFail("Unexpected dependency shape in \(name): \(dep)")
+                }
             }
-            XCTAssertEqual(Set(names), DependencyGuard.dependencies[name], name)
+            XCTAssertEqual(moduleNames, DependencyGuard.dependencies[name], name)
+            if name == "WorkspaceAgent" {
+                XCTAssertEqual(productNames, ["Crypto"], name)
+            } else {
+                XCTAssertEqual(productNames, [], "\(name) must not link extra packages")
+            }
             XCTAssertTrue((target["settings"] as? [Any] ?? []).isEmpty, "Isolation/build overrides require review")
         }
     }
@@ -126,6 +144,27 @@ final class DependencyGuardTests: XCTestCase {
         XCTAssertFalse(source.contains("EvidenceLedger("))
         XCTAssertFalse(source.contains("ToolMutationAdmission"))
         XCTAssertTrue(source.contains("import AgentCore"))
+    }
+
+    func testExternalClientPackageStaysOnThePublishedSurface() throws {
+        let root = packageRoot.appendingPathComponent("Examples/ExternalClient")
+        let manifest = try String(contentsOf: root.appendingPathComponent("Package.swift"), encoding: .utf8)
+        XCTAssertTrue(manifest.contains(".package(name: \"SwiftAgent\", path: \"../..\")"))
+        XCTAssertTrue(manifest.contains("AgentCore"))
+        XCTAssertFalse(manifest.contains("WorkspaceAgent"))
+        XCTAssertFalse(manifest.contains("AgentAppleProvider"))
+        let tests = root.appendingPathComponent("Tests/ExternalClientTests")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: tests, includingPropertiesForKeys: nil))
+        var count = 0
+        for case let url as URL in files where url.pathExtension == "swift" {
+            count += 1
+            let source = try String(contentsOf: url, encoding: .utf8)
+            XCTAssertFalse(source.contains("@testable"), url.path)
+            XCTAssertFalse(source.contains("import WorkspaceAgent"), url.path)
+            XCTAssertFalse(source.contains("import AgentAppleProvider"), url.path)
+            XCTAssertTrue(source.contains("import AgentCore"), url.path)
+        }
+        XCTAssertGreaterThan(count, 0)
     }
 
     func testRejectsForbiddenImportsIncludingInactiveAndScopedImports() {
