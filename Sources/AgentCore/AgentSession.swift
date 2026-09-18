@@ -287,11 +287,14 @@ public actor AgentSession {
         if bytes <= limit {
             return (aligned, nil)
         }
+        guard let compactor = contextPolicy.compactor else {
+            throw AgentContextError.historyTooLarge(bytes: bytes, limit: limit)
+        }
         let split = AgentContextWindow.split(aligned, retainingRecentTurns: contextPolicy.retainedRecentTurnCount)
         guard !split.dropped.isEmpty else {
             throw AgentContextError.historyTooLarge(bytes: bytes, limit: limit)
         }
-        let summary = try await contextPolicy.compactor.summarize(droppedConversation: split.dropped)
+        let summary = try await compactor.summarize(droppedConversation: split.dropped)
         var compacted = split.runtime
         compacted.append(AgentContextWindow.summaryMessage(summary))
         compacted.append(contentsOf: split.retained)

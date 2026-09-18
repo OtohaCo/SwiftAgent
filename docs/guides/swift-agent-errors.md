@@ -24,7 +24,7 @@ switch on them rather than wrapping arbitrary errors themselves.
 | Persistence failure | `AgentJournalError.persistenceUnavailable` | Durable journal I/O |
 | Corrupt journal tail | `AgentJournalError.repairRequired` | Last complete frame invalid; call `discardCorruptTail()` |
 | Settlement and quarantine both failed | `AgentMutationPersistenceError` | `AgentFailure.mutationPersistence`; both sides stay typed |
-| Oversized input / uncompactable history | `AgentContextError` | `inputTooLarge` vs `historyTooLarge` |
+| Oversized input / uncompactable history | `AgentContextError` | `inputTooLarge` vs `historyTooLarge`. Default policy has no compactor, so accumulated history fails closed instead of inventing a summary. |
 | Programmer / configuration | `AgentLoopError.invalidBudget`, `ToolPolicyError`, `ModelProviderError.invalidRequest` | Construction |
 
 `AgentFailure.unclassified` is a last resort for foreign errors on the event

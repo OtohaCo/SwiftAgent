@@ -238,8 +238,9 @@ Do not match `localizedDescription`.
 [Sessions](docs/guides/swift-agent-sessions.md) freeze `wait()` as logical
 termination and `waitForDrain()` as physical resource release.
 
-[Context Policy](docs/guides/swift-agent-context.md) separates current
-instructions from conversation history and bounds checkpoint size.
+[Context Policy](docs/guides/swift-agent-context.md) separates runtime
+configuration, conversation transcript, and trusted Evidence. Default
+compaction is fail-closed; hosts opt in to lossy summaries.
 
 [Concurrency](docs/guides/swift-agent-concurrency.md) records the Swift 6.4
 isolation audit. Core does not use MainActor.

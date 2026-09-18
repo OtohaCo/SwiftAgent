@@ -18,6 +18,7 @@ struct PublicAPIContractTests {
         #expect(configuration.contextPolicy.maxInputUTF8Bytes == 8 * 1024 * 1024)
         #expect(configuration.contextPolicy.maxActiveHistoryUTF8Bytes == 12 * 1024 * 1024)
         #expect(configuration.contextPolicy.retainedRecentTurnCount == 6)
+        #expect(configuration.contextPolicy.compactor == nil)
     }
 
     @Test func readOnlyAgentAcceptsNilMemoryAndDurableJournals() async throws {

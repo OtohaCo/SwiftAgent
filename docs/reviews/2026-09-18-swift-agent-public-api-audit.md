@@ -284,3 +284,20 @@ Do not treat checkpoint `system` messages as active runtime configuration.
 Restore always applies the current Agent instructions. Physical journal
 rollover remains deferred; compaction bounds checkpoint payloads only.
 
+## SAI-043 additive freeze
+
+Conversation context is a 1.0-pre contract:
+
+1. Default `AgentContextPolicy.compactor` is `nil`. Crossing the active history
+   bound without a host compactor throws `AgentContextError.historyTooLarge`.
+2. `AgentContextPolicy.lossyRetainedTurns` is the explicit opt-in for
+   `AgentRetainedTurnCompactor`. It is lossy and does not preserve dropped
+   tool results.
+3. Compaction summaries remain synthetic `.user` messages with the
+   `Conversation summary:` prefix so restore will not strip them as runtime
+   configuration.
+4. Evidence is not restored from transcript. Conversation restart and Evidence
+   restart are separate contracts.
+
+Do not add host-domain fields such as last search results to AgentCore.
+

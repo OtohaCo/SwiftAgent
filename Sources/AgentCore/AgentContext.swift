@@ -14,8 +14,9 @@ public protocol AgentContextCompactor: Sendable {
     func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary
 }
 
-/// Mechanical default. It records that earlier turns were dropped; it does not
-/// interpret domain payloads.
+/// Mechanical, lossy summarizer. Hosts must opt in through
+/// `AgentContextPolicy.lossyRetainedTurns`. It records that earlier turns were
+/// dropped; it does not preserve domain references from dropped tool results.
 public struct AgentRetainedTurnCompactor: AgentContextCompactor {
     public init() {}
 
@@ -34,25 +35,41 @@ public struct AgentRetainedTurnCompactor: AgentContextCompactor {
 
 /// Bounds active Session history. A single input above `maxInputUTF8Bytes`
 /// fails immediately. Accumulated history above `maxActiveHistoryUTF8Bytes`
-/// is compacted instead of being written as an oversized journal frame.
+/// is compacted only when a host supplies a compactor; the default is to fail
+/// closed with `historyTooLarge` rather than invent a semantic summary.
 public struct AgentContextPolicy: Sendable {
     public var maxInputUTF8Bytes: Int
     public var maxActiveHistoryUTF8Bytes: Int
     public var retainedRecentTurnCount: Int
-    public var compactor: any AgentContextCompactor
+    public var compactor: (any AgentContextCompactor)?
 
     public static let `default` = AgentContextPolicy(
         maxInputUTF8Bytes: 8 * 1024 * 1024,
         maxActiveHistoryUTF8Bytes: 12 * 1024 * 1024,
         retainedRecentTurnCount: 6,
-        compactor: AgentRetainedTurnCompactor()
+        compactor: nil
     )
+
+    /// Opt-in lossy compaction. Dropped turns are replaced with a mechanical
+    /// summary that does not preserve tool results or resource identifiers.
+    public static func lossyRetainedTurns(
+        maxInputUTF8Bytes: Int = AgentContextPolicy.default.maxInputUTF8Bytes,
+        maxActiveHistoryUTF8Bytes: Int = AgentContextPolicy.default.maxActiveHistoryUTF8Bytes,
+        retainedRecentTurnCount: Int = AgentContextPolicy.default.retainedRecentTurnCount
+    ) -> AgentContextPolicy {
+        AgentContextPolicy(
+            maxInputUTF8Bytes: maxInputUTF8Bytes,
+            maxActiveHistoryUTF8Bytes: maxActiveHistoryUTF8Bytes,
+            retainedRecentTurnCount: retainedRecentTurnCount,
+            compactor: AgentRetainedTurnCompactor()
+        )
+    }
 
     public init(
         maxInputUTF8Bytes: Int = AgentContextPolicy.default.maxInputUTF8Bytes,
         maxActiveHistoryUTF8Bytes: Int = AgentContextPolicy.default.maxActiveHistoryUTF8Bytes,
         retainedRecentTurnCount: Int = AgentContextPolicy.default.retainedRecentTurnCount,
-        compactor: any AgentContextCompactor = AgentRetainedTurnCompactor()
+        compactor: (any AgentContextCompactor)? = nil
     ) {
         self.maxInputUTF8Bytes = maxInputUTF8Bytes
         self.maxActiveHistoryUTF8Bytes = maxActiveHistoryUTF8Bytes
@@ -94,6 +111,9 @@ enum AgentContextWindow {
         try JSONEncoder().encode(messages).count
     }
 
+    /// Synthetic note stored as a user message so restore will not strip it
+    /// with runtime system/developer configuration. This is not a real user
+    /// utterance; the prefix identifies it across providers.
     static func summaryMessage(_ summary: AgentCompactionSummary) -> ModelMessage {
         var lines = ["Conversation summary:"]
         if !summary.goal.isEmpty { lines.append("Goal: \(summary.goal)") }
