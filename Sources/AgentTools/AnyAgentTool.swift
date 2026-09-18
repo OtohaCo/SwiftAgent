@@ -87,7 +87,18 @@ package struct AnyAgentTool: Sendable {
                         return ToolResult(output: output, receipt: receipt, isIdempotentReplay: true)
                     }
                 }
-                let result = try await tool.execute(input, context: context)
+                let result: ToolResult<T.Output>
+                do {
+                    result = try await tool.execute(input, context: context)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch let error as RecoverableToolError {
+                    try context.checkActive()
+                    guard policy.effect == .readOnly, policy.recoverableErrors == .modelVisible else {
+                        throw error
+                    }
+                    return ToolResult<JSONValue>(modelVisibleError: error.payload)
+                }
                 try context.checkActive()
                 if requiresReceipt || result.receipt != nil {
                     guard let receiptExpectation else { throw ToolReceiptError.unexpectedReceipt }

@@ -54,8 +54,10 @@ package struct ToolRegistry: Sendable {
         return PreparedToolCall(call: call, policy: registration.tool.policy, resources: invocation.resources,
                                 receiptExpectation: invocation.receiptExpectation, context: context) { executionContext in
             let result = try await invocation.invoke(executionContext)
-            do { try registration.output.validate(result.output) }
-            catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidOutput(error) }
+            if !result.isModelVisibleError {
+                do { try registration.output.validate(result.output) }
+                catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidOutput(error) }
+            }
             try executionContext.checkActive()
             if !result.evidence.isEmpty {
                 guard let ledger = executionContext.evidenceLedger else { throw ToolInvocationError.evidenceUnavailable }

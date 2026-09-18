@@ -6,6 +6,29 @@ import Testing
 @testable import AgentProviders
 
 struct AnthropicProviderTests {
+    @Test func recoverableToolResultEncodesIsErrorTrue() throws {
+        let call = ToolCall(id: .init(rawValue: "toolu-error"), name: "search_resource",
+                            argumentsJSON: #"{"query":"missing"}"#, completeness: .complete)
+        let payload = JSONValue.object(["code": .string("not_found"), "message": .string("No result was found.")])
+        let request = ModelRequest(
+            model: .init(provider: "anthropic", name: "fixture"),
+            messages: [
+                .user([.text("Find it")]),
+                .assistant(content: [], toolCalls: [call]),
+                .tool(.init(callID: call.id, content: [.json(payload)], isError: true)),
+            ]
+        )
+        guard case .object(let body) = try AnthropicRequestEncoder.encode(
+            request, maximumOutputTokens: 1_024, thinking: .disabled
+        ), case .array(let messages) = body["messages"], case .object(let last) = messages.last,
+              case .array(let content) = last["content"], case .object(let result) = content.last else {
+            Issue.record("Missing Anthropic tool result")
+            return
+        }
+        #expect(result["is_error"] == .bool(true))
+        #expect(result["tool_use_id"] == .string(call.id.rawValue))
+    }
+
     @Test func completedBatchKeepsSnapshotAndGroupsOrderedToolResults() async throws {
         let second = String(decoding: providerSSE([
             #"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu-2","name":"calculator","input":{"a":5,"b":7}}}"#,

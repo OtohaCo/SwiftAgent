@@ -4,6 +4,25 @@ import Testing
 @testable import AgentAppleProvider
 
 struct ApplePromptEncodingTests {
+    @Test func recoverableToolResultPreservesIsErrorTrue() throws {
+        let call = ToolCall(id: .init(rawValue: "search-error"), name: "search_resource",
+                            argumentsJSON: #"{"query":"missing"}"#, completeness: .complete)
+        let request = ModelRequest(
+            model: AppleFoundationProvider.modelID,
+            messages: [
+                .user([.text("Find it")]),
+                .assistant(content: [], toolCalls: [call]),
+                .tool(.init(callID: call.id, content: [.json(.object([
+                    "code": .string("not_found"), "message": .string("No result was found."),
+                ]))], isError: true)),
+            ]
+        )
+        let encoded = try JSONSerialization.jsonObject(with: ApplePromptEncoding.encode(request)) as? [String: Any]
+        let messages = try #require(encoded?["messages"] as? [[String: Any]])
+        #expect(messages.last?["isError"] as? Bool == true)
+        #expect(messages.last?["callID"] as? String == call.id.rawValue)
+    }
+
     @Test func syntheticSummaryStaysAUserRowBetweenConversationTurns() throws {
         let search = ToolCall(
             id: .init(rawValue: "search-1"),

@@ -25,6 +25,28 @@ Every complete tool call still passes:
 Failing any step fails the call. Completeness on the wire only means the
 transport finished the call payload.
 
+## Model-visible tool failure is not a runtime failure
+
+A read-only tool may opt into `ToolPolicy.RecoverableErrors.modelVisible` and
+throw an explicit `RecoverableToolError`. Only that three-part combination is
+converted into a structured model-facing tool result:
+
+```json
+{"code":"not_found","message":"No matching resource was found."}
+```
+
+The result has `isError == true`, uses the current tool call ID, enters the
+canonical conversation, and consumes the normal tool-call and model-turn
+budgets. The author controls every model-visible field; Core never stringifies
+an arbitrary underlying error.
+
+This channel is not available to mutation tools. It also does not catch input
+or output schema errors, unknown tools, authorization, Evidence, receipts,
+journal persistence, reconciliation, cancellation, deadlines, or ordinary
+Swift errors. Those remain runtime failures. A recoverable error publishes no
+Evidence and carries no Receipt, so text in its payload cannot establish a
+trusted observation or claim a side effect.
+
 ## Mutation is not success until receipt
 
 Executor return is not settlement. A mutation is successful only after

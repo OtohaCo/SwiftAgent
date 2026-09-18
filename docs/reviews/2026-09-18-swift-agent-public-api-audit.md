@@ -3,7 +3,8 @@
 last-verified: 2026-09-18
 status: Approved for 1.0 freeze (this branch)
 
-This inventory is the SAI-026 freeze record, updated by SAI-026B hardening.
+This inventory is the SAI-026 freeze record, updated by SAI-026B hardening and
+the SAI-039 recoverable read-only tool failure contract.
 Symbols stay public only when a third-party SDK user needs them. Host tests
 in another package are not a sufficient reason to keep a type public.
 
@@ -14,7 +15,7 @@ surface even though it ships in this package.
 
 | Decision | Core SDK types | Notes |
 | --- | --- | --- |
-| KEEP | 84 | Includes data contracts, errors, journal storage, and host-facing recovery |
+| KEEP | 86 | Includes data contracts, errors, journal storage, and host-facing recovery |
 | NARROW / PACKAGE | 13 | Loop, journal writes, mutation admission, schema validator, durability enum, tool runtime erase/registry/prepared call |
 | RENAME | 0 | Cosmetic renames deferred; `AgentLoopResult` stays the run result type |
 | REMOVE | 1 | Flattened `Agent` initializer that duplicated `AgentConfiguration` |
@@ -85,7 +86,8 @@ Input/Output. Internal runtime erasure still uses JSONValue.
 | ToolInvocationError | public | KEEP | Typed invocation failures | No |
 | Evidence* / EvidenceLedger / EvidenceError | public | KEEP | Hosts and tools record/validate observations. Ledger stays public because hosts may unit-test evidence without a Session | No |
 | ToolContext | public | KEEP | Session/run/call identity for tools | No |
-| ToolPolicy / ToolPolicyError | public | KEEP | Factories added; designated init remains | No |
+| ToolPolicy / ToolPolicyError | public | KEEP | Recoverable read errors are explicit and default fail-closed | Additive members; error enum expansion is source-breaking |
+| RecoverableToolError / RecoverableToolErrorValidationError | public | KEEP | Tool authors explicitly construct the only business failure Core may expose to the model | Additive types; validation enum requires switch handling when used |
 | ToolReceipt* / ToolReceiptValidator / ToolReceiptError | public | KEEP | Mutation confirmation | No |
 | ToolRegistry / PreparedToolCall | package | PACKAGE | Registry and prepared invocation are runtime seams | Yes |
 | ToolRegistryError | public | KEEP | Appears on `AgentFailure.toolRegistry` | No |
@@ -278,6 +280,7 @@ These belong in 1.0-pre. Exhaustive switches must update:
 2. `AgentJournalRecovery.corruptTail` and `AgentJournalError.repairRequired`.
    Hosts inspect the valid prefix, then call `discardCorruptTail()` before
    another durable write.
+
 3. `AgentMutationPersistenceError` and `AgentFailure.mutationPersistence`.
 4. `AgentContextPolicy`, `AgentContextCompactor`, `AgentRetainedTurnCompactor`,
    `AgentContextError`, and `AgentFailure.context`.
@@ -287,6 +290,22 @@ Do not treat checkpoint `system` messages as active runtime configuration.
 Restore always applies the current Agent instructions. Physical journal
 rollover is internal and automatic after safe checkpoints; it adds no public
 Journal mutation API.
+
+## SAI-039 additive freeze
+
+`RecoverableToolError` is a new public, `Sendable`, `Equatable` error with a
+stable non-empty `code`, non-empty model-visible `message`, and optional
+`JSONValue` details. `ToolPolicy.RecoverableErrors` and the
+`recoverableErrors` policy field are additive; their default is `.failClosed`,
+including when decoding a policy written before SAI-039.
+
+Only `.readOnly` plus `.modelVisible` plus a thrown `RecoverableToolError`
+creates an `isError == true` model result. Mutation policies reject that opt-in
+with the new `ToolPolicyError.mutationCannotExposeRecoverableErrors` case.
+Adding that public enum case is source-breaking for exhaustive switches. The
+default behavior of existing source remains fail-closed, so this is not a
+behavior break for existing tools. No journal schema or provider capability
+changes were made.
 
 ## SAI-043 additive freeze
 

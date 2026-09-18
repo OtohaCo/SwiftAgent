@@ -74,17 +74,32 @@ struct SearchTool: AgentTool {
 
     init(search: @escaping @Sendable (String) async throws -> [String]) throws {
         self.search = search
-        policy = try .readOnly(authorization: .notRequired)
+        policy = try .readOnly(
+            authorization: .notRequired,
+            recoverableErrors: .modelVisible
+        )
     }
 
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
-        ToolResult(output: Output(results: try await search(input.query)))
+        let results = try await search(input.query)
+        guard !results.isEmpty else {
+            throw try RecoverableToolError(
+                code: "not_found",
+                message: "No result was found."
+            )
+        }
+        return ToolResult(output: Output(results: results))
     }
 }
 ```
 
 The runtime erases JSON for the model. Tool code decodes `Input` and returns
-`Output`. Do not build argument dictionaries by hand.
+`Output`. Do not build argument dictionaries by hand. Both the read-only policy
+opt-in and `RecoverableToolError` are required. The
+runtime sends a structured `ToolResultMessage` with `isError == true`, then
+continues the model loop. Ordinary errors, malformed calls, authorization or
+Evidence failures, cancellation, deadlines, mutations, receipts, and journal
+failures remain fail-closed.
 
 ### 3. Mutation Tool
 

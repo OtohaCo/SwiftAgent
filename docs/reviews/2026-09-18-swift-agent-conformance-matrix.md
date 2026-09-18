@@ -106,15 +106,17 @@ Decision: **Host responsibility for 1.0.** Hosts `wait()` then `session.run`. A 
 
 ## F. Recoverable tool errors
 
-Pi can show the model a tool error and continue. SwiftAgent currently hardcodes `isError: false` on successful tool messages and fail-closes executor errors.
+SwiftAgent now provides an explicit read-only channel matching the applicable Pi continuation behavior. The tool policy and the thrown error must both opt in; every other failure remains fail-closed.
 
 | Scenario | Pi coverage | SwiftAgent coverage | Existing test | Gap | Applicable | Severity | Action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Declared read-only recoverable error | tool_execution_end isError | No channel | fail-closed executor tests | SAI-039 | Yes | P2 | Existing backlog |
+| Declared read-only recoverable error | tool_execution_end isError | Yes | `declaredRecoverableReadOnlyErrorBecomesModelVisibleAndContinues`, restart/parallel tests | — | Yes | P2 | Covered by SAI-039 |
 | Malformed arguments / unknown tool | prepare/validate | Fail closed, no execution | `AgentLoopContractTests.malformedUnknownAndInvalidBatchMembersNeverExecuteAnyTool` | Must stay fail closed | Yes | P0 | Covered |
-| Mutation / authorization / receipt / journal | — | Fail closed | `AgentLoopFailureTests.authorizationMutationAndInvalidOutputStayFailClosed` | Must stay fail closed | Yes | P0 | Covered |
+| Mutation / authorization / Evidence / receipt / journal | — | Fail closed | `AgentRecoverableToolErrorTests`, mutation recovery and loop failure suites | — | Yes | P0 | Covered |
 
-SAI-039 is updated with these rows. This task does not implement the channel.
+The model-visible envelope is runtime-defined (`code`, `message`, optional
+`details`), carries no Receipt or Evidence, and is encoded by Anthropic and the
+Apple prompt adapter with `isError == true`.
 
 ---
 
@@ -303,7 +305,7 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 | C Steering | Covered (compact+steer → SAI-042) |
 | D Follow-up queue | Gap → SAI-045 |
 | E Tool execution | Covered |
-| F Recoverable errors | Fail-closed Covered; channel → SAI-039 |
+| F Recoverable errors | Covered (SAI-039) |
 | G Cancellation | Covered |
 | H Timeout | Covered |
 | I Terminal events | Covered (Session onFailed path → SAI-042) |
@@ -329,12 +331,11 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 
 ## Pi has, SwiftAgent does not (applicable)
 
-1. Model-visible recoverable tool error channel — SAI-039.
-2. First-class follow-up queue while a Run is in progress — SAI-045.
-3. Semantic compaction that preserves dropped tool results — **rejected**. Default is fail-closed (`historyTooLarge`). Lossy opt-in is explicit.
-4. Multi-cloud provider catalog (OpenAI Responses, Gemini, Bedrock, …) — N/A until a Host adapter exists.
-5. Tool `terminate` / beforeToolCall hooks — Host wrapper, not Core.
-6. Async subscriber `waitForIdle` — SwiftAgent `wait()`/`waitForDrain()` is the contract.
+1. First-class follow-up queue while a Run is in progress — SAI-045.
+2. Semantic compaction that preserves dropped tool results — **rejected**. Default is fail-closed (`historyTooLarge`). Lossy opt-in is explicit.
+3. Multi-cloud provider catalog (OpenAI Responses, Gemini, Bedrock, …) — N/A until a Host adapter exists.
+4. Tool `terminate` / beforeToolCall hooks — Host wrapper, not Core.
+5. Async subscriber `waitForIdle` — SwiftAgent `wait()`/`waitForDrain()` is the contract.
 
 ## SwiftAgent has, Pi does not (same guarantee)
 

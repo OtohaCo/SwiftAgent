@@ -207,6 +207,39 @@ struct ProviderFallbackTests {
         #expect(await journal.pendingMutations().isEmpty)
     }
 
+    @Test func recoverableReadOnlyFailureContinuesOnTheCurrentProviderRoute() async throws {
+        let primaryProbe = RouteProviderProbe()
+        let fallbackProbe = RouteProviderProbe()
+        let call = ToolCall(id: .init(rawValue: "missing-resource"), name: RouteRecoverableTool.name,
+                            argumentsJSON: "{}", completeness: .complete)
+        let primary = RouteFixtureProvider(probe: primaryProbe) { request, turn, emit in
+            if turn == 1 {
+                try emitContents(toolEvents(request, [call]), emit: emit)
+                return
+            }
+            let result = request.messages.compactMap { message -> ToolResultMessage? in
+                if case .tool(let value) = message { return value }
+                return nil
+            }.last
+            #expect(result?.callID == call.id)
+            #expect(result?.isError == true)
+            try emitContents(textEvents(request, "Try another source"), emit: emit)
+        }
+        let fallback = RouteFixtureProvider(probe: fallbackProbe) { request, _, emit in
+            try emitContents(textEvents(request, "must not run"), emit: emit)
+        }
+        let route = try ModelProviderRoute(id: "fixture", candidates: [primary, fallback],
+                                           policy: .init(maxAttempts: 2))
+        let agent = try Agent(model: .init(provider: "fixture", name: "test"), provider: route,
+                              tools: [try RouteRecoverableTool()])
+
+        let result = try await agent.makeSession().run("Find it").wait()
+
+        #expect(result.outcome == .completed)
+        #expect(await primaryProbe.requests.count == 2)
+        #expect(await fallbackProbe.requests.isEmpty)
+    }
+
     @Test func fallbackPolicyRejectsNonTransientErrorKinds() {
         for kind in [ModelProviderError.Kind.authentication, .permissionDenied, .invalidRequest,
                      .invalidResponse, .fallbackBlocked] {
@@ -288,6 +321,25 @@ private struct RouteFixtureProvider: ModelProvider {
             let turn = await probe.record(request)
             try await produce(request, turn, emit)
         }
+    }
+}
+
+private struct RouteRecoverableTool: AgentTool {
+    struct Input: Codable, Sendable {}
+    typealias Output = String
+
+    static let name = "route_recoverable"
+    static let description = "Return a model-visible read failure"
+    static let inputSchema = ToolSchema.object(properties: [:])
+    static let outputSchema = ToolSchema.string
+    let policy: ToolPolicy
+
+    init() throws {
+        policy = try .readOnly(authorization: .notRequired, recoverableErrors: .modelVisible)
+    }
+
+    func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<String> {
+        throw try RecoverableToolError(code: "not_found", message: "No result was found.")
     }
 }
 

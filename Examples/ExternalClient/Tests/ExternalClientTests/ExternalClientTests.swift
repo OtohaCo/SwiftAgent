@@ -66,6 +66,22 @@ struct ExternalClientTests {
         #expect(probe.toolExecutions == 1)
         #expect(retry.receipts.first?.receipt == first.receipts.first?.receipt)
     }
+
+    @Test func publicRecoverableToolErrorSurfaceCompilesForAReadOnlyTool() throws {
+        let policy = try ToolPolicy.readOnly(
+            authorization: .notRequired,
+            recoverableErrors: .modelVisible
+        )
+        let error = try RecoverableToolError(
+            code: "not_found",
+            message: "No result was found.",
+            details: .object(["query": .string("missing")])
+        )
+
+        #expect(policy.recoverableErrors == .modelVisible)
+        #expect(error.code == "not_found")
+        #expect(error.details == .object(["query": .string("missing")]))
+    }
 }
 
 private func makeReadOnlyAgent() throws -> Agent {

@@ -65,6 +65,37 @@ package struct ToolMutationAdmissionRequest: Codable, Equatable, Sendable {
 
 public enum ToolAuthorization: Sendable { case allowed, denied }
 
+/// A business-domain failure that a read-only tool may explicitly expose to
+/// the model when its policy opts into recoverable errors.
+public struct RecoverableToolError: Error, Equatable, Sendable {
+    public let code: String
+    public let message: String
+    public let details: JSONValue?
+
+    public init(code: String, message: String, details: JSONValue? = nil) throws {
+        guard !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw RecoverableToolErrorValidationError.emptyCode
+        }
+        guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw RecoverableToolErrorValidationError.emptyMessage
+        }
+        self.code = code
+        self.message = message
+        self.details = details
+    }
+
+    package var payload: JSONValue {
+        var fields: [String: JSONValue] = ["code": .string(code), "message": .string(message)]
+        if let details { fields["details"] = details }
+        return .object(fields)
+    }
+}
+
+public enum RecoverableToolErrorValidationError: Error, Equatable, Sendable {
+    case emptyCode
+    case emptyMessage
+}
+
 extension AgentTool {
     public func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement] { [] }
     public func resourceRequirements(for input: Input) throws -> [ToolResource] { [.global] }
@@ -78,12 +109,14 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
     public let evidence: [Evidence]
     public let receipt: ToolReceipt?
     package let isIdempotentReplay: Bool
+    package let isModelVisibleError: Bool
 
     public init(output: Output, evidence: [Evidence] = [], receipt: ToolReceipt? = nil) {
         self.output = output
         self.evidence = evidence
         self.receipt = receipt
         isIdempotentReplay = false
+        isModelVisibleError = false
     }
 
     package init(output: Output, evidence: [Evidence] = [], receipt: ToolReceipt?, isIdempotentReplay: Bool) {
@@ -91,5 +124,14 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
         self.evidence = evidence
         self.receipt = receipt
         self.isIdempotentReplay = isIdempotentReplay
+        isModelVisibleError = false
+    }
+
+    package init(modelVisibleError output: Output) {
+        self.output = output
+        evidence = []
+        receipt = nil
+        isIdempotentReplay = false
+        isModelVisibleError = true
     }
 }

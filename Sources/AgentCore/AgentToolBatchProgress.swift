@@ -26,7 +26,11 @@ actor AgentToolBatchProgress {
         var reserved = false
         do {
             try budget.checkActive()
-            let message = ToolResultMessage(callID: call.call.id, content: [.json(result.output)], isError: false)
+            let message = ToolResultMessage(
+                callID: call.call.id,
+                content: [.json(result.output)],
+                isError: result.isModelVisibleError
+            )
             try await emitter?.reserveCompletion(call.call.id)
             reserved = true
             var proposed = results

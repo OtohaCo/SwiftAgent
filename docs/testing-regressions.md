@@ -22,6 +22,8 @@ long-term map so a later bug does not require moving files.
 | Settled mutation retry must reuse the original receipt and schema-valid output without executing again | `settledRetryReturnsExistingReceiptWithoutExecutingAgain`, `settledRetryWorksAfterSessionRestart`, `journalCompactionPreservesSettledReplayIdentity`, `legacySettlementWithoutDurableOutputFailsClosed` | `Tests/AgentCoreTests/AgentMutationIdempotencyTests.swift` |
 | Concurrent duplicate mutation admission must execute only one side effect | `concurrentDuplicateAdmissionExecutesOnce` | `Tests/AgentCoreTests/AgentMutationIdempotencyTests.swift` |
 | Provider fallback must not replay a previously settled mutation | `fallbackProviderReplaysSettledMutationWithoutExecutingAgain` | `Tests/AgentProvidersTests/ProviderFallbackTests.swift` |
+| Declared read-only recoverable failure must continue the model loop with a canonical error result | `declaredRecoverableReadOnlyErrorBecomesModelVisibleAndContinues`, `crossRunAndRestartPreserveRecoverableTranscript` | `Tests/AgentCoreTests/AgentRecoverableToolErrorTests.swift` |
+| Mutation, authorization, Evidence, malformed calls, and undeclared errors must never enter the recoverable channel | `mutationCannotOptIntoModelVisibleErrors`, `authorizationFailureStaysFailClosed`, `recoverablePayloadCannotMintEvidence`, `malformedArgumentsAndUnknownToolsStayFailClosed`, `recoverableErrorWithoutPolicyOptInStillFailsTheRun` | `Tests/AgentCoreTests/AgentRecoverableToolErrorTests.swift` |
 
 When a new production bug lands, add a row here and a focused test next to the
 domain tests. Prefer a precise name over a `Regressions/` directory move.
