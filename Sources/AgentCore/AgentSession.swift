@@ -38,7 +38,7 @@ public actor AgentSession {
 
     /// Starts one Run. Empty input, an already-active Run, a cancelled caller
     /// and an expired budget do not append history. Mutation tools require a
-    /// journal supplied at Session creation.
+    /// durable journal supplied at Session creation.
     public func run(
         _ text: String,
         budget: AgentBudget? = nil,
@@ -94,7 +94,12 @@ public actor AgentSession {
             }
             var lifecycleEvents: [AgentJournalEvent] = hasSessionRecord ? [] : [.sessionCreated]
             lifecycleEvents.append(.userMessage(text))
-            try await journal.appendCheckpoint(lifecycleEvents, sessionID: id, runID: runID, durability: .durable)
+            try await journal.appendCheckpoint(
+                lifecycleEvents,
+                sessionID: id,
+                runID: runID,
+                durability: journal.storage == .durable ? .durable : .memory
+            )
         }
         let control = AgentRunControl()
         let channel = AsyncStream<AgentEvent>.makeStream()
@@ -164,8 +169,12 @@ public actor AgentSession {
         try budget.checkActive()
         guard activeRunID == runID else { throw CancellationError() }
         if let journal {
-            try await journal.append(.checkpoint(history: messages, steeringIDs: steering.map(\.id)),
-                                     sessionID: id, runID: runID, durability: .durable)
+            try await journal.append(
+                .checkpoint(history: messages, steeringIDs: steering.map(\.id)),
+                sessionID: id,
+                runID: runID,
+                durability: journal.storage == .durable ? .durable : .memory
+            )
         }
         history = messages
         appliedSteeringIDs.formUnion(steering.map(\.id))

@@ -1,7 +1,7 @@
 import AgentModels
 import Foundation
 
-public struct ToolRegistry: Sendable {
+package struct ToolRegistry: Sendable {
     private struct Registration: Sendable {
         let tool: AnyAgentTool
         let input: ToolSchemaValidator
@@ -9,7 +9,7 @@ public struct ToolRegistry: Sendable {
     }
     private let tools: [String: Registration]
 
-    public init(tools: [AnyAgentTool]) throws {
+    package init(tools: [AnyAgentTool]) throws {
         var registered: [String: Registration] = [:]
         for tool in tools {
             guard registered[tool.definition.name] == nil else {
@@ -29,11 +29,11 @@ public struct ToolRegistry: Sendable {
         self.tools = registered
     }
 
-    public var definitions: [ModelToolDefinition] {
+    package var definitions: [ModelToolDefinition] {
         tools.values.map(\.tool.definition).sorted { $0.name < $1.name }
     }
 
-    public func prepare(_ call: ToolCall, context: ToolContext) throws -> PreparedToolCall {
+    package func prepare(_ call: ToolCall, context: ToolContext) throws -> PreparedToolCall {
         try context.checkActive()
         guard call.completeness == .complete else { throw ToolRegistryError.truncatedCall }
         guard let registration = tools[call.name],
@@ -68,10 +68,10 @@ public struct ToolRegistry: Sendable {
     }
 }
 
-public struct PreparedToolCall: Sendable {
-    public let call: ToolCall
-    public let policy: ToolPolicy
-    public let resources: [ToolResource]
+package struct PreparedToolCall: Sendable {
+    package let call: ToolCall
+    package let policy: ToolPolicy
+    package let resources: [ToolResource]
     package var contextSessionID: UUID { context.sessionID }
     package var contextRunID: UUID { context.runID }
     package let receiptExpectation: ToolReceiptExpectation?

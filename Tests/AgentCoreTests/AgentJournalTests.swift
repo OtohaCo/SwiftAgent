@@ -56,6 +56,7 @@ final class AgentJournalTests: XCTestCase {
 
     func testRoundTripPreservesTypedRecordsAndCheckpointBoundaries() async throws {
         let journal = AgentJournal()
+        XCTAssertEqual(journal.storage, .memory)
         let sessionID = UUID()
         let runID = UUID()
         _ = try await journal.append(.sessionCreated, sessionID: sessionID)
@@ -72,7 +73,9 @@ final class AgentJournalTests: XCTestCase {
         let url = temporaryURL()
         defer { try? FileManager.default.removeItem(at: url); try? FileManager.default.removeItem(atPath: url.path + ".lock") }
         try await journal.persist(to: url)
+        XCTAssertEqual(journal.storage, .durable)
         let restored = try AgentJournal.load(from: url)
+        XCTAssertEqual(restored.storage, .durable)
         let restoredRecords = await restored.snapshot()
         let originalRecords = await journal.snapshot()
         let restoredRecovery = await restored.recovery

@@ -1,11 +1,11 @@
 import AgentModels
 import Foundation
 
-/// Heterogeneous tool registration. The invocation bridge is package-only;
-/// model-call validation and scheduling belong to the registry and runtime.
-public struct AnyAgentTool: Sendable {
-    public let definition: ModelToolDefinition
-    public let policy: ToolPolicy
+/// Heterogeneous tool registration used by the runtime. Hosts pass
+/// `[any AgentTool]` to `Agent`; they do not type-erase tools themselves.
+package struct AnyAgentTool: Sendable {
+    package let definition: ModelToolDefinition
+    package let policy: ToolPolicy
     package typealias Invocation = @Sendable (ToolContext) async throws -> ToolResult<JSONValue>
     package struct PreparedInvocation: Sendable {
         let resources: [ToolResource]
@@ -14,7 +14,7 @@ public struct AnyAgentTool: Sendable {
     }
     private let decode: @Sendable (JSONValue) throws -> PreparedInvocation
 
-    public init<T: AgentTool>(_ tool: T) throws {
+    package init<T: AgentTool>(_ tool: T) throws {
         guard !T.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ToolInvocationError.invalidDefinition
         }

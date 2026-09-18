@@ -19,11 +19,21 @@ struct AnthropicLiveTests {
         let provider = try AnthropicProvider(apiKey: key, endpoint: endpoint, maximumOutputTokens: 2_048,
                                              thinking: thinking ? .enabled(budgetTokens: 1_024) : .disabled)
         let execution = ProviderExecutionProbe()
-        let agent = try Agent(model: .init(provider: "anthropic", name: model), provider: provider,
-                              tools: [ProviderCalculator(probe: execution)],
-                              instructions: "Use calculator exactly once for arithmetic. Do not compute the answer yourself. After its tool result, return the sum using the requested JSON schema.",
-                              structuredOutput: .init(name: "sum", schema: ToolSchema.object(properties: ["sum": .integer], required: ["sum"]).json),
-                              maxModelTurns: 3, maxToolCalls: 1, runTimeout: .seconds(90))
+        let agent = try Agent(
+            model: .init(provider: "anthropic", name: model),
+            provider: provider,
+            tools: [ProviderCalculator(probe: execution)],
+            configuration: AgentConfiguration(
+                instructions: "Use calculator exactly once for arithmetic. Do not compute the answer yourself. After its tool result, return the sum using the requested JSON schema.",
+                structuredOutput: .init(
+                    name: "sum",
+                    schema: ToolSchema.object(properties: ["sum": .integer], required: ["sum"]).json
+                ),
+                maxModelTurns: 3,
+                maxToolCalls: 1,
+                runTimeout: .seconds(90)
+            )
+        )
         let run = try await agent.makeSession().run("Use calculator to add 2 and 3, then report its sum.")
         var phases: [String] = []
         var signedStates = 0

@@ -66,8 +66,12 @@ struct ProviderFallbackTests {
         let url = temporaryJournalURL()
         defer { cleanupJournal(url) }
         let journal = try AgentJournal(persistenceURL: url)
-        let agent = try Agent(model: .init(provider: "fixture", name: "test"), provider: route,
-                              tools: [try RouteMutationTool()], runTimeout: .seconds(2))
+        let agent = try Agent(
+            model: .init(provider: "fixture", name: "test"),
+            provider: route,
+            tools: [try RouteMutationTool()],
+            configuration: AgentConfiguration(runTimeout: .seconds(2))
+        )
         let session = try agent.makeSession(journal: journal)
         let run = try await session.run("Update the listing")
 

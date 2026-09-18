@@ -118,7 +118,12 @@ struct AgentIsolationTests {
             await providerProbe.record("B")
             return textResponse(request, "Done")
         }
-        let agent = try Agent(model: fixtureModel, provider: provider, tools: [tool], scheduler: scheduler)
+        let agent = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            tools: [tool],
+            configuration: AgentConfiguration(scheduler: scheduler)
+        )
         let session = try agent.makeSession()
         let first = try await session.run("A")
 
@@ -158,7 +163,12 @@ private func isolationAgent(
         return toolResponse(request, [.init(id: .init(rawValue: label), name: LeaseProbe.name,
                                            argumentsJSON: "{\"label\":\"\(label)\",\"resource\":\"\(resource)\"}", completeness: .complete)])
     }
-    return try Agent(model: fixtureModel, provider: provider, tools: [tool], scheduler: scheduler)
+    return try Agent(
+        model: fixtureModel,
+        provider: provider,
+        tools: [tool],
+        configuration: AgentConfiguration(scheduler: scheduler)
+    )
 }
 
 private actor IsolationProbe {

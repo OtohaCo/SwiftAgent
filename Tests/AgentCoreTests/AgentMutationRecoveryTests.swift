@@ -50,6 +50,30 @@ final class AgentMutationRecoveryTests: XCTestCase {
         XCTAssertEqual(executionCount, 0)
     }
 
+    func testMutationWithMemoryJournalFailsClosedBeforeExecutor() async throws {
+        let probe = MutationProbe()
+        let tool = try MutationTool(probe: probe)
+        let call = mutationCall()
+        let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
+        let agent = try Agent(model: fixtureModel, provider: provider, tools: [tool])
+        let journal = AgentJournal()
+        XCTAssertEqual(journal.storage, .memory)
+        do {
+            _ = try agent.makeSession(journal: journal)
+            XCTFail("Memory journals must not open a mutation Session")
+        } catch {
+            XCTAssertEqual(error as? AgentSessionError, .durableJournalRequired)
+        }
+        let executionCount = await probe.count
+        XCTAssertEqual(executionCount, 0)
+        let snapshot = await journal.snapshot()
+        XCTAssertTrue(snapshot.isEmpty)
+        let pending = await journal.pendingMutations()
+        XCTAssertTrue(pending.isEmpty)
+        let modelRequests = await provider.log.requests
+        XCTAssertEqual(modelRequests.count, 0)
+    }
+
     func testPersistenceFailurePreventsMutationExecutor() async throws {
         let blocker = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         XCTAssertTrue(FileManager.default.createFile(atPath: blocker.path, contents: Data()))
@@ -424,7 +448,12 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let tool = try BlockingMutationTool(gate: gate, entered: entered, timeout: .milliseconds(50))
         let call = blockingMutationCall()
         let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
-        let agent = try Agent(model: fixtureModel, provider: provider, tools: [tool], runTimeout: .seconds(2))
+        let agent = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            tools: [tool],
+            configuration: AgentConfiguration(runTimeout: .seconds(2))
+        )
         let run = try await agent.makeSession(journal: journal).run("Change the listing")
 
         let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 1)

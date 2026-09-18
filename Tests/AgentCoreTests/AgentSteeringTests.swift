@@ -55,7 +55,11 @@ struct AgentSteeringTests {
         let gate = ManualGate()
         let entered = XCTestExpectation(description: "Model entered")
         let provider = ScriptedProvider { request, _ in entered.fulfill(); await gate.wait(); return textResponse(request, "Stale") }
-        let session = try Agent(model: fixtureModel, provider: provider, maxModelTurns: 1).makeSession()
+        let session = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            configuration: AgentConfiguration(maxModelTurns: 1)
+        ).makeSession()
         let run = try await session.run("original")
         #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
         let a = try await run.steer("one"), b = try await run.steer("two")

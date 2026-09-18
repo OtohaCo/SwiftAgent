@@ -17,8 +17,15 @@ struct AppleNativeLiveTests {
             }
             let log = CalculatorLog()
             let provider = try AppleFoundationProvider(maximumResponseTokens: 1)
-            let agent = try Agent(model: AppleFoundationProvider.modelID, provider: provider, tools: [LiveCalculator(log: log)],
-                                  instructions: "Use calculator for arithmetic. Never invent the result.", runTimeout: .seconds(30))
+            let agent = try Agent(
+                model: AppleFoundationProvider.modelID,
+                provider: provider,
+                tools: [LiveCalculator(log: log)],
+                configuration: AgentConfiguration(
+                    instructions: "Use calculator for arithmetic. Never invent the result.",
+                    runTimeout: .seconds(30)
+                )
+            )
             let run = try await agent.makeSession().run("Use calculator to add 19 and 23.")
             var completed = 0
             for await event in run.events {
@@ -44,10 +51,17 @@ struct AppleNativeLiveTests {
             }
             let log = CalculatorLog()
             let provider = try AppleFoundationProvider(maximumResponseTokens: 1_024)
-            let agent = try Agent(model: AppleFoundationProvider.modelID, provider: provider,
-                                  tools: [LiveCalculator(log: log)],
-                                  instructions: "Always use calculator exactly once for arithmetic. Never calculate yourself. After receiving its result, answer with that number and do not call it again.",
-                                  maxModelTurns: 3, maxToolCalls: 1, runTimeout: .seconds(90))
+            let agent = try Agent(
+                model: AppleFoundationProvider.modelID,
+                provider: provider,
+                tools: [LiveCalculator(log: log)],
+                configuration: AgentConfiguration(
+                    instructions: "Always use calculator exactly once for arithmetic. Never calculate yourself. After receiving its result, answer with that number and do not call it again.",
+                    maxModelTurns: 3,
+                    maxToolCalls: 1,
+                    runTimeout: .seconds(90)
+                )
+            )
             let run = try await agent.makeSession().run("Use calculator to add 19 and 23, then tell me the result.")
             var phases: [String] = []
             for await event in run.events {

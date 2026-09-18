@@ -198,13 +198,47 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     }
 }
 
+/// Whether a journal can guarantee mutation durability across process death.
+///
+/// This is a capability, not a file-path check. A future database, remote, or
+/// encrypted journal should advertise `.durable` when it can survive a crash
+/// without losing an admitted mutation intent.
+public enum AgentJournalStorage: Sendable, Equatable {
+    /// In-process only. Sufficient for read-only sessions.
+    case memory
+    /// Survives process death. Required before a mutation Session can be created.
+    case durable
+}
+
+private final class AgentJournalStorageBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: AgentJournalStorage
+
+    init(_ value: AgentJournalStorage) {
+        self.value = value
+    }
+
+    var current: AgentJournalStorage {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            value = newValue
+        }
+    }
+}
+
 /// Durable typed lifecycle log. Mutation success is settlement from a trusted
 /// receipt, never an executor that merely returned. Hosts inspect pending
 /// work, recover after a crash, reconcile or abort. They cannot append a
 /// settlement event directly.
 ///
-/// Read-only Agents may omit a journal. Mutation tools require one at
-/// Session creation. Crash recovery needs `init(persistenceURL:)`.
+/// Read-only Agents may omit a journal or use `.memory` storage. Mutation
+/// tools require `.durable` storage at Session creation.
 public actor AgentJournal {
     private struct JournalFrame: Codable {
         let schemaVersion: Int
@@ -227,6 +261,11 @@ public actor AgentJournal {
     private var persistenceURL: URL?
     private var recoveryState: AgentJournalRecovery
     private var sessionLeases: [UUID: FileHandle]
+    private nonisolated let storageBox: AgentJournalStorageBox
+
+    /// Advertised durability guarantee. `persist(to:)` upgrades `.memory` to
+    /// `.durable` after a successful snapshot bind.
+    public nonisolated var storage: AgentJournalStorage { storageBox.current }
 
     private struct MutationKey: Hashable {
         let sessionID: UUID
@@ -250,6 +289,7 @@ public actor AgentJournal {
         recoveryState = .clean
         sessionLeases = [:]
         mutationRecords = [:]
+        storageBox = AgentJournalStorageBox(.memory)
     }
 
     /// Opens an existing journal or prepares a new journal at the supplied URL.
@@ -261,6 +301,7 @@ public actor AgentJournal {
         recoveryState = loaded.recovery
         sessionLeases = [:]
         mutationRecords = try Self.buildMutationRecords(from: loaded.records)
+        storageBox = AgentJournalStorageBox(.durable)
     }
 
     public static func load(from url: URL) throws -> AgentJournal {
@@ -722,6 +763,7 @@ public actor AgentJournal {
         }
         persistenceURL = url
         recoveryState = .clean
+        storageBox.current = .durable
     }
 
     private func commit(_ committed: [AgentJournalRecord], durability: AgentJournalDurability) throws {

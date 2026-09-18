@@ -35,8 +35,8 @@ public struct AgentConfiguration: Sendable {
 /// it never owns conversation history or an in-flight Run.
 ///
 /// Replace `provider` without changing tools. When any registered tool is a
-/// mutation, every Session must receive a journal; in-memory journals are
-/// allowed only for read-only Agents.
+/// mutation, every Session must receive a journal whose `storage` is
+/// `.durable`. Read-only Agents may omit a journal or use memory storage.
 public struct Agent: Sendable {
     private let loop: AgentLoop
     private let configuration: AgentConfiguration
@@ -64,31 +64,26 @@ public struct Agent: Sendable {
         requiresDurableJournal = tools.contains { $0.policy.effect == .mutation }
     }
 
+    /// Convenience for the common instructions-only case. Limits, structured
+    /// output, and the shared scheduler belong on `AgentConfiguration`.
     public init(
-        model: ModelID, provider: any ModelProvider, tools: [any AgentTool] = [], instructions: String = "",
-        structuredOutput: StructuredOutputSchema? = nil,
-        maxModelTurns: Int = 8, maxToolCalls: Int = 16, runTimeout: Duration = .seconds(30),
-        scheduler: ToolScheduler = .init()
+        model: ModelID,
+        provider: any ModelProvider,
+        tools: [any AgentTool] = [],
+        instructions: String
     ) throws {
         try self.init(
             model: model,
             provider: provider,
             tools: tools,
-            configuration: AgentConfiguration(
-                instructions: instructions,
-                structuredOutput: structuredOutput,
-                maxModelTurns: maxModelTurns,
-                maxToolCalls: maxToolCalls,
-                runTimeout: runTimeout,
-                scheduler: scheduler
-            )
+            configuration: AgentConfiguration(instructions: instructions)
         )
     }
 
-    /// Creates an isolated Session. Mutation tools require a journal; omitting it
-    /// fails here instead of during tool execution.
+    /// Creates an isolated Session. Mutation tools require a durable journal;
+    /// `nil` and memory-only journals fail here instead of during execution.
     public func makeSession(id: UUID = UUID(), journal: AgentJournal? = nil) throws -> AgentSession {
-        if requiresDurableJournal, journal == nil {
+        if requiresDurableJournal, journal?.storage != .durable {
             throw AgentSessionError.durableJournalRequired
         }
         return AgentSession(

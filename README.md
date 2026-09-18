@@ -43,7 +43,8 @@ for await event in run.events {
 _ = try await run.wait()
 ```
 
-Read-only Agents may omit a journal. Mutation tools cannot.
+Read-only Agents may omit a journal. Mutation tools cannot. A memory-only
+`AgentJournal()` also fails for mutation Agents at `makeSession`.
 
 ### 2. Typed Tool
 

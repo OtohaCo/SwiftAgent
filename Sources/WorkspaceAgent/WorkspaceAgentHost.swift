@@ -33,8 +33,7 @@ public struct WorkspaceAgentHost: Sendable {
             model: model,
             provider: provider,
             tools: tools ?? Self.makeTools(store: store),
-            instructions: instructions,
-            scheduler: scheduler
+            configuration: AgentConfiguration(instructions: instructions, scheduler: scheduler)
         )
     }
 
