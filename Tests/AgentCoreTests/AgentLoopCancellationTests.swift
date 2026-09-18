@@ -147,16 +147,31 @@ struct AgentLoopCancellationTests {
 actor ManualGate {
     private var released = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var blockedObservers: [CheckedContinuation<Void, Never>] = []
     func wait() async {
         await withCheckedContinuation { continuation in
-            if released { continuation.resume() } else { waiters.append(continuation) }
+            if released {
+                continuation.resume()
+            } else {
+                waiters.append(continuation)
+                let observers = blockedObservers
+                blockedObservers.removeAll()
+                for observer in observers { observer.resume() }
+            }
         }
+    }
+    func waitUntilBlocked() async {
+        if released || !waiters.isEmpty { return }
+        await withCheckedContinuation { blockedObservers.append($0) }
     }
     func open() {
         released = true
         let pending = waiters
         waiters.removeAll()
+        let observers = blockedObservers
+        blockedObservers.removeAll()
         for waiter in pending { waiter.resume() }
+        for observer in observers { observer.resume() }
     }
 }
 

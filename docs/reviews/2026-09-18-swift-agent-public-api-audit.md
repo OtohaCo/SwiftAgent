@@ -3,8 +3,8 @@
 last-verified: 2026-09-18
 status: Approved for 1.0 freeze (this branch)
 
-This inventory is the SAI-026 freeze record, updated by SAI-026B hardening and
-the SAI-039 recoverable read-only tool failure contract.
+This inventory is the SAI-026 freeze record, updated by SAI-026B hardening,
+SAI-039 recoverable read-only tool failures, and the SAI-047 RC audit.
 Symbols stay public only when a third-party SDK user needs them. Host tests
 in another package are not a sufficient reason to keep a type public.
 
@@ -22,7 +22,11 @@ surface even though it ships in this package.
 | DEFER | 5 | See deferred list; none block 1.0 |
 
 Counts are types (struct/enum/protocol/actor/class), not every property. Members
-follow the type decision unless noted.
+follow the type decision unless noted. SAI-047 separately generated and
+reviewed the complete 956-symbol public member graph in
+[the member inventory](2026-09-19-swift-agent-public-api-members.md); every
+currently public member is KEEP, with NARROW/REMOVE already absent from the
+public graph.
 
 ## Breaking changes made now
 
@@ -128,7 +132,7 @@ readable and not assignable.
 | Symbol | Current | Decision | Reason | Breaking? |
 | --- | --- | --- | --- | --- |
 | AnthropicProvider / AnthropicThinking | public | KEEP | Optional cloud adapter | No |
-| ModelProviderRoute / fallback policy types | public | KEEP | Multi-provider routes | No |
+| ModelProviderRoute / fallback policy types | public | KEEP | Validated fallback among adapters sharing one provider namespace | `candidateProviderIDMismatch` is a 1.0-pre enum expansion |
 | ProviderHTTPTransport / URLSessionProviderHTTPTransport / ProviderHTTPEvent | public | KEEP | Custom transports without linking Apple | No |
 | AppleFoundationProvider | public | KEEP | Isolated in its own target because of FoundationModels | No |
 
@@ -356,3 +360,28 @@ Admission follows the latest durable state:
 Authorization and Evidence currently run before replay admission. Settled and
 aborted identities remain durable indefinitely; there is no expiry or terminal
 identity pruning in this contract.
+
+## SAI-047 RC freeze
+
+The generated symbol graphs contain 100 public top-level types across the six
+products: AgentModels 26, AgentTools 26, AgentCore 32, AgentProviders 8,
+AgentAppleProvider 1, and WorkspaceAgent 7. The audit result is KEEP 100,
+NARROW 0, REMOVE 0. WorkspaceAgent remains an optional Reference Host product;
+its seven public types are not part of the Core SDK compatibility promise.
+
+`ModelProviderRoute` is a validated fallback adapter, not a cross-provider
+model-name rewriting layer. Every candidate must use the route descriptor ID.
+The new `ModelProviderFallbackPolicyError.candidateProviderIDMismatch` case is
+an intentional pre-1.0 source break for exhaustive switches. A route buffers a
+candidate turn until terminal validation, so it no longer advertises
+`.streaming`; same-provider retries honor `ModelProviderError.retryAfter`.
+
+The throwing `RecoverableToolError` initializer is frozen for 1.0. Validation
+failure is a typed construction error rather than a precondition trap or silent
+normalization. `AgentRun.waitForDrain()` is also frozen as `async throws`:
+caller cancellation removes only that waiter and does not cancel physical drain.
+
+Journal v3 remains the write schema. SAI-047 adds no schema version. Legacy v1
+record semantics survive canonical rewrite, valid v2 session-scoped identity
+collisions load conservatively, and all new v3 admissions retain journal-wide
+identity scope.

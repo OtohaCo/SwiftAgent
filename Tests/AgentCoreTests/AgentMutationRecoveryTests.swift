@@ -673,7 +673,8 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let sessionID = UUID()
         let session = try agent.makeSession(id: sessionID, journal: journal)
         let run = try await session.run("Change the listing")
-        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 1)
+        await gate.waitUntilBlocked()
+        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 0)
         XCTAssertEqual(enteredResult, .completed)
 
         async let cancelled: Void = run.cancel()
@@ -957,7 +958,9 @@ final class AgentMutationRecoveryTests: XCTestCase {
         }
 
         await owner.releaseSessionLease(sessionID: sessionID)
-        _ = try await session.run("allowed").wait()
+        let run = try await session.run("allowed")
+        _ = try await run.wait()
+        try await run.waitForDrain()
 
         let verifier = try AgentJournal(persistenceURL: url)
         try await verifier.acquireSessionLease(sessionID: sessionID)

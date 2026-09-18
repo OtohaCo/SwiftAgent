@@ -149,6 +149,7 @@ public struct AgentJournalRecord: Codable, Equatable, Sendable {
         id: UUID = UUID(),
         sequence: UInt64,
         timestamp: Date,
+        schemaVersion: Int = Self.schemaVersion,
         sessionID: UUID,
         runID: UUID?,
         checkpointID: UUID,
@@ -157,7 +158,7 @@ public struct AgentJournalRecord: Codable, Equatable, Sendable {
         self.id = id
         self.sequence = sequence
         self.timestamp = timestamp
-        self.schemaVersion = Self.schemaVersion
+        self.schemaVersion = schemaVersion
         self.sessionID = sessionID
         self.runID = runID
         self.checkpointID = checkpointID
@@ -318,6 +319,8 @@ public actor AgentJournal {
 
     private var mutationRecords: [MutationKey: MutationRecord]
     private var mutationIdentityIndex: [String: MutationKey]
+    private var mutationIdentityMembers: [String: Set<MutationKey>]
+    private var unresolvedMutationBySession: [UUID: MutationKey]
 
     public init() {
         records = []
@@ -327,6 +330,8 @@ public actor AgentJournal {
         sessionLeases = [:]
         mutationRecords = [:]
         mutationIdentityIndex = [:]
+        mutationIdentityMembers = [:]
+        unresolvedMutationBySession = [:]
         storageBox = AgentJournalStorageBox(.memory)
     }
 
@@ -341,6 +346,8 @@ public actor AgentJournal {
         let mutationState = try Self.buildMutationState(from: loaded.records)
         mutationRecords = mutationState.records
         mutationIdentityIndex = mutationState.identityIndex
+        mutationIdentityMembers = mutationState.identityMembers
+        unresolvedMutationBySession = mutationState.unresolvedBySession
         storageBox = AgentJournalStorageBox(.durable)
     }
 
@@ -504,6 +511,8 @@ public actor AgentJournal {
         recoveryState = .clean
         mutationRecords = updatedMutationState.records
         mutationIdentityIndex = updatedMutationState.identityIndex
+        mutationIdentityMembers = updatedMutationState.identityMembers
+        unresolvedMutationBySession = updatedMutationState.unresolvedBySession
         return committed
     }
 
@@ -693,6 +702,8 @@ public actor AgentJournal {
     private struct MutationState {
         var records: [MutationKey: MutationRecord]
         var identityIndex: [String: MutationKey]
+        var identityMembers: [String: Set<MutationKey>]
+        var unresolvedBySession: [UUID: MutationKey]
     }
 
     private func applying(
@@ -700,31 +711,50 @@ public actor AgentJournal {
     ) throws -> MutationState {
         var updated = mutationRecords
         var updatedIndex = mutationIdentityIndex
+        var updatedMembers = mutationIdentityMembers
+        var updatedUnresolved = unresolvedMutationBySession
         for (offset, event) in events.enumerated() {
             try Self.applyMutationEvent(event, sessionID: sessionID, runID: runID,
                                         sequence: nextSequence + UInt64(offset),
                                         schemaVersion: AgentJournalRecord.schemaVersion,
                                         records: &updated,
-                                        identityIndex: &updatedIndex)
+                                        identityIndex: &updatedIndex,
+                                        identityMembers: &updatedMembers,
+                                        unresolvedBySession: &updatedUnresolved)
         }
-        return MutationState(records: updated, identityIndex: updatedIndex)
+        return MutationState(
+            records: updated,
+            identityIndex: updatedIndex,
+            identityMembers: updatedMembers,
+            unresolvedBySession: updatedUnresolved
+        )
     }
 
     private static func buildMutationState(from records: [AgentJournalRecord]) throws -> MutationState {
         var mutationRecords: [MutationKey: MutationRecord] = [:]
         var mutationIdentityIndex: [String: MutationKey] = [:]
+        var mutationIdentityMembers: [String: Set<MutationKey>] = [:]
+        var unresolvedMutationBySession: [UUID: MutationKey] = [:]
         do {
             for record in records {
                 try applyMutationEvent(record.event, sessionID: record.sessionID, runID: record.runID,
                                        sequence: record.sequence, schemaVersion: record.schemaVersion,
                                        allowLegacyMissingReceiptExpectation: record.schemaVersion == 1,
+                                       allowLegacyIdentityConflict: record.schemaVersion < AgentJournalRecord.schemaVersion,
                                        records: &mutationRecords,
-                                       identityIndex: &mutationIdentityIndex)
+                                       identityIndex: &mutationIdentityIndex,
+                                       identityMembers: &mutationIdentityMembers,
+                                       unresolvedBySession: &unresolvedMutationBySession)
             }
         } catch {
             throw AgentJournalError.invalidRecord
         }
-        return MutationState(records: mutationRecords, identityIndex: mutationIdentityIndex)
+        return MutationState(
+            records: mutationRecords,
+            identityIndex: mutationIdentityIndex,
+            identityMembers: mutationIdentityMembers,
+            unresolvedBySession: unresolvedMutationBySession
+        )
     }
 
     private static func applyMutationEvent(
@@ -734,22 +764,27 @@ public actor AgentJournal {
         sequence: UInt64,
         schemaVersion: Int,
         allowLegacyMissingReceiptExpectation: Bool = false,
+        allowLegacyIdentityConflict: Bool = false,
         records: inout [MutationKey: MutationRecord],
-        identityIndex: inout [String: MutationKey]
+        identityIndex: inout [String: MutationKey],
+        identityMembers: inout [String: Set<MutationKey>],
+        unresolvedBySession: inout [UUID: MutationKey]
     ) throws {
         switch event {
         case .pendingMutation(let intent):
             guard let runID else { throw AgentJournalError.invalidRecord }
             try intent.validate(allowMissingReceiptExpectation: allowLegacyMissingReceiptExpectation)
             let key = MutationKey(sessionID: sessionID, runID: runID, callID: intent.call.id)
-            guard !records.values.contains(where: {
-                $0.key.sessionID == sessionID && ($0.state == .intent || $0.state == .needsReconciliation)
-            }) else {
+            guard unresolvedBySession[sessionID] == nil else {
                 throw AgentJournalError.mutationRequiresReconciliation
             }
             let latestMatchingIdentity = identityIndex[intent.idempotencyKey].flatMap { records[$0] }
-            guard records[key] == nil,
-                  latestMatchingIdentity == nil || latestMatchingIdentity?.state == .aborted else {
+            guard records[key] == nil else {
+                throw AgentJournalError.mutationIntentConflict
+            }
+            if !allowLegacyIdentityConflict,
+               latestMatchingIdentity != nil,
+               latestMatchingIdentity?.state != .aborted {
                 throw AgentJournalError.mutationIntentConflict
             }
             records[key] = MutationRecord(
@@ -760,7 +795,14 @@ public actor AgentJournal {
                 receipt: nil,
                 output: nil
             )
-            identityIndex[intent.idempotencyKey] = key
+            unresolvedBySession[sessionID] = key
+            identityMembers[intent.idempotencyKey, default: []].insert(key)
+            Self.refreshIdentityIndex(
+                intent.idempotencyKey,
+                records: records,
+                identityIndex: &identityIndex,
+                identityMembers: identityMembers
+            )
 
         case .mutationReceiptExpectation(let callID, let expectation):
             guard let runID else { throw AgentJournalError.invalidRecord }
@@ -786,6 +828,12 @@ public actor AgentJournal {
             var updated = record
             updated.state = .needsReconciliation
             records[key] = updated
+            Self.refreshIdentityIndex(
+                updated.intent.idempotencyKey,
+                records: records,
+                identityIndex: &identityIndex,
+                identityMembers: identityMembers
+            )
 
         case .mutationOutput(let callID, let output):
             guard let runID else { throw AgentJournalError.invalidRecord }
@@ -812,6 +860,15 @@ public actor AgentJournal {
                 updated.state = .settled
                 updated.receipt = receipt
                 records[key] = updated
+                if unresolvedBySession[sessionID] == key {
+                    unresolvedBySession.removeValue(forKey: sessionID)
+                }
+                Self.refreshIdentityIndex(
+                    updated.intent.idempotencyKey,
+                    records: records,
+                    identityIndex: &identityIndex,
+                    identityMembers: identityMembers
+                )
             default:
                 throw AgentJournalError.mutationIntentConflict
             }
@@ -825,9 +882,45 @@ public actor AgentJournal {
             var updated = record
             updated.state = .aborted
             records[key] = updated
+            if unresolvedBySession[sessionID] == key {
+                unresolvedBySession.removeValue(forKey: sessionID)
+            }
+            Self.refreshIdentityIndex(
+                updated.intent.idempotencyKey,
+                records: records,
+                identityIndex: &identityIndex,
+                identityMembers: identityMembers
+            )
 
         default:
             break
+        }
+    }
+
+    private static func refreshIdentityIndex(
+        _ idempotencyKey: String,
+        records: [MutationKey: MutationRecord],
+        identityIndex: inout [String: MutationKey],
+        identityMembers: [String: Set<MutationKey>]
+    ) {
+        let candidates = (identityMembers[idempotencyKey] ?? []).compactMap { records[$0] }
+        guard let selected = candidates.max(by: { lhs, rhs in
+            let left = identityPriority(lhs.state)
+            let right = identityPriority(rhs.state)
+            return left == right ? lhs.sequence < rhs.sequence : left < right
+        }) else {
+            identityIndex.removeValue(forKey: idempotencyKey)
+            return
+        }
+        identityIndex[idempotencyKey] = selected.key
+    }
+
+    private static func identityPriority(_ state: AgentMutationState) -> Int {
+        switch state {
+        case .needsReconciliation: 4
+        case .intent: 3
+        case .settled: 2
+        case .aborted: 1
         }
     }
 
@@ -952,6 +1045,8 @@ public actor AgentJournal {
                 recoveryState = .clean
                 mutationRecords = compactedMutationState.records
                 mutationIdentityIndex = compactedMutationState.identityIndex
+                mutationIdentityMembers = compactedMutationState.identityMembers
+                unresolvedMutationBySession = compactedMutationState.unresolvedBySession
             }
             throw error is AgentJournalError ? error : AgentJournalError.persistenceUnavailable(error.localizedDescription)
         }
@@ -960,6 +1055,8 @@ public actor AgentJournal {
         recoveryState = .clean
         mutationRecords = compactedMutationState.records
         mutationIdentityIndex = compactedMutationState.identityIndex
+        mutationIdentityMembers = compactedMutationState.identityMembers
+        unresolvedMutationBySession = compactedMutationState.unresolvedBySession
         return true
     }
 
@@ -1018,6 +1115,7 @@ public actor AgentJournal {
             AgentJournalRecord(
                 sequence: UInt64(offset + 1),
                 timestamp: record.timestamp,
+                schemaVersion: record.schemaVersion,
                 sessionID: record.sessionID,
                 runID: record.runID,
                 checkpointID: UUID(),
@@ -1064,9 +1162,16 @@ public actor AgentJournal {
             }
             let length = Int(readUInt32(data, at: offset))
             let expectedChecksum = readUInt32(data, at: offset + 4)
-            if length <= 0 || length > maximumFrameSize {
+            if length <= 0 {
                 let rest = data[offset..<data.count]
                 if rest.allSatisfy({ $0 == 0 }) || remaining == 8 {
+                    recovery = .corruptTail
+                    break
+                }
+                throw AgentJournalError.invalidFrame
+            }
+            if length > maximumFrameSize {
+                if offset + 8 + length > data.count {
                     recovery = .corruptTail
                     break
                 }

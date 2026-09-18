@@ -230,6 +230,12 @@ For streaming, follow the [Model Event Contract](docs/guides/swift-agent-model-e
 It defines event ordering, cumulative usage, terminal validation and the conditions
 under which the agent loop may consider a tool batch for execution.
 
+`ModelProviderRoute` provides validated retry and fallback among adapters that
+share one provider namespace. Candidate responses are buffered until their
+terminal event validates, so a route intentionally does not advertise realtime
+streaming. Candidate descriptor IDs must match the route ID, and same-provider
+retries honor a classified `retryAfter` delay.
+
 Tool authors can start with the [Typed Tool Contract](docs/guides/swift-agent-tools.md)
 for Swift input/output types, schema declarations, authorization and execution policy.
 

@@ -81,6 +81,13 @@ A checksum, sequence, or JSON error in a **middle** frame still fails the load.
 Core does not skip a hole and keep reading. Crash-tail recovery never replays
 tools or infers external success from model text.
 
+Schema v3 is the current write format. Readers accept v1 and v2. Canonical
+rollover preserves each retained record's legacy schema semantics rather than
+relabeling it as v3. A v2 journal may contain the same idempotency key in
+different Sessions because that schema predated journal-wide identity scope;
+the v3 reader keeps those records and chooses the most conservative unresolved
+state for new admission. It never re-executes a legacy collision.
+
 After a safe runtime checkpoint, a durable journal larger than the internal
 rollover threshold is rewritten to a canonical recovery snapshot. The snapshot
 keeps one Session creation marker and the latest checkpoint per Session, plus

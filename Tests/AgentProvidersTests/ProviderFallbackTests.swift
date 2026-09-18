@@ -6,6 +6,83 @@ import Foundation
 import Testing
 
 struct ProviderFallbackTests {
+    @Test func routeDoesNotAdvertiseStreamingWhenItBuffersCandidateResponses() throws {
+        let candidate = RouteFixtureProvider(probe: RouteProviderProbe()) { _, _, _ in }
+
+        let route = try ModelProviderRoute(id: "fixture", candidates: [candidate])
+
+        #expect(!route.descriptor.capabilities.contains(.streaming))
+        #expect(route.descriptor.capabilities.contains(.multiTurn))
+        #expect(route.descriptor.capabilities.contains(.tools))
+    }
+
+    @Test func routeRejectsCandidateFromAnotherProviderNamespace() throws {
+        let candidate = RouteFixtureProvider(id: "other", probe: RouteProviderProbe()) { _, _, _ in }
+
+        do {
+            _ = try ModelProviderRoute(id: "fixture", candidates: [candidate])
+            Issue.record("A route must not rewrite requests across provider namespaces")
+        } catch {
+            #expect(
+                error as? ModelProviderFallbackPolicyError
+                    == .candidateProviderIDMismatch(routeID: "fixture", candidateID: "other")
+            )
+        }
+    }
+
+    @Test func sameProviderRetryHonorsRetryAfter() async throws {
+        let probe = RouteProviderProbe()
+        let candidate = RouteFixtureProvider(probe: probe) { request, turn, emit in
+            if turn == 1 {
+                throw ModelProviderError(
+                    kind: .rateLimited,
+                    message: "retry later",
+                    retryAfter: .milliseconds(120)
+                )
+            }
+            try emitContents(textEvents(request, "retried"), emit: emit)
+        }
+        let route = try ModelProviderRoute(
+            id: "fixture",
+            candidates: [candidate],
+            policy: .init(maxAttempts: 2, maxRetriesPerProvider: 1)
+        )
+        let request = ModelRequest(model: .init(provider: "fixture", name: "test"), messages: [])
+        let clock = ContinuousClock()
+        let start = clock.now
+
+        let events = try await collectRouteEvents(route.stream(request: request))
+
+        #expect(events == textEvents(request, "retried"))
+        #expect(clock.now - start >= .milliseconds(100))
+        #expect(await probe.requests.count == 2)
+    }
+
+    @Test func cancellingDuringRetryAfterStopsBeforeAnotherAttempt() async throws {
+        let probe = RouteProviderProbe()
+        let candidate = RouteFixtureProvider(probe: probe) { _, _, _ in
+            throw ModelProviderError(
+                kind: .rateLimited,
+                message: "retry later",
+                retryAfter: .seconds(30)
+            )
+        }
+        let route = try ModelProviderRoute(
+            id: "fixture",
+            candidates: [candidate],
+            policy: .init(maxAttempts: 2, maxRetriesPerProvider: 1)
+        )
+        let agent = try Agent(model: .init(provider: "fixture", name: "test"), provider: route)
+        let run = try await agent.makeSession().run("Hi")
+        await probe.waitForRequestCount(1)
+
+        await run.cancel()
+
+        await #expect(throws: CancellationError.self) { try await run.wait() }
+        try await run.waitForDrain()
+        #expect(await probe.requests.count == 1)
+    }
+
     @Test func transientFailureFallsBackOnlyAfterAValidatedCandidateResponse() async throws {
         let firstProbe = RouteProviderProbe()
         let secondProbe = RouteProviderProbe()
@@ -291,11 +368,27 @@ private enum RouteFailure {
 }
 
 private actor RouteProviderProbe {
+    private struct Waiter {
+        let requestCount: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private(set) var requests: [ModelRequest] = []
+    private var waiters: [Waiter] = []
 
     func record(_ request: ModelRequest) -> Int {
         requests.append(request)
+        let ready = waiters.filter { $0.requestCount <= requests.count }
+        waiters.removeAll { $0.requestCount <= requests.count }
+        for waiter in ready { waiter.continuation.resume() }
         return requests.count
+    }
+
+    func waitForRequestCount(_ requestCount: Int) async {
+        guard requests.count < requestCount else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(Waiter(requestCount: requestCount, continuation: continuation))
+        }
     }
 }
 
@@ -306,12 +399,14 @@ private actor RouteMutationExecutorProbe {
 }
 
 private struct RouteFixtureProvider: ModelProvider {
-    let descriptor = ModelProviderDescriptor(id: "fixture", capabilities: [.streaming, .multiTurn, .tools])
+    let descriptor: ModelProviderDescriptor
     let probe: RouteProviderProbe
     let produce: @Sendable (ModelRequest, Int, @escaping ModelEventStream.Emit) async throws -> Void
 
-    init(probe: RouteProviderProbe,
+    init(id: String = "fixture",
+         probe: RouteProviderProbe,
          produce: @escaping @Sendable (ModelRequest, Int, @escaping ModelEventStream.Emit) async throws -> Void) {
+        descriptor = ModelProviderDescriptor(id: id, capabilities: [.streaming, .multiTurn, .tools])
         self.probe = probe
         self.produce = produce
     }

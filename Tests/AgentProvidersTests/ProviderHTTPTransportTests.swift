@@ -18,7 +18,7 @@ struct ProviderHTTPTransportTests {
             instance.client?.urlProtocol(instance, didFailWithError: NSError(
                 domain: NSURLErrorDomain, code: URLError.networkConnectionLost.rawValue,
                 userInfo: [NSLocalizedDescriptionKey: "sensitive fixture payload",
-                           NSURLErrorFailingURLStringErrorKey: "https://private.invalid/secret"]))
+                           NSURLErrorFailingURLErrorKey: URL(string: "https://private.invalid/secret")!]))
         }
         try await eventually { await received.completed }
         #expect(await received.error as? ModelProviderError == ModelProviderError(
@@ -285,7 +285,7 @@ private final class ProviderHTTPRegistry: @unchecked Sendable {
 }
 
 // This subclass adds no mutable state; the shared registry locks all access.
-private final class ProviderHTTPURLProtocol: URLProtocol, @unchecked Sendable {
+private final class ProviderHTTPURLProtocol: URLProtocol {
     static let registry = ProviderHTTPRegistry()
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -295,3 +295,7 @@ private final class ProviderHTTPURLProtocol: URLProtocol, @unchecked Sendable {
     }
     override func stopLoading() { Self.registry.get(request.url)?.stop() }
 }
+
+#if !canImport(FoundationNetworking)
+extension ProviderHTTPURLProtocol: @unchecked Sendable {}
+#endif

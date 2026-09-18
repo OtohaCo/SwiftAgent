@@ -62,7 +62,6 @@ struct ToolResourceCoordinatorTests {
         await coordinator.release(second)
     }
 
-    @available(macOS 26.0, iOS 26.0, *)
     @Test func cancellationBeforeAcquireLeavesNoLeaseOrWaiter() async throws {
         let coordinator = ToolResourceCoordinator()
         let gate = ResourceGate()
@@ -89,7 +88,6 @@ struct ToolResourceCoordinatorTests {
         await coordinator.release(last)
     }
 
-    @available(macOS 26.0, iOS 26.0, *)
     @Test func conflictingWaitersStayOrderedWhileDisjointReadsProgress() async throws {
         let coordinator = ToolResourceCoordinator()
         let a = ToolResource.named(.init(namespace: "files", id: "a"))
@@ -98,7 +96,8 @@ struct ToolResourceCoordinatorTests {
         let grants = ResourceGrants()
         let writer = await coordinator.start(resources: [a], execution: .exclusive, label: "writer", grants: grants)
         let reader = await coordinator.start(resources: [a], label: "reader", grants: grants)
-        let disjoint = await coordinator.start(resources: [b], label: "disjoint", grants: grants)
+        let disjoint = await coordinator.start(resources: [b], label: "disjoint", grants: grants,
+                                               waitForQueue: false)
         let disjointLease = try await disjoint.value
         #expect(grants.values == ["disjoint"])
         await coordinator.release(first)
@@ -111,7 +110,6 @@ struct ToolResourceCoordinatorTests {
         await coordinator.release(disjointLease)
     }
 
-    @available(macOS 26.0, iOS 26.0, *)
     @Test func globalConflictsInEitherDirectionAndNamedListsUseAnyOverlap() async throws {
         let a = ToolResource.named(.init(namespace: "files", id: "a"))
         let b = ToolResource.named(.init(namespace: "files", id: "b"))
@@ -128,7 +126,6 @@ struct ToolResourceCoordinatorTests {
         }
     }
 
-    @available(macOS 26.0, iOS 26.0, *)
     @Test func disjointMutationsSerializeButDisjointReadCanProceed() async throws {
         let coordinator = ToolResourceCoordinator()
         let a = ToolResource.named(.init(namespace: "files", id: "a"))
@@ -138,7 +135,8 @@ struct ToolResourceCoordinatorTests {
         let grants = ResourceGrants()
         let second = await coordinator.start(resources: [b], effect: .mutation, execution: .exclusive,
                                              label: "mutation", grants: grants)
-        let read = await coordinator.start(resources: [c], label: "read", grants: grants)
+        let read = await coordinator.start(resources: [c], label: "read", grants: grants,
+                                           waitForQueue: false)
         let readLease = try await read.value
         #expect(grants.values == ["read"])
         await coordinator.release(first)
@@ -148,7 +146,6 @@ struct ToolResourceCoordinatorTests {
         await coordinator.release(readLease)
     }
 
-    @available(macOS 26.0, iOS 26.0, *)
     @Test func cancelledWaiterIsRemovedAndNoLongerBlocksReaders() async throws {
         let coordinator = ToolResourceCoordinator()
         let first = try await coordinator.acquire(resources: [.global], effect: .readOnly, execution: .parallel)
@@ -164,7 +161,6 @@ struct ToolResourceCoordinatorTests {
         await coordinator.release(first)
     }
 
-    @available(macOS 26.0, iOS 26.0, *)
     @Test func cancellingTaskAfterAcquireReturnsDoesNotReleaseActiveLease() async throws {
         let coordinator = ToolResourceCoordinator()
         let grants = ResourceGrants()
@@ -183,7 +179,6 @@ struct ToolResourceCoordinatorTests {
         await coordinator.release(nextLease)
     }
 
-    @available(macOS 26.0, iOS 26.0, *)
     @Test func cancellationAtGrantReleasesOnlyTheUnreturnedLease() async throws {
         for cancelFirst in [true, false] {
             let coordinator = ToolResourceCoordinator()
@@ -226,17 +221,21 @@ private actor ResourceGate {
 }
 
 private extension ToolResourceCoordinator {
-    // Immediate execution on this actor reaches acquire's suspension before start returns.
-    @available(macOS 26.0, iOS 26.0, *)
     func start(resources: [ToolResource], effect: ToolPolicy.Effect = .readOnly,
                execution: ToolPolicy.Execution = .parallel, label: String,
-               grants: ResourceGrants, gate: ResourceGate? = nil) -> Task<UUID, Error> {
-        Task.immediate {
+               grants: ResourceGrants, gate: ResourceGate? = nil,
+               waitForQueue: Bool = true) async -> Task<UUID, Error> {
+        let pendingBeforeStart = pendingWaiterCount
+        let task = Task {
             let lease = try await self.acquire(resources: resources, effect: effect, execution: execution)
             grants.append(label)
             if let gate { await gate.hold() }
             return lease
         }
+        if gate == nil, waitForQueue {
+            await waitUntilPendingWaiterCountEquals(pendingBeforeStart + 1)
+        }
+        return task
     }
 
     func cancelAtGrant(_ task: Task<UUID, Error>, releasing lease: UUID, cancelFirst: Bool) {

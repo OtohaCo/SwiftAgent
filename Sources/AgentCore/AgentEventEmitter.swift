@@ -7,6 +7,7 @@ actor AgentEventEmitter {
     private var activeTools: [ToolCallID] = []
     private var reservedCompletions = Set<ToolCallID>()
     private var pendingTermination: AgentRunTermination?
+    private var finishStartedWaiters: [CheckedContinuation<Void, Never>] = []
     private var finishWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(_ continuation: AsyncStream<AgentEvent>.Continuation, requiresConsumer: Bool = true) {
@@ -60,12 +61,22 @@ actor AgentEventEmitter {
 
     func finish(_ termination: AgentRunTermination) async {
         guard !finished else { return }
-        if pendingTermination == nil { pendingTermination = termination }
+        if pendingTermination == nil {
+            pendingTermination = termination
+            let waiters = finishStartedWaiters
+            finishStartedWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
         finishIfReady()
         // Wait for reserved completions so a checkpoint that already landed can
         // still publish. Settlement failure must abort the reservation itself;
         // finish must not be the only path that can unblock a leaked reserve.
         if !finished { await withCheckedContinuation { finishWaiters.append($0) } }
+    }
+
+    package func waitUntilFinishing() async {
+        if pendingTermination != nil || finished { return }
+        await withCheckedContinuation { finishStartedWaiters.append($0) }
     }
 
     private func finishIfReady() {

@@ -182,7 +182,7 @@ public actor AgentSession {
             },
             beforeFinish: {
                 let pending = await control.beginFinish()
-                await self.finish(runID: runID, pending: pending)
+                await self.finish(runID: runID, pending: pending, control: control)
             }
         )
         do {
@@ -224,7 +224,7 @@ public actor AgentSession {
         appliedSteeringIDs.formUnion(steering.map(\.id))
     }
 
-    private func finish(runID: UUID, pending: [AgentSteeringInput]) async {
+    private func finish(runID: UUID, pending: [AgentSteeringInput], control: AgentRunControl) async {
         guard activeRunID == runID else { return }
         for input in pending where !appliedSteeringIDs.contains(input.id) {
             history.append(.user([.text(input.text)]))
@@ -237,7 +237,10 @@ public actor AgentSession {
         let journal = self.journal
         let drain = drainHandles[runID]
         pendingDrainTask = Task { [weak self] in
-            await loop.waitForRunToDrain(sessionID: sessionID, runID: runID)
+            async let logicalCompletion: Void = control.waitUntilCompleted()
+            async let physicalCompletion: Void = loop.waitForRunToDrain(sessionID: sessionID, runID: runID)
+            await logicalCompletion
+            await physicalCompletion
             if let self {
                 await self.finishDraining(runID: runID)
             } else {

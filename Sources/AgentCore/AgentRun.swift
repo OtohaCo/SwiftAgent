@@ -53,6 +53,7 @@ actor AgentRunControl {
     private var steering: [AgentSteeringInput] = []
     private var delivering: [AgentSteeringInput] = []
     private var waiters: [UUID: CheckedContinuation<AgentLoopResult, Error>] = [:]
+    private var completionWaiters: [CheckedContinuation<Void, Never>] = []
 
     func start(_ operation: @escaping @Sendable () async -> Result<AgentLoopResult, Error>) {
         worker = Task {
@@ -116,6 +117,17 @@ actor AgentRunControl {
         return value
     }
 
+    func waitUntilCompleted() async {
+        if result != nil { return }
+        await withCheckedContinuation { continuation in
+            if result != nil {
+                continuation.resume()
+            } else {
+                completionWaiters.append(continuation)
+            }
+        }
+    }
+
     private func cancelWaiter(_ id: UUID) {
         waiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
     }
@@ -127,6 +139,9 @@ actor AgentRunControl {
         let pending = waiters
         waiters.removeAll()
         for waiter in pending.values { waiter.resume(with: result) }
+        let completions = completionWaiters
+        completionWaiters.removeAll()
+        for waiter in completions { waiter.resume() }
     }
 }
 

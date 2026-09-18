@@ -205,6 +205,96 @@ final class AgentJournalTests: XCTestCase {
         XCTAssertEqual(jsonRecords.count, 1)
     }
 
+    func testTerminalInvalidLengthWithNonzeroPayloadIsRepairableCorruptTail() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        _ = try await journal.append(.sessionCreated, sessionID: sessionID, durability: .durable)
+        var invalidTail = Data(bytes(UInt32(AgentJournal.maximumFrameSize + 1)))
+        invalidTail.append(contentsOf: bytes(0))
+        invalidTail.append(0x7f)
+        try append(invalidTail, to: url)
+
+        let restored = try AgentJournal.load(from: url)
+        let recovery = await restored.recovery
+        let recordCount = await restored.snapshot().count
+        XCTAssertEqual(recovery, .corruptTail)
+        XCTAssertEqual(recordCount, 1)
+        try await restored.discardCorruptTail()
+        _ = try await restored.append(.userMessage("after repair"), sessionID: sessionID, durability: .durable)
+        let reloaded = try AgentJournal.load(from: url)
+        let reloadedRecovery = await reloaded.recovery
+        XCTAssertEqual(reloadedRecovery, .clean)
+    }
+
+    func testValidV2SessionScopedDuplicateIdentitiesRemainLoadableAndFailClosed() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let checkpointID = UUID()
+        let sharedKey = "legacy-shared-operation"
+        let first = try legacyRecord(
+            schemaVersion: 2, sequence: 1, sessionID: UUID(), runID: UUID(), checkpointID: checkpointID,
+            event: .pendingMutation(mutationIntent(idempotencyKey: sharedKey, callID: "legacy-first"))
+        )
+        let second = try legacyRecord(
+            schemaVersion: 2, sequence: 2, sessionID: UUID(), runID: UUID(), checkpointID: checkpointID,
+            event: .pendingMutation(mutationIntent(idempotencyKey: sharedKey, callID: "legacy-second"))
+        )
+        try writeLegacyJournal(schemaVersion: 2, records: [first, second], to: url)
+
+        let restored = try AgentJournal.load(from: url)
+        let pendingCount = await restored.pendingMutations().count
+        XCTAssertEqual(pendingCount, 2)
+        let retry = ToolMutationAdmissionRequest(
+            sessionID: UUID(), runID: UUID(), callID: .init(rawValue: "legacy-retry"),
+            name: "update_listing", argumentsJSON: #"{"id":"listing-1"}"#,
+            resources: [.named(.init(namespace: "property.listing", id: "listing-1"))],
+            idempotencyKey: sharedKey,
+            receiptExpectation: try .init(
+                targets: [.init(namespace: "property.listing", id: "listing-1")], revision: .present
+            )
+        )
+        await XCTAssertThrowsErrorAsync {
+            _ = try await restored.admit(retry)
+        } verify: { error in
+            XCTAssertEqual(error as? AgentJournalError, .mutationPending)
+        }
+    }
+
+    func testLegacyV1PendingMutationSurvivesCompactionAndRestart() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let runID = UUID()
+        let checkpointID = UUID()
+        let intentJSON = #"{"call":{"id":"legacy-call","name":"update_listing","argumentsJSON":"{\"id\":\"listing-1\"}","completeness":"complete"},"resources":[{"named":{"_0":{"namespace":"property.listing","id":"listing-1"}}}],"idempotencyKey":"legacy-key"}"#
+        let intent = try JSONDecoder().decode(PendingMutationIntent.self, from: Data(intentJSON.utf8))
+        var records = [try legacyRecord(
+            schemaVersion: 1, sequence: 1, sessionID: sessionID, runID: runID,
+            checkpointID: checkpointID, event: .pendingMutation(intent)
+        )]
+        for sequence in 2...40 {
+            records.append(try legacyRecord(
+                schemaVersion: 1, sequence: UInt64(sequence), sessionID: sessionID, runID: runID,
+                checkpointID: checkpointID, event: .userMessage(String(repeating: "old-history-", count: 32))
+            ))
+        }
+        try writeLegacyJournal(schemaVersion: 1, records: records, to: url)
+
+        let journal = try AgentJournal.load(from: url)
+        let pendingBeforeCompaction = await journal.pendingMutations().map(\.state)
+        let compacted = try await journal.compactIfNeeded(maxJournalBytes: 1)
+        XCTAssertEqual(pendingBeforeCompaction, [.needsReconciliation])
+        XCTAssertTrue(compacted)
+
+        let restarted = try AgentJournal.load(from: url)
+        let restartedPending = await restarted.pendingMutations().map(\.state)
+        let compactedSchema = await restarted.snapshot().first?.schemaVersion
+        XCTAssertEqual(restartedPending, [.needsReconciliation])
+        XCTAssertEqual(compactedSchema, 1)
+    }
+
     func testMiddleChecksumMismatchFailsClosed() async throws {
         let url = temporaryURL()
         defer { cleanup(url) }
@@ -472,8 +562,8 @@ final class AgentJournalTests: XCTestCase {
         return try XCTUnwrap((attributes[.size] as? NSNumber)?.intValue)
     }
 
-    private func mutationIntent(idempotencyKey: String) throws -> PendingMutationIntent {
-        let call = ToolCall(id: .init(rawValue: "compact-call"), name: "update_listing",
+    private func mutationIntent(idempotencyKey: String, callID: String = "compact-call") throws -> PendingMutationIntent {
+        let call = ToolCall(id: .init(rawValue: callID), name: "update_listing",
                             argumentsJSON: #"{"id":"listing-1"}"#, completeness: .complete)
         return try PendingMutationIntent(
             call: call,
@@ -497,6 +587,31 @@ final class AgentJournalTests: XCTestCase {
         try handle.seekToEnd()
         try handle.write(contentsOf: data)
         try handle.close()
+    }
+
+    private func legacyRecord(
+        schemaVersion: Int,
+        sequence: UInt64,
+        sessionID: UUID,
+        runID: UUID?,
+        checkpointID: UUID,
+        event: AgentJournalEvent
+    ) throws -> AgentJournalRecord {
+        let fixture = AgentJournalRecordFixture(
+            id: UUID(), sequence: sequence, timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            schemaVersion: schemaVersion, sessionID: sessionID, runID: runID,
+            checkpointID: checkpointID, event: event
+        )
+        return try JSONDecoder().decode(AgentJournalRecord.self, from: JSONEncoder().encode(fixture))
+    }
+
+    private func writeLegacyJournal(schemaVersion: Int, records: [AgentJournalRecord], to url: URL) throws {
+        let payload = try JSONEncoder().encode(TestJournalFrame(schemaVersion: schemaVersion, records: records))
+        var data = Data("SWIFTAGENT-JOURNAL-1".utf8)
+        data.append(frame(payload: payload))
+        guard FileManager.default.createFile(atPath: url.path, contents: data) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
     }
 
     private func frame(payload: Data) -> Data {
@@ -558,4 +673,15 @@ private func XCTAssertThrowsErrorAsync(
 private struct TestJournalFrame: Codable {
     let schemaVersion: Int
     let records: [AgentJournalRecord]
+}
+
+private struct AgentJournalRecordFixture: Codable {
+    let id: UUID
+    let sequence: UInt64
+    let timestamp: Date
+    let schemaVersion: Int
+    let sessionID: UUID
+    let runID: UUID?
+    let checkpointID: UUID
+    let event: AgentJournalEvent
 }

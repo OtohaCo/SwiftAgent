@@ -24,6 +24,11 @@ long-term map so a later bug does not require moving files.
 | Provider fallback must not replay a previously settled mutation | `fallbackProviderReplaysSettledMutationWithoutExecutingAgain` | `Tests/AgentProvidersTests/ProviderFallbackTests.swift` |
 | Declared read-only recoverable failure must continue the model loop with a canonical error result | `declaredRecoverableReadOnlyErrorBecomesModelVisibleAndContinues`, `crossRunAndRestartPreserveRecoverableTranscript` | `Tests/AgentCoreTests/AgentRecoverableToolErrorTests.swift` |
 | Mutation, authorization, Evidence, malformed calls, and undeclared errors must never enter the recoverable channel | `mutationCannotOptIntoModelVisibleErrors`, `authorizationFailureStaysFailClosed`, `recoverablePayloadCannotMintEvidence`, `malformedArgumentsAndUnknownToolsStayFailClosed`, `recoverableErrorWithoutPolicyOptInStillFailsTheRun` | `Tests/AgentCoreTests/AgentRecoverableToolErrorTests.swift` |
+| Valid v1/v2 journals must remain loadable and compact without changing mutation safety | `testLegacyV1PendingMutationSurvivesCompactionAndRestart`, `testValidV2SessionScopedDuplicateIdentitiesRemainLoadableAndFailClosed` | `Tests/AgentCoreTests/AgentJournalTests.swift` |
+| Non-zero invalid terminal frame lengths must preserve the prefix and require explicit repair | `testTerminalInvalidLengthWithNonzeroPayloadIsRepairableCorruptTail` | `Tests/AgentCoreTests/AgentJournalTests.swift` |
+| Receipt/cancel race must wait for actual executor entry, not a wall-clock expectation | `testReceiptAndCancellationDoNotDoubleSettle` | `Tests/AgentCoreTests/AgentMutationRecoveryTests.swift` |
+| Provider routes must not claim streaming while buffering or accept incompatible namespaces | `routeDoesNotAdvertiseStreamingWhenItBuffersCandidateResponses`, `routeRejectsCandidateFromAnotherProviderNamespace` | `Tests/AgentProvidersTests/ProviderFallbackTests.swift` |
+| Same-provider retry must honor `retryAfter` and remain cancellable | `sameProviderRetryHonorsRetryAfter`, `cancellingDuringRetryAfterStopsBeforeAnotherAttempt` | `Tests/AgentProvidersTests/ProviderFallbackTests.swift` |
 
 When a new production bug lands, add a row here and a focused test next to the
 domain tests. Prefer a precise name over a `Regressions/` directory move.

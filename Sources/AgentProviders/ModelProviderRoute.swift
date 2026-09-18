@@ -28,6 +28,7 @@ public enum ModelProviderFallbackPolicyError: Error, Equatable, Sendable {
     case invalidLimits
     case invalidRetryableKinds
     case emptyCandidates
+    case candidateProviderIDMismatch(routeID: String, candidateID: String)
 }
 
 /// Composes validated model turns without executing tools or owning an agent loop.
@@ -47,12 +48,19 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
         guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderFallbackPolicyError.emptyCandidates
         }
+        if let candidate = candidates.first(where: { $0.descriptor.id != id }) {
+            throw ModelProviderFallbackPolicyError.candidateProviderIDMismatch(
+                routeID: id,
+                candidateID: candidate.descriptor.id
+            )
+        }
         self.candidates = candidates
         self.policy = policy
         self.boundaryState = MutationBoundaryState()
-        let capabilities = candidates.dropFirst().reduce(candidates[0].descriptor.capabilities) { current, candidate in
+        var capabilities = candidates.dropFirst().reduce(candidates[0].descriptor.capabilities) { current, candidate in
             ModelCapabilities(rawValue: current.rawValue & candidate.descriptor.capabilities.rawValue)
         }
+        capabilities.remove(.streaming)
         descriptor = ModelProviderDescriptor(id: id, capabilities: capabilities)
     }
 
@@ -111,6 +119,9 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
                     }
                     if retries < policy.maxRetriesPerProvider {
                         retries += 1
+                        if let retryAfter = error.retryAfter {
+                            try await Task.sleep(for: retryAfter)
+                        }
                         continue
                     }
                 } catch {

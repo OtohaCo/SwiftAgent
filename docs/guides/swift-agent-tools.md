@@ -114,7 +114,7 @@ model arguments. Tools can use them to associate external operations with a run.
 The typed `execute` method implements a host operation. Calling it directly does
 not enforce execution policy. Registry validation, scheduler timeouts, evidence
 checks and receipt verification are separate runtime responsibilities. See the
-[implementation plan](../plans/2026-09-17-swift-agent-engine-kanban.md) for their tasks.
+[conformance matrix](../reviews/2026-09-18-swift-agent-conformance-matrix.md) for the permanent regression evidence.
 
 The package invocation bridge checks cancellation and deadline around decoding,
 authorization and execution. It does not interrupt an uncooperative executor or

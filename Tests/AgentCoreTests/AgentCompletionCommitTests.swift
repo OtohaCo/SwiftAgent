@@ -33,9 +33,7 @@ struct AgentCompletionCommitTests {
         let recording = Task { try await progress.record(index: 0, call: prepared, result: result) }
         #expect(await XCTWaiter.fulfillment(of: [committed], timeout: 1) == .completed)
         recording.cancel()
-        let finishing: Task<Void, Never>
-        if #available(macOS 26, iOS 26, *) { finishing = await emitter.beginFinishingImmediately(.cancelled) }
-        else { finishing = Task { await emitter.finish(.cancelled) } }
+        let finishing = await emitter.beginFinishing(.cancelled)
         await gate.open()
         _ = try? await recording.value
         await finishing.value
@@ -47,15 +45,14 @@ struct AgentCompletionCommitTests {
         #expect(events.last == .runFinished(.cancelled))
     }
 
-    @available(macOS 26, iOS 26, *)
     @Test func simultaneousFinishersWaitForOneReservedCompletionAndKeepTheFirstOutcome() async throws {
         let channel = AsyncStream<AgentEvent>.makeStream()
         let emitter = AgentEventEmitter(channel.continuation, requiresConsumer: false)
         let call = addition("reserved")
         try await emitter.send(.toolStarted(call))
         try await emitter.reserveCompletion(call.id)
-        let first = await emitter.beginFinishingImmediately(.cancelled)
-        let second = await emitter.beginFinishingImmediately(.failed(.unclassified))
+        let first = await emitter.beginFinishing(.cancelled)
+        let second = await emitter.beginFinishing(.failed(.unclassified))
         let result = ToolResultMessage(callID: call.id, content: [.json(.number(5))], isError: false)
         try await emitter.commitCompletion(result, receipt: nil)
         await first.value
@@ -91,9 +88,10 @@ struct AgentCompletionCommitTests {
 }
 
 private extension AgentEventEmitter {
-    @available(macOS 26, iOS 26, *)
-    func beginFinishingImmediately(_ outcome: AgentRunTermination) -> Task<Void, Never> {
-        Task.immediate { await self.finish(outcome) }
+    func beginFinishing(_ outcome: AgentRunTermination) async -> Task<Void, Never> {
+        let task = Task { await self.finish(outcome) }
+        await waitUntilFinishing()
+        return task
     }
 }
 

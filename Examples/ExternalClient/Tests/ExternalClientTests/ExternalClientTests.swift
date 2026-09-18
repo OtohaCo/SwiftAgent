@@ -82,6 +82,19 @@ struct ExternalClientTests {
         #expect(error.code == "not_found")
         #expect(error.details == .object(["query": .string("missing")]))
     }
+
+    @Test func recoverableReadOnlyFailureContinuesThroughPublicAPI() async throws {
+        let agent = try Agent(
+            model: ModelID(provider: "external-client", name: "recoverable"),
+            provider: RecoverableSearchProvider(),
+            tools: [try SearchTool()]
+        )
+
+        let result = try await agent.makeSession().run("Find the missing resource").wait()
+
+        #expect(result.outcome == .completed)
+        #expect(result.response.content == [.text("Try another source")])
+    }
 }
 
 private func makeReadOnlyAgent() throws -> Agent {
@@ -177,6 +190,42 @@ private struct MutationProvider: ModelProvider {
     }
 }
 
+private struct RecoverableSearchProvider: ModelProvider {
+    let descriptor = ModelProviderDescriptor(id: "external-client", capabilities: [.multiTurn, .tools])
+
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            let info = ResponseInfo(id: "recoverable", model: request.model)
+            if case .tool(let result)? = request.messages.last {
+                guard result.isError,
+                      result.callID == .init(rawValue: "search-missing"),
+                      result.content == [.json(.object([
+                          "code": .string("not_found"),
+                          "message": .string("No result was found."),
+                          "details": .object(["query": .string("missing")]),
+                      ]))] else {
+                    throw ModelProviderError(kind: .invalidRequest, message: "missing recoverable tool result")
+                }
+                try emit(.responseStarted(info))
+                try emit(.textDelta("Try another source"))
+                try emit(.responseCompleted(.init(
+                    info: info, content: [.text("Try another source")], stopReason: .endTurn
+                )))
+                return
+            }
+            let call = ToolCall(
+                id: .init(rawValue: "search-missing"), name: SearchTool.name,
+                argumentsJSON: #"{"query":"missing"}"#, completeness: .complete
+            )
+            try emit(.responseStarted(info))
+            try emit(.toolCallStarted(call.id, name: call.name))
+            try emit(.toolCallArgumentsDelta(call.id, call.argumentsJSON))
+            try emit(.toolCallCompleted(call))
+            try emit(.responseCompleted(.init(info: info, toolCalls: [call], stopReason: .toolCalls)))
+        }
+    }
+}
+
 private struct SearchTool: AgentTool {
     struct Input: Codable, Sendable { let query: String }
     struct Output: Codable, Sendable { let results: [String] }
@@ -190,11 +239,18 @@ private struct SearchTool: AgentTool {
     let policy: ToolPolicy
 
     init() throws {
-        policy = try .readOnly(authorization: .notRequired)
+        policy = try .readOnly(authorization: .notRequired, recoverableErrors: .modelVisible)
     }
 
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
-        ToolResult(output: Output(results: [input.query]))
+        if input.query == "missing" {
+            throw try RecoverableToolError(
+                code: "not_found",
+                message: "No result was found.",
+                details: .object(["query": .string(input.query)])
+            )
+        }
+        return ToolResult(output: Output(results: [input.query]))
     }
 }
 

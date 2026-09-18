@@ -3,7 +3,7 @@
 last-verified: 2026-09-18
 
 Pi reference: `earendil-works/pi` `5901446094988aa5cd8e11efdaa131c3949106f1` (main, 2026-09-18).
-SwiftAgent baseline: `8cf2373ca14b19d9463451c3f3e01c86ca4f6ba9` (SAI-043) plus the SAI-040 and SAI-044 deltas on this branch.
+SwiftAgent baseline: `3e47373eedf89c50d9642f11d0268d00f9e5ea91` plus the SAI-047 RC audit fixes on this branch.
 
 Pi tests are a catalog, not a porting checklist. Each row answers: SwiftAgent has the concept? Should it? Already tested? Stronger? Not applicable?
 
@@ -146,7 +146,7 @@ Phases are covered across files, not one checklist suite.
 | Tool timeout + late discard | `toolTimeoutEndsRunBeforeOverallDeadlineAndDiscardsLateResult` | Covered |
 | Mutation executor timeout, no replay | `testTimeoutAfterExecutorSideEffectDoesNotReplayMutation` | Covered |
 | Timeout + cancel race / next Run | receipt + conversation follow-up | Covered |
-| Resource wait timeout | cancel path only | Partial; not a new SAI |
+| Resource wait timeout | scheduler deadline and cancellation paths | Covered by scheduler/cancellation tests |
 
 ---
 
@@ -157,7 +157,7 @@ Phases are covered across files, not one checklist suite.
 | Success / refusal / cancel / provider failure: `runStarted` once, `runFinished` once, `wait()` matches | `AgentEventTests`, `AgentEventFailureTests`, **SAI-044** `AgentEventContractTests` | Covered |
 | F1 settlement+quarantine hang | `AgentSessionHangTests.testMutationCommitAndQuarantineFailureStillFinishesTheRun` | Covered |
 | Observer disconnect / multiple waiters | `AgentRunTests` | Covered |
-| `onFailed` + quarantine via Agent→Session→Run | record() path only | Existing backlog SAI-042 |
+| `onFailed` + quarantine via Agent→Session→Run | `testExecutorAndQuarantineFailureUseOneTypedTerminalWithoutReplay` | Covered |
 
 ---
 
@@ -269,8 +269,9 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 | --- | --- | --- |
 | Transient fallback; non-transient / cancel never fallback | `ProviderFallbackTests` | Covered |
 | Mutation side effect blocks replay/switch | same | SwiftAgent stronger |
-| Generic retry-after delay framework / Pi retry-events | No generic retry API | Not applicable / Future |
+| Same-provider `retryAfter`; cancellation during delay | `sameProviderRetryHonorsRetryAfter`, `cancellingDuringRetryAfterStopsBeforeAnotherAttempt` | Covered for declared route |
 | Partial stream then fallback never publishes failed candidate | `partialEventsFromFailedCandidateAreNeverPublished` | Covered |
+| Route candidate namespace and buffered capability truthfulness | `routeRejectsCandidateFromAnotherProviderNamespace`, `routeDoesNotAdvertiseStreamingWhenItBuffersCandidateResponses` | Covered |
 
 ---
 
