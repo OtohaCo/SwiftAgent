@@ -1,7 +1,8 @@
 # SwiftAgent
 
-A standalone Swift package for provider-neutral agent infrastructure. See the
-[implementation plan](../docs/plans/2026-09-17-swift-agent-engine-kanban.md) for task scope.
+A standalone Swift package for provider-neutral agent infrastructure. See
+[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/extraction.md](docs/extraction.md)
+for development and the independent-repository plan.
 
 ## Build and Test
 
@@ -191,53 +192,56 @@ registry validation and authorization. `ToolResultMessage` is model-facing conte
 not an execution receipt. Usage fields distinguish unreported counts from zero;
 see [ModelMetadata](Sources/AgentModels/ModelMetadata.swift) for accounting semantics.
 
-For streaming, follow the [Model Event Contract](../docs/guides/swift-agent-model-events.md).
+For streaming, follow the [Model Event Contract](docs/guides/swift-agent-model-events.md).
 It defines event ordering, cumulative usage, terminal validation and the conditions
 under which the agent loop may consider a tool batch for execution.
 
-Tool authors can start with the [Typed Tool Contract](../docs/guides/swift-agent-tools.md)
+Tool authors can start with the [Typed Tool Contract](docs/guides/swift-agent-tools.md)
 for Swift input/output types, schema declarations, authorization and execution policy.
 
-[Tool Scheduling](../docs/guides/swift-agent-scheduler.md) covers parallel groups,
+[Tool Scheduling](docs/guides/swift-agent-scheduler.md) covers parallel groups,
 resource isolation, shared schedulers and executor lifetime after cancellation.
 
-The [Agent Loop Contract](../docs/guides/swift-agent-loop.md) covers multi-turn tool
+The [Agent Loop Contract](docs/guides/swift-agent-loop.md) covers multi-turn tool
 feedback, terminal outcomes, budgets, deadlines and run isolation.
 
-For progress rendering, use the [Agent Event Stream](../docs/guides/swift-agent-events.md).
+For progress rendering, use the [Agent Event Stream](docs/guides/swift-agent-events.md).
 
-Use [Agent, Session and Run](../docs/guides/swift-agent-sessions.md) for conversation
+Use [Agent, Session and Run](docs/guides/swift-agent-sessions.md) for conversation
 history, independent sessions and explicit cancel/steer/wait control.
 
-[Evidence](../docs/guides/swift-agent-evidence.md) defines trusted resource
+[Evidence](docs/guides/swift-agent-evidence.md) defines trusted resource
 observations, run/session scope, expiry and tool requirement binding.
 
-[Receipts](../docs/guides/swift-agent-receipts.md) defines executor confirmations,
+[Receipts](docs/guides/swift-agent-receipts.md) defines executor confirmations,
 operation/target/revision binding and the remaining mutation admission requirements.
 
-[Journal](../docs/guides/swift-agent-journal.md) defines typed lifecycle records,
+[Journal](docs/guides/swift-agent-journal.md) defines typed lifecycle records,
 durable checkpoints, crash-tail recovery and fail-closed persistence behavior.
 It also defines durable mutation admission and explicit reconciliation without
 automatic executor replay.
 
-[Errors](../docs/guides/swift-agent-errors.md) lists the typed failure taxonomy.
+[Errors](docs/guides/swift-agent-errors.md) lists the typed failure taxonomy.
 Do not match `localizedDescription`.
 
-[Concurrency](../docs/guides/swift-agent-concurrency.md) records the Swift 6.4
+[Concurrency](docs/guides/swift-agent-concurrency.md) records the Swift 6.4
 isolation audit. Core does not use MainActor.
 
-[Versioning](../docs/guides/swift-agent-versioning.md) is the 1.0 compatibility
+[Versioning](docs/guides/swift-agent-versioning.md) is the 1.0 compatibility
 policy. Adding a public enum case is a source break.
 
-The [Workspace File Agent](../docs/guides/swift-agent-workspace-host.md) is a second
+The [security model](docs/security-model.md) states what the SDK can and cannot
+guarantee. Model output is never authorization.
+
+The [Workspace File Agent](docs/guides/swift-agent-workspace-host.md) is a second
 Reference Host. It uses the same public Agent/Session/Run API with Anthropic or any
 other conforming provider, and keeps sandbox file identity out of AgentCore.
 
-The [public API audit](../docs/reviews/2026-09-18-swift-agent-public-api-audit.md)
+The [public API audit](docs/reviews/2026-09-18-swift-agent-public-api-audit.md)
 is the freeze record for this branch.
 
-[Apple Foundation Models](../docs/guides/swift-agent-apple-provider.md) documents
+[Apple Foundation Models](docs/guides/swift-agent-apple-provider.md) documents
 the on-device planning adapter, execution boundary and opt-in live verification.
 
-[Anthropic Messages](../docs/guides/swift-agent-anthropic-provider.md) covers cloud
+[Anthropic Messages](docs/guides/swift-agent-anthropic-provider.md) covers cloud
 streaming, signed continuation, structured answers and opt-in gateway verification.

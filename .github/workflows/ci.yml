@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    name: macOS build and test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test --disable-sandbox --no-parallel
+      - name: iOS cross-build
+        run: swift build --triple arm64-apple-ios16.0
+
+  linux:
+    name: Linux Core products
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.0.3"
+      - name: Build portable products
+        run: |
+          swift build --product AgentModels
+          swift build --product AgentTools
+          swift build --product AgentCore
+          swift build --product AgentProviders
+      - name: Full tests run on macOS
+        run: echo "WorkspaceAgent imports CryptoKit; AgentAppleProvider needs FoundationModels. Linux CI builds Core products only."
+
+  apple-provider:
+    name: Apple provider compile
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Apple adapter and fixtures
+        run: swift test --filter AgentAppleProviderTests --disable-sandbox --no-parallel
+      - name: Live models are opt-in
+        run: echo "Do not set SWIFT_AGENT_APPLE_LIVE or SWIFT_AGENT_ANTHROPIC_API_KEY on this job."
