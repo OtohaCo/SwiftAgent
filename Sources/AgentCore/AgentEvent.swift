@@ -44,6 +44,33 @@ public enum AgentRunTermination: Equatable, Sendable {
     case cancelled
 }
 
+/// Settlement failed, and writing the quarantine record also failed.
+/// Both sides stay typed; do not parse `localizedDescription`.
+public struct AgentMutationPersistenceError: Error, Equatable, Sendable {
+    public let settlement: AgentFailure
+    public let quarantine: AgentFailure
+
+    public init(settlement: AgentFailure, quarantine: AgentFailure) {
+        self.settlement = settlement
+        self.quarantine = quarantine
+    }
+
+    static func capturing(
+        settlement: any Error,
+        quarantine: @Sendable () async throws -> Void
+    ) async -> any Error {
+        do {
+            try await quarantine()
+            return settlement
+        } catch {
+            return AgentMutationPersistenceError(
+                settlement: AgentFailure(settlement),
+                quarantine: AgentFailure(error)
+            )
+        }
+    }
+}
+
 /// Typed failure for events and host switches. Match the enum; do not parse
 /// `localizedDescription`. Unknown host errors collapse to `unclassified`
 /// without leaking payloads.
@@ -59,6 +86,8 @@ public enum AgentFailure: Error, Equatable, Sendable {
     case resource(ToolResourceError)
     case scheduler(ToolSchedulerError)
     case journal(AgentJournalError)
+    indirect case mutationPersistence(AgentMutationPersistenceError)
+    case context(AgentContextError)
     case cancelled
     case unclassified
 
@@ -76,6 +105,8 @@ public enum AgentFailure: Error, Equatable, Sendable {
         case let error as ToolResourceError: self = .resource(error)
         case let error as ToolSchedulerError: self = .scheduler(error)
         case let error as AgentJournalError: self = .journal(error)
+        case let error as AgentMutationPersistenceError: self = .mutationPersistence(error)
+        case let error as AgentContextError: self = .context(error)
         default: self = .unclassified
         }
     }

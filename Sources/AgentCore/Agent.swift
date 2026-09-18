@@ -13,6 +13,7 @@ public struct AgentConfiguration: Sendable {
     public var maxToolCalls: Int
     public var runTimeout: Duration
     public var scheduler: ToolScheduler
+    public var contextPolicy: AgentContextPolicy
 
     public init(
         instructions: String = "",
@@ -20,7 +21,8 @@ public struct AgentConfiguration: Sendable {
         maxModelTurns: Int = 8,
         maxToolCalls: Int = 16,
         runTimeout: Duration = .seconds(30),
-        scheduler: ToolScheduler = .init()
+        scheduler: ToolScheduler = .init(),
+        contextPolicy: AgentContextPolicy = .default
     ) {
         self.instructions = instructions
         self.structuredOutput = structuredOutput
@@ -28,6 +30,7 @@ public struct AgentConfiguration: Sendable {
         self.maxToolCalls = maxToolCalls
         self.runTimeout = runTimeout
         self.scheduler = scheduler
+        self.contextPolicy = contextPolicy
     }
 }
 
@@ -89,7 +92,8 @@ public struct Agent: Sendable {
         return AgentSession(
             id: id, loop: loop, instructions: configuration.instructions,
             structuredOutput: configuration.structuredOutput, maxModelTurns: configuration.maxModelTurns,
-            maxToolCalls: configuration.maxToolCalls, runTimeout: configuration.runTimeout, journal: journal
+            maxToolCalls: configuration.maxToolCalls, runTimeout: configuration.runTimeout,
+            contextPolicy: configuration.contextPolicy, journal: journal
         )
     }
 }

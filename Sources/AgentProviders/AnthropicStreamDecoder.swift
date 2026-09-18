@@ -27,6 +27,11 @@ struct AnthropicStreamDecoder {
     private var activeCall: Int?
     private var signaturesStarted = Set<Int>()
 
+    private static let knownEventTypes: Set<String> = [
+        "ping", "error", "message_start", "content_block_start", "content_block_delta",
+        "content_block_stop", "message_delta", "message_stop",
+    ]
+
     init(model: ModelID) { self.model = model }
 
     mutating func consume(_ event: ProviderSSEEvent) throws -> [ModelEvent] {
@@ -62,7 +67,10 @@ struct AnthropicStreamDecoder {
             info = value
             return [.responseStarted(value)] + (try usageEvents(message["usage"]))
         }
-        guard let info else { throw ProviderJSON.invalid() }
+        guard let info else {
+            if Self.knownEventTypes.contains(type) { throw ProviderJSON.invalid() }
+            return []
+        }
         switch type {
         case "content_block_start":
             guard stopReason == nil, activeIndex == nil, try ProviderJSON.count(object["index"]) == blockCount else { throw ProviderJSON.invalid() }
@@ -162,7 +170,8 @@ struct AnthropicStreamDecoder {
             }
             events.append(.responseCompleted(.init(info: info, content: content, toolCalls: modelCalls, usage: usage, stopReason: stopReason)))
             return events
-        default: throw ProviderJSON.invalid()
+        default:
+            return []
         }
     }
 

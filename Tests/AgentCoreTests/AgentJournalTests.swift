@@ -125,18 +125,148 @@ final class AgentJournalTests: XCTestCase {
         XCTAssertEqual(reloadedRecovery, .clean)
     }
 
-    func testCommittedFrameChecksumFailureFailsClosed() async throws {
+    func testPartialPayloadTailIsTruncatedNotCorrupt() async throws {
         let url = temporaryURL()
-        defer { try? FileManager.default.removeItem(at: url); try? FileManager.default.removeItem(atPath: url.path + ".lock") }
+        defer { cleanup(url) }
+        let sessionID = UUID()
         let journal = try AgentJournal(persistenceURL: url)
-        _ = try await journal.append(.sessionCreated, sessionID: UUID(), durability: .durable)
+        _ = try await journal.append(.sessionCreated, sessionID: sessionID, durability: .durable)
+        var header = Data()
+        header.append(contentsOf: [0x00, 0x00, 0x00, 0x20])
+        header.append(contentsOf: [0x11, 0x22, 0x33, 0x44])
+        header.append(Data(repeating: 0xab, count: 4))
+        try append(header, to: url)
+        let restored = try AgentJournal.load(from: url)
+        let truncatedRecovery = await restored.recovery
+        let truncatedRecords = await restored.snapshot()
+        XCTAssertEqual(truncatedRecovery, .truncatedTail)
+        XCTAssertEqual(truncatedRecords.count, 1)
+    }
+
+    func testZeroFilledTailIsCorruptAndPreservesPrefix() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        _ = try await journal.append(.sessionCreated, sessionID: sessionID, durability: .durable)
+        try append(Data(repeating: 0, count: 64), to: url)
+        let restored = try AgentJournal.load(from: url)
+        let zeroRecovery = await restored.recovery
+        let zeroRecords = await restored.snapshot()
+        XCTAssertEqual(zeroRecovery, .corruptTail)
+        XCTAssertEqual(zeroRecords.count, 1)
+        do {
+            _ = try await restored.append(.userMessage("must repair first"), sessionID: sessionID, durability: .durable)
+            XCTFail("corrupt tail must require an explicit repair")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .repairRequired)
+        }
+        try await restored.discardCorruptTail()
+        let repairedRecovery = await restored.recovery
+        XCTAssertEqual(repairedRecovery, .clean)
+        _ = try await restored.append(.userMessage("after repair"), sessionID: sessionID, durability: .durable)
+        let appendedRecovery = await restored.recovery
+        XCTAssertEqual(appendedRecovery, .clean)
+        let reloaded = try AgentJournal.load(from: url)
+        let sequences = await reloaded.snapshot().map(\.sequence)
+        XCTAssertEqual(sequences, [1, 2])
+    }
+
+    func testTerminalChecksumMismatchIsCorruptTail() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        _ = try await journal.append(.sessionCreated, sessionID: sessionID, durability: .durable)
+        _ = try await journal.append(.userMessage("keep me"), sessionID: sessionID, durability: .durable)
         var data = try Data(contentsOf: url)
         data[data.count - 1] ^= 0x01
         try data.write(to: url)
+        let restored = try AgentJournal.load(from: url)
+        let checksumRecovery = await restored.recovery
+        let checksumRecords = await restored.snapshot()
+        let pending = await restored.pendingMutations()
+        XCTAssertEqual(checksumRecovery, .corruptTail)
+        XCTAssertEqual(checksumRecords.count, 1)
+        XCTAssertEqual(pending.count, 0)
+    }
 
+    func testTerminalInvalidJSONFrameIsCorruptTail() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        _ = try await journal.append(.sessionCreated, sessionID: sessionID, durability: .durable)
+        try append(frame(payload: Data(#"{"not":"a-journal-frame"}"#.utf8)), to: url)
+        let restored = try AgentJournal.load(from: url)
+        let jsonRecovery = await restored.recovery
+        let jsonRecords = await restored.snapshot()
+        XCTAssertEqual(jsonRecovery, .corruptTail)
+        XCTAssertEqual(jsonRecords.count, 1)
+    }
+
+    func testMiddleChecksumMismatchFailsClosed() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let journal = try AgentJournal(persistenceURL: url)
+        _ = try await journal.append(.sessionCreated, sessionID: UUID(), durability: .durable)
+        _ = try await journal.append(.userMessage("second"), sessionID: UUID(), durability: .durable)
+        var data = try Data(contentsOf: url)
+        let headerCount = Data("SWIFTAGENT-JOURNAL-1".utf8).count
+        let length = Int(readUInt32(data, at: headerCount))
+        data[headerCount + 8 + length - 1] ^= 0x01
+        try data.write(to: url)
         XCTAssertThrowsError(try AgentJournal.load(from: url)) { error in
             XCTAssertEqual(error as? AgentJournalError, .checksumMismatch)
         }
+    }
+
+    func testMiddleSequenceCorruptionFailsClosed() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        _ = try await journal.append(.sessionCreated, sessionID: sessionID, durability: .durable)
+        _ = try await journal.append(.userMessage("second"), sessionID: sessionID, durability: .durable)
+        let records = await journal.snapshot()
+        let bogus = try mutatedSequence(records[1], sequence: 99)
+        let extra = try mutatedSequence(records[1], sequence: 100)
+        try append(frame(payload: try JSONEncoder().encode(TestJournalFrame(schemaVersion: 2, records: [bogus]))), to: url)
+        try append(frame(payload: try JSONEncoder().encode(TestJournalFrame(schemaVersion: 2, records: [extra]))), to: url)
+        XCTAssertThrowsError(try AgentJournal.load(from: url)) { error in
+            XCTAssertEqual(error as? AgentJournalError, .invalidRecord)
+        }
+    }
+
+    func testCorruptTailKeepsPendingMutationPrefixUntilRepair() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let runID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        let call = ToolCall(id: .init(rawValue: "call-1"), name: "update_listing",
+                            argumentsJSON: #"{"id":"listing-1"}"#, completeness: .complete)
+        let expectation = try ToolReceiptExpectation(
+            targets: [EvidenceReference(namespace: "property.listing", id: "listing-1")],
+            revision: .present
+        )
+        let intent = try PendingMutationIntent(
+            call: call,
+            resources: [.named(EvidenceReference(namespace: "property.listing", id: "listing-1"))],
+            idempotencyKey: "op-1",
+            receiptExpectation: expectation
+        )
+        _ = try await journal.append(.pendingMutation(intent), sessionID: sessionID, runID: runID, durability: .durable)
+        try append(Data(repeating: 0, count: 64), to: url)
+        let restored = try AgentJournal.load(from: url)
+        let mutationRecovery = await restored.recovery
+        let pending = await restored.pendingMutations()
+        XCTAssertEqual(mutationRecovery, .corruptTail)
+        XCTAssertEqual(pending.count, 1)
+        XCTAssertEqual(pending[0].state, .intent)
+        try await restored.discardCorruptTail()
+        let recovered = try await restored.recoverPendingMutations(sessionID: sessionID)
+        XCTAssertEqual(recovered.map(\.state), [.needsReconciliation])
     }
 
     func testStaleJournalInstanceCannotOverwriteAConcurrentDurableAppend() async throws {
@@ -174,10 +304,63 @@ final class AgentJournalTests: XCTestCase {
         FileManager.default.temporaryDirectory.appendingPathComponent("swift-agent-journal-\(UUID().uuidString).log")
     }
 
+    private func cleanup(_ url: URL) {
+        try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(atPath: url.path + ".lock")
+    }
+
     private func append(_ data: Data, to url: URL) throws {
         let handle = try FileHandle(forWritingTo: url)
         try handle.seekToEnd()
         try handle.write(contentsOf: data)
         try handle.close()
     }
+
+    private func frame(payload: Data) -> Data {
+        var frame = Data()
+        frame.append(contentsOf: bytes(UInt32(payload.count)))
+        frame.append(contentsOf: bytes(crc32(payload)))
+        frame.append(payload)
+        return frame
+    }
+
+    private func mutatedSequence(_ record: AgentJournalRecord, sequence: UInt64) throws -> AgentJournalRecord {
+        let encoded = try JSONEncoder().encode(record)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object["sequence"] = sequence
+        let mutated = try JSONSerialization.data(withJSONObject: object)
+        return try JSONDecoder().decode(AgentJournalRecord.self, from: mutated)
+    }
+
+    private func readUInt32(_ data: Data, at offset: Int) -> UInt32 {
+        UInt32(data[offset]) << 24
+            | UInt32(data[offset + 1]) << 16
+            | UInt32(data[offset + 2]) << 8
+            | UInt32(data[offset + 3])
+    }
+
+    private func bytes(_ value: UInt32) -> [UInt8] {
+        [
+            UInt8((value >> 24) & 0xff),
+            UInt8((value >> 16) & 0xff),
+            UInt8((value >> 8) & 0xff),
+            UInt8(value & 0xff),
+        ]
+    }
+
+    private func crc32(_ data: Data) -> UInt32 {
+        var checksum: UInt32 = 0xffffffff
+        for byte in data {
+            checksum ^= UInt32(byte)
+            for _ in 0..<8 {
+                checksum = (checksum & 1) == 0 ? checksum >> 1 : (checksum >> 1) ^ 0xedb88320
+            }
+        }
+        return checksum ^ 0xffffffff
+    }
+}
+
+private struct TestJournalFrame: Codable {
+    let schemaVersion: Int
+    let records: [AgentJournalRecord]
 }

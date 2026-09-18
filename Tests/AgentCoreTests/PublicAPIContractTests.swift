@@ -15,6 +15,9 @@ struct PublicAPIContractTests {
         #expect(configuration.maxModelTurns == 8)
         #expect(configuration.maxToolCalls == 16)
         #expect(configuration.runTimeout == .seconds(30))
+        #expect(configuration.contextPolicy.maxInputUTF8Bytes == 8 * 1024 * 1024)
+        #expect(configuration.contextPolicy.maxActiveHistoryUTF8Bytes == 12 * 1024 * 1024)
+        #expect(configuration.contextPolicy.retainedRecentTurnCount == 6)
     }
 
     @Test func readOnlyAgentAcceptsNilMemoryAndDurableJournals() async throws {
@@ -95,6 +98,7 @@ struct PublicAPIContractTests {
         let journal = try AgentJournal(persistenceURL: url)
         let run = try await PublicAPIMutationClient.makeSession(journal: journal).run("Update the listing")
         let result = try await run.wait()
+        await run.waitForDrain()
         #expect(result.toolCalls == 1)
         #expect(result.receipts.count == 1)
         #expect(await journal.pendingMutations().isEmpty)

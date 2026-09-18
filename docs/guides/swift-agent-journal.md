@@ -30,7 +30,9 @@ are load, inspect, recover, reconcile and abort:
 ```swift
 let journal = try AgentJournal(persistenceURL: journalURL)
 let session = try agent.makeSession(id: sessionID, journal: journal)
-_ = try await session.run("Update the listing").wait()
+let run = try await session.run("Update the listing")
+_ = try await run.wait()
+await run.waitForDrain()
 
 let restarted = try AgentJournal.load(from: journalURL)
 let pending = try await restarted.recoverPendingMutations(sessionID: sessionID)
@@ -67,10 +69,20 @@ marker that blocks recovery.
 ## Restart Behavior
 
 `AgentJournal.load(from:)` validates the header, frame checksum, schema version and
-strict sequence. A partial final frame is treated as an uncommitted crash tail and
-is excluded from the snapshot; a later durable append truncates that tail before
-writing. A checksum or schema error in a complete frame is not ignored. The journal
-does not replay tools or infer external success from model text.
+strict sequence. Recovery is one of:
+
+| State | Meaning | Prefix | Next durable write |
+| --- | --- | --- | --- |
+| `clean` | Every frame validated | Complete file | Append |
+| `truncatedTail` | Final length header or payload was not written completely | Valid prefix kept | Truncate the incomplete tail, then append |
+| `corruptTail` | The last complete frame has an invalid length, checksum, JSON, or sequence | Valid prefix kept; pending mutations stay inspectable | Throws `repairRequired` until `discardCorruptTail()` |
+
+A checksum, sequence, or JSON error in a **middle** frame still fails the load.
+Core does not skip a hole and keep reading. Crash-tail recovery never replays
+tools or infers external success from model text.
+
+Compaction summaries recorded in the journal bound later checkpoint payloads.
+The file remains append-only; physical rollover is not performed on load.
 
 ## Mutation Recovery
 

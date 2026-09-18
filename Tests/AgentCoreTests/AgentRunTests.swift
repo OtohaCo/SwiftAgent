@@ -120,4 +120,70 @@ struct AgentRunTests {
         #expect(resultB.outcome == .completed)
         #expect(try await run.wait() == resultB)
     }
+
+    @Test func waitForDrainCompletesAfterWaitWhenNoUnderlyingWorkRemains() async throws {
+        let sessionID = UUID()
+        let agent = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, _ in textResponse(request, "ok") }
+        )
+        let session = try agent.makeSession(id: sessionID)
+        let run = try await session.run("hello")
+        #expect(try await run.wait().outcome == .completed)
+        await run.waitForDrain()
+        let replacement = try agent.makeSession(id: sessionID)
+        let next = try await replacement.run("again")
+        #expect(try await next.wait().outcome == .completed)
+        await next.waitForDrain()
+    }
+
+    @Test func waitReturnsBeforeAnUncooperativeToolDrainsAndBlocksAReplacementSession() async throws {
+        let gate = ManualGate()
+        let entered = XCTestExpectation(description: "Tool entered")
+        let returned = XCTestExpectation(description: "Tool returned")
+        let tool = try BlockingTool(gate: gate, entered: entered, returned: returned, timeout: .seconds(30))
+        let provider = ScriptedProvider { request, turn in
+            turn == 1 ? toolResponse(request, [blockingCall]) : textResponse(request, "Done")
+        }
+        let sessionID = UUID()
+        let agent = try Agent(model: fixtureModel, provider: provider, tools: [tool])
+        let session = try agent.makeSession(id: sessionID)
+        let run = try await session.run("block")
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        await run.cancel()
+        await #expect(throws: CancellationError.self) { try await run.wait() }
+        #expect(await collectEvents(run.events).last == .runFinished(.cancelled))
+
+        let replacement = try agent.makeSession(id: sessionID)
+        await #expect(throws: AgentSessionError.runInProgress) {
+            _ = try await replacement.run("too early")
+        }
+
+        await gate.open()
+        await run.waitForDrain()
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+
+        let after = try await replacement.run("after drain")
+        #expect(try await after.wait().outcome == .completed)
+        await after.waitForDrain()
+    }
+
+    @Test func sessionAndRunDrainShareOneOwner() async throws {
+        let sessionID = UUID()
+        let session = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, _ in textResponse(request, "ok") }
+        ).makeSession(id: sessionID)
+        let run = try await session.run("hello")
+        _ = try await run.wait()
+        await session.waitForRunToDrain(runID: run.id)
+        await run.waitForDrain()
+        let replacement = try Agent(
+            model: fixtureModel,
+            provider: ScriptedProvider { request, _ in textResponse(request, "ok") }
+        ).makeSession(id: sessionID)
+        let next = try await replacement.run("again")
+        #expect(try await next.wait().outcome == .completed)
+        await next.waitForDrain()
+    }
 }

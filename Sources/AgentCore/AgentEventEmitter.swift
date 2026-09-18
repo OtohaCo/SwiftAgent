@@ -62,6 +62,9 @@ actor AgentEventEmitter {
         guard !finished else { return }
         if pendingTermination == nil { pendingTermination = termination }
         finishIfReady()
+        // Wait for reserved completions so a checkpoint that already landed can
+        // still publish. Settlement failure must abort the reservation itself;
+        // finish must not be the only path that can unblock a leaked reserve.
         if !finished { await withCheckedContinuation { finishWaiters.append($0) } }
     }
 

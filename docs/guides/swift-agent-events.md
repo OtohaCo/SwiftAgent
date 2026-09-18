@@ -56,7 +56,10 @@ The terminal `result` carries AgentLoopResult; inspect its outcome for completed
 refused or incomplete. Typed AgentFailure distinguishes loop, session, provider,
 model protocol, registry, invocation, evidence, receipt, resource, scheduler and
 journal failures. Unknown host errors become unclassified without copying their
-arbitrary descriptions into events. `wait()` throws the original error.
+arbitrary descriptions into events. Combined mutation settlement/quarantine
+failures are `AgentFailure.mutationPersistence`. Context policy failures are
+`AgentFailure.context`. `wait()` throws the original error. `wait()` is the
+logical terminal; `waitForDrain()` is the physical provider/tool release.
 
 ## Cancellation and Lifetime
 

@@ -177,10 +177,15 @@ package struct AgentLoop: Sendable {
                 }, onCompleted: { index, call, result in
                     try await progress.record(index: index, call: call, result: result)
                 }, onFailed: { call, error in
+                    var exposed: any Error = Self.toolError(error)
                     if call.policy.effect == .mutation {
-                        try await lifecycle?.markMutationNeedsReconciliation(call.call.id)
+                        let mark = lifecycle?.markMutationNeedsReconciliation
+                        let callID = call.call.id
+                        exposed = await AgentMutationPersistenceError.capturing(settlement: exposed) {
+                            if let mark { try await mark(callID) }
+                        }
                     }
-                    try await emitter?.failIfActive(call.call.id, failure: AgentFailure(Self.toolError(error)))
+                    try await emitter?.failIfActive(call.call.id, failure: AgentFailure(exposed))
                 })
                 for call in prepared where call.policy.effect == .mutation {
                     // The scheduler has completed authorization, evidence validation,

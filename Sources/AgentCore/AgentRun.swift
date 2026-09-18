@@ -1,7 +1,14 @@
 import Foundation
 
 /// One execution owned by a Session. The public surface is events, cancel,
-/// steer and wait. The backing Task and scheduler handles are not exposed.
+/// steer, wait and waitForDrain. The backing Task and scheduler handles are
+/// not exposed.
+///
+/// `wait()` returns when the Agent has produced a logical terminal outcome.
+/// That does not mean provider or tool work has exited, or that Session
+/// identity is free. `waitForDrain()` waits for that physical release.
+/// Both methods share the Session's drain owner; they do not start a second
+/// drain.
 ///
 /// `events` is a single-consumer stream. Cancelling the observer does not
 /// cancel the Run; call `cancel()` to stop execution. `wait()` may be used
@@ -11,15 +18,18 @@ public struct AgentRun: Sendable {
     public let sessionID: UUID
     public let events: AsyncStream<AgentEvent>
     private let control: AgentRunControl
+    private let drain: AgentRunDrain
 
-    init(id: UUID, sessionID: UUID, events: AsyncStream<AgentEvent>, control: AgentRunControl) {
+    init(id: UUID, sessionID: UUID, events: AsyncStream<AgentEvent>, control: AgentRunControl, drain: AgentRunDrain) {
         self.id = id
         self.sessionID = sessionID
         self.events = events
         self.control = control
+        self.drain = drain
     }
 
     public func wait() async throws -> AgentLoopResult { try await control.wait() }
+    public func waitForDrain() async { await drain.wait() }
     public func cancel() async { await control.cancel() }
     @discardableResult
     public func steer(_ text: String) async throws -> UUID { try await control.enqueue(text) }
@@ -117,5 +127,29 @@ actor AgentRunControl {
         let pending = waiters
         waiters.removeAll()
         for waiter in pending.values { waiter.resume(with: result) }
+    }
+}
+
+actor AgentRunDrain {
+    private var completed = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if completed { return }
+        await withCheckedContinuation { continuation in
+            if completed {
+                continuation.resume()
+            } else {
+                waiters.append(continuation)
+            }
+        }
+    }
+
+    func complete() {
+        guard !completed else { return }
+        completed = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
     }
 }

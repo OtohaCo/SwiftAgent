@@ -23,9 +23,11 @@ resources. Isolation is per scheduler instance, not per Session.
 
 `AgentRun.events` is a single-consumer `AsyncStream`. Cancelling the observer
 does not cancel the Run. `wait()` may have several callers and returns one
-terminal result. Provider streams use `ModelEventStream.make`, which cancels the
-producer on termination. After a thrown `ModelProviderError` there is no
-terminal model event; AgentCore still publishes exactly one `runFinished`.
+logical terminal result. `waitForDrain()` waits until provider and tool work
+for that Run have exited and the Session identity is free. Provider streams
+use `ModelEventStream.make`, which cancels the producer on termination. After
+a thrown `ModelProviderError` there is no terminal model event; AgentCore still
+publishes exactly one `runFinished`.
 
 ## Workarounds
 

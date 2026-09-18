@@ -254,8 +254,11 @@ final class AgentMutationRecoveryTests: XCTestCase {
                                       result: ToolResult(output: .object(["updated": .bool(true)]),
                                                          receipt: validReceipt(operationID: "operation")))
             XCTFail("A quarantine failure must be surfaced")
+        } catch let error as AgentMutationPersistenceError {
+            XCTAssertEqual(error.settlement, .journal(settlementFailure))
+            XCTAssertEqual(error.quarantine, .journal(quarantineFailure))
         } catch {
-            XCTAssertEqual(error as? AgentJournalError, quarantineFailure)
+            XCTFail("Expected AgentMutationPersistenceError, got \(error)")
         }
     }
 
@@ -862,7 +865,9 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let operationID = "queue-operation-1"
 
         let first = try agent.makeSession(id: sessionID, journal: journal)
-        _ = try await first.run("Update the listing", operationID: operationID).wait()
+        let firstRun = try await first.run("Update the listing", operationID: operationID)
+        _ = try await firstRun.wait()
+        await firstRun.waitForDrain()
         let firstCount = await probe.count
         XCTAssertEqual(firstCount, 1)
 

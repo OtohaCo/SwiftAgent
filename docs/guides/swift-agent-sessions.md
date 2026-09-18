@@ -62,20 +62,34 @@ the completed proposal/result pairs. Pending or invalid proposals and provisiona
 model deltas are not made into canonical tool history. A run's terminal response
 can still contain interrupted proposals for diagnostics.
 
-History is committed and ownership is released before runFinished is published.
-`wait()` also completes after that release. Late work from an older cancelled run
-cannot overwrite history or release ownership belonging to a newer run. History
-is in memory; durable journaling, restoration and compaction are separate concerns.
+History is committed before `runFinished` is published. That is the logical
+terminal: `run.wait()` returns, and the event stream closes. It does not mean
+provider or tool work has exited, or that the Session identity is free.
+
+`await run.waitForDrain()` waits for that physical release. The same owner is
+exposed as `session.waitForRunToDrain(runID:)`. Do not start a second drain.
+A replacement Session with the same ID must wait until drain completes;
+`runInProgress` is the typed rejection if it tries to run earlier.
+
+Late work from an older cancelled run cannot overwrite history belonging to a
+newer run. History is in memory; durable journaling, restoration and compaction
+are separate concerns. See [Context Policy](swift-agent-context.md).
 
 ## Run Control
 
-The public Run surface is `events`, `cancel()`, `steer(_:)`, and `wait()`. The
-backing Task and scheduler handles are not exposed.
+The public Run surface is `events`, `cancel()`, `steer(_:)`, `wait()`, and
+`waitForDrain()`. The backing Task and scheduler handles are not exposed.
 
-`await run.cancel()` requests cancellation idempotently. Wait for `run.wait()` or
-runFinished before starting another request in that Session. Cancellation does not
-roll back external effects, and a host operation that ignores cancellation may
-finish later; its result cannot advance the run or alter the Session.
+```swift
+let result = try await run.wait()
+await run.waitForDrain()
+```
+
+`await run.cancel()` requests cancellation idempotently. Wait for `run.wait()`
+before treating the Run as logically finished. Wait for `waitForDrain()` before
+reusing the Session ID or assuming host executors have returned. Cancellation
+does not roll back external effects. A host operation that ignores cancellation
+may finish later; its result cannot advance the run or alter the Session.
 
 `try await run.wait()` returns the cached AgentLoopResult or throws the original
 error. Multiple callers can wait independently. Cancelling one waiter only ends

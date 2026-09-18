@@ -34,14 +34,17 @@ struct ExternalClientTests {
         }
         let journal = try AgentJournal(persistenceURL: url)
         #expect(journal.storage == .durable)
-        let result = try await makeMutationAgent().makeSession(journal: journal).run("Update the listing").wait()
+        let sessionID = UUID()
+        let run = try await makeMutationAgent().makeSession(id: sessionID, journal: journal).run("Update the listing")
+        let result = try await run.wait()
+        await run.waitForDrain()
         #expect(result.receipts.count == 1)
         #expect(await journal.pendingMutations().isEmpty)
 
         let restarted = try AgentJournal.load(from: url)
         #expect(await restarted.pendingMutations().isEmpty)
         #expect(await restarted.recovery == .clean)
-        _ = try makeMutationAgent().makeSession(id: UUID(), journal: restarted)
+        _ = try makeMutationAgent().makeSession(id: sessionID, journal: restarted)
     }
 }
 

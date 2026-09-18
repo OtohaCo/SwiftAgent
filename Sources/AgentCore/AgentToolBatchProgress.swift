@@ -21,10 +21,12 @@ actor AgentToolBatchProgress {
     }
 
     func record(index: Int, call: PreparedToolCall, result: ToolResult<JSONValue>) async throws {
+        var reserved = false
         do {
             try budget.checkActive()
             let message = ToolResultMessage(callID: call.call.id, content: [.json(result.output)], isError: false)
             try await emitter?.reserveCompletion(call.call.id)
+            reserved = true
             var proposed = results
             proposed[index] = message
             let committedHistory = history(proposed)
@@ -45,13 +47,22 @@ actor AgentToolBatchProgress {
             // A committed checkpoint must be reflected in events even if cancellation arrived afterward.
             try await emitter?.commitCompletion(message, receipt: receipt)
         } catch {
-            // The executor already returned. Any failure while settling or committing
-            // must quarantine a mutation before the run reports its failure.
+            // The executor already returned. Quarantine persistence must not
+            // pin the emitter's reserved completion, or finish() waits forever.
+            let exposed: any Error
             if call.policy.effect == .mutation {
-                try await lifecycle?.markMutationNeedsReconciliation(call.call.id)
+                let mark = lifecycle?.markMutationNeedsReconciliation
+                let callID = call.call.id
+                exposed = await AgentMutationPersistenceError.capturing(settlement: error) {
+                    if let mark { try await mark(callID) }
+                }
+            } else {
+                exposed = error
             }
-            await emitter?.abortCompletion(call.call.id, failure: AgentFailure(error))
-            throw error
+            if reserved {
+                await emitter?.abortCompletion(call.call.id, failure: AgentFailure(exposed))
+            }
+            throw exposed
         }
     }
 

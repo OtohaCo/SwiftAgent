@@ -1,6 +1,6 @@
 # Anthropic Messages Provider
 
-last-verified: 2026-09-17
+last-verified: 2026-09-18
 
 `AnthropicProvider` implements one streaming Messages API request per ModelRequest.
 It does not execute tools, keep a second conversation history, retry requests or
@@ -29,8 +29,12 @@ ModelProviderError categories; numeric Retry-After hints do not authorize retrie
 Text, returned thinking summaries, complete tool proposals, usage and terminal
 reasons are normalized from [Messages streaming events](https://platform.claude.com/docs/en/build-with-claude/streaming).
 SSE decoding preserves fragmented UTF-8, handles CR/LF delimiters, and rejects
-unfinished or oversized frames. The per-event limit is 1 MiB. A complete proposal
-still needs a valid terminal response and clean EOF before Core can dispatch it.
+unfinished or oversized frames. The per-event limit is 1 MiB. Unknown top-level
+event types are ignored without emitting a ModelEvent and without closing an
+active content block. Known event types with illegal structure, including an
+unknown `delta.type` inside `content_block_delta`, still fail. `ping` is a
+no-op. `error` follows the existing error contract. A complete proposal still
+needs a valid terminal response and clean EOF before Core can dispatch it.
 
 `AnthropicThinking` supports disabled, adaptive, or enabled with an explicit budget.
 Manual budgets must be at least 1024 tokens and below the configured output limit.

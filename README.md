@@ -50,6 +50,7 @@ for await event in run.events {
     if case .model(.textDelta(let delta)) = event { print(delta, terminator: "") }
 }
 _ = try await run.wait()
+await run.waitForDrain()
 ```
 
 Read-only Agents may omit a journal. Mutation tools cannot. A memory-only
@@ -145,7 +146,9 @@ let agent = try Agent(
     configuration: AgentConfiguration(scheduler: scheduler)
 )
 let session = try agent.makeSession(id: sessionID, journal: journal)
-_ = try await session.run("Update the listing").wait()
+let run = try await session.run("Update the listing")
+_ = try await run.wait()
+await run.waitForDrain()
 
 let restarted = try AgentJournal.load(from: journalURL)
 for pending in await restarted.pendingMutations(sessionID: sessionID) {
@@ -231,6 +234,12 @@ automatic executor replay.
 
 [Errors](docs/guides/swift-agent-errors.md) lists the typed failure taxonomy.
 Do not match `localizedDescription`.
+
+[Sessions](docs/guides/swift-agent-sessions.md) freeze `wait()` as logical
+termination and `waitForDrain()` as physical resource release.
+
+[Context Policy](docs/guides/swift-agent-context.md) separates current
+instructions from conversation history and bounds checkpoint size.
 
 [Concurrency](docs/guides/swift-agent-concurrency.md) records the Swift 6.4
 isolation audit. Core does not use MainActor.

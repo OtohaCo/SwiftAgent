@@ -154,7 +154,10 @@ public struct AgentJournalRecord: Codable, Equatable, Sendable {
 
 public enum AgentJournalRecovery: Equatable, Sendable {
     case clean
+    /// Incomplete final length header or payload. Prefix frames are valid.
     case truncatedTail
+    /// The last complete frame failed validation. Prefix frames are valid.
+    case corruptTail
 }
 
 package enum AgentJournalDurability: Sendable {
@@ -177,6 +180,7 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     case mutationSettlementRequiresReconciliation
     case persistenceUnavailable(String)
     case sessionLeaseUnavailable
+    case repairRequired
 
     public var errorDescription: String? {
         switch self {
@@ -194,6 +198,7 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
         case .mutationSettlementRequiresReconciliation: "Mutation settlement must use the reconciliation API."
         case .persistenceUnavailable(let message): "Agent journal persistence is unavailable: \(message)"
         case .sessionLeaseUnavailable: "The durable Agent session is already active in another process."
+        case .repairRequired: "The journal has a corrupt tail that must be discarded before another durable write."
         }
     }
 }
@@ -255,14 +260,15 @@ public actor AgentJournal {
         let exists: Bool
     }
 
+    public static let maximumFrameSize = 16 * 1024 * 1024
     private static let header = Data("SWIFTAGENT-JOURNAL-1".utf8)
-    private static let maximumFrameSize = 16 * 1024 * 1024
     private static let supportedSchemaVersions: Set<Int> = [1, AgentJournalRecord.schemaVersion]
 
     private var records: [AgentJournalRecord]
     private var nextSequence: UInt64
     private var persistenceURL: URL?
     private var recoveryState: AgentJournalRecovery
+    private var validByteLength: Int
     private var sessionLeases: [UUID: FileHandle]
     private nonisolated let storageBox: AgentJournalStorageBox
 
@@ -291,6 +297,7 @@ public actor AgentJournal {
         nextSequence = 1
         persistenceURL = nil
         recoveryState = .clean
+        validByteLength = 0
         sessionLeases = [:]
         mutationRecords = [:]
         storageBox = AgentJournalStorageBox(.memory)
@@ -303,6 +310,7 @@ public actor AgentJournal {
         nextSequence = (loaded.records.last?.sequence ?? 0) + 1
         self.persistenceURL = persistenceURL
         recoveryState = loaded.recovery
+        validByteLength = loaded.validLength
         sessionLeases = [:]
         mutationRecords = try Self.buildMutationRecords(from: loaded.records)
         storageBox = AgentJournalStorageBox(.durable)
@@ -385,6 +393,24 @@ public actor AgentJournal {
 
     public var recovery: AgentJournalRecovery { recoveryState }
 
+    /// Removes a validated-but-corrupt final frame after a successful prefix load.
+    /// Truncated tails are repaired by the next durable append and do not need this.
+    public func discardCorruptTail() throws {
+        guard recoveryState == .corruptTail else { return }
+        guard let url = persistenceURL else {
+            recoveryState = .clean
+            return
+        }
+        let repairedLength = try Self.withFileLock(for: url) {
+            let current = try Self.read(from: url)
+            guard current.recovery == .corruptTail else { return current.validLength }
+            try Self.createOrTruncateTail(at: url, to: current.validLength)
+            return current.validLength
+        }
+        validByteLength = repairedLength
+        recoveryState = .clean
+    }
+
     @discardableResult
     package func append(
         _ event: AgentJournalEvent,
@@ -422,6 +448,9 @@ public actor AgentJournal {
         durability: AgentJournalDurability,
         allowMutationSettlement: Bool
     ) throws -> [AgentJournalRecord] {
+        if durability == .durable, recoveryState == .corruptTail {
+            throw AgentJournalError.repairRequired
+        }
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
             throw AgentJournalError.mutationSettlementRequiresReconciliation
@@ -779,6 +808,9 @@ public actor AgentJournal {
         let frame = try Self.encodeFrame(records: committed)
         try Self.withFileLock(for: url) {
             let current = try Self.read(from: url)
+            if current.recovery == .corruptTail {
+                throw AgentJournalError.repairRequired
+            }
             guard current.records == expectedRecords else {
                 throw AgentJournalError.concurrentWriter
             }
@@ -839,30 +871,69 @@ public actor AgentJournal {
             }
             let length = Int(readUInt32(data, at: offset))
             let expectedChecksum = readUInt32(data, at: offset + 4)
-            guard length > 0, length <= maximumFrameSize else { throw AgentJournalError.invalidFrame }
+            if length <= 0 || length > maximumFrameSize {
+                let rest = data[offset..<data.count]
+                if rest.allSatisfy({ $0 == 0 }) || remaining == 8 {
+                    recovery = .corruptTail
+                    break
+                }
+                throw AgentJournalError.invalidFrame
+            }
             let end = offset + 8 + length
             guard end <= data.count else {
                 recovery = .truncatedTail
                 break
             }
+            let isTerminalFrame = end == data.count
             let payload = data.subdata(in: (offset + 8)..<end)
-            guard crc32(payload) == expectedChecksum else { throw AgentJournalError.checksumMismatch }
+            if crc32(payload) != expectedChecksum {
+                if isTerminalFrame {
+                    recovery = .corruptTail
+                    break
+                }
+                throw AgentJournalError.checksumMismatch
+            }
             let frame: JournalFrame
-            do { frame = try JSONDecoder().decode(JournalFrame.self, from: payload) }
-            catch { throw AgentJournalError.invalidFrame }
-            guard Self.supportedSchemaVersions.contains(frame.schemaVersion),
-                  !frame.records.isEmpty,
-                  frame.records.allSatisfy({ $0.checkpointID == frame.records[0].checkpointID }) else {
+            do {
+                frame = try JSONDecoder().decode(JournalFrame.self, from: payload)
+            } catch {
+                if isTerminalFrame {
+                    recovery = .corruptTail
+                    break
+                }
+                throw AgentJournalError.invalidFrame
+            }
+            let headerValid = Self.supportedSchemaVersions.contains(frame.schemaVersion)
+                && !frame.records.isEmpty
+                && frame.records.allSatisfy { $0.checkpointID == frame.records[0].checkpointID }
+            guard headerValid else {
+                if isTerminalFrame {
+                    recovery = .corruptTail
+                    break
+                }
                 throw AgentJournalError.invalidRecord
             }
+            var accepted: [AgentJournalRecord] = []
+            var next = expectedSequence
+            var recordsValid = true
             for record in frame.records {
                 guard Self.supportedSchemaVersions.contains(record.schemaVersion),
-                      record.sequence == expectedSequence else {
-                    throw AgentJournalError.invalidRecord
+                      record.sequence == next else {
+                    recordsValid = false
+                    break
                 }
-                records.append(record)
-                expectedSequence += 1
+                accepted.append(record)
+                next += 1
             }
+            guard recordsValid else {
+                if isTerminalFrame {
+                    recovery = .corruptTail
+                    break
+                }
+                throw AgentJournalError.invalidRecord
+            }
+            records.append(contentsOf: accepted)
+            expectedSequence = next
             offset = end
         }
         return ReadResult(records: records, recovery: recovery, validLength: offset, exists: true)

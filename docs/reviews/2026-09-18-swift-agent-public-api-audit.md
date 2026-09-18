@@ -115,7 +115,7 @@ Input/Output. Internal runtime erasure still uses JSONValue.
 | AgentJournalError / AgentJournal | public | KEEP | Hosts load, inspect, recover, reconcile, abort | Write APIs package |
 | AgentLoop | package | PACKAGE | Orchestration detail | Yes |
 | AgentLoopOutcome / AgentLoopResult / AgentLoopError | public | KEEP | Run result and limits | No |
-| AgentRun / AgentRunError | public | KEEP | events / cancel / steer / wait | No |
+| AgentRun / AgentRunError | public | KEEP | events / cancel / steer / wait / waitForDrain | Additive `waitForDrain` |
 | AgentSession / AgentSessionError | public | KEEP | History and run ownership | New error case |
 
 History is `public private(set)`. Callers cannot assign it. `activeRunID` is
@@ -264,3 +264,23 @@ Public `AgentEvent` cases are business semantics:
 
 Do not add scheduler-lease or HTTP-frame cases to this enum. SAI-030 may add a
 diagnostic channel later without redefining `toolStarted`.
+
+## SAI-038 additive freeze
+
+These belong in 1.0-pre. Exhaustive switches must update:
+
+1. `AgentRun.waitForDrain()` — physical provider/tool drain and Session identity
+   release. Same owner as `AgentSession.waitForRunToDrain(runID:)`. `wait()` is
+   only the logical terminal.
+2. `AgentJournalRecovery.corruptTail` and `AgentJournalError.repairRequired`.
+   Hosts inspect the valid prefix, then call `discardCorruptTail()` before
+   another durable write.
+3. `AgentMutationPersistenceError` and `AgentFailure.mutationPersistence`.
+4. `AgentContextPolicy`, `AgentContextCompactor`, `AgentRetainedTurnCompactor`,
+   `AgentContextError`, and `AgentFailure.context`.
+5. `AgentConfiguration.contextPolicy` default.
+
+Do not treat checkpoint `system` messages as active runtime configuration.
+Restore always applies the current Agent instructions. Physical journal
+rollover remains deferred; compaction bounds checkpoint payloads only.
+

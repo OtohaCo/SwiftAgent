@@ -6,7 +6,8 @@ import Foundation
 /// be active; overlapping `run` calls fail with `runInProgress`.
 ///
 /// History is readable and not assignable. Restoration uses the journal
-/// checkpoint, never a caller-supplied array. Share the Agent's scheduler
+/// checkpoint for conversation state. Runtime instructions always come from
+/// the Agent that created this Session. Share the Agent's scheduler
 /// when another Session can mutate the same host resources.
 public actor AgentSession {
     public nonisolated let id: UUID
@@ -18,18 +19,23 @@ public actor AgentSession {
     private let maxModelTurns: Int
     private let maxToolCalls: Int
     private let runTimeout: Duration
+    private let instructions: String
+    private let contextPolicy: AgentContextPolicy
     private let journal: AgentJournal?
     private var appliedSteeringIDs: Set<UUID> = []
     private var restoredJournalState = false
     private var pendingDrainTask: Task<Void, Never>?
     private var drainingRunID: UUID?
+    private var drainHandles: [UUID: AgentRunDrain] = [:]
 
     init(id: UUID = UUID(), loop: AgentLoop, instructions: String, structuredOutput: StructuredOutputSchema?, maxModelTurns: Int,
-         maxToolCalls: Int, runTimeout: Duration, journal: AgentJournal? = nil) {
+         maxToolCalls: Int, runTimeout: Duration, contextPolicy: AgentContextPolicy, journal: AgentJournal? = nil) {
         self.id = id
         self.loop = loop
         self.structuredOutput = structuredOutput
-        history = instructions.isEmpty ? [] : [.system(instructions)]
+        self.instructions = instructions
+        self.contextPolicy = contextPolicy
+        history = AgentContextWindow.applyingCurrentInstructions([], instructions: instructions)
         self.maxModelTurns = maxModelTurns
         self.maxToolCalls = maxToolCalls
         self.runTimeout = runTimeout
@@ -46,6 +52,7 @@ public actor AgentSession {
     ) async throws -> AgentRun {
         try Task.checkCancellation()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentSessionError.emptyInput }
+        try contextPolicy.checkInput(text)
         guard activeRunID == nil else { throw AgentSessionError.runInProgress }
         if let pendingDrainTask {
             await pendingDrainTask.value
@@ -74,7 +81,13 @@ public actor AgentSession {
         }
     }
 
+    /// Waits until provider/tool work for `runID` has exited and this Session
+    /// identity is released. Same owner as `AgentRun.waitForDrain()`.
     public func waitForRunToDrain(runID: UUID) async {
+        if let drain = drainHandles[runID] {
+            await drain.wait()
+            return
+        }
         await loop.waitForRunToDrain(sessionID: id, runID: runID)
         await finishDraining(runID: runID)
     }
@@ -84,6 +97,7 @@ public actor AgentSession {
                                                deadline: .now.advanced(by: runTimeout))
         try budget.checkActive()
         await restoreJournalStateIfNeeded()
+        try await compactHistoryIfNeeded(runID: nil, budget: budget)
         let runID = UUID()
         if let journal {
             _ = try await journal.recoverPendingMutations(sessionID: id)
@@ -107,6 +121,8 @@ public actor AgentSession {
         history.append(.user([.text(text)]))
         activeRunID = runID
         appliedSteeringIDs.removeAll()
+        let drain = AgentRunDrain()
+        drainHandles[runID] = drain
         let messages = history
         Task {
             await control.start {
@@ -120,7 +136,7 @@ public actor AgentSession {
                 )
             }
         }
-        return AgentRun(id: runID, sessionID: id, events: channel.stream, control: control)
+        return AgentRun(id: runID, sessionID: id, events: channel.stream, control: control, drain: drain)
     }
     private func perform(_ messages: [ModelMessage], runID: UUID, operationID: String?, budget: AgentBudget,
                          emitter: AgentEventEmitter, control: AgentRunControl) async -> Result<AgentLoopResult, Error> {
@@ -137,15 +153,24 @@ public actor AgentSession {
                 guard let journal else {
                     throw AgentJournalError.persistenceUnavailable("mutation history cannot be committed without a journal")
                 }
+                let prepared = try await self.prepareCheckpoint(messages)
+                if let summary = prepared.summary {
+                    try await journal.append(
+                        .compaction(summary),
+                        sessionID: self.id,
+                        runID: runID,
+                        durability: journal.storage == .durable ? .durable : .memory
+                    )
+                }
                 try await journal.commitMutation(
                     sessionID: self.id,
                     runID: runID,
                     callID: callID,
                     receipt: receipt,
-                    history: messages,
+                    history: prepared.history,
                     steeringIDs: steering.map(\.id)
                 )
-                await self.applyCommittedHistory(messages, steering: steering, runID: runID)
+                await self.applyCommittedHistory(prepared.history, steering: steering, runID: runID)
             },
             markMutationNeedsReconciliation: { callID in
                 try await journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
@@ -168,15 +193,21 @@ public actor AgentSession {
     private func record(_ messages: [ModelMessage], steering: [AgentSteeringInput], runID: UUID, budget: AgentBudget) async throws {
         try budget.checkActive()
         guard activeRunID == runID else { throw CancellationError() }
+        let prepared = try await prepareCheckpoint(messages)
         if let journal {
-            try await journal.append(
-                .checkpoint(history: messages, steeringIDs: steering.map(\.id)),
+            var events: [AgentJournalEvent] = []
+            if let summary = prepared.summary {
+                events.append(.compaction(summary))
+            }
+            events.append(.checkpoint(history: prepared.history, steeringIDs: steering.map(\.id)))
+            try await journal.appendCheckpoint(
+                events,
                 sessionID: id,
                 runID: runID,
                 durability: journal.storage == .durable ? .durable : .memory
             )
         }
-        history = messages
+        history = prepared.history
         appliedSteeringIDs.formUnion(steering.map(\.id))
     }
 
@@ -197,11 +228,13 @@ public actor AgentSession {
         let sessionID = id
         let loop = self.loop
         let journal = self.journal
+        let drain = drainHandles[runID]
         pendingDrainTask = Task { [weak self] in
             await loop.waitForRunToDrain(sessionID: sessionID, runID: runID)
             if let self {
                 await self.finishDraining(runID: runID)
             } else {
+                await drain?.complete()
                 await journal?.releaseSessionLease(sessionID: sessionID)
                 await AgentSessionIdentityRegistry.shared.release(sessionID)
             }
@@ -214,6 +247,9 @@ public actor AgentSession {
         pendingDrainTask = nil
         await journal?.releaseSessionLease(sessionID: id)
         await AgentSessionIdentityRegistry.shared.release(id)
+        if let drain = drainHandles.removeValue(forKey: runID) {
+            await drain.complete()
+        }
     }
 
     private func restoreJournalStateIfNeeded() async {
@@ -221,7 +257,50 @@ public actor AgentSession {
         restoredJournalState = true
         guard let journal,
               let checkpoint = await journal.latestCheckpoint(sessionID: id) else { return }
-        history = checkpoint.history
+        // Checkpoint system/developer messages are a historical record of the
+        // runtime configuration that was sent, not the active configuration.
+        history = AgentContextWindow.applyingCurrentInstructions(checkpoint.history, instructions: instructions)
+    }
+
+    private func compactHistoryIfNeeded(runID: UUID?, budget: AgentBudget) async throws {
+        try budget.checkActive()
+        let prepared = try await prepareCheckpoint(history)
+        guard let summary = prepared.summary else { return }
+        if let journal {
+            try await journal.appendCheckpoint(
+                [
+                    .compaction(summary),
+                    .checkpoint(history: prepared.history, steeringIDs: Array(appliedSteeringIDs)),
+                ],
+                sessionID: id,
+                runID: runID,
+                durability: journal.storage == .durable ? .durable : .memory
+            )
+        }
+        history = prepared.history
+    }
+
+    private func prepareCheckpoint(_ messages: [ModelMessage]) async throws -> (history: [ModelMessage], summary: AgentCompactionSummary?) {
+        let aligned = AgentContextWindow.applyingCurrentInstructions(messages, instructions: instructions)
+        let bytes = try AgentContextWindow.encodedByteCount(aligned)
+        let limit = min(contextPolicy.maxActiveHistoryUTF8Bytes, AgentJournal.maximumFrameSize)
+        if bytes <= limit {
+            return (aligned, nil)
+        }
+        let split = AgentContextWindow.split(aligned, retainingRecentTurns: contextPolicy.retainedRecentTurnCount)
+        guard !split.dropped.isEmpty else {
+            throw AgentContextError.historyTooLarge(bytes: bytes, limit: limit)
+        }
+        let summary = try await contextPolicy.compactor.summarize(droppedConversation: split.dropped)
+        var compacted = split.runtime
+        compacted.append(AgentContextWindow.summaryMessage(summary))
+        compacted.append(contentsOf: split.retained)
+        compacted = AgentContextWindow.applyingCurrentInstructions(compacted, instructions: instructions)
+        let compactedBytes = try AgentContextWindow.encodedByteCount(compacted)
+        guard compactedBytes <= limit else {
+            throw AgentContextError.historyTooLarge(bytes: compactedBytes, limit: limit)
+        }
+        return (compacted, summary)
     }
 }
 

@@ -22,6 +22,9 @@ switch on them rather than wrapping arbitrary errors themselves.
 | Session contract | `AgentSessionError` | `emptyInput`, `runInProgress`, `durableJournalRequired` (nil or memory journal on a mutation Agent) |
 | Cancellation | `CancellationError` | `AgentFailure.cancelled` |
 | Persistence failure | `AgentJournalError.persistenceUnavailable` | Durable journal I/O |
+| Corrupt journal tail | `AgentJournalError.repairRequired` | Last complete frame invalid; call `discardCorruptTail()` |
+| Settlement and quarantine both failed | `AgentMutationPersistenceError` | `AgentFailure.mutationPersistence`; both sides stay typed |
+| Oversized input / uncompactable history | `AgentContextError` | `inputTooLarge` vs `historyTooLarge` |
 | Programmer / configuration | `AgentLoopError.invalidBudget`, `ToolPolicyError`, `ModelProviderError.invalidRequest` | Construction |
 
 `AgentFailure.unclassified` is a last resort for foreign errors on the event
