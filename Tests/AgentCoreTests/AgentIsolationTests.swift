@@ -1,9 +1,9 @@
-import AgentCore
 import AgentModels
 import AgentTools
 import Foundation
 import Testing
 import XCTest
+@testable import AgentCore
 
 struct AgentIsolationTests {
     @Test(arguments: [false, true])
@@ -54,6 +54,7 @@ struct AgentIsolationTests {
         let returned = XCTestExpectation(description: "A returned")
         let probe = IsolationProbe()
         let providerProbe = ProviderStartProbe()
+        let drainWaitStarted = XCTestExpectation(description: "replacement waits for drain")
         let agent = try isolationAgent(
             scheduler: scheduler,
             tool: LeaseProbe(
@@ -65,7 +66,7 @@ struct AgentIsolationTests {
             ),
             providerProbe: providerProbe
         )
-        let session = try agent.makeSession()
+        let session = try agent.makeSession(drainWaitDidBegin: { _ in drainWaitStarted.fulfill() })
         let first = try await session.run("A")
 
         #expect(await providerProbe.waitUntilStarted("A"))
@@ -75,7 +76,7 @@ struct AgentIsolationTests {
         }
 
         let replacement = Task { try await session.run("B") }
-        try await Task.sleep(for: .milliseconds(80))
+        #expect(await XCTWaiter.fulfillment(of: [drainWaitStarted], timeout: 1) == .completed)
         let labelsBeforeSecondWorker = await providerProbe.labels
         #expect(labelsBeforeSecondWorker == ["A"])
         #expect(await probe.labels == ["A"])
@@ -97,6 +98,7 @@ struct AgentIsolationTests {
         let returnedA = XCTestExpectation(description: "A1 returned")
         let returnedB = XCTestExpectation(description: "A2 returned")
         let providerProbe = ProviderStartProbe()
+        let drainWaitStarted = XCTestExpectation(description: "replacement waits for every worker")
         let tool = try ParallelDrainProbe(
             gateA: gateA,
             gateB: gateB,
@@ -124,7 +126,7 @@ struct AgentIsolationTests {
             tools: [tool],
             configuration: AgentConfiguration(scheduler: scheduler)
         )
-        let session = try agent.makeSession()
+        let session = try agent.makeSession(drainWaitDidBegin: { _ in drainWaitStarted.fulfill() })
         let first = try await session.run("A")
 
         #expect(await XCTWaiter.fulfillment(of: [enteredA, enteredB], timeout: 1) == .completed)
@@ -135,7 +137,7 @@ struct AgentIsolationTests {
         #expect(await XCTWaiter.fulfillment(of: [returnedA], timeout: 1) == .completed)
 
         let replacement = Task { try await session.run("B") }
-        try await Task.sleep(for: .milliseconds(80))
+        #expect(await XCTWaiter.fulfillment(of: [drainWaitStarted], timeout: 1) == .completed)
         let labelsBeforeSecondWorker = await providerProbe.labels
         #expect(labelsBeforeSecondWorker == ["A"])
 

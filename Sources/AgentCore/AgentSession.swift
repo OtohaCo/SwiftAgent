@@ -23,6 +23,7 @@ public actor AgentSession {
     private let contextPolicy: AgentContextPolicy
     private let journal: AgentJournal?
     private let checkpointDidExit: (@Sendable (UUID) -> Void)?
+    private let drainWaitDidBegin: (@Sendable (UUID) -> Void)?
     private var appliedSteeringIDs: Set<UUID> = []
     private var restoredJournalState = false
     private var pendingDrainTask: Task<Void, Never>?
@@ -31,7 +32,8 @@ public actor AgentSession {
 
     init(id: UUID = UUID(), loop: AgentLoop, instructions: String, structuredOutput: StructuredOutputSchema?, maxModelTurns: Int,
          maxToolCalls: Int, runTimeout: Duration, contextPolicy: AgentContextPolicy, journal: AgentJournal? = nil,
-         checkpointDidExit: (@Sendable (UUID) -> Void)? = nil) {
+         checkpointDidExit: (@Sendable (UUID) -> Void)? = nil,
+         drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil) {
         self.id = id
         self.loop = loop
         self.structuredOutput = structuredOutput
@@ -43,6 +45,7 @@ public actor AgentSession {
         self.runTimeout = runTimeout
         self.journal = journal
         self.checkpointDidExit = checkpointDidExit
+        self.drainWaitDidBegin = drainWaitDidBegin
     }
 
     /// Starts one Run. Empty input, an already-active Run, a cancelled caller
@@ -58,6 +61,7 @@ public actor AgentSession {
         try contextPolicy.checkInput(text)
         guard activeRunID == nil else { throw AgentSessionError.runInProgress }
         if let pendingDrainTask {
+            if let drainingRunID { drainWaitDidBegin?(drainingRunID) }
             await pendingDrainTask.value
             try Task.checkCancellation()
         }
