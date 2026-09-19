@@ -2,8 +2,10 @@
 
 > last-verified: 2026-09-19
 >
-> Status: final hosted and Host integration evidence pending. This document is
-> updated on the exact candidate before the release gate closes.
+> Status: audit gates passed. The production code candidate is
+> `c5f08c7520c989cf01234e19c1fd011b486ca76f`; the exact docs-only audit-seal
+> SHA and its hosted run are recorded by Tingting SAI-061 so this document does
+> not create a self-referential commit.
 
 ## Baseline And Scope
 
@@ -34,8 +36,8 @@
 | Public API | PASS | Swift 6.4 symbol graphs: 956 → 1,156 precise identifiers, +200 / -0; 100 → 121 top-level types. No rc.1 public symbol is removed. |
 | Linux | PASS | Swift 6.4 clean-copy container runs six portable target builds, 126 XCTest, 437 Swift Testing, 2 live skips, ExternalClient 7/7, and target-isolation checks. |
 | ExternalClient | PASS | 7/7 through public imports only, including standard Agent, durable mutation/idempotency, recoverable error, and Decision/Jev consumption. |
-| Hosted CI | PENDING | Must pass on the exact final audit-seal SHA with non-empty macOS, Linux, and Apple jobs. |
-| Tingting Host | PENDING | Final pushed child SHA must be committed as the parent gitlink and pass focused Host/macOS/iOS validation plus recursive-clone identity. |
+| Hosted CI | PASS | Run `35443682417` on code candidate `c5f08c7`: macOS, Linux, and Apple jobs used real runners with non-empty steps and succeeded. The docs-only audit seal is re-run and recorded externally by Tingting SAI-061. |
+| Tingting Host | PASS | Parent `1731aa493817f691800a7e395442174239a39102` pins pushed child `c5f08c7`; package resolve, Otoha 4/4, macOS build, iOS Simulator build, and recursive-clone identity pass. |
 
 ## Security And Recovery Invariants
 
@@ -119,6 +121,28 @@ The remediation review reports P0 0, P1 0, P2 0 and no new finding.
 | `bash Scripts/ci-apple-provider.sh` | Swift 6.4, Xcode 27 | 18 discovered; 15 passed; 3 live skipped | 0 |
 | `bash Scripts/ci-linux.sh` in clean `swift:6.4` container | Swift 6.4, Linux aarch64 | 126 XCTest; 437 Swift Testing; 2 live skips; ExternalClient 7/7; Core isolation pass | 0 |
 
+## Hosted And Host Verification
+
+- GitHub Actions run `35443682417`, head `c5f08c7`, completed successfully.
+  macOS runner `1000000071` used macOS 27.0, Xcode 27.0, and Apple Swift
+  6.4; Linux runner `1000000072` used Ubuntu 24.04.5 and Swift 6.4; Apple
+  adapter runner `1000000073` used macOS 27.0, Xcode 27.0, and Apple Swift
+  6.4. Every job had non-empty steps.
+- Hosted macOS repeated 126 XCTest and 447 Swift Testing with five documented
+  live/provider skips, ExternalClient 7/7, iOS cross-build, and concurrency
+  seals 11/11 plus 4/4. Hosted Linux repeated 126 XCTest and 437 Swift Testing
+  with two live skips, ExternalClient 7/7, and portable target isolation.
+  Hosted Apple discovered 18 tests, passed 15 fixtures, and skipped three live
+  model/PCC tests.
+- Tingting resolved `SwiftAgent` from the local `../SwiftAgent` submodule and
+  passed four focused safety-chain tests, a macOS arm64 `Tingting SK` build,
+  and a generic iOS Simulator `Tingting-iOS` build. The pre-existing user
+  `project.pbxproj` and `Package.resolved` hashes did not change.
+- A fresh remote clone of Tingting parent `1731aa49` with
+  `--recurse-submodules` checked out gitlink and child HEAD `c5f08c7` exactly.
+  The final docs-only audit-seal SHA and its hosted run are the authoritative
+  closure evidence in Tingting SAI-061.
+
 ## Residual Risks
 
 - Post-RC product/API work: SAI-045 queued follow-up.
@@ -131,6 +155,9 @@ The remediation review reports P0 0, P1 0, P2 0 and no new finding.
 
 ## Release Gate
 
-Final verdict is written only after exact-SHA hosted CI and Tingting Host
-integration complete. `READY FOR RC.2 RELEASE PREPARATION` does not authorize a
-tag, GitHub Release, merge to `main`, or Host publication.
+**READY FOR RC.2 RELEASE PREPARATION**
+
+This verdict becomes the cross-repository release gate only after Tingting
+SAI-061 records the exact docs-only audit-seal SHA and its successful hosted
+run. It does not authorize a tag, GitHub Release, merge to `main`, or Host
+publication.
