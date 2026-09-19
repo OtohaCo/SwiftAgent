@@ -4,7 +4,10 @@ All notable changes to SwiftAgent are recorded here.
 
 ## [Unreleased]
 
-## [1.0.0-rc.1] - Unreleased
+Development after `1.0.0-rc.1` targets the next release candidate. Public API
+additions and behavior changes will be recorded here before that release is cut.
+
+## [1.0.0-rc.1] - 2026-09-19
 
 ### Runtime
 

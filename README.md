@@ -17,26 +17,29 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development and
 
 ## Installation
 
-Before the `1.0.0-rc.1` tag is published, depend on `main`:
-
-```swift
-dependencies: [
-    .package(
-        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        branch: "main"
-    )
-]
-```
-
-Then add only the products the target uses, for example `AgentModels`,
-`AgentTools`, and `AgentCore`. Release builds should pin a version rather than
-follow `main`. After `1.0.0-rc.1` is published, use:
+The current release candidate is `1.0.0-rc.1`:
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
         exact: "1.0.0-rc.1"
+    )
+]
+```
+
+Then add only the products the target uses, for example `AgentModels`,
+`AgentTools`, and `AgentCore`. Release builds should pin a version rather than
+follow `main`.
+
+The `main` branch contains development for the next release candidate. Use it
+only when intentionally testing unreleased changes:
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
+        branch: "main"
     )
 ]
 ```
