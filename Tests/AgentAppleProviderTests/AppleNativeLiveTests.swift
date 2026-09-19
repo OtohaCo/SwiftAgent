@@ -98,6 +98,44 @@ struct AppleNativeLiveTests {
             throw ModelProviderError(kind: .unavailable, message: "Apple live proof requires a supported OS.")
         }
     }
+
+    #if compiler(>=6.4)
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["SWIFT_AGENT_APPLE_PCC_LIVE"] == "1"))
+    func privateCloudModelProposesCalculatorWithoutOwningToolExecution() async throws {
+        if #available(macOS 27, iOS 27, *) {
+            let model = PrivateCloudComputeLanguageModel()
+            guard case .available = model.availability else {
+                throw ModelProviderError(kind: .unavailable, message: "Opted-in Apple PCC model is unavailable.")
+            }
+            let log = CalculatorLog()
+            let provider = try AppleFoundationProvider.privateCloudCompute(maximumResponseTokens: 1_024)
+            let agent = try Agent(
+                model: AppleFoundationProvider.privateCloudComputeModelID,
+                provider: provider,
+                tools: [LiveCalculator(log: log)],
+                configuration: AgentConfiguration(
+                    instructions: "Always use calculator exactly once for arithmetic, then answer from its real result.",
+                    maxModelTurns: 3,
+                    maxToolCalls: 1,
+                    runTimeout: .seconds(90)
+                )
+            )
+            let run = try await agent.makeSession().run("Use calculator to add 19 and 23, then tell me the result.")
+            for await _ in run.events {}
+            let result = try await run.wait()
+            #expect(result.outcome == .completed)
+            #expect(result.modelTurns == 2)
+            #expect(result.toolCalls == 1)
+            #expect(await log.inputs == [[19, 23]])
+            #expect(result.response.content.contains { content in
+                if case .text(let text) = content { return text.contains("42") }
+                return false
+            })
+        } else {
+            throw ModelProviderError(kind: .unavailable, message: "Apple PCC live proof requires macOS or iOS 27.")
+        }
+    }
+    #endif
 }
 
 private actor CalculatorLog {

@@ -7,6 +7,23 @@ import FoundationModels
 enum AppleNativeErrors {
     static func resolve(_ error: any Error) throws -> AppleModelPlan {
         #if compiler(>=6.4)
+        if #available(macOS 27, iOS 27, *), let error = error as? PrivateCloudComputeLanguageModel.Error {
+            switch error {
+            case .networkFailure: throw failure(.transport)
+            case .quotaLimitReached(let context):
+                let retryAfter = context.resetDate.flatMap { resetDate -> Duration? in
+                    let milliseconds = Int64((resetDate.timeIntervalSinceNow * 1_000).rounded(.up))
+                    return milliseconds > 0 ? .milliseconds(milliseconds) : nil
+                }
+                throw ModelProviderError(
+                    kind: .rateLimited,
+                    message: "Apple model generation failed (rateLimited).",
+                    retryAfter: retryAfter
+                )
+            case .serviceUnavailable: throw failure(.unavailable)
+            @unknown default: throw failure(.unavailable)
+            }
+        }
         if #available(macOS 27, iOS 27, *), error is GeneratedContent.ParsingError {
             throw failure(.invalidResponse)
         }

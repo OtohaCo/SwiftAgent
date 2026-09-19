@@ -9,10 +9,27 @@ extension AppleFoundationProvider {
         guard maximumResponseTokens > 0 else {
             throw ModelProviderError(kind: .invalidRequest, message: "The response token limit must be positive.")
         }
-        self.generate = { request in
+        self.init(modelID: Self.modelID) { request in
             try await AppleNativeGeneration.respond(to: request, maximumResponseTokens: maximumResponseTokens)
         }
     }
+
+    #if compiler(>=6.4)
+    @available(macOS 27, iOS 27, *)
+    public static func privateCloudCompute(maximumResponseTokens: Int = 2_048) throws -> Self {
+        guard maximumResponseTokens > 0 else {
+            throw ModelProviderError(kind: .invalidRequest, message: "The response token limit must be positive.")
+        }
+        let model = PrivateCloudComputeLanguageModel()
+        return Self(modelID: privateCloudComputeModelID) { request in
+            try await AppleNativeGeneration.respond(
+                to: request,
+                privateCloudModel: model,
+                maximumResponseTokens: maximumResponseTokens
+            )
+        }
+    }
+    #endif
 }
 
 @available(macOS 26, iOS 26, *)
@@ -22,13 +39,47 @@ private enum AppleNativeGeneration {
         guard case .available = SystemLanguageModel.default.availability else {
             throw ModelProviderError(kind: .unavailable, message: "The on-device Apple model is unavailable.")
         }
+        let instructions = instructions(for: request)
+        let data = try ApplePromptEncoding.encode(request)
+        let session = LanguageModelSession(model: .default, tools: [], instructions: instructions)
+        let response = try await session.respond(to: String(decoding: data, as: UTF8.self), generating: NativePlan.self,
+                                                  options: GenerationOptions(temperature: 0, maximumResponseTokens: maximumResponseTokens))
+        try Task.checkCancellation()
+        return try generatedTurn(from: response)
+    }
+
+    #if compiler(>=6.4)
+    @available(macOS 27, iOS 27, *)
+    static func respond(
+        to request: ModelRequest,
+        privateCloudModel: PrivateCloudComputeLanguageModel,
+        maximumResponseTokens: Int
+    ) async throws -> AppleGeneratedTurn {
+        try Task.checkCancellation()
+        guard case .available = privateCloudModel.availability else {
+            throw ModelProviderError(kind: .unavailable, message: "Apple Private Cloud Compute is unavailable.")
+        }
+        let instructions = instructions(for: request)
+        let data = try ApplePromptEncoding.encode(request)
+        let session = LanguageModelSession(model: privateCloudModel, tools: [], instructions: instructions)
+        let response = try await session.respond(
+            to: String(decoding: data, as: UTF8.self),
+            generating: NativePlan.self,
+            options: GenerationOptions(temperature: 0, maximumResponseTokens: maximumResponseTokens)
+        )
+        try Task.checkCancellation()
+        return try generatedTurn(from: response)
+    }
+    #endif
+
+    private static func instructions(for request: ModelRequest) -> String {
         let hostInstructions = request.messages.compactMap { message -> String? in
             switch message {
             case .system(let text), .developer(let text): return text
             default: return nil
             }
         }.joined(separator: "\n")
-        let instructions = """
+        return """
         You are the planner for an external tool runtime. Produce exactly one plan for the supplied conversation.
         The runtime executes the tool action you propose and sends you its real result in the next request.
         If the user asks to use a tool, choose tool unless its actual result is already in the conversation.
@@ -41,11 +92,12 @@ private enum AppleNativeGeneration {
         Choose refusal to decline a request.
         \(hostInstructions)
         """
-        let data = try ApplePromptEncoding.encode(request)
-        let session = LanguageModelSession(model: .default, tools: [], instructions: instructions)
-        let response = try await session.respond(to: String(decoding: data, as: UTF8.self), generating: NativePlan.self,
-                                                  options: GenerationOptions(temperature: 0, maximumResponseTokens: maximumResponseTokens))
-        try Task.checkCancellation()
+    }
+
+    @available(macOS 26, iOS 26, *)
+    private static func generatedTurn(
+        from response: LanguageModelSession.Response<NativePlan>
+    ) throws -> AppleGeneratedTurn {
         guard response.rawContent.isComplete else {
             throw ModelProviderError(kind: .invalidResponse, message: "The Apple model plan was truncated.")
         }

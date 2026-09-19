@@ -4,16 +4,29 @@ import Foundation
 /// One structured model plan per request. Host tools are never registered with the native session.
 public struct AppleFoundationProvider: ModelProvider {
     public static let modelID = ModelID(provider: "apple-foundation", name: "on-device")
+    public static let privateCloudComputeModelID = ModelID(provider: "apple-foundation", name: "private-cloud-compute")
     public let descriptor = ModelProviderDescriptor(id: "apple-foundation", capabilities: [.multiTurn, .tools])
+    private let acceptedModelID: ModelID
     let generate: @Sendable (ModelRequest) async throws -> AppleGeneratedTurn
 
     init(generate: @escaping @Sendable (ModelRequest) async throws -> AppleModelPlan) {
-        self.generate = { request in AppleGeneratedTurn(plan: try await generate(request)) }
+        self.init(modelID: Self.modelID, generate: generate)
+    }
+
+    init(modelID: ModelID, generate: @escaping @Sendable (ModelRequest) async throws -> AppleModelPlan) {
+        self.init(modelID: modelID) { request in
+            AppleGeneratedTurn(plan: try await generate(request))
+        }
+    }
+
+    init(modelID: ModelID, generatedTurn: @escaping @Sendable (ModelRequest) async throws -> AppleGeneratedTurn) {
+        acceptedModelID = modelID
+        generate = generatedTurn
     }
 
     public func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         ModelEventStream.make { emit in
-            guard request.model == Self.modelID else {
+            guard request.model == acceptedModelID else {
                 throw ModelProviderError(kind: .invalidRequest, message: "Unsupported Apple model identifier.")
             }
             guard request.structuredOutput == nil else {

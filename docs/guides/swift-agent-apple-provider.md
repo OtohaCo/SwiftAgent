@@ -1,10 +1,10 @@
 # Apple Foundation Models Provider
 
-last-verified: 2026-09-17
+last-verified: 2026-09-19
 
-`AgentAppleProvider` supplies `AppleFoundationProvider` for the on-device
-`SystemLanguageModel`. It requires an available Apple model on macOS 26 or iOS 26
-or later. The portable Engine targets do not import Foundation Models.
+`AgentAppleProvider` supplies `AppleFoundationProvider` for Apple's on-device
+`SystemLanguageModel` and, on macOS or iOS 27, Private Cloud Compute. The
+portable Engine targets do not import Foundation Models.
 
 ```swift
 import AgentModels
@@ -15,6 +15,23 @@ func makeAppleProvider() throws -> AppleFoundationProvider {
     try AppleFoundationProvider(maximumResponseTokens: 1_024)
 }
 ```
+
+Private Cloud Compute is an additive backend with a distinct model identity:
+
+```swift
+@available(macOS 27, iOS 27, *)
+func makePrivateCloudProvider() throws -> AppleFoundationProvider {
+    try AppleFoundationProvider.privateCloudCompute(maximumResponseTokens: 1_024)
+}
+
+let model = AppleFoundationProvider.privateCloudComputeModelID
+```
+
+PCC does not require an application API key. Availability remains an Apple
+device, account, region, and system decision; an unavailable backend fails the
+request with `ModelProviderError.Kind.unavailable`. Network failures map to
+`transport`, quota exhaustion to `rateLimited`, and service outages to
+`unavailable`, without exposing native diagnostics.
 
 ## Execution Boundary
 
@@ -48,8 +65,8 @@ remain Core responsibilities. The adapter does not open the mutation gate.
 - SDK refusals remain refusals. Errors are classified without copying private
   native diagnostics. Cancellation reaches generation; as with other Swift tasks,
   cancelling a caller does not prove native work stopped immediately.
-- This provider does not implement Private Cloud Compute, production backend
-  routing, or a host application's domain tool catalog.
+- On-device and PCC identities are explicit. SwiftAgent does not silently route
+  between them, and neither backend owns a host application's domain tool catalog.
 
 ## Verification
 
@@ -60,9 +77,15 @@ requires explicit opt-in:
 SWIFT_AGENT_APPLE_LIVE=1 swift test --package-path SwiftAgent --filter AppleNativeLiveTests
 ```
 
+PCC has a separate operator opt-in:
+
+```sh
+SWIFT_AGENT_APPLE_PCC_LIVE=1 swift test --filter privateCloudModelProposesCalculatorWithoutOwningToolExecution
+```
+
 The live tests require an available model, execute a read-only Calculator through
 Core, check actual result feedback and SDK 27 usage, and verify that a one-token
 truncated response cannot complete or dispatch a tool. Unavailability or failure
 is a failed opted-in test, never a pass. Default skipped live tests do not establish
-device readiness. These bounded cases do not establish broad planning reliability
-or production qualification; migration acceptance remains in SAI-023/024.
+device or PCC readiness. These bounded cases do not establish broad planning
+reliability or production qualification.
