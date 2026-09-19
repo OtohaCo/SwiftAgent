@@ -10,6 +10,7 @@ status: Extracted to `OtohaPlayer/SwiftAgent`
 - SSH: `git@github.com:OtohaPlayer/SwiftAgent.git`
 - Default branch: `main`
 - Repository visibility at extraction: private
+- Current repository visibility: public
 
 The package, repository, and module family name are frozen as **SwiftAgent**.
 
@@ -72,10 +73,10 @@ macOS and Apple used macOS 27.0 / Xcode 27.0 / Apple Swift 6.4, and Linux used
 Ubuntu 24.04.5 / Swift 6.4. All jobs passed. The macOS concurrency seal executed
 11 resource-coordinator tests and 3 completion-commit tests without skips.
 
-The repository remains private during RC preparation. An authenticated SwiftPM
-consumer resolved and built the documented HTTPS `main` dependency. Anonymous
-HTTPS resolution is expected to work only after the owner makes the repository
-public.
+The repository was private during RC preparation and became public on
+2026-09-19 before `1.0.0-rc.1`. A credential-isolated anonymous HTTPS clone and
+a no-cache SwiftPM consumer both resolved and built the documented `main`
+dependency without GitHub authentication.
 
 ## Tingting Overlap
 

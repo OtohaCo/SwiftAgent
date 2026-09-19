@@ -28,13 +28,18 @@ dependencies: [
 ]
 ```
 
-The repository is private during RC preparation, so installation currently
-requires GitHub access to `OtohaPlayer/SwiftAgent`. The same HTTPS URL works
-without private-repository credentials after the repository is made public.
-
 Then add only the products the target uses, for example `AgentModels`,
-`AgentTools`, and `AgentCore`. After the RC tag is published, pin the exact RC
-version instead of following `main`.
+`AgentTools`, and `AgentCore`. Release builds should pin a version rather than
+follow `main`. After `1.0.0-rc.1` is published, use:
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
+        exact: "1.0.0-rc.1"
+    )
+]
+```
 
 ## Build and Test
 

@@ -173,8 +173,9 @@ for enum expansion before the 1.0 freeze.
 - Local Markdown links pass. SwiftAgent production sources contain no Tingting
   or Otoha dependency. The MIT license is confirmed as
   `Copyright (c) 2026 ChainBow Co., Ltd.`. A clean remote clone passed macOS,
-  Linux, Apple adapter, ExternalClient, concurrency, and authenticated HTTPS
-  SwiftPM installation validation.
+  Linux, Apple adapter, ExternalClient, and concurrency validation. After the
+  repository became public, a credential-isolated anonymous HTTPS clone and
+  no-cache SwiftPM consumer build also passed.
 
 ## Verdict
 
