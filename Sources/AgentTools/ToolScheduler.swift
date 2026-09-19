@@ -8,8 +8,17 @@ import Foundation
 public struct ToolScheduler: Sendable {
     private let coordinator = ToolResourceCoordinator()
     private let drain = ToolExecutionDrain()
+    private let operationCancellationDidResolve: (@Sendable (UUID, UUID, ToolCallID) async -> Void)?
 
-    public init() {}
+    public init() {
+        operationCancellationDidResolve = nil
+    }
+
+    package init(
+        operationCancellationDidResolve: @escaping @Sendable (UUID, UUID, ToolCallID) async -> Void
+    ) {
+        self.operationCancellationDidResolve = operationCancellationDidResolve
+    }
 
     /// Wait until all work belonging to one run has returned from its host
     /// executor, including work that outlived a timeout or cancellation.
@@ -124,7 +133,16 @@ public struct ToolScheduler: Sendable {
                             await drain.end(drainKey)
                         }
                         return Completion(index: index, call: call, result: .success(result))
-                    } catch { return Completion(index: index, call: call, result: .failure(error)) }
+                    } catch {
+                        if error is CancellationError {
+                            await operationCancellationDidResolve?(
+                                call.contextSessionID,
+                                call.contextRunID,
+                                call.call.id
+                            )
+                        }
+                        return Completion(index: index, call: call, result: .failure(error))
+                    }
                 }
             }
             for try await completion in group {

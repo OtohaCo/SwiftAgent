@@ -741,15 +741,27 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let url = temporaryURL()
         defer { cleanup(url) }
         let executorGate = ManualGate()
+        let cancellationGate = ManualGate()
         let quarantineGate = ManualGate()
         let entered = expectation(description: "mutation executor entered")
+        let cancellationResolved = expectation(description: "operation cancellation resolved")
         let quarantineStarted = expectation(description: "mutation quarantine started")
         let probe = MutationProbe()
         let journal = try AgentJournal(persistenceURL: url)
         let tool = try BlockingMutationTool(gate: executorGate, entered: entered, probe: probe)
         let call = blockingMutationCall()
         let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
-        let agent = try Agent(model: fixtureModel, provider: provider, tools: [tool])
+        let scheduler = ToolScheduler { _, _, callID in
+            XCTAssertEqual(callID, call.id)
+            cancellationResolved.fulfill()
+            await cancellationGate.wait()
+        }
+        let agent = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            tools: [tool],
+            configuration: .init(scheduler: scheduler)
+        )
         let sessionID = UUID()
         let session = try agent.makeSession(
             id: sessionID,
@@ -773,9 +785,14 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let registered = await registrations.next()
         XCTAssertEqual(registered, true)
         await run.cancel()
+        let cancellationResult = await XCTWaiter.fulfillment(of: [cancellationResolved], timeout: 1)
+        XCTAssertEqual(cancellationResult, .completed)
         await executorGate.open()
+        await cancellationGate.open()
         let quarantineResult = await XCTWaiter.fulfillment(of: [quarantineStarted], timeout: 1)
         XCTAssertEqual(quarantineResult, .completed)
+        let drainCompletedBeforeQuarantine = await run.isDrainComplete()
+        XCTAssertFalse(drainCompletedBeforeQuarantine)
 
         let eventsBeforeQuarantine = await journal.snapshot().map(\.event)
         XCTAssertFalse(eventsBeforeQuarantine.contains {
@@ -791,6 +808,8 @@ final class AgentMutationRecoveryTests: XCTestCase {
             XCTAssertTrue(error is CancellationError || error is AgentLoopError)
         }
         try await drainWaiter.value
+        let drainCompletedAfterQuarantine = await run.isDrainComplete()
+        XCTAssertTrue(drainCompletedAfterQuarantine)
 
         let events = await journal.snapshot().map(\.event)
         let settled = events.filter { if case .mutationSettled = $0 { true } else { false } }

@@ -37,6 +37,8 @@ public struct AgentRun: Sendable {
     func waitForDrain(waiterDidRegister: @escaping @Sendable (Bool) -> Void) async throws {
         try await drain.wait(waiterDidRegister: waiterDidRegister)
     }
+
+    func isDrainComplete() async -> Bool { await drain.isComplete }
 }
 
 public enum AgentRunError: Error, Equatable, Sendable {
@@ -152,6 +154,8 @@ actor AgentRunControl {
 actor AgentRunDrain {
     private var completed = false
     private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
+
+    var isComplete: Bool { completed }
 
     func wait(waiterDidRegister: (@Sendable (Bool) -> Void)? = nil) async throws {
         try Task.checkCancellation()
