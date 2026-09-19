@@ -115,6 +115,33 @@ Final local macOS package evidence with Swift 6.4:
 Skipped tests are the Anthropic and OpenAI real-cloud tests plus three Apple
 live-model tests. DeepSeek has fixture/schema coverage only and no live suite.
 
+## Hosted CI Evidence
+
+The first hosted run for `6fb185f38f8e4178ad16332003fb9d4ba83c710b`
+(`35432662166`) passed macOS and Apple but exposed a Linux-only test compile
+failure: two provider test files used `URLRequest` without conditionally
+importing `FoundationNetworking`. Commit
+`c473ebd8766f37c464fd53fbb68e1948936533f0` added only those two conditional
+test imports.
+
+Hosted run `35432835499` then executed all three jobs on that commit with real
+GitHub-hosted runners and passed:
+
+- macOS 27, Xcode 27.0, Apple Swift 6.4: 126 XCTest and 425 Swift Testing
+  cases discovered, 5 operator/live skips, 0 failures; ExternalClient 6/6;
+  iOS cross-build passed.
+- Linux Ubuntu 24.04, Swift 6.4: 126 XCTest and 415 Swift Testing cases
+  discovered, 2 real-cloud skips, 0 failures; ExternalClient 6/6. The target
+  isolation check confirmed that Core target builds did not compile
+  WorkspaceAgent or AgentAppleProvider.
+- Apple adapter job on macOS 27/Xcode 27/Swift 6.4: 18 cases discovered,
+  3 live-model skips, 0 failures.
+- The macOS concurrency seal executed `ToolResourceCoordinatorTests` 11/11
+  and `AgentCompletionCommitTests` 4/4.
+
+Runner IDs were nonzero and every job had populated steps. No test retry,
+failure suppression, or availability skip was added to obtain the green run.
+
 ## Protocol Sources
 
 Verified on 2026-09-19:
