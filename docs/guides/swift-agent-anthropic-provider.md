@@ -24,6 +24,21 @@ and stored credentials, rejects redirects, and propagates cancellation. Debug
 descriptions omit provider credentials. HTTP and native API errors use sanitized
 ModelProviderError categories; numeric Retry-After hints do not authorize retries.
 
+The native response model must match the requested model. Older Anthropic model
+aliases may resolve to a dated model ID; declare that relationship explicitly so
+the adapter can validate it without accepting an arbitrary model:
+
+```swift
+let provider = try AnthropicProvider(
+    apiKey: apiKey,
+    resolvedModelIDsByAlias: [
+        "claude-haiku-4-5": "claude-haiku-4-5-20251001"
+    ]
+)
+```
+
+Canonical model IDs, including 4.6-generation dateless IDs, need no mapping.
+
 ## Model Contract
 
 Text, returned thinking summaries, complete tool proposals, usage and terminal

@@ -10,6 +10,7 @@ struct AnthropicStreamDecoder {
         var arguments: String?
     }
     let model: ModelID
+    let responseModelName: String
     private var info: ResponseInfo?
     private var content: [ModelContent] = []
     private var nativeBlocks: [[String: JSONValue]] = []
@@ -32,7 +33,10 @@ struct AnthropicStreamDecoder {
         "content_block_stop", "message_delta", "message_stop",
     ]
 
-    init(model: ModelID) { self.model = model }
+    init(model: ModelID, responseModelName: String? = nil) {
+        self.model = model
+        self.responseModelName = responseModelName ?? model.name
+    }
 
     mutating func consume(_ event: ProviderSSEEvent) throws -> [ModelEvent] {
         let object = try ProviderJSON.decode(event.data)
@@ -59,10 +63,12 @@ struct AnthropicStreamDecoder {
             guard info == nil else { throw ProviderJSON.invalid() }
             let message = try ProviderJSON.object(object["message"])
             let id = try ProviderJSON.string(message["id"])
+            let responseModel = try ProviderJSON.string(message["model"])
             guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   message["type"] == .string("message"), message["role"] == .string("assistant"),
                   message["content"] == .array([]),
-                  !(try ProviderJSON.string(message["model"])).isEmpty else { throw ProviderJSON.invalid() }
+                  !responseModel.isEmpty,
+                  responseModel.utf8.elementsEqual(responseModelName.utf8) else { throw ProviderJSON.invalid() }
             let value = ResponseInfo(id: id, model: model)
             info = value
             return [.responseStarted(value)] + (try usageEvents(message["usage"]))

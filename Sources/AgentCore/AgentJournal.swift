@@ -186,6 +186,10 @@ package enum AgentJournalCompactionFault: Sendable {
     case directorySync
 }
 
+package enum AgentJournalPersistenceFault: Sendable {
+    case directorySync
+}
+
 public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     case invalidHeader
     case invalidFrame
@@ -295,6 +299,10 @@ public actor AgentJournal {
     private var persistenceURL: URL?
     private var recoveryState: AgentJournalRecovery
     private var sessionLeases: [UUID: FileHandle]
+    private var directorySyncPending: Bool
+    private var uncertainPersistenceURL: URL?
+    private var uncertainPersistenceRecords: [AgentJournalRecord]?
+    private let persistenceFault: AgentJournalPersistenceFault?
     private nonisolated let storageBox: AgentJournalStorageBox
 
     /// Configured persistence mode. `persist(to:)` upgrades `.memory` to
@@ -328,6 +336,10 @@ public actor AgentJournal {
         persistenceURL = nil
         recoveryState = .clean
         sessionLeases = [:]
+        directorySyncPending = false
+        uncertainPersistenceURL = nil
+        uncertainPersistenceRecords = nil
+        persistenceFault = nil
         mutationRecords = [:]
         mutationIdentityIndex = [:]
         mutationIdentityMembers = [:]
@@ -343,6 +355,32 @@ public actor AgentJournal {
         self.persistenceURL = persistenceURL
         recoveryState = loaded.recovery
         sessionLeases = [:]
+        directorySyncPending = false
+        uncertainPersistenceURL = nil
+        uncertainPersistenceRecords = nil
+        persistenceFault = nil
+        let mutationState = try Self.buildMutationState(from: loaded.records)
+        mutationRecords = mutationState.records
+        mutationIdentityIndex = mutationState.identityIndex
+        mutationIdentityMembers = mutationState.identityMembers
+        unresolvedMutationBySession = mutationState.unresolvedBySession
+        storageBox = AgentJournalStorageBox(.durable)
+    }
+
+    package init(
+        persistenceURL: URL,
+        persistenceFault: AgentJournalPersistenceFault
+    ) throws {
+        let loaded = try Self.read(from: persistenceURL)
+        records = loaded.records
+        nextSequence = (loaded.records.last?.sequence ?? 0) + 1
+        self.persistenceURL = persistenceURL
+        recoveryState = loaded.recovery
+        sessionLeases = [:]
+        directorySyncPending = false
+        uncertainPersistenceURL = nil
+        uncertainPersistenceRecords = nil
+        self.persistenceFault = persistenceFault
         let mutationState = try Self.buildMutationState(from: loaded.records)
         mutationRecords = mutationState.records
         mutationIdentityIndex = mutationState.identityIndex
@@ -959,11 +997,17 @@ public actor AgentJournal {
 
     /// Writes a complete snapshot and binds this journal to the destination for later durable appends.
     public func persist(to url: URL) throws {
+        try persist(to: url, fault: nil)
+    }
+
+    package func persist(to url: URL, fault: AgentJournalPersistenceFault?) throws {
         let data = try Self.encodeFile(records: records)
         try Self.withFileLock(for: url) {
             let existing = try Self.read(from: url)
             if existing.recovery == .corruptTail { throw AgentJournalError.repairRequired }
-            guard !existing.exists || existing.records == records else {
+            let matchesUncertainPublication = uncertainPersistenceURL?.standardizedFileURL == url.standardizedFileURL
+                && existing.records == uncertainPersistenceRecords
+            guard !existing.exists || existing.records == records || matchesUncertainPublication else {
                 throw AgentJournalError.concurrentWriter
             }
             try FileManager.default.createDirectory(
@@ -979,6 +1023,18 @@ public actor AgentJournal {
                 } else {
                     try FileManager.default.moveItem(at: temporary, to: url)
                 }
+                if fault == .directorySync {
+                    uncertainPersistenceURL = url
+                    uncertainPersistenceRecords = records
+                    throw AgentJournalError.persistenceUnavailable("injected journal directory sync failure")
+                }
+                do {
+                    try Self.syncDirectory(url.deletingLastPathComponent())
+                } catch {
+                    uncertainPersistenceURL = url
+                    uncertainPersistenceRecords = records
+                    throw error
+                }
             } catch {
                 try? FileManager.default.removeItem(at: temporary)
                 throw error is AgentJournalError ? error : AgentJournalError.persistenceUnavailable(error.localizedDescription)
@@ -986,6 +1042,9 @@ public actor AgentJournal {
         }
         persistenceURL = url
         recoveryState = .clean
+        directorySyncPending = false
+        uncertainPersistenceURL = nil
+        uncertainPersistenceRecords = nil
         storageBox.current = .durable
     }
 
@@ -1040,6 +1099,7 @@ public actor AgentJournal {
             }
         } catch {
             if replaced {
+                directorySyncPending = true
                 records = compacted
                 nextSequence = UInt64(compacted.count) + 1
                 recoveryState = .clean
@@ -1053,6 +1113,7 @@ public actor AgentJournal {
         records = compacted
         nextSequence = UInt64(compacted.count) + 1
         recoveryState = .clean
+        directorySyncPending = false
         mutationRecords = compactedMutationState.records
         mutationIdentityIndex = compactedMutationState.identityIndex
         mutationIdentityMembers = compactedMutationState.identityMembers
@@ -1075,10 +1136,37 @@ public actor AgentJournal {
             guard current.records == expectedRecords else {
                 throw AgentJournalError.concurrentWriter
             }
+            if directorySyncPending {
+                try Self.syncDirectory(url.deletingLastPathComponent())
+                directorySyncPending = false
+            }
             let appendOffset = current.exists ? current.validLength : Self.header.count
             try Self.createOrTruncateTail(at: url, to: appendOffset)
             try Self.appendAndSync(frame, to: url, offset: appendOffset)
+            if !current.exists {
+                do {
+                    if persistenceFault == .directorySync {
+                        throw AgentJournalError.persistenceUnavailable("injected journal directory sync failure")
+                    }
+                    try Self.syncDirectory(url.deletingLastPathComponent())
+                } catch {
+                    directorySyncPending = true
+                    try adopt(expectedRecords + committed)
+                    throw error
+                }
+            }
         }
+    }
+
+    private func adopt(_ durableRecords: [AgentJournalRecord]) throws {
+        let mutationState = try Self.buildMutationState(from: durableRecords)
+        records = durableRecords
+        nextSequence = (durableRecords.last?.sequence ?? 0) + 1
+        recoveryState = .clean
+        mutationRecords = mutationState.records
+        mutationIdentityIndex = mutationState.identityIndex
+        mutationIdentityMembers = mutationState.identityMembers
+        unresolvedMutationBySession = mutationState.unresolvedBySession
     }
 
     private static func encodeFile(records: [AgentJournalRecord]) throws -> Data {

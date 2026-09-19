@@ -20,6 +20,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
     private let endpoint: URL
     private let maximumOutputTokens: Int
     private let thinking: AnthropicThinking
+    private let resolvedModelIDsByAlias: [String: String]
     private let transport: any ProviderHTTPTransport
     public var description: String { "AnthropicProvider" }
     public var debugDescription: String { description }
@@ -27,6 +28,20 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
 
     public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
                 thinking: AnthropicThinking = .disabled,
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+        try self.init(
+            apiKey: apiKey,
+            endpoint: endpoint,
+            maximumOutputTokens: maximumOutputTokens,
+            thinking: thinking,
+            resolvedModelIDsByAlias: [:],
+            transport: transport
+        )
+    }
+
+    public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
+                thinking: AnthropicThinking = .disabled,
+                resolvedModelIDsByAlias: [String: String],
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !apiKey.contains("\r"), !apiKey.contains("\n"), maximumOutputTokens > 0,
@@ -37,6 +52,12 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
         if case .enabled(let budget) = thinking, budget < 1_024 || budget >= maximumOutputTokens {
             throw ModelProviderError(kind: .invalidRequest, message: "The thinking budget must be at least 1024 and below the output limit.")
         }
+        guard resolvedModelIDsByAlias.allSatisfy({ alias, resolved in
+            !alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !resolved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) else {
+            throw ModelProviderError(kind: .invalidRequest, message: "Invalid Anthropic model alias configuration.")
+        }
         let loopback = ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
         guard !host.isEmpty, endpoint.user == nil, endpoint.password == nil, endpoint.fragment == nil,
               endpoint.scheme?.lowercased() == "https" || (endpoint.scheme?.lowercased() == "http" && loopback) else {
@@ -46,6 +67,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
         self.endpoint = endpoint
         self.maximumOutputTokens = maximumOutputTokens
         self.thinking = thinking
+        self.resolvedModelIDsByAlias = resolvedModelIDsByAlias
         self.transport = transport
     }
 
@@ -64,7 +86,8 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
             http.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             http.httpBody = body
             var sse = try ProviderSSEDecoder()
-            var decoder = AnthropicStreamDecoder(model: request.model)
+            let responseModelName = resolvedModelIDsByAlias[request.model.name] ?? request.model.name
+            var decoder = AnthropicStreamDecoder(model: request.model, responseModelName: responseModelName)
             var validation = ModelEventAccumulator()
             var receivedHeader = false
             for try await event in transport.stream(http) {

@@ -102,6 +102,62 @@ final class AgentJournalTests: XCTestCase {
         XCTAssertTrue(records.isEmpty)
     }
 
+    func testFirstDurableAppendFailsClosedWhenDirectorySyncFails() async throws {
+        let url = temporaryURL()
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let journal = try AgentJournal(
+            persistenceURL: url,
+            persistenceFault: .directorySync
+        )
+
+        let sessionID = UUID()
+        do {
+            _ = try await journal.append(.sessionCreated, sessionID: sessionID, durability: .durable)
+            XCTFail("Expected the first durable append to fail when its directory cannot be synced")
+        } catch let error as AgentJournalError {
+            guard case .persistenceUnavailable = error else {
+                return XCTFail("Unexpected journal error: \(error)")
+            }
+        }
+
+        let records = await journal.snapshot()
+        XCTAssertEqual(records.count, 1)
+        _ = try await journal.append(.userMessage("after uncertain publish"), sessionID: sessionID, durability: .durable)
+        let restarted = try AgentJournal.load(from: url)
+        let restartedRecords = await restarted.snapshot()
+        XCTAssertEqual(restartedRecords.count, 2)
+    }
+
+    func testPersistDoesNotAdvertiseDurabilityWhenDirectorySyncFails() async throws {
+        let url = temporaryURL()
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let journal = AgentJournal()
+        _ = try await journal.append(.sessionCreated, sessionID: UUID())
+
+        do {
+            try await journal.persist(to: url, fault: .directorySync)
+            XCTFail("Expected snapshot publication to fail when its directory cannot be synced")
+        } catch let error as AgentJournalError {
+            guard case .persistenceUnavailable = error else {
+                return XCTFail("Unexpected journal error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(journal.storage, .memory)
+        _ = try await journal.append(.userMessage("newer memory state"), sessionID: UUID())
+        try await journal.persist(to: url)
+        XCTAssertEqual(journal.storage, .durable)
+        let restarted = try AgentJournal.load(from: url)
+        let restartedRecords = await restarted.snapshot()
+        XCTAssertEqual(restartedRecords.count, 2)
+    }
+
     func testTruncatedTailRecoversOnlyCompleteFramesAndNextDurableWriteRepairsTail() async throws {
         let url = temporaryURL()
         defer { try? FileManager.default.removeItem(at: url); try? FileManager.default.removeItem(atPath: url.path + ".lock") }

@@ -34,6 +34,44 @@ struct AnthropicFailureTests {
         }
     }
 
+    @Test func responseCannotSilentlyChangeTheRequestedModelIdentity() async throws {
+        let mismatched = String(decoding: anthropicTextFixture, as: UTF8.self)
+            .replacingOccurrences(of: #""model":"fixture""#, with: #""model":"other-model""#)
+        let provider = try AnthropicProvider(
+            apiKey: "fixture-key",
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(),
+                bodies: [Data(mismatched.utf8)]
+            )
+        )
+
+        do {
+            for try await _ in provider.stream(request: request) {}
+            Issue.record("A response from another model must fail closed")
+        } catch {
+            #expect((error as? ModelProviderError)?.kind == .invalidResponse)
+        }
+    }
+
+    @Test func explicitlyConfiguredLegacyAliasAcceptsOnlyItsResolvedModel() async throws {
+        let resolved = String(decoding: anthropicTextFixture, as: UTF8.self)
+            .replacingOccurrences(of: #""model":"fixture""#, with: #""model":"fixture-20260919""#)
+        let provider = try AnthropicProvider(
+            apiKey: "fixture-key",
+            resolvedModelIDsByAlias: ["fixture": "fixture-20260919"],
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(),
+                bodies: [Data(resolved.utf8)]
+            )
+        )
+
+        var accumulator = ModelEventAccumulator()
+        for try await event in provider.stream(request: request) {
+            try accumulator.append(event)
+        }
+        #expect(try accumulator.finish().info.model == request.model)
+    }
+
     @Test func providerDiagnosticsNeverPrintCredentials() throws {
         let provider = try AnthropicProvider(apiKey: "fixture-secret")
         #expect(!String(describing: provider).contains("fixture-secret"))

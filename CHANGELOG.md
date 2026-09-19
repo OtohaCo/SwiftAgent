@@ -7,6 +7,13 @@ All notable changes to SwiftAgent are recorded here.
 Development after `1.0.0-rc.1` targets the next release candidate. Public API
 additions and behavior changes will be recorded here before that release is cut.
 
+### Reliability
+
+- Sync the journal parent directory when publishing a new durable file, and
+  conservatively adopt a frame that was written before directory sync failed.
+- Validate Anthropic response model identity, with an explicit mapping for
+  legacy aliases that resolve to dated model IDs.
+
 ## [1.0.0-rc.1] - 2026-09-19
 
 ### Runtime
