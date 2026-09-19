@@ -512,6 +512,27 @@ public actor AgentJournal {
                              durability: durability, allowMutationSettlement: false)
     }
 
+    @discardableResult
+    package func appendCheckpointForCurrentRun(
+        _ events: [AgentJournalEvent],
+        sessionID: UUID,
+        runID: UUID,
+        timestamp: Date = Date(),
+        durability: AgentJournalDurability = .memory
+    ) throws -> [AgentJournalRecord] {
+        guard records.last(where: { $0.sessionID == sessionID && $0.runID != nil })?.runID == runID else {
+            throw CancellationError()
+        }
+        return try appendCheckpoint(
+            events,
+            sessionID: sessionID,
+            runID: runID,
+            timestamp: timestamp,
+            durability: durability,
+            allowMutationSettlement: false
+        )
+    }
+
     private func appendCheckpoint(
         _ events: [AgentJournalEvent],
         sessionID: UUID,

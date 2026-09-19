@@ -199,13 +199,15 @@ public actor AgentSession {
         try budget.checkActive()
         guard activeRunID == runID else { throw CancellationError() }
         let prepared = try await prepareCheckpoint(messages)
+        try budget.checkActive()
+        guard activeRunID == runID else { throw CancellationError() }
         if let journal {
             var events: [AgentJournalEvent] = []
             if let summary = prepared.summary {
                 events.append(.compaction(summary))
             }
             events.append(.checkpoint(history: prepared.history, steeringIDs: steering.map(\.id)))
-            try await journal.appendCheckpoint(
+            try await journal.appendCheckpointForCurrentRun(
                 events,
                 sessionID: id,
                 runID: runID,
@@ -213,6 +215,8 @@ public actor AgentSession {
             )
             _ = try? await journal.compactIfNeeded()
         }
+        try budget.checkActive()
+        guard activeRunID == runID else { throw CancellationError() }
         history = prepared.history
         appliedSteeringIDs.formUnion(steering.map(\.id))
         return prepared.history
