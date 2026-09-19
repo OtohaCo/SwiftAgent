@@ -85,6 +85,121 @@ struct AgentCompletionCommitTests {
         #expect(events.contains(.toolFailed(calls[0].id, .unclassified)))
         #expect(!events.contains { if case .toolCompleted(let result) = $0 { result.callID == calls[0].id } else { false } })
     }
+
+    @Test func finishingWaitsForBlockedMutationCommitAndPreservesDurableSettlement() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-completion-reservation-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let journal = try AgentJournal(persistenceURL: url)
+        let sessionID = UUID()
+        let runID = UUID()
+        let operationID = "completion-reservation-operation"
+        let call = ToolCall(
+            id: .init(rawValue: "completion-reservation-call"),
+            name: CompletionMutationTool.name,
+            argumentsJSON: "{}",
+            completeness: .complete
+        )
+        let probe = CompletionMutationProbe()
+        let registry = try ToolRegistry(tools: [AnyAgentTool(CompletionMutationTool(probe: probe))])
+        let budget = try testBudget()
+        let context = ToolContext(
+            sessionID: sessionID,
+            runID: runID,
+            callID: call.id,
+            deadline: budget.deadline,
+            idempotencyKey: operationID,
+            argumentsJSON: call.argumentsJSON,
+            evidenceLedger: EvidenceLedger(),
+            mutationAdmission: journal
+        )
+        let prepared = try registry.prepare(call, context: context)
+        let result = try await prepared.invoke()
+        #expect(await probe.count == 1)
+        #expect(await journal.pendingMutations(sessionID: sessionID).map(\.state) == [.intent])
+
+        let channel = AsyncStream<AgentEvent>.makeStream()
+        let emitter = AgentEventEmitter(channel.continuation, requiresConsumer: false)
+        try await emitter.send(.toolStarted(call))
+        let compactor = CompletionCompactorGate()
+        let lifecycle = AgentLoopLifecycle(
+            control: AgentRunControl(),
+            evidenceLedger: EvidenceLedger(),
+            mutationAdmission: journal,
+            checkpoint: { messages, _ in messages },
+            commitMutation: { callID, receipt, output, messages, steering in
+                _ = try await compactor.summarize(droppedConversation: messages)
+                try await journal.commitMutation(
+                    sessionID: sessionID,
+                    runID: runID,
+                    callID: callID,
+                    receipt: receipt,
+                    output: output,
+                    history: messages,
+                    steeringIDs: steering.map(\.id)
+                )
+                return messages
+            },
+            markMutationNeedsReconciliation: { callID in
+                try await journal.markMutationNeedsReconciliation(
+                    sessionID: sessionID,
+                    runID: runID,
+                    callID: callID
+                )
+            }
+        )
+        let response = ModelResponse(info: .init(id: "response", model: fixtureModel),
+                                     toolCalls: [call], stopReason: .toolCalls)
+        let progress = AgentToolBatchProgress(prefix: [], response: response, budget: budget,
+                                              lifecycle: lifecycle, emitter: emitter)
+        let recording = Task { try await progress.record(index: 0, call: prepared, result: result) }
+        await compactor.waitUntilBlocked()
+
+        let finishing = await emitter.beginFinishing(.cancelled)
+        await compactor.open()
+        await compactor.waitUntilResumed()
+        try await recording.value
+        await finishing.value
+
+        #expect(await probe.count == 1)
+        #expect(await journal.pendingMutations(sessionID: sessionID).isEmpty)
+        let durable = try AgentJournal.load(from: url)
+        #expect(await durable.pendingMutations(sessionID: sessionID).isEmpty)
+        let records = await durable.snapshot()
+        #expect(records.contains { record in
+            if case .mutationSettled(let callID, let receipt, .executor) = record.event {
+                return callID == call.id && receipt == result.receipt
+            }
+            return false
+        })
+        #expect(records.contains { record in
+            if case .mutationOutput(let callID, let output) = record.event {
+                return callID == call.id && output == result.output
+            }
+            return false
+        })
+        #expect(!records.contains { record in
+            if case .mutationNeedsReconciliation(let callID) = record.event { return callID == call.id }
+            return false
+        })
+        let expectedHistory: [ModelMessage] = [
+            .assistant(content: [], toolCalls: [call]),
+            .tool(.init(callID: call.id, content: [.json(result.output)], isError: false)),
+        ]
+        #expect(await durable.latestCheckpoint(sessionID: sessionID)?.history == expectedHistory)
+
+        let events = await collectEvents(channel.stream)
+        #expect(events == [
+            .toolStarted(call),
+            .toolReceiptValidated(.init(callID: call.id, effect: .mutation,
+                                        receipt: try #require(result.receipt))),
+            .toolCompleted(.init(callID: call.id, content: [.json(result.output)], isError: false)),
+            .runFinished(.cancelled),
+        ])
+    }
 }
 
 private extension AgentEventEmitter {
@@ -108,6 +223,86 @@ private actor FailingCompletionHistory {
 private actor CompletionHistory {
     private(set) var messages: [ModelMessage] = []
     func record(_ messages: [ModelMessage]) { self.messages = messages }
+}
+
+private actor CompletionCompactorGate: AgentContextCompactor {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var blocked = false
+    private var resumed = false
+    private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var resumedWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
+        blocked = true
+        let observers = blockedWaiters
+        blockedWaiters.removeAll()
+        for observer in observers { observer.resume() }
+        await withCheckedContinuation { continuation = $0 }
+        resumed = true
+        let resumedObservers = resumedWaiters
+        resumedWaiters.removeAll()
+        for observer in resumedObservers { observer.resume() }
+        return AgentCompactionSummary(goal: "Preserve the completed mutation")
+    }
+
+    func waitUntilBlocked() async {
+        if blocked { return }
+        await withCheckedContinuation { blockedWaiters.append($0) }
+    }
+
+    func open() {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func waitUntilResumed() async {
+        if resumed { return }
+        await withCheckedContinuation { resumedWaiters.append($0) }
+    }
+}
+
+private actor CompletionMutationProbe {
+    private(set) var count = 0
+    func record() { count += 1 }
+}
+
+private struct CompletionMutationTool: AgentTool {
+    struct Input: Codable, Sendable {}
+    struct Output: Codable, Sendable, Equatable { let updated: Bool }
+
+    static let name = "completion_mutation"
+    static let description = "Apply one fixture mutation"
+    static let inputSchema = ToolSchema.object(properties: [:])
+    static let outputSchema = ToolSchema.object(properties: ["updated": .boolean], required: ["updated"])
+
+    let probe: CompletionMutationProbe
+    let policy: ToolPolicy
+
+    init(probe: CompletionMutationProbe) throws {
+        self.probe = probe
+        policy = try .mutation(authorization: .notRequired, evidence: .none)
+    }
+
+    func resourceRequirements(for input: Input) throws -> [ToolResource] {
+        [.named(.init(namespace: "fixture.resource", id: "one"))]
+    }
+
+    func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation? {
+        try .init(targets: [.init(namespace: "fixture.resource", id: "one")], revision: .present)
+    }
+
+    func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
+        await probe.record()
+        return ToolResult(
+            output: .init(updated: true),
+            receipt: .init(
+                operationID: context.idempotencyKey ?? "missing",
+                status: .succeeded,
+                confirmedTargets: [.init(namespace: "fixture.resource", id: "one")],
+                revision: "v1"
+            )
+        )
+    }
 }
 
 private struct CommitProbe: AgentTool {

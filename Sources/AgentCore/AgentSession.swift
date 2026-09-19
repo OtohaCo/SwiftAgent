@@ -22,6 +22,7 @@ public actor AgentSession {
     private let instructions: String
     private let contextPolicy: AgentContextPolicy
     private let journal: AgentJournal?
+    private let checkpointDidExit: (@Sendable (UUID) -> Void)?
     private var appliedSteeringIDs: Set<UUID> = []
     private var restoredJournalState = false
     private var pendingDrainTask: Task<Void, Never>?
@@ -29,7 +30,8 @@ public actor AgentSession {
     private var drainHandles: [UUID: AgentRunDrain] = [:]
 
     init(id: UUID = UUID(), loop: AgentLoop, instructions: String, structuredOutput: StructuredOutputSchema?, maxModelTurns: Int,
-         maxToolCalls: Int, runTimeout: Duration, contextPolicy: AgentContextPolicy, journal: AgentJournal? = nil) {
+         maxToolCalls: Int, runTimeout: Duration, contextPolicy: AgentContextPolicy, journal: AgentJournal? = nil,
+         checkpointDidExit: (@Sendable (UUID) -> Void)? = nil) {
         self.id = id
         self.loop = loop
         self.structuredOutput = structuredOutput
@@ -40,6 +42,7 @@ public actor AgentSession {
         self.maxToolCalls = maxToolCalls
         self.runTimeout = runTimeout
         self.journal = journal
+        self.checkpointDidExit = checkpointDidExit
     }
 
     /// Starts one Run. Empty input, an already-active Run, a cancelled caller
@@ -196,30 +199,36 @@ public actor AgentSession {
     }
 
     private func record(_ messages: [ModelMessage], steering: [AgentSteeringInput], runID: UUID, budget: AgentBudget) async throws -> [ModelMessage] {
-        try budget.checkActive()
-        guard activeRunID == runID else { throw CancellationError() }
-        let prepared = try await prepareCheckpoint(messages)
-        try budget.checkActive()
-        guard activeRunID == runID else { throw CancellationError() }
-        if let journal {
-            var events: [AgentJournalEvent] = []
-            if let summary = prepared.summary {
-                events.append(.compaction(summary))
+        do {
+            try budget.checkActive()
+            guard activeRunID == runID else { throw CancellationError() }
+            let prepared = try await prepareCheckpoint(messages)
+            try budget.checkActive()
+            guard activeRunID == runID else { throw CancellationError() }
+            if let journal {
+                var events: [AgentJournalEvent] = []
+                if let summary = prepared.summary {
+                    events.append(.compaction(summary))
+                }
+                events.append(.checkpoint(history: prepared.history, steeringIDs: steering.map(\.id)))
+                try await journal.appendCheckpointForCurrentRun(
+                    events,
+                    sessionID: id,
+                    runID: runID,
+                    durability: journal.storage == .durable ? .durable : .memory
+                )
+                _ = try? await journal.compactIfNeeded()
             }
-            events.append(.checkpoint(history: prepared.history, steeringIDs: steering.map(\.id)))
-            try await journal.appendCheckpointForCurrentRun(
-                events,
-                sessionID: id,
-                runID: runID,
-                durability: journal.storage == .durable ? .durable : .memory
-            )
-            _ = try? await journal.compactIfNeeded()
+            try budget.checkActive()
+            guard activeRunID == runID else { throw CancellationError() }
+            history = prepared.history
+            appliedSteeringIDs.formUnion(steering.map(\.id))
+            checkpointDidExit?(runID)
+            return prepared.history
+        } catch {
+            checkpointDidExit?(runID)
+            throw error
         }
-        try budget.checkActive()
-        guard activeRunID == runID else { throw CancellationError() }
-        history = prepared.history
-        appliedSteeringIDs.formUnion(steering.map(\.id))
-        return prepared.history
     }
 
     private func applyCommittedHistory(_ messages: [ModelMessage], steering: [AgentSteeringInput], runID: UUID) {

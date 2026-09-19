@@ -86,6 +86,14 @@ public struct Agent: Sendable {
     /// Creates an isolated Session. Mutation tools require a durable journal;
     /// `nil` and memory-only journals fail here instead of during execution.
     public func makeSession(id: UUID = UUID(), journal: AgentJournal? = nil) throws -> AgentSession {
+        try makeSession(id: id, journal: journal, checkpointDidExit: nil)
+    }
+
+    func makeSession(
+        id: UUID = UUID(),
+        journal: AgentJournal? = nil,
+        checkpointDidExit: (@Sendable (UUID) -> Void)?
+    ) throws -> AgentSession {
         if requiresDurableJournal, journal?.storage != .durable {
             throw AgentSessionError.durableJournalRequired
         }
@@ -93,7 +101,8 @@ public struct Agent: Sendable {
             id: id, loop: loop, instructions: configuration.instructions,
             structuredOutput: configuration.structuredOutput, maxModelTurns: configuration.maxModelTurns,
             maxToolCalls: configuration.maxToolCalls, runTimeout: configuration.runTimeout,
-            contextPolicy: configuration.contextPolicy, journal: journal
+            contextPolicy: configuration.contextPolicy, journal: journal,
+            checkpointDidExit: checkpointDidExit
         )
     }
 }

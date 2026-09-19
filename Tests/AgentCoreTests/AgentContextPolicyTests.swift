@@ -462,6 +462,78 @@ struct AgentContextPolicyTests {
         #expect(await session.activeRunID == nil)
     }
 
+    @Test func timedOutCompactorCannotOverwriteNewerMemoryHistory() async throws {
+        let compactor = BlockingCompactor()
+        let checkpointExits = AsyncStream<UUID>.makeStream()
+        let seedInput = "seed"
+        let seedReply = "seed-reply"
+        let timedOutInput = "run-a"
+        let timedOutReply = String(repeating: "stale-a-", count: 80)
+        let newerInput = "run-b"
+        let newerReply = "fresh-b"
+        let newerHistory: [ModelMessage] = [
+            .user([.text(seedInput)]),
+            .assistant(content: [.text(seedReply)], toolCalls: []),
+            .user([.text(timedOutInput)]),
+            .user([.text(newerInput)]),
+            .assistant(content: [.text(newerReply)], toolCalls: []),
+        ]
+        let limit = try AgentContextWindow.encodedByteCount(newerHistory)
+        let provider = ScriptedProvider { request, _ in
+            switch request.messages.last {
+            case .user([.text(seedInput)]): textResponse(request, seedReply)
+            case .user([.text(timedOutInput)]): textResponse(request, timedOutReply)
+            case .user([.text(newerInput)]): textResponse(request, newerReply)
+            default: throw FixtureError.invalidOperation
+            }
+        }
+        let session = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            configuration: .init(contextPolicy: .init(
+                maxInputUTF8Bytes: 4_096,
+                maxActiveHistoryUTF8Bytes: limit,
+                retainedRecentTurnCount: 0,
+                compactor: compactor
+            ))
+        ).makeSession(checkpointDidExit: { checkpointExits.continuation.yield($0) })
+
+        let seed = try await session.run(seedInput)
+        _ = try await seed.wait()
+        try await seed.waitForDrain()
+
+        let runA = try await session.run(
+            timedOutInput,
+            budget: AgentBudget(
+                maxModelTurns: 2,
+                maxToolCalls: 0,
+                deadline: .now.advanced(by: .seconds(1))
+            )
+        )
+        await compactor.waitUntilBlocked()
+        await #expect(throws: AgentLoopError.deadlineExceeded) { try await runA.wait() }
+
+        let runB = try await session.run(newerInput)
+        #expect(try await runB.wait().history == newerHistory)
+        try await runB.waitForDrain()
+        #expect(await session.history == newerHistory)
+
+        let exited = XCTestExpectation(description: "The stale Run A checkpoint returned through its ownership guard")
+        let exitObserver = Task {
+            for await runID in checkpointExits.stream where runID == runA.id {
+                exited.fulfill()
+                return
+            }
+        }
+        await compactor.open()
+        await compactor.waitUntilResumed()
+        #expect(await XCTWaiter.fulfillment(of: [exited], timeout: 1) == .completed)
+        _ = await exitObserver.value
+        checkpointExits.continuation.finish()
+
+        #expect(await session.history == newerHistory)
+    }
+
     @Test func timedOutCompactorCannotOverwriteANewerRunOrDurableCheckpoint() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("swift-agent-stale-compactor-\(UUID().uuidString).log")
@@ -472,6 +544,7 @@ struct AgentContextPolicyTests {
         let journal = try AgentJournal(persistenceURL: url)
         let sessionID = UUID()
         let compactor = BlockingCompactor()
+        let checkpointExits = AsyncStream<UUID>.makeStream()
         let seedInput = "seed"
         let seedReply = "seed-reply"
         let timedOutInput = "run-a"
@@ -507,7 +580,11 @@ struct AgentContextPolicyTests {
                 retainedRecentTurnCount: 0,
                 compactor: compactor
             ))
-        ).makeSession(id: sessionID, journal: journal)
+        ).makeSession(
+            id: sessionID,
+            journal: journal,
+            checkpointDidExit: { checkpointExits.continuation.yield($0) }
+        )
 
         let seed = try await session.run(seedInput)
         _ = try await seed.wait()
@@ -528,20 +605,18 @@ struct AgentContextPolicyTests {
         #expect(await session.history == newerHistory)
         #expect(await journal.latestCheckpoint(sessionID: sessionID)?.history == newerHistory)
 
+        let exited = XCTestExpectation(description: "The stale Run A checkpoint returned through its ownership guard")
+        let exitObserver = Task {
+            for await runID in checkpointExits.stream where runID == runA.id {
+                exited.fulfill()
+                return
+            }
+        }
         await compactor.open()
-        for _ in 0..<10_000 {
-            if await journal.snapshot().contains(where: { record in
-                record.runID == runA.id && record.sequence > 1 && {
-                    if case .checkpoint = record.event { return true }
-                    return false
-                }()
-            }) { break }
-            await Task.yield()
-        }
-        for _ in 0..<10_000 {
-            if await session.history != newerHistory { break }
-            await Task.yield()
-        }
+        await compactor.waitUntilResumed()
+        #expect(await XCTWaiter.fulfillment(of: [exited], timeout: 1) == .completed)
+        _ = await exitObserver.value
+        checkpointExits.continuation.finish()
 
         #expect(await session.history == newerHistory)
         let restored = try AgentJournal.load(from: url)
@@ -561,7 +636,9 @@ actor SpyCompactor: AgentContextCompactor {
 private actor BlockingCompactor: AgentContextCompactor {
     private var continuation: CheckedContinuation<Void, Never>?
     private var blocked = false
+    private var resumed = false
     private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var resumedWaiters: [CheckedContinuation<Void, Never>] = []
 
     func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
         blocked = true
@@ -569,6 +646,10 @@ private actor BlockingCompactor: AgentContextCompactor {
         blockedWaiters.removeAll()
         for observer in observers { observer.resume() }
         await withCheckedContinuation { continuation = $0 }
+        resumed = true
+        let resumedObservers = resumedWaiters
+        resumedWaiters.removeAll()
+        for observer in resumedObservers { observer.resume() }
         return AgentCompactionSummary(goal: "Run A stale summary")
     }
 
@@ -580,6 +661,11 @@ private actor BlockingCompactor: AgentContextCompactor {
     func open() {
         continuation?.resume()
         continuation = nil
+    }
+
+    func waitUntilResumed() async {
+        if resumed { return }
+        await withCheckedContinuation { resumedWaiters.append($0) }
     }
 }
 
