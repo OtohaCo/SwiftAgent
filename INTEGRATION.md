@@ -1,4 +1,4 @@
-# Integrating SwiftAgent into an app
+# Integrating SwiftAgent into an app or service
 
 last-verified: 2026-09-19
 
@@ -10,6 +10,8 @@ rules remain in [CONTRIBUTING.md](CONTRIBUTING.md); they are not an app architec
 | --- | --- |
 | Select products and use the public API | [Start here](docs/ai/start-here.md) |
 | Own sessions, runs, cancellation and UI state on Apple platforms | [Apple UI integration](docs/guides/swift-agent-apple-ui.md) |
+| Run SwiftAgent behind a Linux HTTP service | [Server integration](docs/guides/swift-agent-server.md) |
+| Choose Android server access or native Swift/JNI embedding | [Android integration](docs/guides/swift-agent-android.md) |
 | Render streaming text, tool progress and terminal outcomes | [UI streaming](docs/guides/swift-agent-ui-streaming.md) |
 | Add tools, trusted receipts or Decision/Jev advice | [Consumer recipes](docs/ai/consumer-recipes.md) |
 | Configure examples and verify real services | [Examples and live qualification](docs/guides/swift-agent-examples-and-live.md) |
@@ -39,3 +41,11 @@ The source-checked baseline is
 `7cc8aa6e333062ee3a20a24daed13de463008fff` on the RC.2 development line.
 This is not a release declaration or live-test result. Use documentation from the
 same revision as the dependency installed in your app.
+
+## Platform qualification boundaries
+
+Linux SDK checks are not server deployment qualification. An Android app can call
+an app-owned SwiftAgent service without embedding Swift, while native embedding
+requires separate module, bridge, packaging and device tests. These guides add
+neither a server executable nor Android-native support; follow their explicit
+acceptance gates before making those claims.

@@ -21,6 +21,8 @@ SwiftAgent は、特定のモデルベンダーに依存しない Swift 向け A
 | 作業 | ガイド |
 | --- | --- |
 | iOS/macOS UI、MainActor の分離、Run の所有権、停止、画面遷移 | [Apple UI 統合](docs/guides/swift-agent-apple-ui.md) |
+| Linux HTTP サービスを構築する：テナント分離、Run の所有権、SSE、デプロイ | [サーバー統合](docs/guides/swift-agent-server.md) |
+| Android クライアントを開発する、または Swift/JNI によるネイティブ組み込みを検討する | [Android 統合](docs/guides/swift-agent-android.md) |
 | UI で SSE を解析せず、テキストとツールの進捗を表示する | [UI ストリーミング](docs/guides/swift-agent-ui-streaming.md) |
 | 読み取り専用ツール、mutation、再起動後の復旧、構造化回答を追加する | [統合レシピ](docs/ai/consumer-recipes.md) |
 | 会話 Provider を選び、対応範囲を確認する | [Provider マトリクス](docs/providers.md) |
@@ -84,6 +86,12 @@ Git submodule でローカル package を提供する場合、SDK commit は親�
 | その他の移植可能な products | AgentModels、AgentTools、AgentProviders、WorkspaceAgent は Linux に対応 |
 
 正確な可用性は [Package.swift](Package.swift) と Apple Provider ガイドで確認してください。`swift-tools-version: 6.0` は manifest 言語の下限であり、検証に使うコンパイラーのバージョンではありません。Core は SwiftUI や Apple のモデル SDK に依存しません。
+
+## サーバーと Android の対応範囲
+
+[サーバーガイド](docs/guides/swift-agent-server.md)では、App が所有する HTTP サービスで SwiftAgent を実行する方法を説明します。Linux パッケージの検証は、本番サーバーへのデプロイ検証とは別です。認証、会話の分離、クライアント向けストリーミング、複数インスタンスの調整は Host が担当します。
+
+[Android ガイド](docs/guides/swift-agent-android.md)では、Android からそのサービスを呼ぶ方式と、Swift/JNI で SwiftAgent をアプリ内に組み込む方式を区別します。前者では APK に Swift runtime を含める必要はありません。後者には、対象モジュール、ブリッジ、パッケージング、デバイス上での検証が必要です。Swift 自体の Android 対応は、SwiftAgent がこれらを検証済みであることを意味しません。この文書追加ではサーバー実行ファイルや Android ブリッジを実装しません。詳細ガイドは英語です。
 
 ## 既存サンプルを実行する
 

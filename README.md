@@ -29,6 +29,8 @@ whether generated code looks plausible.
 | Task | Guide |
 | --- | --- |
 | iOS/macOS UI, MainActor separation, Run ownership, Stop and navigation | [Apple UI integration](docs/guides/swift-agent-apple-ui.md) |
+| Run a Linux HTTP service: tenant isolation, Run ownership, SSE and deployment | [Server integration](docs/guides/swift-agent-server.md) |
+| Build an Android client or evaluate native Swift/JNI embedding | [Android integration](docs/guides/swift-agent-android.md) |
 | Stream text and tool progress without parsing SSE in the UI | [UI streaming](docs/guides/swift-agent-ui-streaming.md) |
 | Add a read tool, a mutation, restart recovery or a structured answer | [Consumer recipes](docs/ai/consumer-recipes.md) |
 | Choose a conversational provider and check capability boundaries | [Provider matrix](docs/providers.md) |
@@ -105,6 +107,20 @@ gitlink. Do not silently follow a remote branch or upgrade to make guessed APIs 
 Check [Package.swift](Package.swift) and the Apple provider guide for exact
 availability. `swift-tools-version: 6.0` is the manifest language floor, not the
 compiler used for validation. Core does not depend on SwiftUI or Apple model SDKs.
+
+## Server and Android scope
+
+The [server guide](docs/guides/swift-agent-server.md) explains how an app-owned
+HTTP service hosts SwiftAgent. Linux package verification is not production
+server deployment qualification; authentication, session isolation, client
+streaming and multi-instance coordination remain host responsibilities.
+
+The [Android guide](docs/guides/swift-agent-android.md) separates an Android app
+calling that service from embedding SwiftAgent through Swift/JNI. The former
+needs no Swift runtime in the APK. The latter still needs target-module, bridge,
+packaging and device validation. Official Swift Android support is not a claim
+that SwiftAgent has completed those checks. These guides add no server executable
+or Android bridge; the detailed guides are in English.
 
 ## Run an existing example
 

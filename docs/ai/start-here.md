@@ -45,6 +45,9 @@ native agent loop. Add only the products the consuming target needs.
 - Apple chat or assistant: [UI ownership](../guides/swift-agent-apple-ui.md),
   then [event rendering](../guides/swift-agent-ui-streaming.md), with
   [AppleChatApp](../../Examples/AppleChatApp) as the executable reference.
+- Linux HTTP service: [server ownership, streaming and deployment](../guides/swift-agent-server.md).
+- Android app: choose [remote service or native embedding](../guides/swift-agent-android.md)
+  before designing the bridge or declaring platform support.
 - Read-only tool, mutation, restart or typed decision:
   [consumer recipes](consumer-recipes.md).
 - Credentials and executable examples:
@@ -85,8 +88,9 @@ trusted state.
 A useful app-side task is:
 
 > Use this exact SwiftAgent revision and its public API. Implement one owner for
-> each conversation, one consumer of each Run event stream, MainActor display
-> updates, explicit Stop, and guarded replacement after drain. Keep fixtures
+> each conversation, one consumer of each Run event stream, platform-appropriate
+> display delivery (MainActor for Apple UI), explicit Stop, and guarded replacement
+> after drain. Keep fixtures
 > separate from live mode. Do not edit the SDK or bypass tool policy to make the
 > app compile. Report the build configuration, exercised scenarios, actual
 > results and unverified items.
@@ -94,6 +98,11 @@ A useful app-side task is:
 Require a build and the [acceptance checks](acceptance-checklist.md), not merely
 a plausible diff. If a required public capability is absent, report the gap and
 choose a supported host design rather than creating an undocumented SDK API.
+
+For a server, also specify authenticated ownership, disconnect policy and the
+client protocol. For Android, record whether SwiftAgent runs remotely or inside
+the app. A Linux build does not qualify the Android bridge or a server deployment;
+use the chosen platform guide's acceptance gates as well.
 
 ## Evidence and maintenance
 
