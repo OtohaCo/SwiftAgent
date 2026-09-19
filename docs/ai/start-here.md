@@ -1,6 +1,6 @@
 # Start here: build an app with SwiftAgent
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
 Audience: a developer or coding agent integrating the SDK into another app.
 Executable-example baseline: `c17adeb86f5ea086e9ac9f2d454a41fbe7f85455`.

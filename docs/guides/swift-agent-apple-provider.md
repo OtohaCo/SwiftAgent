@@ -1,6 +1,6 @@
 # Apple Foundation Models Provider
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
 `AgentAppleProvider` supplies `AppleFoundationProvider` for Apple's on-device
 `SystemLanguageModel` and, on macOS or iOS 27, Private Cloud Compute. The

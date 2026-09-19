@@ -1,6 +1,6 @@
 # Apple app integration: isolation, ownership and lifetime
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
 Scope: SwiftUI, UIKit or AppKit hosts using the public Agent/Session/Run API.
 Read [the integration entry](../ai/start-here.md) for the checked SDK revision.

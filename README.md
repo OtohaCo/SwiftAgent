@@ -46,7 +46,7 @@ Provider-specific contracts:
 
 ## Version scope and installation
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
 The executable-example baseline for this README and its translations is
 `c17adeb86f5ea086e9ac9f2d454a41fbe7f85455` on the RC.2 development line.

@@ -1,6 +1,6 @@
 # SwiftAgent Testing
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
 Primary compiler: Swift 6.4. From the package directory:
 

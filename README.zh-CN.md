@@ -38,7 +38,7 @@ SwiftAgent 是一个不绑定模型厂商的 Swift Agent 运行时，提供类�
 
 ## 版本范围与安装
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
 本 README 及其翻译所核对的可执行示例基线是 RC.2 开发线上的 `c17adeb86f5ea086e9ac9f2d454a41fbe7f85455`。这些文档不是发布公告。应始终阅读与 App 实际安装的依赖版本一致的文档。
 
