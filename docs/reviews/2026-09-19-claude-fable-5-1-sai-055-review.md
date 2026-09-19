@@ -87,4 +87,20 @@ SAI-055.
 
 ## Follow-up review
 
-Pending focused re-review of the P1 fix commit.
+- Model: Claude Fable 5.1 (`claude-fable-5-1`), as reported by the reviewer runtime.
+- Reviewed fix commit: `6ed5884e018bad20e3540c83c18a6f5cde7c6440`.
+- Invocation: focused Herdr prompt to the same dedicated Claude pane `w1A:p5`.
+- Result: `P0: 0`, `P1: 0`, `P2: 0`, `P3: 0`; verdict `CLEAN`.
+
+The reviewer marked the prior P1 **closed** after exercising the real adapter
+with the original oversized values plus representable `Int64` boundaries,
+fractional millisecond and second values, HTTP dates, non-finite values, and
+negative values. Every rejected value preserved the typed `.rateLimited`
+failure and request ID without trapping or starting another request. The
+reviewer also ran the complete macOS package suite from a detached export of
+the fix commit. It found no new issue, confirmed that the security boundary is
+unchanged, and judged SAI-055 suitable for integration.
+
+Linux and live Jev service calls were outside the reviewer run. Project-owned
+validation covers Linux through the repository CI script; live Jev remains an
+operator opt-in qualification rather than an offline acceptance requirement.

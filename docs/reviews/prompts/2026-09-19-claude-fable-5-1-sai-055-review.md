@@ -68,3 +68,19 @@ Finish with:
 - A direct verdict: `BLOCKING`, `NON-BLOCKING FINDINGS`, or `CLEAN`.
 - Whether the security boundary remains intact.
 - Whether the public API is suitable to carry into the next RC.
+
+## Focused follow-up prompt
+
+After the blocker fix was committed and pushed, the same reviewer received:
+
+> Focused follow-up review for SAI-055. State your exact runtime model first.
+> Review exact SwiftAgent commit
+> `6ed5884e018bad20e3540c83c18a6f5cde7c6440` against reviewed implementation
+> `a7f76c1096e1bbb310c2d6702d6cfec850187db9`. Do not modify files. Verify
+> whether the prior P1 oversized Retry-After/Duration trap is fully closed for
+> `retry-after-ms`, numeric `Retry-After`, HTTP-date conversion,
+> fractional/carry boundaries, and typed HTTP error preservation. Review the
+> added regression and initial review record. Look for new P0/P1/P2/P3 caused
+> by the fix. Finish with severity counts, a direct verdict, whether the prior
+> P1 is closed, security-boundary status, and whether SAI-055 is suitable to
+> integrate after this fix.
