@@ -86,6 +86,10 @@ RED evidence retained during implementation:
 
 Final targeted evidence:
 
+- `ResponsesTerminalValidationTests`: 72 status-matrix cases plus 4 Agent
+  executor controls, 0 failures. The matrix covers added, item-done, and final
+  response snapshots for message, reasoning, and function-call items on both
+  adapters.
 - `ResponsesContinuationIntegrityTests`: 10 tests, 0 failures.
 - `OpenAIResponsesStreamDecoderTests`: 11 tests, 0 failures.
 - `OpenAIResponsesProviderTests`: 19 tests, 0 failures.

@@ -85,6 +85,7 @@ enum TerminalItemKind: String, Sendable {
 }
 
 enum TerminalStage: String, Sendable {
+    case itemAdded
     case itemDone
     case responseFinal
 }
@@ -112,7 +113,7 @@ private let terminalStatusCases: [TerminalStatusCase] = {
     var result: [TerminalStatusCase] = []
     for vendor in [TerminalVendor.openAI, .deepSeek] {
         for kind in [TerminalItemKind.message, .reasoning, .functionCall] {
-            for stage in [TerminalStage.itemDone, .responseFinal] {
+            for stage in [TerminalStage.itemAdded, .itemDone, .responseFinal] {
                 for status in [TerminalStatus.legal, .missing, .null, .unknown] {
                     let missingAccepted = vendor == .deepSeek || kind != .message
                     let nullAccepted = vendor == .openAI && kind != .message
@@ -180,7 +181,12 @@ private func terminalFixture(_ testCase: TerminalStatusCase) throws -> Data {
         ])),
     ]
 
-    let added = initialItem(vendor: testCase.vendor, kind: testCase.itemKind, id: itemID)
+    var added = initialItem(vendor: testCase.vendor, kind: testCase.itemKind, id: itemID)
+    applyStatus(
+        testCase.stage == .itemAdded ? testCase.status : .legal,
+        expected: "in_progress",
+        to: &added
+    )
     frames.append(("response.output_item.added", try encoded([
         "type": .string("response.output_item.added"),
         "output_index": .number(0),
@@ -232,7 +238,11 @@ private func terminalFixture(_ testCase: TerminalStatusCase) throws -> Data {
     }
 
     var done = terminalItem(vendor: testCase.vendor, kind: testCase.itemKind, id: itemID)
-    applyStatus(testCase.stage == .itemDone ? testCase.status : .legal, to: &done)
+    applyStatus(
+        testCase.stage == .itemDone ? testCase.status : .legal,
+        expected: "completed",
+        to: &done
+    )
     frames.append(("response.output_item.done", try encoded([
         "type": .string("response.output_item.done"),
         "output_index": .number(0),
@@ -240,7 +250,11 @@ private func terminalFixture(_ testCase: TerminalStatusCase) throws -> Data {
     ])))
 
     var final = terminalItem(vendor: testCase.vendor, kind: testCase.itemKind, id: itemID)
-    applyStatus(testCase.stage == .responseFinal ? testCase.status : .legal, to: &final)
+    applyStatus(
+        testCase.stage == .responseFinal ? testCase.status : .legal,
+        expected: "completed",
+        to: &final
+    )
     frames.append(("response.completed", try encoded([
         "type": .string("response.completed"),
         "response": .object([
@@ -313,9 +327,13 @@ private func terminalItem(
     }
 }
 
-private func applyStatus(_ status: TerminalStatus, to item: inout [String: JSONValue]) {
+private func applyStatus(
+    _ status: TerminalStatus,
+    expected: String,
+    to item: inout [String: JSONValue]
+) {
     switch status {
-    case .legal: item["status"] = .string("completed")
+    case .legal: item["status"] = .string(expected)
     case .missing: item.removeValue(forKey: "status")
     case .null: item["status"] = .null
     case .unknown: item["status"] = .string("finalized")
