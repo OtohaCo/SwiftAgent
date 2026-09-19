@@ -412,4 +412,6 @@ The remaining additions are provider members and synthesized conformances, the
 Anthropic alias-aware initializer, and Apple Private Cloud Compute members. No
 AgentCore, AgentModels, AgentTools, or WorkspaceAgent public symbol changed in
 this remediation round. No Journal schema or continuation format version was
-changed.
+changed. Current OpenAI v2 and DeepSeek v1 opaque continuation payloads add an
+optional ordered-visible-content binding; readers continue to accept payloads
+written before that field existed.

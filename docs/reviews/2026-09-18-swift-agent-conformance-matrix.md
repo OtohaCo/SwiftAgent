@@ -186,8 +186,8 @@ Phases are covered across files, not one checklist suite.
 | Unicode / combining / CJK / emoji chunk split | unicode-surrogate | Yes | **SAI-044** `chineseJapaneseEmojiSurviveUTF8ChunkBoundaries` | Covered |
 | Unknown top-level Anthropic event ignored | anthropic-sse-parsing | Yes | `AnthropicUnknownEventTests` | Covered |
 | Thinking signature / tool input streaming / usage | anthropic thinking tests | Declared subset | `AnthropicProviderTests`, continuation tests | Covered |
-| OpenAI terminal item status, incomplete calls, native identity, ordered continuation | Responses API | Yes | `ResponsesTerminalValidationTests`, `OpenAIResponsesFailureTests`, `ResponsesContinuationIntegrityTests` | Covered |
-| DeepSeek terminal status, legal partial response, same-turn reasoning, ordered continuation | Responses API | Yes | `ResponsesTerminalValidationTests`, `DeepSeekResponsesIncompleteTests`, `ResponsesContinuationIntegrityTests` | Covered |
+| OpenAI terminal item status, incomplete calls, native identity, ordered/interleaved continuation | Responses API | Yes | `ResponsesTerminalValidationTests`, `OpenAIResponsesFailureTests`, `OpenAIResponsesStreamDecoderTests.interleavedItemsPreserveCanonicalContentOrder`, `ResponsesContinuationIntegrityTests` | Covered |
+| DeepSeek terminal status, legal partial response, same-turn reasoning, ordered/interleaved continuation | Responses API | Yes | `ResponsesTerminalValidationTests`, `DeepSeekResponsesIncompleteTests`, `ResponsesContinuationIntegrityTests.deepSeekInterleavedItemsPreserveCanonicalContentOrder` | Covered |
 | Adaptive thinking, OAuth, Bedrock, Gemini, … | packages/ai/test catalog | No | — | Not applicable |
 | `event:` vs `data.type` mismatch after `message_stop` | — | Yes | `AnthropicUnknownEventTests` | Covered |
 

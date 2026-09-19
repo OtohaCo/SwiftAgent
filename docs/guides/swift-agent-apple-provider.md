@@ -74,7 +74,7 @@ Ordinary package tests use controlled generation fixtures. Real local inference
 requires explicit opt-in:
 
 ```sh
-SWIFT_AGENT_APPLE_LIVE=1 swift test --package-path SwiftAgent --filter AppleNativeLiveTests
+SWIFT_AGENT_APPLE_LIVE=1 swift test --filter AppleNativeLiveTests
 ```
 
 PCC has a separate operator opt-in:

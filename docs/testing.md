@@ -5,9 +5,11 @@ last-verified: 2026-09-19
 Primary compiler: Swift 6.4. From the package directory:
 
 ```sh
-swift test --package-path SwiftAgent
-swift test --package-path SwiftAgent/ExternalClient
+swift test --disable-sandbox --no-parallel
+swift test --package-path Examples/ExternalClient --disable-sandbox --no-parallel
+bash Scripts/ci-macos.sh
 bash Scripts/ci-linux.sh
+bash Scripts/ci-concurrency-seal.sh
 ```
 
 Do not treat skipped live tests as passes. Anthropic, OpenAI, and Apple live

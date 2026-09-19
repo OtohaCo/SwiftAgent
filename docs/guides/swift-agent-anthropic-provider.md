@@ -91,7 +91,7 @@ Fixtures cover request encoding, signed-state replay, errors, truncation, cancel
 usage and the same Core tool loop. Live verification is explicitly enabled:
 
 ```sh
-SWIFT_AGENT_ANTHROPIC_LIVE=1 swift test --package-path SwiftAgent --filter AnthropicLiveTests
+SWIFT_AGENT_ANTHROPIC_LIVE=1 swift test --filter AnthropicLiveTests
 ```
 
 The live test reads ANTHROPIC_API_KEY, optional ANTHROPIC_BASE_URL and optional

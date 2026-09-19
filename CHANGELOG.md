@@ -17,8 +17,9 @@ additions and behavior changes will be recorded here before that release is cut.
   states before AgentCore can dispatch a tool, while preserving legal
   incomplete output as non-executable partial state.
 - Bind OpenAI and DeepSeek continuations to ordered canonical visible content,
-  tool-call order, and native function identities; reject reordered or
-  rewritten replay state.
+  including legal cross-item stream interleaving, tool-call order, and native
+  function identities; reject reordered or rewritten replay state while
+  retaining readability of older opaque payloads.
 - Fence provider-route candidate callbacks by Run generation so a response that
   finishes after clear/cancel cannot restore stale pinning.
 - Add deterministic ownership tests proving a timed-out compactor cannot

@@ -91,8 +91,10 @@ not execute any call from an incomplete turn.
 
 Continuation binding preserves provider item order and the ordered visible
 text/reasoning projection. Adjacent fragments of the same kind may merge;
-text/reasoning reordering is rejected. A function-only turn retains the native
-OpenAI function item ID and status for the next stateless request. If a
+legal cross-item streaming interleaving is preserved, while later reordering or
+splitting is rejected. Payloads written before the ordered projection was added
+remain readable. A function-only turn retains the native OpenAI function item
+ID and status for the next stateless request. If a
 reasoning item lacks encrypted content, the adapter keeps only replayable
 native function state rather than inventing reasoning continuation bytes.
 

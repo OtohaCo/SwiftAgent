@@ -35,6 +35,11 @@ they still match the canonical assistant content and tool calls, and replays
 them in their original item order. It never fabricates reasoning and does not
 use OpenAI reasoning summaries or encrypted content.
 
+The opaque continuation also binds the normalized visible text/reasoning order
+published by the decoder. Adjacent fragments of one kind may merge, while
+reordering or splitting a stored kind run around another kind is rejected.
+Payloads written before this ordered projection was added remain readable.
+
 If required reasoning state is missing, request encoding fails with
 `ModelProviderError.invalidRequest` before network I/O. A `.developer` message
 also fails before network I/O because DeepSeek treats that role as `user`, which
@@ -64,7 +69,8 @@ keeps the observed partial text, reasoning, and truncated function arguments,
 but does not invent a done event, repair JSON, or execute any call from that
 turn. A completed call mixed with a partial call in the same incomplete
 response also executes nothing. The final snapshot may preserve the observed
-partial prefix; it cannot rewrite the item ID, content, or argument prefix.
+partial state only when it exactly matches the observed bytes; it cannot extend
+or rewrite the item ID, content, or argument prefix.
 
 When thinking and host function tools are enabled, the adapter requires the
 same completed assistant turn to contain replayable plaintext reasoning, even
