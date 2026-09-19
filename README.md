@@ -48,9 +48,9 @@ Provider-specific contracts:
 
 last-verified: 2026-09-19
 
-The source-checked baseline for this README and its translations is
-`7cc8aa6e333062ee3a20a24daed13de463008fff` on the RC.2 development line.
-This documentation is not a release announcement or a new test result. Always
+The executable-example baseline for this README and its translations is
+`c17adeb86f5ea086e9ac9f2d454a41fbe7f85455` on the RC.2 development line.
+This documentation is not a release announcement. Always
 read documentation from the same revision as the dependency installed in your app.
 
 ### Published rc.1
@@ -79,7 +79,7 @@ To reproduce the checked source baseline rather than follow a moving branch:
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        revision: "7cc8aa6e333062ee3a20a24daed13de463008fff"
+        revision: "c17adeb86f5ea086e9ac9f2d454a41fbe7f85455"
     )
 ]
 ```
@@ -129,6 +129,8 @@ From the **SwiftAgent repository root**:
 ```sh
 swift test --package-path Examples/ExternalClient
 swift run --package-path Examples/JevDecision JevDecision
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider openai --mode fixture --case all
 swift test --package-path Examples/AppleChatApp
 bash Examples/AppleChatApp/run-macos.sh
 ```
@@ -136,23 +138,26 @@ bash Examples/AppleChatApp/run-macos.sh
 [ExternalClient](Examples/ExternalClient) tests consumption through public API.
 [JevDecision](Examples/JevDecision) is an executable fixture-first example of
 Noul, Choice and Score. Its output is a proposal, not permission to execute a tool.
-[AppleChatApp](Examples/AppleChatApp) is a credential-free fixture reference for
-app-owned SwiftUI lifecycle, direct streaming, validated buffered publication,
-tool progress and cancellation/drain ownership.
+[ProviderQualification](Examples/ProviderQualification) is the fixture-first,
+bounded CLI for OpenAI, DeepSeek, Anthropic and Jev preflight or operator live
+checks. [AppleChatApp](Examples/AppleChatApp) uses the same safe configuration
+layer for fixture or explicit live chat-provider runs while retaining its
+app-owned SwiftUI lifecycle, tool progress and cancellation/drain ownership.
 
-For a real Jev call, inject `TYPESAFE_API_KEY` locally, then use a POSIX-compatible
-shell:
+Live configuration comes from process environment values or a literal assignment
+file passed with `--env-file`. The loader does not execute shell syntax, and the
+process environment takes precedence. Run a no-network preflight first:
 
 ```sh
-: "${TYPESAFE_API_KEY:?Set TYPESAFE_API_KEY locally before a live run}"
-export TYPESAFE_API_KEY
-SWIFT_AGENT_JEV_LIVE=1 \
-  swift run --package-path Examples/JevDecision JevDecision
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider anthropic --mode live --case preflight \
+  --env-file /absolute/path/to/.env.live
 ```
 
-`TYPESAFE_MODEL` optionally selects the model. The executable reads process
-environment; creating a `.env` file does not load it automatically. From a parent
-repository, prefix package paths with `SwiftAgent/`.
+See the [example guide](docs/guides/swift-agent-examples-and-live.md) for exact
+provider variables, request budgets, single-case commands, Jev calls and the
+AppleChatApp live launch. From a parent repository, prefix package paths with
+`SwiftAgent/`.
 
 Keep credentials out of source, prompts, logs and shipped app binaries. Explicit
 live mode must not be mistaken for a fixture run. Fixture checks, SDK CI, Host

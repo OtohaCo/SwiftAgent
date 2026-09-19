@@ -103,3 +103,9 @@ swift run --package-path Examples/JevDecision JevDecision
 
 Normal CI never requires or prints the API key. Live service qualification is
 operator opt-in and is separate from fixture/schema coverage.
+
+The bounded 2026-09-19 operator run accepted separate Noul, Choice and Score
+requests plus a mixed request. The example validated question identity,
+candidate membership, rubric indices/ranges and typed decoding without creating
+Evidence, a Receipt or a tool execution. See the
+[qualification report](../reviews/2026-09-19-provider-live-qualification.md).

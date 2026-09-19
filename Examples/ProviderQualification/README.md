@@ -30,13 +30,26 @@ swift run --package-path Examples/ProviderQualification ProviderQualification \
   --env-file /absolute/path/to/.env.live --budget-file "$budget"
 ```
 
-The default limits are 12 HTTP send attempts per Provider and 48 total. Runs
-are sequential, use at most three model turns and two local read-only tool
+The default limits are 12 HTTP send attempts per Provider and 48 total. A live
+request requires a persistent ledger through `--budget-file` or
+`SWIFT_AGENT_LIVE_BUDGET_FILE`; restarting a command cannot reset the limit.
+Runs are sequential, use at most three model turns and two local read-only tool
 calls, and have a 120-second deadline. Output contains only status, counts,
 usage fields and sanitized request-shape evidence. It never prints credentials,
 request bodies, signed/encrypted continuation data or arbitrary underlying
 error descriptions.
 
 Supported chat cases are `text`, `tool`, `restart`, `structured`, `usage`,
-`cancel`, and `all`. Jev supports `noul`, `choice`, `score`, `mixed`, and `all`.
+`cancel`, and `all`; `all` runs all six chat cases. Jev supports `noul`,
+`choice`, `score`, `mixed`, and `all`.
 `preflight` never sends a request.
+
+Environment files are loaded only when selected with `--env-file` or
+`SWIFT_AGENT_LIVE_ENV_FILE`; the CLI does not implicitly load `.env.live` from
+the working directory. Persistent reservations are serialized through a
+permission-restricted lock file and re-read the latest ledger before updating.
+
+Provider variables, service selection, exit codes, AppleChatApp integration and
+the latest bounded evidence are documented in
+[`docs/guides/swift-agent-examples-and-live.md`](../../docs/guides/swift-agent-examples-and-live.md).
+Do not run qualification processes concurrently against the same ledger.

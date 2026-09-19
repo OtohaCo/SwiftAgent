@@ -109,3 +109,10 @@ swift test --filter OpenAIResponsesLiveTests
 
 If `OPENAI_MODEL` is an alias whose response reports a different snapshot name,
 also set `OPENAI_RESOLVED_MODEL` to that expected snapshot.
+
+The bounded 2026-09-19 operator run used an explicitly configured compatible
+gateway and covered text history, a Host tool loop, text-history restart,
+structured output, usage and cancellation. The later durable-tool restart case
+remains unexecuted live. It did not establish official-endpoint or encrypted
+reasoning-continuation coverage. See the
+[qualification report](../reviews/2026-09-19-provider-live-qualification.md).

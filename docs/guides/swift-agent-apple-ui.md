@@ -197,10 +197,15 @@ model, one actor controller per conversation, one `run.events` consumer, complet
 bounded snapshots, generation fencing and separate logical/drain states. The
 non-UI lifecycle suite uses deterministic gates for startup, cancellation, drain
 and buffered terminal-event delivery. At implementation commit
-`7cc8aa6e333062ee3a20a24daed13de463008fff`, 14 tests pass and the integration
-target cross-builds for `arm64-apple-ios16.0`.
+`c17adeb86f5ea086e9ac9f2d454a41fbe7f85455`, 21 tests in four suites pass and
+the actual AppleChatApp executable target cross-builds for
+`arm64-apple-ios16.0`.
 
 Manual fixture acceptance ran on macOS 27.0 with Xcode/Swift 6.4. Direct
 incremental output, tool progress, a recoverable tool error, terminal labels and
-two app windows were observed. iOS UI/device execution and live Apple model/PCC
-qualification were not run; those narrower gaps must not be reported as passing.
+two app windows were observed. The explicit OpenAI-compatible live launch also
+completed a two-request local read-only tool loop through the same Controller;
+window-content inspection was unavailable to the automation process, so this is
+execution evidence rather than a fresh visual acceptance pass. iOS UI/device
+execution was not run. Apple on-device and PCC evidence is recorded separately
+in the [provider guide](swift-agent-apple-provider.md).

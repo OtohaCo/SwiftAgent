@@ -19,26 +19,32 @@ rules remain in [CONTRIBUTING.md](CONTRIBUTING.md); they are not an app architec
 | Check an integration before accepting generated code | [Acceptance checklist](docs/ai/acceptance-checklist.md) |
 
 These guides distinguish existing SDK APIs, host design recommendations and
-example acceptance requirements. The fixture-backed executable Apple UI sample
-is [Examples/AppleChatApp](Examples/AppleChatApp); it does not add a media
-provider, broadcast event API or background execution entitlement.
+example acceptance requirements. The executable Apple UI sample is
+[Examples/AppleChatApp](Examples/AppleChatApp). It defaults to fixtures and can
+use the same explicit live configuration as the
+[ProviderQualification CLI](Examples/ProviderQualification); it does not add a
+media provider, broadcast event API or background execution entitlement.
 
 Run it from the repository root:
 
 ```sh
 bash Examples/AppleChatApp/run-macos.sh
 swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider openai --mode fixture --case all
 ```
 
-The default conversation displays incremental output. Create a **Validated**
+The default fixture conversation displays incremental output. Create a **Validated**
 conversation to see the same UI publish only after `ModelProviderRoute` accepts a
 complete candidate. The example uses a deterministic local provider and a
 read-only account lookup tool, so it needs no credentials and performs no real
-external effect. Its implementation and recorded acceptance evidence are linked
-from the Apple UI, UI streaming and acceptance guides above.
+external effect. Explicit `--mode live` uses an existing chat provider through
+the same Controller and local read-only tool path; missing configuration never
+falls back to the fixture. Configuration and bounded commands are in the examples
+guide linked above.
 
 The source-checked baseline is
-`7cc8aa6e333062ee3a20a24daed13de463008fff` on the RC.2 development line.
+`c17adeb86f5ea086e9ac9f2d454a41fbe7f85455` on the RC.2 development line.
 This is not a release declaration or live-test result. Use documentation from the
 same revision as the dependency installed in your app.
 

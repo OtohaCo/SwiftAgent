@@ -162,6 +162,9 @@ Acceptance should include a multi-turn tool loop, refusal, valid incomplete
 output, protocol failure after visible deltas, recoverable tool error, Stop,
 slow rendering, navigation, and a buffered route. Verify no duplicate final text,
 no lost accumulated text, no stale-generation repaint and no false tool-success
-label. `Examples/AppleChatApp` covers these protocol and lifecycle cases with 14
-deterministic tests; the direct fixture UI was also run on macOS 27.0. Run
-ownership is covered separately in the Apple UI guide.
+label. `Examples/AppleChatApp` covers these protocol and lifecycle cases with 21
+tests in four suites, including deterministic lifecycle gates. Fixture UI behavior was observed on macOS
+27.0. The explicit live configuration uses the same projection and Controller;
+its OpenAI-compatible two-request tool loop completed, but current automation
+could not inspect the rendered window contents, so that run is not a new visual
+acceptance claim. Run ownership is covered separately in the Apple UI guide.

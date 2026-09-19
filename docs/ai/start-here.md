@@ -3,10 +3,10 @@
 last-verified: 2026-09-19
 
 Audience: a developer or coding agent integrating the SDK into another app.
-Source-checked SDK baseline: `7cc8aa6e333062ee3a20a24daed13de463008fff`.
-The fixture-backed Apple UI example at this baseline was built, tested and run as
-recorded in the acceptance checklist. That evidence is not a claim of live
-provider qualification or iOS device UI acceptance.
+Executable-example baseline: `c17adeb86f5ea086e9ac9f2d454a41fbe7f85455`.
+The fixture and explicit-live entry points at this baseline are recorded in the
+acceptance checklist. Each provider and platform has its own evidence boundary;
+iOS cross-build is not iOS simulator/device UI acceptance.
 
 ## 1. Establish the version before writing code
 

@@ -10,14 +10,23 @@ swift test --package-path Examples/ExternalClient --disable-sandbox --no-paralle
 bash Scripts/ci-macos.sh
 bash Scripts/ci-linux.sh
 bash Scripts/ci-concurrency-seal.sh
+swift test --package-path Examples/ProviderQualification --disable-sandbox --no-parallel
+swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
 ```
 
 Do not treat skipped live tests as passes. Anthropic, OpenAI, and Apple live
 tests are env-gated. OpenAI live coverage requires
 `SWIFT_AGENT_OPENAI_LIVE=1`, `OPENAI_API_KEY`, and `OPENAI_MODEL`; alias users
 also provide `OPENAI_RESOLVED_MODEL` when the API reports a dated snapshot.
-DeepSeek currently has fixture/schema coverage only; there is no operator live
-suite, so a green package run is not a DeepSeek cloud qualification.
+DeepSeek has fixture/schema coverage and bounded operator evidence for one
+completed reasoning/usage response. Multi-turn, tool, restart, structured and
+incomplete live shapes remain unqualified, so a green package run or that one
+operator case is not broad DeepSeek cloud qualification.
+
+Use `Examples/ProviderQualification` for credential-free fixtures, no-network
+preflight and explicitly bounded live cases. Its persistent ledger defaults to
+12 sends per provider and 48 total; explicit live mode never falls back to a
+fixture. See the [qualification guide](guides/swift-agent-examples-and-live.md).
 
 Provider remediation fixtures can be run directly:
 

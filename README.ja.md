@@ -40,7 +40,7 @@ Provider ごとの契約：
 
 last-verified: 2026-09-19
 
-この README と翻訳版がソースを確認した基準は、RC.2 開発系列の `7cc8aa6e333062ee3a20a24daed13de463008fff` です。このドキュメントはリリース告知でも、新たなテスト結果でもありません。App に導入した依存関係と同じ revision のドキュメントを参照してください。
+この README と翻訳版の実行可能サンプル基準は、RC.2 開発系列の `c17adeb86f5ea086e9ac9f2d454a41fbe7f85455` です。このドキュメントはリリース告知ではありません。App に導入した依存関係と同じ revision のドキュメントを参照してください。
 
 ### 公開済みの rc.1
 
@@ -66,7 +66,7 @@ rc.1 の固定先は `d2347f11c6a78f421708e897dae42a51a98d37ea` です。
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        revision: "7cc8aa6e333062ee3a20a24daed13de463008fff"
+        revision: "c17adeb86f5ea086e9ac9f2d454a41fbe7f85455"
     )
 ]
 ```
@@ -100,22 +100,23 @@ Git submodule でローカル package を提供する場合、SDK commit は親�
 ```sh
 swift test --package-path Examples/ExternalClient
 swift run --package-path Examples/JevDecision JevDecision
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider openai --mode fixture --case all
 swift test --package-path Examples/AppleChatApp
 bash Examples/AppleChatApp/run-macos.sh
 ```
 
-[ExternalClient](Examples/ExternalClient) は public API を通じた SDK の利用をテストします。[JevDecision](Examples/JevDecision) は、標準では fixture を使う Noul、Choice、Score の実行可能なサンプルで、出力は提案でありツール実行の許可ではありません。[AppleChatApp](Examples/AppleChatApp) は認証情報不要の fixture リファレンスで、App 所有の SwiftUI ライフサイクル、直接ストリーミング、検証後のバッファー公開、ツール進捗、キャンセル/drain の所有権を示します。
+[ExternalClient](Examples/ExternalClient) は public API を通じた SDK 利用をテストします。[JevDecision](Examples/JevDecision) は fixture-first の typed Decision サンプルです。[ProviderQualification](Examples/ProviderQualification) は OpenAI、DeepSeek、Anthropic、Jev のオフライン preflight と明示的 live case を共有予算で実行します。[AppleChatApp](Examples/AppleChatApp) は同じ安全な設定層を使い、fixture または明示的 live 会話 Provider と App 所有の SwiftUI ライフサイクル、ツール進捗、キャンセル/drain を示します。
 
-Jev を実際に呼び出すには、ローカル環境に `TYPESAFE_API_KEY` を設定した後、POSIX 互換の shell で実行します。
+live 設定はプロセス環境、または `--env-file` が指すローカルの literal assignment ファイルから読み取れます。loader は shell を実行せず、プロセス環境が優先されます。ネットワーク接続前にオフライン preflight を実行してください。
 
 ```sh
-: "${TYPESAFE_API_KEY:?Set TYPESAFE_API_KEY locally before a live run}"
-export TYPESAFE_API_KEY
-SWIFT_AGENT_JEV_LIVE=1 \
-  swift run --package-path Examples/JevDecision JevDecision
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider anthropic --mode live --case preflight \
+  --env-file /absolute/path/to/.env.live
 ```
 
-`TYPESAFE_MODEL` でモデルを指定できます。実行プログラムはプロセス環境変数を読みます。`.env` ファイルを作成するだけでは自動で読み込まれません。親リポジトリから実行する場合は、package パスの先頭に `SwiftAgent/` を付けます。
+Provider 変数、リクエスト予算、単一 case、Jev、AppleChatApp live のコマンドは[サンプルと実サービス検証](docs/guides/swift-agent-examples-and-live.md)を参照してください。親リポジトリから実行する場合は package パスの先頭に `SwiftAgent/` を付けます。
 
 認証情報をソース、プロンプト、ログ、配布する App バイナリに含めないでください。明示的な live モードと fixture 実行を区別する必要があります。Fixture 検証、SDK CI、Host 統合、実サービス検証は別々の根拠です。キーがない状態は live テストの成功ではありません。制限と受け入れ条件はサンプルガイドを参照してください。
 

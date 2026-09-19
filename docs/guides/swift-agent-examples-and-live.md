@@ -2,136 +2,145 @@
 
 last-verified: 2026-09-19
 
-This guide separates executable examples present at the
-[source-checked baseline](../ai/start-here.md) from requirements for future
-examples. Fixture UI evidence and live-service qualification remain separate.
+Executable-example baseline: `c17adeb86f5ea086e9ac9f2d454a41fbe7f85455`.
+Run these commands from the SwiftAgent repository root. In a parent repository
+where SwiftAgent is a submodule, prefix package paths with `SwiftAgent/`.
 
-## Existing executable entry points
+## Executable entry points
 
-| Path | What exists at the baseline |
+| Path | Purpose |
 | --- | --- |
-| `Examples/ExternalClient` | An outside-the-package public-API test consumer |
-| `Examples/JevDecision` | A fixture-first executable with explicit Jev live opt-in |
-| `Examples/AppleChatApp` | A fixture-backed macOS SwiftUI/AppKit reference with app-owned lifecycle, direct streaming and validated buffered routes |
+| `Examples/ExternalClient` | Public-API consumption tests outside the root package |
+| `Examples/JevDecision` | Small fixture-first Decision/Jev proposal example |
+| `Examples/ProviderQualification` | Shared fixture/live CLI for bounded provider cases and sanitized evidence |
+| `Examples/AppleChatApp` | macOS/iOS SwiftUI example reusing one Controller for fixture or explicit live chat providers |
 
-Run from the **SwiftAgent repository root**:
+The qualification CLI and AppleChatApp use the existing `AnthropicProvider`,
+`OpenAIResponsesProvider`, `DeepSeekResponsesProvider` and `JevDecisionProvider`.
+They do not implement a second provider or Agent loop.
+
+## Configuration
+
+Start from `Examples/ProviderQualification/.env.live.example`, but keep the real
+file outside Git and restrict its local permissions. `--env-file` is parsed as
+literal `KEY=VALUE` or `export KEY=VALUE` assignments. It does not execute shell,
+interpolation, backticks or command substitution. Process environment values
+override file values. The CLI does not probe the working directory for an
+implicit `.env.live`; select a file with `--env-file` or
+`SWIFT_AGENT_LIVE_ENV_FILE`.
+
+| Provider | Credential | Model | Optional endpoint/profile |
+| --- | --- | --- | --- |
+| OpenAI official | `OPENAI_API_KEY` | `OPENAI_MODEL` | `OPENAI_RESOLVED_MODEL`, `OPENAI_BASE_URL` |
+| OpenAI-compatible gateway | `CHAINBOW_API_KEY` | `CHAINBOW_MODEL` | `CHAINBOW_RESOLVED_MODEL`, `CHAINBOW_BASE_URL`; legacy `CHAINBOW_MODLE` is accepted |
+| DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_MODEL` | `DEEPSEEK_RESOLVED_MODEL`, `DEEPSEEK_BASE_URL`; legacy `DEEPSEEK_MODLE` is accepted |
+| Anthropic | `ANTHROPIC_API_KEY` | `SWIFT_AGENT_ANTHROPIC_MODEL` | `ANTHROPIC_RESOLVED_MODEL`, `ANTHROPIC_BASE_URL` |
+| TypeSafe Jev | `TYPESAFE_API_KEY` | `TYPESAFE_MODEL` | `TYPESAFE_BASE_URL` |
+
+Apple on-device and PCC use platform availability rather than an API key. Do
+not put cloud credentials in an app bundle, `Info.plist`, resource file or
+committed Scheme. A Finder-launched app does not inherit a terminal environment;
+pass an absolute `--env-file` during local operator testing or use an app-owned
+secret architecture in a real product.
+
+## Offline commands
+
+Fixture matrix:
 
 ```sh
-swift test --package-path Examples/ExternalClient
-swift run --package-path Examples/JevDecision JevDecision
-swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
-bash Examples/AppleChatApp/run-macos.sh
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider openai --mode fixture --case all
 ```
 
-From a parent app repository where SwiftAgent is a submodule, prefix each
-package path with `SwiftAgent/`. Inspect [Examples](../../Examples) at your
-revision instead of assuming that a newer example exists in an older release.
-
-`AppleChatApp` defaults to a deterministic local provider and read-only account
-lookup tool. It accepts no key and performs no real external effect. Use the New
-Conversation menu to compare direct **Streaming** with **Validated** publication.
-The controller/projection tests and recorded manual scope are listed in the
-[acceptance checklist](../ai/acceptance-checklist.md).
-
-For the existing Jev live path, inject `TYPESAFE_API_KEY` through your local
-credential mechanism, then run in a POSIX-compatible shell:
+No-network preflight:
 
 ```sh
-: "${TYPESAFE_API_KEY:?Set TYPESAFE_API_KEY locally before a live run}"
-export TYPESAFE_API_KEY
-SWIFT_AGENT_JEV_LIVE=1 \
-  swift run --package-path Examples/JevDecision JevDecision
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider deepseek --mode live --case preflight \
+  --env-file /absolute/path/to/.env.live
 ```
 
-`TYPESAFE_MODEL` optionally overrides the example's model configuration.
-The actual variable names and behavior are in
-[the executable source](../../Examples/JevDecision/Sources/JevDecision/main.swift).
-The default path uses a fixture and makes no Jev request. The current executable
-reads process environment; it does not automatically load `.env`. The explicit
-shell preflight above also prevents a missing key from being mistaken for a
-successful live run. Do not identify fixture/live mode solely by process exit.
+Preflight reports only mode, provider, service, redacted origin, requested model,
+credential presence, budget limits and case. It reports the environment file as
+`CONFIGURED` or `NONE`, never its local path or contents.
 
-The example asks Noul, Choice and Score questions and produces a review proposal;
-it does not authorize or execute a tool. See [Decisions](swift-agent-decisions.md).
+## Bounded live commands
 
-## Credential rules
+Use one ledger across CLI and UI runs:
 
-Keep keys out of source, checked-in configuration, screenshots, shell tracing,
-logs and model input. Do not ask a user to paste a secret into a coding-agent
-conversation. Read credentials in the host configuration layer, not in prompts
-or model-selected arbitrary endpoint arguments.
+```sh
+budget="${TMPDIR:-/tmp}/swiftagent-live-budget.json"
 
-A `.env.example`, if later added, contains only names and dummy placeholders;
-loading it requires a real loader. Never demonstrate a production secret in
-`.env.example`. Validate which settings the executable actually implements.
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider anthropic --service official --mode live --case tool \
+  --reasoning enabled \
+  --env-file /absolute/path/to/.env.live --budget-file "$budget"
+```
 
-For an Apple app, an Xcode Run Scheme environment can support local development;
-it is not a production secret-management plan. App-owned service credentials
-belong in an appropriate backend/credential architecture, not a shipped binary.
-User-provided keys require a separate host storage and consent policy. This
-SDK does not implement the app's Keychain/settings UI.
+Chat cases are `text`, `tool`, `restart`, `structured`, `usage`, `cancel` and
+`all`; `all` runs all six chat cases in that order. Jev cases are `noul`,
+`choice`, `score`, `mixed` and `all`:
 
-## Requirements for new examples
+```sh
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider jev --mode live --case mixed \
+  --env-file /absolute/path/to/.env.live --budget-file "$budget"
+```
 
-Recommended examples cover model conversation, a no-side-effect local tool loop,
-structured answer handling, and an Apple UI using the existing SDK. These are
-implementation requirements, not current command names or directories.
+The default budget is 12 HTTP sends per provider and 48 total. A persistent
+ledger supplied by `--budget-file` or `SWIFT_AGENT_LIVE_BUDGET_FILE` is required
+for every live request; restarting a command cannot reset it. Reservations use a
+separate advisory lock and re-read the latest ledger before an atomic update.
+Operator concurrency remains one, each Agent Run is limited to three model turns
+and two local read-only tool calls, and the default Run/request timeout is 120 seconds.
 
-Every executable example should:
+Exit codes are `0` for all selected cases passing, `2` for configuration errors,
+`3` for a failed/not-exercised case or exhausted budget, and `1` for an
+unclassified failure. Explicit live mode never falls back to fixtures.
 
-- Use only public SDK imports and state its minimum SDK revision/platform.
-- Default to deterministic fixture mode and label that mode visibly.
-- Require explicit opt-in for real network use and label the selected provider
-  and requested model without printing credentials.
-- Fail clearly when explicit live mode lacks credentials or fails; never silently
-  substitute a fixture, another account or another service.
-- Bound requests, output and concurrency, avoid hidden retries, and show the
-  actual logical outcome rather than equating stream closure with success.
-- Preserve cancellation/drain ownership and provide safe synthetic inputs.
+The CLI prints sanitized request shape and bounded protocol metadata. It does not
+print credentials, request bodies, response text, reasoning, signatures, opaque
+continuation values or arbitrary underlying error descriptions. Raw wire data is
+not persisted.
 
-For an Apple UI, implement and test the ownership and projection designs in
-[Apple UI integration](swift-agent-apple-ui.md) and
-[UI streaming](swift-agent-ui-streaming.md). A compilable code fragment is not a
-manually exercised application, and an SDK CI result is not a UI performance
-measurement.
+## AppleChatApp
 
-## Live qualification is a separate evidence layer
+Fixture mode:
 
-Offline fixtures cover malformed protocols, failure boundaries and deterministic
-races. Live calls check actual request acceptance and server response shapes.
-Quality evaluation checks whether the result is useful. None substitutes for the
-other two. Ordinary CI remains credential-free; qualification is an explicit,
-bounded operator action.
+```sh
+bash Examples/AppleChatApp/run-macos.sh \
+  --demo "Use lookup_account for account A-100 and summarize it."
+```
 
-For each supported scope, record SDK commit, provider, official service versus
-specific gateway, requested/resolved model identity when available, date,
-scenario, request count, outcome and sanitized request IDs. Report PASS, FAIL,
-NOT RUN or BLOCKED; missing credentials are not PASS. A successful request can
-still be billable. Do not deliberately exhaust a quota to provoke rate limits.
+Explicit live mode uses the same provider configuration and budget ledger:
 
-Suggested representative live checks, not a claim of completed coverage:
+```sh
+bash Examples/AppleChatApp/run-macos.sh \
+  --provider openai --service official --mode live \
+  --env-file /absolute/path/to/.env.live --budget-file "$budget" \
+  --demo "Use lookup_account exactly once for account A-100 and summarize the observed status."
+```
 
-| Surface | Checks |
-| --- | --- |
-| OpenAI Responses | Two text turns, local function/result/next request, encrypted continuation when configured, structured output and cancellation |
-| DeepSeek Responses | Thinking settings, registered tools with text-only and tool turns, reasoning replay, argument-done event, native replay metadata and incomplete status evidence |
-| Anthropic | Multi-turn, tool feedback and configured thinking continuation |
-| Jev | Separate and combined Noul/Choice/Score requests, actual response membership/ranges, rubric mapping and usage |
-| Apple on-device/PCC | Applicable device/OS/service availability, real planning and cancellation; not ordinary API-key setup |
+The app labels `FIXTURE` or `LIVE`, provider and model without displaying a key.
+It retains one event consumer, separates logical terminal from physical drain,
+and keeps the local account tool read-only. Use the Stop button during an active
+Run. In fixture automation, `--stop` requests Stop after startup; it is not a
+timing-based proof that cancellation won.
 
-Do not infer a service's complete model catalog from one successful model. Do not
-force live responses to equal fixture probabilities or prose. Jev Score uses an
-ordered rubric, not a universal 0-to-1 probability. Reconcile documented upstream
-schema differences with actual evidence rather than arbitrary decoder relaxation.
+The package includes an iOS SwiftUI entry and cross-builds the executable target
+for `arm64-apple-ios16.0`. That is not simulator/device UI acceptance. Live
+Apple Foundation Models remain the opt-in tests documented in the
+[Apple provider guide](swift-agent-apple-provider.md).
 
-When live behavior reveals a problem, retain a synthetic or carefully sanitized
-regression preserving the relevant wire shape. Do not publish real user payloads,
-keys, signed URLs or opaque vendor state by default. Mark transformed fixtures
-and their provenance; a mocked encrypted value is not a proof of real replay.
+## Evidence boundaries
 
-## Release wording
+Fixture, normal CI, Host integration, live service qualification and visual UI
+acceptance are separate evidence. A model that answers without calling the
+required tool produces `NOT_EXERCISED`, not a fabricated pass. Missing config,
+platform unavailability and exhausted budget are also distinct statuses.
 
-Document fixture-verified, SDK-CI-verified, Host-integration-verified and
-live-qualified scopes separately. A docs commit, a running fixture, or a skipped
-live test must not upgrade the release verdict. Unverified advertised capability
-must remain explicitly qualified until its agreed acceptance evidence exists.
+The 2026-09-19 bounded operator run is recorded in
+[provider live qualification](../reviews/2026-09-19-provider-live-qualification.md).
+It includes successful OpenAI-compatible gateway, Anthropic gateway, Jev and
+Apple on-device evidence, plus the exact DeepSeek and PCC limitations. Normal CI
+remains credential-free.

@@ -10,7 +10,7 @@ adapters translate vendor transport and stream contracts into `ModelEvent`;
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Anthropic Messages | AgentProviders | macOS, iOS, Linux | Yes | Yes | Yes | Signed thinking continuation | Yes | API key | Fixtures; operator live test available |
 | OpenAI Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Encrypted opaque continuation and visible summaries | Yes | API key | Fixtures; operator live test available |
-| DeepSeek Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Plaintext opaque continuation | Yes | API key | Fixtures only; no live qualification yet |
+| DeepSeek Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Plaintext opaque continuation | Yes | API key | Fixtures; bounded terminal/usage live evidence |
 | Apple on-device | AgentAppleProvider | macOS/iOS 26+ | No; one validated plan per request | Yes | No | Not advertised | SDK 27 where available | None | Compile and fixtures; operator live test available |
 | Apple Private Cloud Compute | AgentAppleProvider | macOS/iOS 27+ | No; one validated plan per request | Yes | No | Not advertised | Yes where reported by SDK | None | Compile and fixtures; operator live test available |
 
@@ -45,3 +45,6 @@ return untrusted advice for Host orchestration.
 See the [Decision Provider guide](guides/swift-agent-decisions.md). A decision
 cannot mint Evidence, authorize or execute a tool, create a Receipt, or settle
 an AgentJournal.
+
+Bounded operator evidence and explicit gaps are recorded in the
+[2026-09-19 provider qualification report](reviews/2026-09-19-provider-live-qualification.md).

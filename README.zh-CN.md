@@ -40,7 +40,7 @@ SwiftAgent 是一个不绑定模型厂商的 Swift Agent 运行时，提供类�
 
 last-verified: 2026-09-19
 
-本 README 及其翻译所核对的源码基线是 RC.2 开发线上的 `7cc8aa6e333062ee3a20a24daed13de463008fff`。这些文档不是发布公告，也不是新的测试结果。应始终阅读与 App 实际安装的依赖版本一致的文档。
+本 README 及其翻译所核对的可执行示例基线是 RC.2 开发线上的 `c17adeb86f5ea086e9ac9f2d454a41fbe7f85455`。这些文档不是发布公告。应始终阅读与 App 实际安装的依赖版本一致的文档。
 
 ### 已发布的 rc.1
 
@@ -66,7 +66,7 @@ rc.1 的固定提交为 `d2347f11c6a78f421708e897dae42a51a98d37ea`。
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        revision: "7cc8aa6e333062ee3a20a24daed13de463008fff"
+        revision: "c17adeb86f5ea086e9ac9f2d454a41fbe7f85455"
     )
 ]
 ```
@@ -100,22 +100,23 @@ dependencies: [
 ```sh
 swift test --package-path Examples/ExternalClient
 swift run --package-path Examples/JevDecision JevDecision
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider openai --mode fixture --case all
 swift test --package-path Examples/AppleChatApp
 bash Examples/AppleChatApp/run-macos.sh
 ```
 
-[ExternalClient](Examples/ExternalClient) 验证通过 public API 使用 SDK。[JevDecision](Examples/JevDecision) 是默认使用 fixture 的 Noul、Choice、Score 可执行示例，其输出是建议，不是执行工具的权限。[AppleChatApp](Examples/AppleChatApp) 是无需凭据的 fixture 参考实现，展示 App 自己管理 SwiftUI 生命周期、直接流式输出、验证后缓冲发布、工具进度和取消/drain 所有权。
+[ExternalClient](Examples/ExternalClient) 验证通过 public API 使用 SDK。[JevDecision](Examples/JevDecision) 是 fixture-first 的 typed Decision 示例。[ProviderQualification](Examples/ProviderQualification) 为 OpenAI、DeepSeek、Anthropic 和 Jev 提供受预算约束的离线 preflight 与显式 live case。[AppleChatApp](Examples/AppleChatApp) 复用同一安全配置层，支持 fixture 或显式 live 对话 Provider，同时保持 App 自己管理的 SwiftUI 生命周期、工具进度和取消/drain 所有权。
 
-真实调用 Jev 时，先在本机注入 `TYPESAFE_API_KEY`，再使用兼容 POSIX 的 shell：
+live 配置可以来自进程环境，或 `--env-file` 指向的本机 literal assignment 文件；loader 不执行 shell，进程环境优先。联网前先执行无网络 preflight：
 
 ```sh
-: "${TYPESAFE_API_KEY:?Set TYPESAFE_API_KEY locally before a live run}"
-export TYPESAFE_API_KEY
-SWIFT_AGENT_JEV_LIVE=1 \
-  swift run --package-path Examples/JevDecision JevDecision
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider anthropic --mode live --case preflight \
+  --env-file /absolute/path/to/.env.live
 ```
 
-可通过 `TYPESAFE_MODEL` 选择模型。该程序读取进程环境变量；仅创建 `.env` 文件不会自动加载配置。从父仓库执行时，在 package 路径前加 `SwiftAgent/`。
+Provider 变量、请求预算、单 case、Jev 和 AppleChatApp live 命令见[示例与真实服务验收](docs/guides/swift-agent-examples-and-live.md)。从父仓库执行时，在 package 路径前加 `SwiftAgent/`。
 
 密钥不得进入源码、提示词、日志或分发的 App 二进制文件。必须区分显式 live 模式和 fixture 运行。Fixture 检查、SDK CI、Host 集成与真实服务验收是不同层次的证据；缺少 key 不算 live 测试通过。调用限制与验收要求见示例指南。
 
