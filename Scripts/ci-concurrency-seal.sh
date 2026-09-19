@@ -20,7 +20,7 @@ require_suite_count() {
 }
 
 require_suite_count "AgentToolsTests.ToolResourceCoordinatorTests" 11
-require_suite_count "AgentCoreTests.AgentCompletionCommitTests" 3
+require_suite_count "AgentCoreTests.AgentCompletionCommitTests" 4
 
 swift test --filter ToolResourceCoordinatorTests --disable-sandbox --no-parallel
 swift test --filter AgentCompletionCommitTests --disable-sandbox --no-parallel
