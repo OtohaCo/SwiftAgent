@@ -83,14 +83,20 @@ RED evidence retained during implementation:
 - Continuation: reordered and split visible sequences were accepted before
   binding; the first exact-order fix then failed the existing legal OpenAI
   interleaving regression.
+- Independent review reproduced a DeepSeek continuation rejection for the
+  documented `summary: []` reasoning shape and for a null compatibility field.
+- Both adapters accepted `output_item.done` without first observing
+  `function_call_arguments.done`, allowing one protocol transition to replace
+  another.
 
 Final targeted evidence:
 
-- `ResponsesTerminalValidationTests`: 72 status-matrix cases plus 4 Agent
+- `ResponsesTerminalValidationTests`: 72 status-matrix cases plus 6 Agent
   executor controls, 0 failures. The matrix covers added, item-done, and final
   response snapshots for message, reasoning, and function-call items on both
   adapters.
-- `ResponsesContinuationIntegrityTests`: 10 tests, 0 failures.
+- `ResponsesContinuationIntegrityTests`: 12 tests, including two parameterized
+  DeepSeek metadata cases, 0 failures.
 - `OpenAIResponsesStreamDecoderTests`: 11 tests, 0 failures.
 - `OpenAIResponsesProviderTests`: 19 tests, 0 failures.
 - `DeepSeekResponsesProviderTests`: 10 tests, 0 failures.
@@ -117,6 +123,22 @@ Verified on 2026-09-19:
 - OpenAI function output type, source revision `c51f68056113fadecd154f44ee220e381421349a`: `https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_function_tool_call.py`
 - OpenAI output-item done type, source revision `7609337c1c7f26f49a237e2698df126f7983e948`: `https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_output_item_done_event.py`
 - DeepSeek Responses reference: `https://api-docs.deepseek.com/api/create-response/`
+
+## Independent Review Remediation
+
+Claude Fable 5.1 reviewed `c2185912b5374c077fa268af9c6ec9860ed8a09c`
+through the Herdr Claude panel on 2026-09-19. The full review and Codex
+adjudication are recorded in
+`2026-09-19-claude-fable-5-1-provider-remediation-review.md`.
+
+The reported DeepSeek reasoning-metadata P1 was accepted and reproduced. The
+adapter now accepts a documented summary array and null encrypted compatibility
+metadata while continuing to reject non-null encrypted state. The reported
+missing `function_call_arguments.done` P3 was elevated to a P2 contract gap
+because this remediation explicitly treats argument completion, item
+completion, and response completion as independent facts. Both adapters now
+require exact argument agreement across those transitions before publishing a
+complete call.
 
 ## Residual Risk
 

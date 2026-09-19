@@ -6,6 +6,71 @@ import Testing
 @testable import AgentProviders
 
 struct ResponsesContinuationIntegrityTests {
+    @Test(arguments: DeepSeekReasoningMetadata.allCases)
+    func deepSeekDocumentedReasoningMetadataRemainsReplayable(
+        metadata: DeepSeekReasoningMetadata
+    ) throws {
+        let model = ModelID(provider: "deepseek", name: "deepseek-flash")
+        var reasoning: [String: JSONValue] = [
+            "type": .string("reasoning"),
+            "id": .string("rs-1"),
+            "status": .string("completed"),
+            "content": .array([.object([
+                "type": .string("reasoning_text"),
+                "text": .string("Considered."),
+            ])]),
+        ]
+        metadata.apply(to: &reasoning)
+        let items: [JSONValue] = [
+            .object(reasoning),
+            nativeMessage(id: "msg-1", text: "Answer"),
+        ]
+        let content: [ModelContent] = [.reasoning("Considered."), .text("Answer")]
+
+        let continuation = try #require(try DeepSeekResponsesContinuation.make(
+            items: items,
+            content: content,
+            calls: [],
+            model: model
+        ))
+        let body = try DeepSeekResponsesRequestEncoder.encode(
+            .init(model: model, messages: [
+                .assistant(content: content + [.providerContinuation(continuation)], toolCalls: []),
+                .user([.text("Continue")]),
+            ]),
+            maximumOutputTokens: 100,
+            reasoningEffort: .high
+        )
+        guard case .object(let object) = body, case .array(let input) = object["input"] else {
+            Issue.record("Missing input")
+            return
+        }
+        #expect(Array(input.prefix(items.count)) == items)
+    }
+
+    @Test func deepSeekNonNullEncryptedReasoningMetadataFailsClosed() throws {
+        let model = ModelID(provider: "deepseek", name: "deepseek-flash")
+        let item = JSONValue.object([
+            "type": .string("reasoning"),
+            "id": .string("rs-1"),
+            "status": .string("completed"),
+            "content": .array([.object([
+                "type": .string("reasoning_text"),
+                "text": .string("Considered."),
+            ])]),
+            "encrypted_content": .string("openai-only-state"),
+        ])
+
+        #expect(throws: ModelProviderError.self) {
+            _ = try DeepSeekResponsesContinuation.make(
+                items: [item],
+                content: [.reasoning("Considered.")],
+                calls: [],
+                model: model
+            )
+        }
+    }
+
     @Test func openAIContinuationRejectsVisibleContentReordering() throws {
         let model = ModelID(provider: "openai", name: "fixture")
         let items: [JSONValue] = [
@@ -346,6 +411,20 @@ struct ResponsesContinuationIntegrityTests {
         }
         #expect(input.contains(deepSeekReasoning(id: "rs-resp-1", text: "Considered.")))
         #expect(input.contains(nativeMessage(id: "msg-resp-1", text: "Answer")))
+    }
+}
+
+enum DeepSeekReasoningMetadata: String, CaseIterable, Sendable {
+    case emptySummary
+    case nullEncryptedContent
+
+    func apply(to item: inout [String: JSONValue]) {
+        switch self {
+        case .emptySummary:
+            item["summary"] = .array([])
+        case .nullEncryptedContent:
+            item["encrypted_content"] = .null
+        }
     }
 }
 

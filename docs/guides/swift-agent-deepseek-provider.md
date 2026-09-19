@@ -35,6 +35,11 @@ they still match the canonical assistant content and tool calls, and replays
 them in their original item order. It never fabricates reasoning and does not
 use OpenAI reasoning summaries or encrypted content.
 
+DeepSeek responses may include an empty `summary` array or a null
+`encrypted_content` compatibility field on a plaintext reasoning item. Those
+shapes are retained for replay; non-null encrypted reasoning state is rejected
+because it belongs to a different provider contract.
+
 The opaque continuation also binds the normalized visible text/reasoning order
 published by the decoder. Adjacent fragments of one kind may merge, while
 reordering or splitting a stored kind run around another kind is rejected.
@@ -63,6 +68,9 @@ accepted where the current Responses schema makes it optional. An explicit
 `null`, unknown value, or value that contradicts the event phase is rejected.
 A `response.completed` snapshot must agree with every observed item identity,
 content fragment, function name, and original argument bytes.
+For function calls, `function_call_arguments.done`, `output_item.done`, and the
+response terminal are independent required transitions; a later event cannot
+silently replace an earlier missing transition.
 
 A legal `response.incomplete` can end without `output_item.done`. SwiftAgent
 keeps the observed partial text, reasoning, and truncated function arguments,

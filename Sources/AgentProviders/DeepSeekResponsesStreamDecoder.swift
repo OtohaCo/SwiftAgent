@@ -304,15 +304,12 @@ struct DeepSeekResponsesStreamDecoder {
         case .functionCall:
             try validateItemStatus(item["status"], expected: "completed")
             guard try ProviderJSON.string(item["type"]) == "function_call", var call = state.call,
+                  call.argumentsDone,
                   try ProviderJSON.string(item["call_id"]) == call.id.rawValue,
                   try ProviderJSON.string(item["name"]) == call.name else { throw ProviderJSON.invalid() }
             let final = try ProviderJSON.string(item["arguments"])
-            guard final.hasPrefix(call.arguments) else { throw ProviderJSON.invalid() }
-            let suffix = String(final.dropFirst(call.arguments.count))
-            if !suffix.isEmpty { events.append(.toolCallArgumentsDelta(call.id, suffix)) }
-            guard (try? JSONValue.decodeToolArguments(final)) != nil else { throw ProviderJSON.invalid() }
-            call.arguments = final
-            call.argumentsDone = true
+            guard final == call.arguments,
+                  (try? JSONValue.decodeToolArguments(final)) != nil else { throw ProviderJSON.invalid() }
             call.completed = true
             state.call = call
             events.append(.toolCallCompleted(.init(id: call.id, name: call.name,

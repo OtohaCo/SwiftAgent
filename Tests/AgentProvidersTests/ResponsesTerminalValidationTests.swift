@@ -71,6 +71,34 @@ struct ResponsesTerminalValidationTests {
         #expect(result.outcome == .completed)
         #expect(await execution.count == 1)
     }
+
+    @Test(arguments: [TerminalVendor.openAI, .deepSeek])
+    func missingFunctionArgumentsDoneNeverReachesAgentExecutor(vendor: TerminalVendor) async throws {
+        let execution = ProviderExecutionProbe()
+        let provider = try provider(
+            for: vendor,
+            bodies: [
+                terminalFixture(.init(
+                    vendor: vendor,
+                    itemKind: .functionCall,
+                    stage: .responseFinal,
+                    status: .legal,
+                    expectedAccepted: false
+                ), includeArgumentsDone: false),
+                terminalTextFixture(vendor),
+            ]
+        )
+        let session = try Agent(
+            model: request(for: vendor).model,
+            provider: provider,
+            tools: [try ProviderCalculator(probe: execution)]
+        ).makeSession()
+
+        await #expect(throws: ModelProviderError.self) {
+            _ = try await session.run("Add 2 and 3").wait()
+        }
+        #expect(await execution.count == 0)
+    }
 }
 
 enum TerminalVendor: String, Sendable {
@@ -164,7 +192,10 @@ private func request(for vendor: TerminalVendor) -> ModelRequest {
     return .init(model: model, messages: [.user([.text("Test")])])
 }
 
-private func terminalFixture(_ testCase: TerminalStatusCase) throws -> Data {
+private func terminalFixture(
+    _ testCase: TerminalStatusCase,
+    includeArgumentsDone: Bool = true
+) throws -> Data {
     let responseID = "resp-terminal"
     let model = testCase.vendor == .openAI ? "fixture" : "deepseek-flash"
     let itemID = switch testCase.itemKind {
@@ -231,10 +262,12 @@ private func terminalFixture(_ testCase: TerminalStatusCase) throws -> Data {
             "type": .string("response.function_call_arguments.delta"), "item_id": .string(itemID),
             "output_index": .number(0), "delta": .string(#"{"a":2,"b":3}"#),
         ])))
-        frames.append(("response.function_call_arguments.done", try encoded([
-            "type": .string("response.function_call_arguments.done"), "item_id": .string(itemID),
-            "output_index": .number(0), "arguments": .string(#"{"a":2,"b":3}"#),
-        ])))
+        if includeArgumentsDone {
+            frames.append(("response.function_call_arguments.done", try encoded([
+                "type": .string("response.function_call_arguments.done"), "item_id": .string(itemID),
+                "output_index": .number(0), "arguments": .string(#"{"a":2,"b":3}"#),
+            ])))
+        }
     }
 
     var done = terminalItem(vendor: testCase.vendor, kind: testCase.itemKind, id: itemID)

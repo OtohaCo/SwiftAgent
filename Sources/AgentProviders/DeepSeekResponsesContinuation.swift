@@ -77,8 +77,13 @@ enum DeepSeekResponsesContinuation {
             let object = try ProviderJSON.object(item)
             switch try ProviderJSON.string(object["type"]) {
             case "reasoning":
-                guard object["summary"] == nil, object["encrypted_content"] == nil,
-                      case .array(let parts) = object["content"], !parts.isEmpty else {
+                if let summary = object["summary"], summary != .null {
+                    guard case .array = summary else { throw ProviderJSON.invalid() }
+                }
+                if let encrypted = object["encrypted_content"], encrypted != .null {
+                    throw ProviderJSON.invalid()
+                }
+                guard case .array(let parts) = object["content"], !parts.isEmpty else {
                     throw ProviderJSON.invalid()
                 }
                 hasReasoning = true
