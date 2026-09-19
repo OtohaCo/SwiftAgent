@@ -1,5 +1,15 @@
 import Foundation
 
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Linux)
+@_silgen_name("flock")
+private func swiftAgentLiveBudgetFlock(_ fileDescriptor: Int32, _ operation: Int32) -> Int32
+
+private enum LiveBudgetFileLockOperation {
+    static let exclusive: Int32 = 2
+    static let unlock: Int32 = 8
+}
+#endif
+
 public enum LiveBudgetError: Error, Equatable, Sendable {
     case invalidLedger
     case providerLimit(provider: QualificationProvider, limit: Int)
@@ -29,24 +39,28 @@ public actor LiveRequestBudget {
         self.fileURL = fileURL
         self.perProviderLimit = perProviderLimit
         self.totalLimit = totalLimit
-        if let fileURL, FileManager.default.fileExists(atPath: fileURL.path) {
-            let stored: Stored
-            do { stored = try JSONDecoder().decode(Stored.self, from: Data(contentsOf: fileURL)) }
-            catch { throw LiveBudgetError.invalidLedger }
-            var decoded: [QualificationProvider: Int] = [:]
-            for (key, value) in stored.attempts {
-                guard let provider = QualificationProvider(rawValue: key), value >= 0 else {
-                    throw LiveBudgetError.invalidLedger
-                }
-                decoded[provider] = value
+        if let fileURL {
+            attempts = try Self.withLedgerLock(for: fileURL) {
+                try Self.readAttempts(from: fileURL)
             }
-            attempts = decoded
         } else {
             attempts = [:]
         }
     }
 
     public func reserve(_ provider: QualificationProvider) throws {
+        if let fileURL {
+            try Self.withLedgerLock(for: fileURL) {
+                attempts = try Self.readAttempts(from: fileURL)
+                try reserveInMemory(provider)
+                try persist()
+            }
+            return
+        }
+        try reserveInMemory(provider)
+    }
+
+    private func reserveInMemory(_ provider: QualificationProvider) throws {
         let providerCount = attempts[provider, default: 0]
         guard providerCount < perProviderLimit else {
             throw LiveBudgetError.providerLimit(provider: provider, limit: perProviderLimit)
@@ -54,7 +68,7 @@ public actor LiveRequestBudget {
         let total = attempts.values.reduce(0, +)
         guard total < totalLimit else { throw LiveBudgetError.totalLimit(limit: totalLimit) }
         attempts[provider] = providerCount + 1
-        try persist()
+        if fileURL == nil { return }
     }
 
     public func snapshot() -> LiveBudgetSnapshot {
@@ -77,5 +91,53 @@ public actor LiveRequestBudget {
         } catch {
             throw LiveBudgetError.persistenceFailed
         }
+    }
+
+    private static func readAttempts(from fileURL: URL) throws -> [QualificationProvider: Int] {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [:] }
+        let stored: Stored
+        do { stored = try JSONDecoder().decode(Stored.self, from: Data(contentsOf: fileURL)) }
+        catch { throw LiveBudgetError.invalidLedger }
+        var decoded: [QualificationProvider: Int] = [:]
+        for (key, value) in stored.attempts {
+            guard let provider = QualificationProvider(rawValue: key), value >= 0 else {
+                throw LiveBudgetError.invalidLedger
+            }
+            decoded[provider] = value
+        }
+        return decoded
+    }
+
+    private static func withLedgerLock<T>(for fileURL: URL, _ body: () throws -> T) throws -> T {
+        #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Linux)
+        let lockURL = URL(fileURLWithPath: fileURL.path + ".lock")
+        do {
+            try FileManager.default.createDirectory(
+                at: lockURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if !FileManager.default.fileExists(atPath: lockURL.path),
+               !FileManager.default.createFile(atPath: lockURL.path, contents: nil) {
+                throw LiveBudgetError.persistenceFailed
+            }
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: lockURL.path)
+            let handle = try FileHandle(forUpdating: lockURL)
+            guard swiftAgentLiveBudgetFlock(handle.fileDescriptor, LiveBudgetFileLockOperation.exclusive) == 0 else {
+                try? handle.close()
+                throw LiveBudgetError.persistenceFailed
+            }
+            defer {
+                _ = swiftAgentLiveBudgetFlock(handle.fileDescriptor, LiveBudgetFileLockOperation.unlock)
+                try? handle.close()
+            }
+            return try body()
+        } catch let error as LiveBudgetError {
+            throw error
+        } catch {
+            throw LiveBudgetError.persistenceFailed
+        }
+        #else
+        throw LiveBudgetError.persistenceFailed
+        #endif
     }
 }

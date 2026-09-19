@@ -41,4 +41,24 @@ struct LiveRequestBudgetTests {
         }
         #expect(outcomes.filter { $0 }.count == 1)
     }
+
+    @Test func independentPersistentBudgetsReserveAgainstTheLatestLedger() async throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftagent-live-budget-shared-")
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("json")
+        let first = try LiveRequestBudget(fileURL: file, perProviderLimit: 2, totalLimit: 2)
+        let second = try LiveRequestBudget(fileURL: file, perProviderLimit: 2, totalLimit: 2)
+
+        try await first.reserve(.openAI)
+        try await second.reserve(.openAI)
+
+        let reloaded = try LiveRequestBudget(fileURL: file, perProviderLimit: 2, totalLimit: 2)
+        let snapshot = await reloaded.snapshot()
+        #expect(snapshot.totalAttempts == 2)
+        #expect(snapshot.attempts[.openAI] == 2)
+        await #expect(throws: LiveBudgetError.providerLimit(provider: .openAI, limit: 2)) {
+            try await first.reserve(.openAI)
+        }
+    }
 }

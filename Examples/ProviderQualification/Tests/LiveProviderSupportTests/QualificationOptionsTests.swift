@@ -80,4 +80,22 @@ struct QualificationOptionsTests {
         )
         #expect(try resolvedBudgetFile(options: fixture, environment: environment, required: true) == nil)
     }
+
+    @Test func environmentFileResolutionIsExplicitAndDoesNotProbeTheWorkingDirectory() throws {
+        let defaults = try QualificationOptions.parse([])
+        #expect(resolvedEnvironmentFile(options: defaults, process: [:]) == nil)
+
+        let fromProcess = resolvedEnvironmentFile(
+            options: defaults,
+            process: ["SWIFT_AGENT_LIVE_ENV_FILE": "/tmp/operator.env"]
+        )
+        #expect(fromProcess?.path == "/tmp/operator.env")
+
+        let explicit = try QualificationOptions.parse(["--env-file", "/tmp/explicit.env"])
+        let resolved = resolvedEnvironmentFile(
+            options: explicit,
+            process: ["SWIFT_AGENT_LIVE_ENV_FILE": "/tmp/operator.env"]
+        )
+        #expect(resolved?.path == "/tmp/explicit.env")
+    }
 }

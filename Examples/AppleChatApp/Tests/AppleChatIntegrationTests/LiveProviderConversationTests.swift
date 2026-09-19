@@ -82,6 +82,27 @@ struct LiveProviderConversationTests {
             )
         }
     }
+
+    @Test func trailingQualificationFlagWithoutAValueFailsClosed() {
+        #expect(throws: LiveConfigurationError.invalidArgument("Missing value for --mode.")) {
+            try AppleChatLaunchConfiguration.resolve(arguments: ["--mode"], process: [:])
+        }
+    }
+
+    @Test func knownLaunchErrorsAreActionableWithoutExposingSecretValues() {
+        let credential = renderedLaunchConfigurationError(
+            LiveConfigurationError.missingCredential("OPENAI_API_KEY")
+        )
+        let budget = renderedLaunchConfigurationError(
+            LiveBudgetError.providerLimit(provider: .openAI, limit: 12)
+        )
+
+        #expect(credential.contains("OPENAI_API_KEY"))
+        #expect(credential.contains("preflight"))
+        #expect(!credential.contains("secret"))
+        #expect(budget.contains("budget"))
+        #expect(budget.contains("12"))
+    }
 }
 
 private func terminalSnapshot(

@@ -152,7 +152,7 @@ public struct QualificationRunner: Sendable {
     private func selectedScenarios() -> [QualificationScenario] {
         guard configuration.options.scenario == .all else { return [configuration.options.scenario] }
         if configuration.options.provider == .jev { return [.noul, .choice, .score, .mixed] }
-        return [.text, .tool, .restart, .structured, .cancel]
+        return [.text, .tool, .restart, .structured, .usage, .cancel]
     }
 
     private func run(_ scenario: QualificationScenario) async throws -> QualificationCaseResult {

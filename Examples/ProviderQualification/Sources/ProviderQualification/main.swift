@@ -12,9 +12,7 @@ enum ProviderQualificationMain {
         do {
             let options = try QualificationOptions.parse(Array(CommandLine.arguments.dropFirst()))
             let process = ProcessInfo.processInfo.environment
-            let environmentFile = options.environmentFile
-                ?? process["SWIFT_AGENT_LIVE_ENV_FILE"].map { URL(fileURLWithPath: $0).standardizedFileURL }
-                ?? defaultEnvironmentFile()
+            let environmentFile = resolvedEnvironmentFile(options: options, process: process)
             let environment = try LiveEnvironment.load(process: process, fileURL: environmentFile)
             let preflight = try QualificationConfiguration.preflight(options: options, environment: environment)
             write(preflight.rendered)
@@ -52,12 +50,6 @@ enum ProviderQualificationMain {
             writeError("qualification=FAILED")
             exit(1)
         }
-    }
-
-    private static func defaultEnvironmentFile() -> URL? {
-        let candidate = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent(".env.live")
-        return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
     }
 
     private static func write(_ value: String) {

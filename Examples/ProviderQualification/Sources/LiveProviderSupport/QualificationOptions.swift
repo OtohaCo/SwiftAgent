@@ -57,6 +57,15 @@ public func resolvedBudgetFile(
     return file
 }
 
+public func resolvedEnvironmentFile(
+    options: QualificationOptions,
+    process: [String: String]
+) -> URL? {
+    if let explicit = options.environmentFile { return explicit }
+    guard let path = normalized(process["SWIFT_AGENT_LIVE_ENV_FILE"]) else { return nil }
+    return URL(fileURLWithPath: path).standardizedFileURL
+}
+
 public struct QualificationOptions: Equatable, Sendable {
     public let provider: QualificationProvider
     public let mode: QualificationMode

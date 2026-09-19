@@ -47,7 +47,7 @@ final class AppleChatAppModel: ObservableObject {
             createConversation(route: initialRoute)
         } catch {
             launchConfiguration = nil
-            launchError = "The selected provider configuration is unavailable. Check the local preflight and try again."
+            launchError = renderedLaunchConfigurationError(error)
         }
     }
 

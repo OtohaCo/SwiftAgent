@@ -9,6 +9,7 @@ struct QualificationRunnerTests {
         .restart,
         .structured,
         .usage,
+        .cancel,
     ])
     func fixtureCasesUseTheRealAgentSessionRunAndDrainPath(_ scenario: QualificationScenario) async throws {
         let options = QualificationOptions(
@@ -43,6 +44,33 @@ struct QualificationRunnerTests {
             #expect(results[0].toolExecutions == 1)
             #expect(results[0].note == "durable_tool_history_replayed_without_reexecution")
         }
+    }
+
+    @Test func allChatCasesIncludesStandaloneUsageAndCancellation() async throws {
+        let options = QualificationOptions(
+            provider: .openAI,
+            mode: .fixture,
+            scenario: .all,
+            modelOverride: nil,
+            endpointOverride: nil,
+            environmentFile: nil,
+            budgetFile: nil,
+            service: .official
+        )
+        let configuration = try QualificationConfiguration.resolve(
+            options: options,
+            environment: LiveEnvironment(process: [:])
+        )
+        let runner = try QualificationRunner(
+            configuration: configuration,
+            budget: LiveRequestBudget(fileURL: nil),
+            evidence: RequestEvidenceLedger()
+        )
+
+        let results = await runner.runSelected()
+
+        #expect(results.map(\.scenario) == [.text, .tool, .restart, .structured, .usage, .cancel])
+        #expect(results.allSatisfy { $0.status == .pass })
     }
 
     @Test func providerFailureNotesStaySanitizedAndPauseProtocolFailures() {
