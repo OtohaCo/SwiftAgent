@@ -327,22 +327,22 @@ enum OpenAIResponsesContinuation {
         canonical: [(ContentKind, String)],
         allowOmittedVisibleReasoning: Bool
     ) -> Bool {
-        for kind in [ContentKind.text, .reasoning] {
-            if kind == .reasoning, allowOmittedVisibleReasoning,
-               native.lazy.filter({ $0.0 == kind }).map(\.1).joined().isEmpty {
-                continue
-            }
-            guard native.lazy.filter({ $0.0 == kind }).map(\.1).joined()
-                    == canonical.lazy.filter({ $0.0 == kind }).map(\.1).joined() else {
-                return false
+        var expected = canonical
+        if allowOmittedVisibleReasoning, !native.contains(where: { $0.0 == .reasoning }) {
+            expected = canonical.reduce(into: []) { result, part in
+                guard part.0 != .reasoning else { return }
+                if let last = result.last, last.0 == part.0 {
+                    result[result.count - 1].1 += part.1
+                } else {
+                    result.append(part)
+                }
             }
         }
 
-        var nativeIndex = 0
-        for (kind, _) in canonical where nativeIndex < native.count {
-            if native[nativeIndex].0 == kind { nativeIndex += 1 }
+        guard native.count == expected.count else { return false }
+        return zip(native, expected).allSatisfy { nativePart, expectedPart in
+            nativePart.0 == expectedPart.0 && nativePart.1 == expectedPart.1
         }
-        return nativeIndex == native.count
     }
 
     private static func visibleReasoning(_ content: [ModelContent]) -> [String] {

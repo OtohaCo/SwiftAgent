@@ -85,6 +85,42 @@ struct ResponsesContinuationIntegrityTests {
         ) != nil)
     }
 
+    @Test func visibleContentCannotSplitANativeKindRunAcrossAnotherKind() throws {
+        let openAIModel = ModelID(provider: "openai", name: "fixture")
+        let openAIItems: [JSONValue] = [
+            .object([
+                "type": .string("reasoning"), "id": .string("rs-1"),
+                "summary": .array([.object([
+                    "type": .string("summary_text"), "text": .string("Reason"),
+                ])]),
+                "encrypted_content": .string("encrypted"),
+            ]),
+            nativeMessage(id: "msg-1", text: "Answer"),
+        ]
+        #expect(throws: (any Error).self) {
+            try OpenAIResponsesContinuation.make(
+                items: openAIItems,
+                content: [.reasoning("Rea"), .text("Answer"), .reasoning("son")],
+                calls: [],
+                model: openAIModel
+            )
+        }
+
+        let deepSeekModel = ModelID(provider: "deepseek", name: "deepseek-flash")
+        let deepSeekItems: [JSONValue] = [
+            deepSeekReasoning(id: "rs-1", text: "Reason"),
+            nativeMessage(id: "msg-1", text: "Answer"),
+        ]
+        #expect(throws: (any Error).self) {
+            try DeepSeekResponsesContinuation.make(
+                items: deepSeekItems,
+                content: [.reasoning("Rea"), .text("Answer"), .reasoning("son")],
+                calls: [],
+                model: deepSeekModel
+            )
+        }
+    }
+
     @Test(arguments: [1, 2])
     func openAIToolOnlyContinuationPreservesNativeIdentityAcrossEncoding(callCount: Int) throws {
         let model = ModelID(provider: "openai", name: "fixture")

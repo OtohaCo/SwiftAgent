@@ -127,17 +127,9 @@ enum DeepSeekResponsesContinuation {
         native: [(ContentKind, String)],
         canonical: [(ContentKind, String)]
     ) -> Bool {
-        for kind in [ContentKind.text, .reasoning] {
-            guard native.lazy.filter({ $0.0 == kind }).map(\.1).joined()
-                    == canonical.lazy.filter({ $0.0 == kind }).map(\.1).joined() else {
-                return false
-            }
+        guard native.count == canonical.count else { return false }
+        return zip(native, canonical).allSatisfy { nativePart, canonicalPart in
+            nativePart.0 == canonicalPart.0 && nativePart.1 == canonicalPart.1
         }
-
-        var nativeIndex = 0
-        for (kind, _) in canonical where nativeIndex < native.count {
-            if native[nativeIndex].0 == kind { nativeIndex += 1 }
-        }
-        return nativeIndex == native.count
     }
 }
