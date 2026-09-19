@@ -4,7 +4,7 @@ last-verified: 2026-09-18
 
 `AgentJournal` is the Core-owned typed lifecycle log. It records provider-neutral
 messages, model attempts, tool proposals/results, checkpoints, compaction summaries
-and run outcomes. Journal events are not a UI timeline and contain no Otoha or
+and run outcomes. Journal events are not a UI timeline and contain no host-domain
 other application-domain payloads.
 
 Read-only Agents may omit a journal. Any mutation tool requires a **durable**

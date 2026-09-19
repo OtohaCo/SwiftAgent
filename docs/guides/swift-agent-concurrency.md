@@ -1,6 +1,6 @@
 # SwiftAgent Swift 6.4 Concurrency Audit
 
-last-verified: 2026-09-18
+last-verified: 2026-09-19
 
 Audited against the workspace Swift 6.4 toolchain (`swiftLanguageModes: [.v6]`).
 AgentModels, AgentTools, and AgentCore do not import or isolate to MainActor.
@@ -59,5 +59,5 @@ changes the advertised mode that `makeSession` consults.
 Do not collapse these two annotations to keep a count of one. They protect
 different seams.
 
-Otoha’s Engine adapter is `@MainActor` because the conversation UI is. That
-isolation stays in the host. Core types remain usable off the main actor.
+A UI host may isolate its adapter to `MainActor`; that isolation stays in the
+host. Core types remain usable off the main actor.

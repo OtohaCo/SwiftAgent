@@ -44,7 +44,7 @@ supply an explicit per-run budget instead. Empty input, cancelled callers and
 already-expired budgets do not append user input or start work.
 
 Share the Agent's `ToolScheduler` whenever another Session can mutate the same
-host resources. Two Agents that control one player or one file store must be
+host resources. Two Agents that control one account or one file store must be
 constructed with the same scheduler value.
 
 ## Operation Identity and Mutation Retries

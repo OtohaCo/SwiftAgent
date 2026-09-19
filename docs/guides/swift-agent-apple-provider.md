@@ -49,7 +49,7 @@ remain Core responsibilities. The adapter does not open the mutation gate.
   native diagnostics. Cancellation reaches generation; as with other Swift tasks,
   cancelling a caller does not prove native work stopped immediately.
 - This provider does not implement Private Cloud Compute, production backend
-  routing or the full Otoha tool catalog.
+  routing, or a host application's domain tool catalog.
 
 ## Verification
 

@@ -1,6 +1,6 @@
 # SwiftAgent Mutation Recovery
 
-last-verified: 2026-09-18
+last-verified: 2026-09-19
 
 Mutations have two durable phases: an intent before the host executor is called,
 and a validated receipt after it returns. The model can propose a call, but it
@@ -46,15 +46,14 @@ Read-only tools do not require this mutation journal path. A different Session
 can continue independently when one Session has a quarantined mutation.
 
 For a host process that recreates its Engine objects after a crash, the owner must
-reopen the same durable journal and provide the same stable Session identity. The
-Otoha adapter does this per production owner (`conversation`, `queue-planning`,
-and `observation`). A random replacement Session ID would hide an outstanding
-intent from the recovery gate. Stable identity does not authorize replay: the
-pending intent still requires an explicit trusted receipt, reconciliation, or abort.
+reopen the same durable journal and provide the same stable Session identity per
+logical workflow. A random replacement Session ID would hide an outstanding intent
+from the recovery gate. Stable identity does not authorize replay: the pending
+intent still requires an explicit trusted receipt, reconciliation, or abort.
 
 The host boundary also records a conservative in-process signal when a mutation
 tool reaches the Engine execution path. If the run then fails without a trusted
 receipt, the host must surface reconciliation rather than invoke a local fallback
 that could repeat the same mutation. A cancelled, deadline-exceeded or failed
 conversation action follows the same rule; it does not silently degrade into a
-second local playback attempt.
+second local mutation attempt.

@@ -1,9 +1,9 @@
 # SwiftAgent Workspace Host
 
-last-verified: 2026-09-18
+last-verified: 2026-09-19
 
 `WorkspaceAgent` is a second Reference Host. It proves SwiftAgent can run a
-sandbox file agent without Otoha, player types, or AgentCore changes.
+sandbox file agent without product-domain types or AgentCore changes.
 
 The host is not a product. It has no GUI, shell, git or editor. It only wires
 the public engine API to five file tools.

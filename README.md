@@ -1,8 +1,36 @@
 # SwiftAgent
 
-A standalone Swift package for provider-neutral agent infrastructure. See
-[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/extraction.md](docs/extraction.md)
-for development and the independent-repository plan.
+SwiftAgent is a provider-neutral Agent runtime for Swift with typed tools,
+durable sessions, Evidence-backed execution, mutation receipts, crash recovery,
+idempotent retries, and provider adapters.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and
+[the security model](docs/security-model.md) for trust boundaries.
+
+## Requirements
+
+- Swift 6.4 validated compiler
+- Swift language mode 6
+- macOS 13+ or iOS 16+ for Core products
+- macOS/iOS 26+ for the optional Apple Foundation Models adapter
+- Linux support for AgentModels, AgentTools, AgentCore, AgentProviders, and WorkspaceAgent
+
+## Installation
+
+Before the `1.0.0-rc.1` tag is published, depend on `main`:
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
+        branch: "main"
+    )
+]
+```
+
+Then add only the products the target uses, for example `AgentModels`,
+`AgentTools`, and `AgentCore`. After the RC tag is published, pin the exact RC
+version instead of following `main`.
 
 ## Build and Test
 
@@ -23,9 +51,9 @@ Apple deployment minimums are declared in [Package.swift](Package.swift).
 Platform providers may impose higher availability requirements within their
 adapters.
 
-Until SwiftAgent is its own GitHub repository, Tingting runs
-`.github/workflows/swift-agent.yml`. After extraction, the package-root
-`SwiftAgent/.github/workflows/ci.yml` is the workflow GitHub will discover.
+The repository workflow is [.github/workflows/ci.yml](.github/workflows/ci.yml).
+It validates macOS, Linux, the optional Apple adapter, ExternalClient, iOS
+cross-compilation, and the named concurrency seal without live credentials.
 
 ## Quick Start
 
@@ -181,8 +209,59 @@ for pending in await restarted.pendingMutations(sessionID: sessionID) {
 }
 ```
 
-Two Sessions that mutate the same listing, player, or file store must share
+Two Sessions that mutate the same listing, account, or file store must share
 `scheduler`. Crash recovery never replays a tool; the host reconciles or aborts.
+
+`wait()` resolves at logical Run termination. `waitForDrain()` waits for
+provider/tool physical drain and Session identity release. Cancelling one drain
+waiter does not cancel the Session-owned drain.
+
+## Provider Model
+
+`ModelProvider` is the provider-neutral request and event contract.
+`AgentProviders` supplies Anthropic transport and validated routing;
+`AgentAppleProvider` is an optional Apple Foundation Models adapter. Provider
+continuations are opaque and provider-specific, not conversation memory or
+portable trusted state.
+
+## Evidence and Mutation Safety
+
+Conversation memory is not Evidence, and a model proposal is not authorization.
+Mutation execution requires durable intent before the executor, a validated
+Receipt, and durable settlement before success is claimed. Crash recovery never
+automatically replays an uncertain mutation.
+
+Cross-Run retry safety requires the same non-nil `operationID`, the same tool,
+canonical semantic arguments, and a shared durable `AgentJournal`. A new
+operation ID represents a new logical mutation.
+
+## Platform Support
+
+| Surface | Platforms |
+| --- | --- |
+| Core products | macOS 13+, iOS 16+, Linux |
+| AgentAppleProvider | macOS/iOS 26+ |
+| Validated compiler | Swift 6.4 |
+
+`WorkspaceAgent` is a Reference Host and generality proof. AgentCore does not
+depend on it.
+
+## Testing
+
+```sh
+bash Scripts/ci-macos.sh
+bash Scripts/ci-concurrency-seal.sh
+```
+
+On Ubuntu 24.04, install/verify Swift 6.4 and run:
+
+```sh
+bash Scripts/install-linux-swift.sh
+bash Scripts/ci-linux.sh
+```
+
+The ExternalClient package under `Examples/ExternalClient` imports public API
+only. Live Anthropic and Apple model tests remain explicit operator opt-ins.
 
 ## Module Boundaries
 
@@ -193,7 +272,7 @@ Two Sessions that mutate the same listing, player, or file store must share
 | AgentCore | AgentModels, AgentTools | The single agent loop, sessions and runs |
 | AgentProviders | AgentModels | Native request and event conversion |
 | AgentAppleProvider | AgentModels | Apple on-device structured planning; platform SDK isolation |
-| WorkspaceAgent | AgentModels, AgentTools, AgentCore, AgentProviders | Non-player Reference Host for a sandbox file agent |
+| WorkspaceAgent | AgentModels, AgentTools, AgentCore, AgentProviders | Domain-neutral Reference Host for a sandbox file agent |
 
 Providers receive model data, never a host tool executor. Execution belongs to
 AgentCore and AgentTools. Domain policies remain in host adapters. WorkspaceAgent

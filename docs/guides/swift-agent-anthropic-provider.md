@@ -84,4 +84,4 @@ SWIFT_AGENT_ANTHROPIC_MODEL. Its default is the verified available Haiku 4.5 mod
 It runs a read-only Calculator with thinking disabled and enabled, checks the real
 tool result, signed continuation, structured answer and usage. Missing credentials
 or service failures fail an opted-in run. This is a bounded gateway verification,
-not qualification of every model, endpoint or the Otoha production path.
+not qualification of every model, endpoint, or host production path.

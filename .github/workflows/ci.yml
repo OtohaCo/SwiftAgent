@@ -1,8 +1,12 @@
-name: CI
+name: SwiftAgent CI
 
 on:
+  workflow_dispatch:
   push:
   pull_request:
+
+permissions:
+  contents: read
 
 env:
   SWIFT_AGENT_REQUIRED_SWIFT: "6.4"
@@ -10,21 +14,35 @@ env:
 jobs:
   macos:
     name: macOS Swift 6.4
-    runs-on: macos-15
+    runs-on: xcode-27
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Runner metadata
+        run: |
+          sw_vers
+          uname -a
+          xcodebuild -version
+          swift --version
       - name: Select Swift 6.4 Xcode
         run: bash Scripts/select-apple-toolchain.sh
       - name: Verify compiler, Xcode, and SDK
         run: bash Scripts/require-toolchain.sh --apple
       - name: Build, test, iOS cross-build, external client
         run: bash Scripts/ci-macos.sh
+      - name: Core concurrency seal
+        run: bash Scripts/ci-concurrency-seal.sh
 
   linux:
     name: Linux Swift 6.4
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Runner metadata
+        run: |
+          cat /etc/os-release
+          uname -a
       - name: Install Swift 6.4
         run: bash Scripts/install-linux-swift.sh
       - name: Verify compiler
@@ -34,9 +52,16 @@ jobs:
 
   apple-provider:
     name: Apple provider compile
-    runs-on: macos-15
+    runs-on: xcode-27
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Runner metadata
+        run: |
+          sw_vers
+          uname -a
+          xcodebuild -version
+          swift --version
       - name: Select Swift 6.4 Xcode
         run: bash Scripts/select-apple-toolchain.sh
       - name: Verify compiler, Xcode, and SDK

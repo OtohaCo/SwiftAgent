@@ -139,6 +139,6 @@ The SDK cannot:
 - Prevent a host from implementing `AgentTool.execute` incorrectly
 - Replace operating-system sandboxing, secrets handling, or user consent
 
-Otoha, MusicKit, file systems, and other product executors stay outside Core.
+Product UI, platform services, file systems, and other host executors stay outside Core.
 WorkspaceAgent is a Reference Host that demonstrates the contract; it is not a
 security boundary for other apps.

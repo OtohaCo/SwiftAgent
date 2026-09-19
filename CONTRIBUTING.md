@@ -1,9 +1,9 @@
 # Contributing to SwiftAgent
 
-last-verified: 2026-09-18
+last-verified: 2026-09-19
 
-This package is a provider-neutral Agent engine. Otoha, music tools, playback,
-and Tingting product code do not belong here.
+This package is a provider-neutral Agent engine. Product UI, domain tools, and
+host-specific policy do not belong in the portable modules.
 
 ## Layout
 
@@ -47,5 +47,5 @@ WorkspaceAgent may import `Crypto` from `apple/swift-crypto`. Core must not.
 - Public API changes belong in `docs/reviews/` and `docs/guides/swift-agent-versioning.md`.
 - WorkspaceAgent may use CryptoKit or `Crypto` from swift-crypto. Core must not.
 
-See [docs/extraction.md](docs/extraction.md) for the independent-repository plan
+See [docs/extraction.md](docs/extraction.md) for repository provenance
 and [docs/security-model.md](docs/security-model.md) for trust boundaries.
