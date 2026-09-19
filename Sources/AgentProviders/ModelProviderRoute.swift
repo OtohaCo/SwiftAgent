@@ -72,10 +72,18 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
 
     public func markMutationBoundary(sessionID: UUID, runID: UUID) async {
         await boundaryState.mark(sessionID: sessionID, runID: runID)
+        for candidate in candidates {
+            guard let boundary = candidate as? any ModelProviderMutationBoundary else { continue }
+            await boundary.markMutationBoundary(sessionID: sessionID, runID: runID)
+        }
     }
 
     public func clearMutationBoundary(sessionID: UUID, runID: UUID) async {
         await boundaryState.clear(sessionID: sessionID, runID: runID)
+        for candidate in candidates {
+            guard let boundary = candidate as? any ModelProviderMutationBoundary else { continue }
+            await boundary.clearMutationBoundary(sessionID: sessionID, runID: runID)
+        }
     }
 
     public func waitForRunToDrain(sessionID: UUID, runID: UUID) async {
@@ -90,6 +98,11 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
             throw ModelProviderError(kind: .invalidRequest, message: "Provider route does not serve this model namespace.")
         }
 
+        let admission = await boundaryState.admission(sessionID: request.sessionID, runID: request.runID)
+        if admission.boundaryReached {
+            return try await streamPinnedCandidate(admission, request: request, emit: emit)
+        }
+
         var attempts = 0
         var lastError: (any Error)?
         for (candidateIndex, candidate) in candidates.enumerated() {
@@ -100,16 +113,21 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
                 do {
                     let events = try await validatedEvents(from: candidate, request: request)
                     for event in events { try emit(event) }
+                    await boundaryState.recordValidatedCandidate(
+                        sessionID: request.sessionID,
+                        runID: request.runID,
+                        candidateIndex: candidateIndex
+                    )
                     return
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let error as ModelProviderError {
                     lastError = error
                     guard policy.retryableKinds.contains(error.kind) else { throw error }
-                    let boundaryReached = await boundaryState.contains(
+                    let boundaryReached = await boundaryState.admission(
                         sessionID: request.sessionID,
                         runID: request.runID
-                    )
+                    ).boundaryReached
                     if boundaryReached {
                         if retries < policy.maxRetriesPerProvider || candidateIndex + 1 < candidates.count {
                             throw ModelProviderError(kind: .fallbackBlocked,
@@ -131,7 +149,10 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
                 guard candidateIndex + 1 < candidates.count, attempts < policy.maxAttempts else {
                     throw lastError ?? ModelProviderError(kind: .unavailable, message: "Provider route exhausted.")
                 }
-                if await boundaryState.contains(sessionID: request.sessionID, runID: request.runID) {
+                if await boundaryState.admission(
+                    sessionID: request.sessionID,
+                    runID: request.runID
+                ).boundaryReached {
                     throw ModelProviderError(kind: .fallbackBlocked,
                                              message: "Provider fallback is blocked after a mutation boundary.")
                 }
@@ -139,6 +160,42 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
             }
         }
         throw lastError ?? ModelProviderError(kind: .unavailable, message: "Provider route exhausted.")
+    }
+
+    private func streamPinnedCandidate(
+        _ admission: MutationBoundaryState.Admission,
+        request: ModelRequest,
+        emit: @escaping ModelEventStream.Emit
+    ) async throws {
+        // A direct boundary mark without a prior validated turn keeps the old conservative
+        // contract: probe the first candidate once, then pin it if it validates. Never search
+        // later candidates from an unowned boundary.
+        let candidateIndex = admission.pinnedCandidateIndex ?? 0
+
+        let candidate = candidates[candidateIndex]
+        do {
+            let events = try await validatedEvents(from: candidate, request: request)
+            for event in events { try emit(event) }
+            if admission.pinnedCandidateIndex == nil {
+                await boundaryState.recordValidatedCandidate(
+                    sessionID: request.sessionID,
+                    runID: request.runID,
+                    candidateIndex: candidateIndex
+                )
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as ModelProviderError {
+            let couldRetry = policy.maxRetriesPerProvider > 0
+            let hasLaterCandidate = candidateIndex + 1 < candidates.count
+            if policy.retryableKinds.contains(error.kind), couldRetry || hasLaterCandidate {
+                throw ModelProviderError(
+                    kind: .fallbackBlocked,
+                    message: "Provider fallback is blocked after a mutation boundary."
+                )
+            }
+            throw error
+        }
     }
 
     private func validatedEvents(from candidate: any ModelProvider, request: ModelRequest) async throws -> [ModelEvent] {
@@ -157,23 +214,43 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
 }
 
 private actor MutationBoundaryState {
+    struct Admission: Sendable {
+        let boundaryReached: Bool
+        let pinnedCandidateIndex: Int?
+    }
+
     private struct Key: Hashable {
         let sessionID: UUID
         let runID: UUID
     }
 
-    private var keys: Set<Key> = []
+    private struct State {
+        var boundaryReached = false
+        var pinnedCandidateIndex: Int?
+    }
+
+    private var states: [Key: State] = [:]
 
     func mark(sessionID: UUID, runID: UUID) {
-        keys.insert(Key(sessionID: sessionID, runID: runID))
+        let key = Key(sessionID: sessionID, runID: runID)
+        states[key, default: .init()].boundaryReached = true
     }
 
     func clear(sessionID: UUID, runID: UUID) {
-        keys.remove(Key(sessionID: sessionID, runID: runID))
+        states.removeValue(forKey: Key(sessionID: sessionID, runID: runID))
     }
 
-    func contains(sessionID: UUID?, runID: UUID?) -> Bool {
-        guard let sessionID, let runID else { return false }
-        return keys.contains(Key(sessionID: sessionID, runID: runID))
+    func recordValidatedCandidate(sessionID: UUID?, runID: UUID?, candidateIndex: Int) {
+        guard let sessionID, let runID else { return }
+        let key = Key(sessionID: sessionID, runID: runID)
+        states[key, default: .init()].pinnedCandidateIndex = candidateIndex
+    }
+
+    func admission(sessionID: UUID?, runID: UUID?) -> Admission {
+        guard let sessionID, let runID, let state = states[Key(sessionID: sessionID, runID: runID)] else {
+            return .init(boundaryReached: false, pinnedCandidateIndex: nil)
+        }
+        return .init(boundaryReached: state.boundaryReached,
+                     pinnedCandidateIndex: state.pinnedCandidateIndex)
     }
 }

@@ -284,6 +284,140 @@ struct ProviderFallbackTests {
         #expect(await journal.pendingMutations().isEmpty)
     }
 
+    @Test func validatedFallbackCandidateStaysPinnedAfterMutationBoundary() async throws {
+        let primaryProbe = RouteProviderProbe()
+        let fallbackProbe = RouteProviderProbe()
+        let executorProbe = RouteMutationExecutorProbe()
+        let call = ToolCall(
+            id: .init(rawValue: "fallback-mutation"),
+            name: RouteMutationTool.name,
+            argumentsJSON: #"{"id":"listing-1"}"#,
+            completeness: .complete
+        )
+        let primary = RouteFixtureProvider(probe: primaryProbe) { request, turn, emit in
+            if turn == 1 {
+                throw ModelProviderError(kind: .unavailable, message: "primary unavailable")
+            }
+            try emitContents(textEvents(request, "primary recovered"), emit: emit)
+        }
+        let fallback = RouteFixtureProvider(probe: fallbackProbe) { request, turn, emit in
+            if turn == 1 {
+                try emitContents(toolEvents(request, [call]), emit: emit)
+                return
+            }
+            let toolResult = request.messages.compactMap { message -> ToolResultMessage? in
+                if case .tool(let value) = message { return value }
+                return nil
+            }.last
+            #expect(toolResult?.callID == call.id)
+            try emitContents(textEvents(request, "fallback complete"), emit: emit)
+        }
+        let route = try ModelProviderRoute(
+            id: "fixture",
+            candidates: [primary, fallback],
+            policy: .init(maxAttempts: 2)
+        )
+        let journalURL = temporaryJournalURL()
+        defer { cleanupJournal(journalURL) }
+        let journal = try AgentJournal(persistenceURL: journalURL)
+        let agent = try Agent(
+            model: .init(provider: "fixture", name: "test"),
+            provider: route,
+            tools: [try RouteMutationTool(probe: executorProbe)],
+            configuration: AgentConfiguration(runTimeout: .seconds(2))
+        )
+        let session = try agent.makeSession(journal: journal)
+
+        let result = try await session.run("Update", operationID: "pinned-operation").wait()
+
+        #expect(result.outcome == .completed)
+        #expect(result.receipts.count == 1)
+        #expect(result.receipts.first?.callID == call.id)
+        #expect(await executorProbe.count == 1)
+        #expect(await primaryProbe.requests.count == 1)
+        #expect(await fallbackProbe.requests.count == 2)
+        #expect(await journal.pendingMutations().isEmpty)
+    }
+
+    @Test func clearingMutationBoundaryReleasesPinnedCandidate() async throws {
+        let primaryProbe = RouteProviderProbe()
+        let fallbackProbe = RouteProviderProbe()
+        let primary = RouteFixtureProvider(probe: primaryProbe) { request, turn, emit in
+            if turn == 1 {
+                throw ModelProviderError(kind: .unavailable, message: "primary unavailable")
+            }
+            try emitContents(textEvents(request, "primary recovered"), emit: emit)
+        }
+        let fallback = RouteFixtureProvider(probe: fallbackProbe) { request, _, emit in
+            try emitContents(textEvents(request, "fallback"), emit: emit)
+        }
+        let route = try ModelProviderRoute(
+            id: "fixture",
+            candidates: [primary, fallback],
+            policy: .init(maxAttempts: 2)
+        )
+        let sessionID = UUID()
+        let runID = UUID()
+        let request = ModelRequest(
+            model: .init(provider: "fixture", name: "test"),
+            messages: [],
+            sessionID: sessionID,
+            runID: runID
+        )
+
+        _ = try await collectRouteEvents(route.stream(request: request))
+        #expect(await primaryProbe.requests.count == 1)
+        #expect(await fallbackProbe.requests.count == 1)
+
+        await route.markMutationBoundary(sessionID: sessionID, runID: runID)
+        _ = try await collectRouteEvents(route.stream(request: request))
+        #expect(await primaryProbe.requests.count == 1)
+        #expect(await fallbackProbe.requests.count == 2)
+
+        await route.clearMutationBoundary(sessionID: sessionID, runID: runID)
+        _ = try await collectRouteEvents(route.stream(request: request))
+        #expect(await primaryProbe.requests.count == 2)
+        #expect(await fallbackProbe.requests.count == 2)
+    }
+
+    @Test func mutationBoundaryPropagatesThroughNestedRoutes() async throws {
+        let primaryProbe = RouteProviderProbe()
+        let fallbackProbe = RouteProviderProbe()
+        let primary = RouteFixtureProvider(probe: primaryProbe) { _, _, _ in
+            throw ModelProviderError(kind: .unavailable, message: "primary unavailable")
+        }
+        let fallback = RouteFixtureProvider(probe: fallbackProbe) { request, _, emit in
+            try emitContents(textEvents(request, "fallback"), emit: emit)
+        }
+        let inner = try ModelProviderRoute(
+            id: "fixture",
+            candidates: [primary, fallback],
+            policy: .init(maxAttempts: 2)
+        )
+        let outer = try ModelProviderRoute(
+            id: "fixture",
+            candidates: [inner],
+            policy: .init(maxAttempts: 1)
+        )
+        let sessionID = UUID()
+        let runID = UUID()
+        let request = ModelRequest(
+            model: .init(provider: "fixture", name: "test"),
+            messages: [],
+            sessionID: sessionID,
+            runID: runID
+        )
+
+        _ = try await collectRouteEvents(outer.stream(request: request))
+        #expect(await primaryProbe.requests.count == 1)
+        #expect(await fallbackProbe.requests.count == 1)
+
+        await outer.markMutationBoundary(sessionID: sessionID, runID: runID)
+        _ = try await collectRouteEvents(outer.stream(request: request))
+        #expect(await primaryProbe.requests.count == 1)
+        #expect(await fallbackProbe.requests.count == 2)
+    }
+
     @Test func recoverableReadOnlyFailureContinuesOnTheCurrentProviderRoute() async throws {
         let primaryProbe = RouteProviderProbe()
         let fallbackProbe = RouteProviderProbe()
