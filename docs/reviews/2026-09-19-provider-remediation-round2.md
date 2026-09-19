@@ -106,11 +106,11 @@ Final targeted evidence:
 Final local macOS package evidence with Swift 6.4:
 
 - XCTest: 126 passed, 0 failed.
-- Swift Testing: 422 discovered, 417 passed, 5 operator/live tests skipped,
+- Swift Testing: 425 discovered, 420 passed, 5 operator/live tests skipped,
   0 failed.
 - ExternalClient: 6 passed, 0 failed.
 - iOS `arm64-apple-ios16.0` cross-build: passed.
-- `swift test list`: 548 discovered test entries.
+- `swift test list`: 551 discovered test entries.
 
 Skipped tests are the Anthropic and OpenAI real-cloud tests plus three Apple
 live-model tests. DeepSeek has fixture/schema coverage only and no live suite.
@@ -140,10 +140,20 @@ completion, and response completion as independent facts. Both adapters now
 require exact argument agreement across those transitions before publishing a
 complete call.
 
+Claude then reviewed the exact remediation diff through
+`0173179b1bb74e40afabac33ab30f5311bbb1c9b`, reran the prior DeepSeek
+reproduction and the package/concurrency seals from an isolated copy, and
+confirmed that both fixes are closed with no new P0, P1, or P2. The two
+remaining P3 questions require a live DeepSeek tool turn: whether the service
+emits `response.function_call_arguments.done`, and whether it accepts the raw
+native metadata replayed by the next request.
+
 ## Residual Risk
 
 - Live Anthropic, OpenAI, DeepSeek, and Apple model qualification was not run in
   this remediation. Normal CI remains credential-free and fixture based.
+- The first live DeepSeek tool fixture must confirm the argument-done event and
+  native-item replay shape described in the independent follow-up review.
 - Legacy continuation payloads remain readable but have only the ordering
   evidence present when they were written.
 - `DeepSeekReasoningEffort` is a closed public enum. Adding future vendor values

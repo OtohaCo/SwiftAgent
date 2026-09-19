@@ -85,8 +85,36 @@ public API/docs, or Swift concurrency.
 The reviewed SHA had one blocking P1. That P1 and the accepted protocol P2 were
 fixed after the review. No public API, journal schema, or continuation format
 identifier changed. A focused Claude follow-up review of the remediation diff
-is recorded below once the fix commit is available.
+is recorded below.
 
 ## Follow-Up Review
 
-Pending focused review of the post-`c218591` remediation diff.
+- Reviewer: Claude Fable 5.1 in the same Herdr panel
+- Reviewed SHA: `0173179b1bb74e40afabac33ab30f5311bbb1c9b`
+- Reviewed diff: `c2185912b5374c077fa268af9c6ec9860ed8a09c..0173179b1bb74e40afabac33ab30f5311bbb1c9b`
+- Review date: 2026-09-19
+
+Claude independently reran the package suite, ExternalClient, the concurrency
+seal, and the prior reviewer-only DeepSeek reproduction from an isolated copy.
+The documented `summary: []` and null encrypted-metadata streams now complete,
+retain continuation, and replay the native item. Non-null encrypted metadata
+still fails closed.
+
+The follow-up also confirmed that both Responses decoders now require
+`function_call_arguments.done` before `output_item.done`, require byte-exact
+agreement at item completion, and leave legal incomplete streams unchanged.
+The Agent-level negative regression proves that neither adapter reaches the
+executor when the argument terminal is missing.
+
+Claude reported no P0, P1, or P2 regression and concluded that both fixes are
+closed with no new blocker. Two P3 live-evidence questions remain:
+
+- Confirm that the live DeepSeek stream emits
+  `response.function_call_arguments.done` for host function calls.
+- Confirm that DeepSeek accepts replayed reasoning/message native items carrying
+  the retained identifier, status, and empty summary metadata. If it does not,
+  the request encoder should project the replay form without weakening decoder
+  terminal validation.
+
+These are operator live-qualification gaps, not defects reproduced against the
+reviewed fixtures or documented contract.
