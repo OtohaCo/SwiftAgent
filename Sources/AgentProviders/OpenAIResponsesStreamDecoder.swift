@@ -223,6 +223,7 @@ struct OpenAIResponsesStreamDecoder {
 
         switch try ProviderJSON.string(item["type"]) {
         case "message":
+            try validateItemStatus(item["status"], expected: "in_progress", required: true)
             guard try ProviderJSON.string(item["role"]) == "assistant",
                   case .array(let parts) = item["content"] else { throw ProviderJSON.invalid() }
             var state = ItemState(outputIndex: index, itemID: itemID, kind: .message)
@@ -235,6 +236,7 @@ struct OpenAIResponsesStreamDecoder {
             items[index] = state
             return events
         case "reasoning":
+            try validateItemStatus(item["status"], expected: "in_progress", required: false)
             guard case .array(let summary) = item["summary"] else { throw ProviderJSON.invalid() }
             var state = ItemState(outputIndex: index, itemID: itemID, kind: .reasoning)
             var events: [ModelEvent] = []
@@ -254,6 +256,7 @@ struct OpenAIResponsesStreamDecoder {
             items[index] = state
             return events
         case "function_call":
+            try validateItemStatus(item["status"], expected: "in_progress", required: false)
             let callID = ToolCallID(rawValue: try ProviderJSON.string(item["call_id"]))
             let name = try ProviderJSON.string(item["name"])
             let arguments = try ProviderJSON.string(item["arguments"])
@@ -472,9 +475,9 @@ struct OpenAIResponsesStreamDecoder {
         var events: [ModelEvent] = []
         switch state.kind {
         case .message:
+            try validateItemStatus(item["status"], expected: "completed", required: true)
             guard try ProviderJSON.string(item["type"]) == "message",
                   try ProviderJSON.string(item["role"]) == "assistant",
-                  try ProviderJSON.string(item["status"]) == "completed",
                   case .array(let parts) = item["content"] else { throw ProviderJSON.invalid() }
             guard state.messageParts.keys.sorted() == Array(parts.indices) else { throw ProviderJSON.invalid() }
             for partIndex in parts.indices {
@@ -494,6 +497,7 @@ struct OpenAIResponsesStreamDecoder {
             }
             if state.messageParts.isEmpty, !parts.isEmpty { throw ProviderJSON.invalid() }
         case .reasoning:
+            try validateItemStatus(item["status"], expected: "completed", required: false)
             guard try ProviderJSON.string(item["type"]) == "reasoning",
                   case .array(let summary) = item["summary"] else { throw ProviderJSON.invalid() }
             try reconcileReasoningParts(&state, values: summary, summary: true, events: &events)
@@ -508,6 +512,7 @@ struct OpenAIResponsesStreamDecoder {
                 throw ProviderJSON.invalid()
             }
         case .functionCall:
+            try validateItemStatus(item["status"], expected: "completed", required: false)
             guard try ProviderJSON.string(item["type"]) == "function_call",
                   var call = state.functionCall,
                   try ProviderJSON.string(item["call_id"]) == call.id.rawValue,
@@ -702,9 +707,11 @@ struct OpenAIResponsesStreamDecoder {
     private func validateFinalItem(_ item: [String: JSONValue], against state: ItemState) throws {
         switch state.kind {
         case .message:
+            try validateItemStatus(
+                item["status"], expected: state.done ? "completed" : "incomplete", required: true
+            )
             guard try ProviderJSON.string(item["type"]) == "message",
                   try ProviderJSON.string(item["role"]) == "assistant",
-                  try ProviderJSON.string(item["status"]) == (state.done ? "completed" : "incomplete"),
                   case .array(let parts) = item["content"],
                   state.messageParts.keys.sorted() == Array(parts.indices) else { throw ProviderJSON.invalid() }
             for index in parts.indices {
@@ -721,14 +728,12 @@ struct OpenAIResponsesStreamDecoder {
                 if kind == .outputText { try validateAnnotations(part, against: statePart.annotations) }
             }
         case .reasoning:
+            try validateItemStatus(
+                item["status"], expected: state.done ? "completed" : "incomplete", required: false
+            )
             guard try ProviderJSON.string(item["type"]) == "reasoning",
                   case .array(let summary) = item["summary"],
                   state.reasoningSummaryParts.keys.sorted() == Array(summary.indices) else {
-                throw ProviderJSON.invalid()
-            }
-            if let status = try optionalString(item["status"]),
-               ["in_progress", "completed", "incomplete"].contains(status),
-               status != (state.done ? "completed" : "incomplete") {
                 throw ProviderJSON.invalid()
             }
             let streamedEncrypted: String?
@@ -762,17 +767,34 @@ struct OpenAIResponsesStreamDecoder {
                 throw ProviderJSON.invalid()
             }
         case .functionCall:
+            try validateItemStatus(
+                item["status"], expected: state.done ? "completed" : "incomplete", required: false
+            )
             let final = try ProviderJSON.object(.object(item))
             guard try ProviderJSON.string(final["type"]) == "function_call",
                   let call = state.functionCall,
                   try ProviderJSON.string(final["call_id"]) == call.id.rawValue,
                   try ProviderJSON.string(final["name"]) == call.name,
                   try ProviderJSON.string(final["arguments"]) == call.arguments else { throw ProviderJSON.invalid() }
-            if let status = try optionalString(final["status"]),
-               ["in_progress", "completed", "incomplete"].contains(status),
-               status != (state.done ? "completed" : "incomplete") {
-                throw ProviderJSON.invalid()
-            }
+        }
+    }
+
+    private func validateItemStatus(
+        _ value: JSONValue?,
+        expected: String,
+        required: Bool
+    ) throws {
+        guard let value else {
+            if required { throw ProviderJSON.invalid() }
+            return
+        }
+        guard value != .null else {
+            if required { throw ProviderJSON.invalid() }
+            return
+        }
+        let status = try ProviderJSON.string(value)
+        guard ["in_progress", "completed", "incomplete"].contains(status), status == expected else {
+            throw ProviderJSON.invalid()
         }
     }
 

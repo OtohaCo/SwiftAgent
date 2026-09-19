@@ -5,6 +5,7 @@ enum DeepSeekResponsesContinuation {
     static let format = "deepseek.responses.v1"
 
     struct Restored { let items: [JSONValue] }
+    private enum ContentKind: Equatable { case text, reasoning }
 
     static func make(
         items: [JSONValue], content: [ModelContent], calls: [ToolCall], model: ModelID
@@ -42,8 +43,16 @@ enum DeepSeekResponsesContinuation {
     private static func validate(
         items: [JSONValue], content: [ModelContent], calls: [ToolCall]
     ) throws -> (hasReasoning: Bool, visibleReasoning: String) {
-        var nativeText = ""
-        var nativeReasoning = ""
+        func append(_ value: String, as kind: ContentKind, to sequence: inout [(ContentKind, String)]) {
+            guard !value.isEmpty else { return }
+            if let last = sequence.last, last.0 == kind {
+                sequence[sequence.count - 1].1 += value
+            } else {
+                sequence.append((kind, value))
+            }
+        }
+
+        var nativeContent: [(ContentKind, String)] = []
         var functionItems: [[String: JSONValue]] = []
         var hasReasoning = false
         for item in items {
@@ -62,12 +71,12 @@ enum DeepSeekResponsesContinuation {
                     }
                     let text = try ProviderJSON.string(part["text"])
                     guard !text.isEmpty else { throw ProviderJSON.invalid() }
-                    nativeReasoning += text
+                    append(text, as: .reasoning, to: &nativeContent)
                 }
             case "message":
                 guard try ProviderJSON.string(object["role"]) == "assistant" else { throw ProviderJSON.invalid() }
                 if case .string(let text) = object["content"] {
-                    nativeText += text
+                    append(text, as: .text, to: &nativeContent)
                 } else {
                     guard case .array(let parts) = object["content"] else { throw ProviderJSON.invalid() }
                     for value in parts {
@@ -75,7 +84,7 @@ enum DeepSeekResponsesContinuation {
                         guard try ProviderJSON.string(part["type"]) == "output_text" else {
                             throw ProviderJSON.invalid()
                         }
-                        nativeText += try ProviderJSON.string(part["text"])
+                        append(try ProviderJSON.string(part["text"]), as: .text, to: &nativeContent)
                     }
                 }
             case "function_call":
@@ -87,18 +96,18 @@ enum DeepSeekResponsesContinuation {
                 throw ProviderJSON.invalid()
             }
         }
-        let canonicalText = try content.compactMap { part -> String? in
+        var canonicalContent: [(ContentKind, String)] = []
+        for part in content {
             switch part {
-            case .text(let value): return value
-            case .json(let value): return String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
-            case .reasoning, .providerContinuation: return nil
+            case .text(let value): append(value, as: .text, to: &canonicalContent)
+            case .json(let value):
+                append(String(decoding: try JSONEncoder().encode(value), as: UTF8.self),
+                       as: .text, to: &canonicalContent)
+            case .reasoning(let value): append(value, as: .reasoning, to: &canonicalContent)
+            case .providerContinuation: break
             }
-        }.joined()
-        let canonicalReasoning = content.compactMap { part -> String? in
-            if case .reasoning(let value) = part { return value }
-            return nil
-        }.joined()
-        guard nativeText == canonicalText, nativeReasoning == canonicalReasoning,
+        }
+        guard orderedContentMatches(native: nativeContent, canonical: canonicalContent),
               functionItems.count == calls.count else { throw ProviderJSON.invalid() }
         for (item, call) in zip(functionItems, calls) {
             guard call.completeness == .complete,
@@ -108,6 +117,27 @@ enum DeepSeekResponsesContinuation {
                 throw ProviderJSON.invalid()
             }
         }
-        return (hasReasoning, nativeReasoning)
+        let visibleReasoning = nativeContent.reduce(into: "") { result, part in
+            if part.0 == .reasoning { result += part.1 }
+        }
+        return (hasReasoning, visibleReasoning)
+    }
+
+    private static func orderedContentMatches(
+        native: [(ContentKind, String)],
+        canonical: [(ContentKind, String)]
+    ) -> Bool {
+        for kind in [ContentKind.text, .reasoning] {
+            guard native.lazy.filter({ $0.0 == kind }).map(\.1).joined()
+                    == canonical.lazy.filter({ $0.0 == kind }).map(\.1).joined() else {
+                return false
+            }
+        }
+
+        var nativeIndex = 0
+        for (kind, _) in canonical where nativeIndex < native.count {
+            if native[nativeIndex].0 == kind { nativeIndex += 1 }
+        }
+        return nativeIndex == native.count
     }
 }

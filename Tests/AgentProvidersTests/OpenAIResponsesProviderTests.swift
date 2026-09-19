@@ -139,7 +139,7 @@ struct OpenAIResponsesProviderTests {
         ])))
     }
 
-    @Test func missingEncryptedReasoningCompletesWithoutProviderContinuation() async throws {
+    @Test func missingEncryptedReasoningKeepsOnlyReplayableFunctionContinuation() async throws {
         let fixture = providerNamedSSE([
             ("response.created", #"{"type":"response.created","response":{"id":"resp-reasoning","model":"fixture","status":"in_progress"}}"#),
             ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"rs-1","type":"reasoning","summary":[]}}"#),
@@ -160,7 +160,29 @@ struct OpenAIResponsesProviderTests {
         )) { try accumulator.append(event) }
         let response = try accumulator.finish()
         #expect(response.toolCalls.count == 1)
-        #expect(!response.content.contains { if case .providerContinuation = $0 { true } else { false } })
+        #expect(response.content.contains { if case .providerContinuation = $0 { true } else { false } })
+
+        let encoded = try OpenAIResponsesRequestEncoder.encode(.init(
+            model: .init(provider: "openai", name: "fixture"),
+            messages: [
+                .assistant(content: response.content, toolCalls: response.toolCalls),
+                .tool(.init(callID: .init(rawValue: "call-1"),
+                            content: [.json(.object(["sum": .number(5)]))], isError: false)),
+            ]
+        ), maximumOutputTokens: 100, reasoningEffort: .medium, reasoningSummary: nil)
+        guard case .object(let body) = encoded, case .array(let input) = body["input"] else {
+            Issue.record("Missing replay input")
+            return
+        }
+        #expect(!input.contains { item in
+            guard case .object(let object) = item else { return false }
+            return object["type"] == .string("reasoning")
+        })
+        #expect(input.contains(.object([
+            "type": .string("function_call"), "id": .string("fc-1"),
+            "call_id": .string("call-1"), "name": .string("calculator"),
+            "arguments": .string(#"{"a":2,"b":3}"#), "status": .string("completed"),
+        ])))
     }
 
     @Test func continuationPreservesProviderItemOrder() throws {
@@ -198,7 +220,7 @@ struct OpenAIResponsesProviderTests {
         #expect(input == items)
     }
 
-    @Test func finalOutputIgnoresBenignStatusAndSummaryExpansion() async throws {
+    @Test func finalOutputRejectsUnknownStatus() async throws {
         let fixture = providerNamedSSE([
             ("response.created", #"{"type":"response.created","response":{"id":"resp-tool","model":"fixture","status":"in_progress"}}"#),
             ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"","status":"in_progress"}}"#),
@@ -209,6 +231,26 @@ struct OpenAIResponsesProviderTests {
         ])
         let provider = try OpenAIResponsesProvider(apiKey: "fixture-key",
             transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [fixture]))
+        await #expect(throws: ModelProviderError.self) {
+            for try await _ in provider.stream(request: .init(
+                model: .init(provider: "openai", name: "fixture"), messages: [.user([.text("Add")])]
+            )) {}
+        }
+    }
+
+    @Test func finalOutputAllowsFutureMetadataWithLegalStatus() async throws {
+        let fixture = providerNamedSSE([
+            ("response.created", #"{"type":"response.created","response":{"id":"resp-tool","model":"fixture","status":"in_progress"}}"#),
+            ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"","status":"in_progress"}}"#),
+            ("response.function_call_arguments.delta", #"{"type":"response.function_call_arguments.delta","item_id":"fc-1","output_index":0,"delta":"{\"a\":2,\"b\":3}"}"#),
+            ("response.function_call_arguments.done", #"{"type":"response.function_call_arguments.done","item_id":"fc-1","output_index":0,"arguments":"{\"a\":2,\"b\":3}"}"#),
+            ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"{\"a\":2,\"b\":3}","status":"completed"}}"#),
+            ("response.completed", #"{"type":"response.completed","response":{"id":"resp-tool","model":"fixture","status":"completed","output":[{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"{\"a\":2,\"b\":3}","status":"completed","future_metadata":{"safe":true}}],"usage":{"input_tokens":5,"output_tokens":4}}}"#),
+        ])
+        let provider = try OpenAIResponsesProvider(
+            apiKey: "fixture-key",
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [fixture])
+        )
         var accumulator = ModelEventAccumulator()
         for try await event in provider.stream(request: .init(
             model: .init(provider: "openai", name: "fixture"), messages: [.user([.text("Add")])]
@@ -257,8 +299,9 @@ struct OpenAIResponsesProviderTests {
         guard case .object(let body) = try JSONDecoder().decode(JSONValue.self, from: #require(requests.last?.httpBody)),
               case .array(let input) = body["input"] else { Issue.record("Missing input"); return }
         #expect(input.contains(.object([
-            "type": .string("function_call"), "call_id": .string("call-1"),
+            "type": .string("function_call"), "id": .string("fc-1"), "call_id": .string("call-1"),
             "name": .string("calculator"), "arguments": .string(#"{"a":2,"b":3}"#),
+            "status": .string("completed"),
         ])))
         #expect(input.contains(.object([
             "type": .string("function_call_output"), "call_id": .string("call-1"),

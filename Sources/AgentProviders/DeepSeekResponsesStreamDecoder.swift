@@ -155,6 +155,7 @@ struct DeepSeekResponsesStreamDecoder {
         guard !id.isEmpty, itemIDs.insert(id).inserted else { throw ProviderJSON.invalid() }
         switch try ProviderJSON.string(item["type"]) {
         case "message":
+            try validateItemStatus(item["status"], expected: "in_progress")
             guard try ProviderJSON.string(item["role"]) == "assistant",
                   case .array(let parts) = item["content"] else { throw ProviderJSON.invalid() }
             var state = ItemState(index: index, id: id, kind: .message)
@@ -166,6 +167,7 @@ struct DeepSeekResponsesStreamDecoder {
             items[index] = state
             return events
         case "reasoning":
+            try validateItemStatus(item["status"], expected: "in_progress")
             guard case .array(let parts) = item["content"] else { throw ProviderJSON.invalid() }
             var state = ItemState(index: index, id: id, kind: .reasoning)
             var events: [ModelEvent] = []
@@ -176,6 +178,7 @@ struct DeepSeekResponsesStreamDecoder {
             items[index] = state
             return events
         case "function_call":
+            try validateItemStatus(item["status"], expected: "in_progress")
             let callID = ToolCallID(rawValue: try ProviderJSON.string(item["call_id"]))
             let name = try ProviderJSON.string(item["name"])
             let arguments = try ProviderJSON.string(item["arguments"])
@@ -290,15 +293,16 @@ struct DeepSeekResponsesStreamDecoder {
         var events: [ModelEvent] = []
         switch state.kind {
         case .message:
+            try validateItemStatus(item["status"], expected: "completed")
             try reconcileParts(item, state: &state, expected: .outputText, events: &events)
-            state.native = normalizedMessage(item)
         case .reasoning:
+            try validateItemStatus(item["status"], expected: "completed")
             try reconcileParts(item, state: &state, expected: .reasoningText, events: &events)
             guard !state.parts.isEmpty, state.parts.values.contains(where: { !$0.value.isEmpty }) else {
                 throw ProviderJSON.invalid()
             }
-            state.native = normalizedReasoning(item)
         case .functionCall:
+            try validateItemStatus(item["status"], expected: "completed")
             guard try ProviderJSON.string(item["type"]) == "function_call", var call = state.call,
                   try ProviderJSON.string(item["call_id"]) == call.id.rawValue,
                   try ProviderJSON.string(item["name"]) == call.name else { throw ProviderJSON.invalid() }
@@ -311,10 +315,10 @@ struct DeepSeekResponsesStreamDecoder {
             call.argumentsDone = true
             call.completed = true
             state.call = call
-            state.native = normalizedFunction(item)
             events.append(.toolCallCompleted(.init(id: call.id, name: call.name,
                                                    argumentsJSON: final, completeness: .complete)))
         }
+        state.native = .object(item)
         state.done = true
         items[itemIndex] = state
         return events
@@ -331,7 +335,7 @@ struct DeepSeekResponsesStreamDecoder {
         try validateFinalOutput(response["output"], completed: true)
         let usageEvents = try updateUsage(response["usage"])
         let calls = orderedCalls()
-        if requiresReasoningForTools, !calls.isEmpty {
+        if requiresReasoningForTools {
             let reasoning = items.values.filter { $0.kind == .reasoning }.flatMap(\.parts.values).map(\.value).joined()
             guard !reasoning.isEmpty else { throw ProviderJSON.invalid() }
         }
@@ -406,20 +410,6 @@ struct DeepSeekResponsesStreamDecoder {
         }
     }
 
-    private func normalizedMessage(_ item: [String: JSONValue]) -> JSONValue {
-        .object(["type": .string("message"), "role": .string("assistant"),
-                 "content": item["content"] ?? .array([])])
-    }
-
-    private func normalizedReasoning(_ item: [String: JSONValue]) -> JSONValue {
-        .object(["type": .string("reasoning"), "content": item["content"] ?? .array([])])
-    }
-
-    private func normalizedFunction(_ item: [String: JSONValue]) -> JSONValue {
-        .object(["type": .string("function_call"), "call_id": item["call_id"] ?? .null,
-                 "name": item["name"] ?? .null, "arguments": item["arguments"] ?? .null])
-    }
-
     private func validateFinalOutput(_ value: JSONValue?, completed: Bool) throws {
         guard case .array(let output) = value, output.count == items.count,
               items.keys.sorted() == Array(output.indices) else { throw ProviderJSON.invalid() }
@@ -428,14 +418,48 @@ struct DeepSeekResponsesStreamDecoder {
             if completed && !state.done { throw ProviderJSON.invalid() }
             let item = try ProviderJSON.object(output[index])
             guard try ProviderJSON.string(item["id"]) == state.id else { throw ProviderJSON.invalid() }
-            switch state.kind {
-            case .message:
-                guard normalizedMessage(item) == state.native else { throw ProviderJSON.invalid() }
-            case .reasoning:
-                guard normalizedReasoning(item) == state.native else { throw ProviderJSON.invalid() }
-            case .functionCall:
-                guard normalizedFunction(item) == state.native else { throw ProviderJSON.invalid() }
+            try validateFinalItem(item, against: state)
+        }
+    }
+
+    private func validateFinalItem(_ item: [String: JSONValue], against state: ItemState) throws {
+        try validateItemStatus(item["status"], expected: state.done ? "completed" : "incomplete")
+        switch state.kind {
+        case .message, .reasoning:
+            let expectedType = state.kind == .message ? "message" : "reasoning"
+            let expectedPart: PartKind = state.kind == .message ? .outputText : .reasoningText
+            guard try ProviderJSON.string(item["type"]) == expectedType,
+                  case .array(let parts) = item["content"],
+                  state.parts.keys.sorted() == Array(parts.indices) else {
+                throw ProviderJSON.invalid()
             }
+            if state.kind == .message, try ProviderJSON.string(item["role"]) != "assistant" {
+                throw ProviderJSON.invalid()
+            }
+            for index in parts.indices {
+                let part = try ProviderJSON.object(parts[index])
+                guard PartKind(rawValue: try ProviderJSON.string(part["type"])) == expectedPart,
+                      try ProviderJSON.string(part["text"]) == state.parts[index]?.value else {
+                    throw ProviderJSON.invalid()
+                }
+            }
+        case .functionCall:
+            guard try ProviderJSON.string(item["type"]) == "function_call",
+                  let call = state.call,
+                  try ProviderJSON.string(item["call_id"]) == call.id.rawValue,
+                  try ProviderJSON.string(item["name"]) == call.name,
+                  try ProviderJSON.string(item["arguments"]) == call.arguments else {
+                throw ProviderJSON.invalid()
+            }
+        }
+    }
+
+    private func validateItemStatus(_ value: JSONValue?, expected: String) throws {
+        guard let value else { return }
+        guard value != .null else { throw ProviderJSON.invalid() }
+        let status = try ProviderJSON.string(value)
+        guard ["in_progress", "completed", "incomplete"].contains(status), status == expected else {
+            throw ProviderJSON.invalid()
         }
     }
 

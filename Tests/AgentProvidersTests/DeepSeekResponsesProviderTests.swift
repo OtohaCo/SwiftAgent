@@ -323,14 +323,16 @@ private let deepSeekTextWithoutReasoningFixture = providerNamedSSE([
 ])
 
 private func deepSeekReasoningItem(call: Int) -> JSONValue {
-    .object(["type": .string("reasoning"), "content": .array([
-        .object(["type": .string("reasoning_text"), "text": .string("Reason \(call).")]),
-    ])])
+    .object(["type": .string("reasoning"), "id": .string("rs-\(call)"),
+             "status": .string("completed"), "content": .array([
+                 .object(["type": .string("reasoning_text"), "text": .string("Reason \(call).")]),
+             ])])
 }
 
 private func deepSeekFunctionItem(call: Int) -> JSONValue {
-    .object(["type": .string("function_call"), "call_id": .string("call-\(call)"),
-             "name": .string("calculator"), "arguments": .string(#"{"a":2,"b":3}"#)])
+    .object(["type": .string("function_call"), "id": .string("fc-\(call)"),
+             "call_id": .string("call-\(call)"), "name": .string("calculator"),
+             "arguments": .string(#"{"a":2,"b":3}"#), "status": .string("completed")])
 }
 
 private func deepSeekFunctionOutput(call: Int) -> JSONValue {

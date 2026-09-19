@@ -25,7 +25,12 @@ enum OpenAIResponsesContinuation {
         calls: [ToolCall],
         model: ModelID
     ) throws -> ModelProviderContinuation? {
-        let validated = try validateCurrent(items: items, content: content, calls: calls)
+        let validated = try validateCurrent(
+            items: items,
+            content: content,
+            calls: calls,
+            allowOmittedVisibleReasoning: false
+        )
         guard validated.shouldStore else { return nil }
         let payload = JSONValue.object([
             "items": .array(validated.items),
@@ -61,7 +66,12 @@ enum OpenAIResponsesContinuation {
 
             let validated = state.format == legacyFormat
                 ? try migrateLegacy(items: items, content: content, calls: calls)
-                : try validateCurrent(items: items, content: content, calls: calls)
+                : try validateCurrent(
+                    items: items,
+                    content: content,
+                    calls: calls,
+                    allowOmittedVisibleReasoning: true
+                )
             return .init(items: validated.items)
         } catch {
             throw ModelProviderError(
@@ -74,7 +84,8 @@ enum OpenAIResponsesContinuation {
     private static func validateCurrent(
         items: [JSONValue],
         content: [ModelContent],
-        calls: [ToolCall]
+        calls: [ToolCall],
+        allowOmittedVisibleReasoning: Bool
     ) throws -> Validated {
         func append(_ value: String, as kind: ContentKind, to sequence: inout [(ContentKind, String)]) {
             guard !value.isEmpty else { return }
@@ -89,6 +100,7 @@ enum OpenAIResponsesContinuation {
         var messageCount = 0
         var shouldStore = false
         var nativeContent: [(ContentKind, String)] = []
+        var replayItems: [JSONValue] = []
 
         for item in items {
             let object = try ProviderJSON.object(item)
@@ -96,11 +108,15 @@ enum OpenAIResponsesContinuation {
             case "reasoning":
                 let reasoning = try validateReasoning(object)
                 append(reasoning.visibleText, as: .reasoning, to: &nativeContent)
-                if reasoning.hasEncryptedContent { shouldStore = true }
+                if reasoning.hasEncryptedContent {
+                    shouldStore = true
+                    replayItems.append(item)
+                }
             case "message":
                 if case .string(let text) = object["content"], object["id"] == nil, object["status"] == nil {
                     guard try ProviderJSON.string(object["role"]) == "assistant" else { throw ProviderJSON.invalid() }
                     append(text, as: .text, to: &nativeContent)
+                    replayItems.append(item)
                     continue
                 }
                 let message = try validateMessage(object)
@@ -109,17 +125,23 @@ enum OpenAIResponsesContinuation {
                     shouldStore = true
                 }
                 append(message.visibleText, as: .text, to: &nativeContent)
+                replayItems.append(item)
             case "function_call":
                 try validateFunctionItem(object)
                 functionItems.append(item)
+                shouldStore = true
+                replayItems.append(item)
             default:
                 throw ProviderJSON.invalid()
             }
         }
 
         let canonicalContent = try visibleContent(content)
-        guard joined(nativeContent, kind: .text) == joined(canonicalContent, kind: .text),
-              joined(nativeContent, kind: .reasoning) == joined(canonicalContent, kind: .reasoning),
+        guard orderedContentMatches(
+                  native: nativeContent,
+                  canonical: canonicalContent,
+                  allowOmittedVisibleReasoning: allowOmittedVisibleReasoning
+              ),
               functionItems.count == calls.count else {
             throw ProviderJSON.invalid()
         }
@@ -132,7 +154,7 @@ enum OpenAIResponsesContinuation {
                 throw ProviderJSON.invalid()
             }
         }
-        return .init(items: items, shouldStore: shouldStore)
+        return .init(items: replayItems, shouldStore: shouldStore)
     }
 
     private static func migrateLegacy(
@@ -167,7 +189,12 @@ enum OpenAIResponsesContinuation {
                 throw ProviderJSON.invalid()
             }
         }
-        return try validateCurrent(items: migrated, content: content, calls: calls)
+        return try validateCurrent(
+            items: migrated,
+            content: content,
+            calls: calls,
+            allowOmittedVisibleReasoning: false
+        )
     }
 
     private struct ReasoningValidation {
@@ -295,8 +322,27 @@ enum OpenAIResponsesContinuation {
         return sequence
     }
 
-    private static func joined(_ content: [(ContentKind, String)], kind: ContentKind) -> String {
-        content.lazy.filter { $0.0 == kind }.map(\.1).joined()
+    private static func orderedContentMatches(
+        native: [(ContentKind, String)],
+        canonical: [(ContentKind, String)],
+        allowOmittedVisibleReasoning: Bool
+    ) -> Bool {
+        for kind in [ContentKind.text, .reasoning] {
+            if kind == .reasoning, allowOmittedVisibleReasoning,
+               native.lazy.filter({ $0.0 == kind }).map(\.1).joined().isEmpty {
+                continue
+            }
+            guard native.lazy.filter({ $0.0 == kind }).map(\.1).joined()
+                    == canonical.lazy.filter({ $0.0 == kind }).map(\.1).joined() else {
+                return false
+            }
+        }
+
+        var nativeIndex = 0
+        for (kind, _) in canonical where nativeIndex < native.count {
+            if native[nativeIndex].0 == kind { nativeIndex += 1 }
+        }
+        return nativeIndex == native.count
     }
 
     private static func visibleReasoning(_ content: [ModelContent]) -> [String] {
