@@ -71,7 +71,8 @@ struct ConversationControllerTests {
         #expect((await nextSnapshot(&snapshots, phase: .running)).generation == 2)
     }
 
-    @Test func drainWaitsForBufferedTerminalEventsBeforeReleasingConversation() async throws {
+    @Test(.timeLimit(.minutes(1)))
+    func drainWaitsForBufferedTerminalEventsBeforeReleasingConversation() async throws {
         let session = ControlledSession()
         let run = ControlledRun()
         let deliveryGate = EventDeliveryGate()
@@ -94,7 +95,7 @@ struct ConversationControllerTests {
         await run.releaseDrain()
         await deliveryGate.waitUntilPaused()
 
-        #expect(await controller.snapshot().phase == .draining)
+        #expect((await nextSnapshot(&snapshots, phase: .draining)).phase == .draining)
         await #expect(throws: ConversationControllerError.runInProgress) {
             try await controller.send("Too early")
         }
