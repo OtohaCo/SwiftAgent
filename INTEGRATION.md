@@ -17,10 +17,25 @@ rules remain in [CONTRIBUTING.md](CONTRIBUTING.md); they are not an app architec
 | Check an integration before accepting generated code | [Acceptance checklist](docs/ai/acceptance-checklist.md) |
 
 These guides distinguish existing SDK APIs, host design recommendations and
-example acceptance requirements. They do not add an executable Apple UI sample,
-media provider, broadcast event API or background execution entitlement.
+example acceptance requirements. The fixture-backed executable Apple UI sample
+is [Examples/AppleChatApp](Examples/AppleChatApp); it does not add a media
+provider, broadcast event API or background execution entitlement.
+
+Run it from the repository root:
+
+```sh
+bash Examples/AppleChatApp/run-macos.sh
+swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
+```
+
+The default conversation displays incremental output. Create a **Validated**
+conversation to see the same UI publish only after `ModelProviderRoute` accepts a
+complete candidate. The example uses a deterministic local provider and a
+read-only account lookup tool, so it needs no credentials and performs no real
+external effect. Its implementation and recorded acceptance evidence are linked
+from the Apple UI, UI streaming and acceptance guides above.
 
 The source-checked baseline is
-`c5f08c7520c989cf01234e19c1fd011b486ca76f` on the RC.2 development line.
+`7cc8aa6e333062ee3a20a24daed13de463008fff` on the RC.2 development line.
 This is not a release declaration or live-test result. Use documentation from the
 same revision as the dependency installed in your app.

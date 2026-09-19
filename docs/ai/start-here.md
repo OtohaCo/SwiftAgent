@@ -3,9 +3,10 @@
 last-verified: 2026-09-19
 
 Audience: a developer or coding agent integrating the SDK into another app.
-Source-checked SDK baseline: `c5f08c7520c989cf01234e19c1fd011b486ca76f`.
-This guide is not a claim that the snippets, Apple UI or real services were
-executed during documentation authoring.
+Source-checked SDK baseline: `7cc8aa6e333062ee3a20a24daed13de463008fff`.
+The fixture-backed Apple UI example at this baseline was built, tested and run as
+recorded in the acceptance checklist. That evidence is not a claim of live
+provider qualification or iOS device UI acceptance.
 
 ## 1. Establish the version before writing code
 
@@ -42,7 +43,8 @@ native agent loop. Add only the products the consuming target needs.
 ## 3. Follow a recipe instead of inventing API
 
 - Apple chat or assistant: [UI ownership](../guides/swift-agent-apple-ui.md),
-  then [event rendering](../guides/swift-agent-ui-streaming.md).
+  then [event rendering](../guides/swift-agent-ui-streaming.md), with
+  [AppleChatApp](../../Examples/AppleChatApp) as the executable reference.
 - Read-only tool, mutation, restart or typed decision:
   [consumer recipes](consumer-recipes.md).
 - Credentials and executable examples:
@@ -95,8 +97,9 @@ choose a supported host design rather than creating an undocumented SDK API.
 
 ## Evidence and maintenance
 
-The linked source and existing contract guides establish SDK behavior. Host
-architectures in this documentation are recommendations, not shipped SDK
-components. Future examples must be linked only after they exist and pass their
-stated checks. After API or lifecycle changes, update the affected recipe and
-its source-checked revision; do not copy old review verdicts as new test evidence.
+The linked source and existing contract guides establish SDK behavior. The
+controller and display projection in `Examples/AppleChatApp` are example-owned
+reference code, not new AgentCore API. Future examples must be linked only after
+they exist and pass their stated checks. After API or lifecycle changes, update
+the affected recipe and its source-checked revision; do not copy old review
+verdicts as new test evidence.

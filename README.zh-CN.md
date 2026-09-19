@@ -38,7 +38,7 @@ SwiftAgent 是一个不绑定模型厂商的 Swift Agent 运行时，提供类�
 
 last-verified: 2026-09-19
 
-本 README 及其翻译所核对的源码基线是 RC.2 开发线上的 `c5f08c7520c989cf01234e19c1fd011b486ca76f`。这些文档不是发布公告，也不是新的测试结果。应始终阅读与 App 实际安装的依赖版本一致的文档。
+本 README 及其翻译所核对的源码基线是 RC.2 开发线上的 `7cc8aa6e333062ee3a20a24daed13de463008fff`。这些文档不是发布公告，也不是新的测试结果。应始终阅读与 App 实际安装的依赖版本一致的文档。
 
 ### 已发布的 rc.1
 
@@ -64,7 +64,7 @@ rc.1 的固定提交为 `d2347f11c6a78f421708e897dae42a51a98d37ea`。
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        revision: "c5f08c7520c989cf01234e19c1fd011b486ca76f"
+        revision: "7cc8aa6e333062ee3a20a24daed13de463008fff"
     )
 ]
 ```
@@ -92,9 +92,11 @@ dependencies: [
 ```sh
 swift test --package-path Examples/ExternalClient
 swift run --package-path Examples/JevDecision JevDecision
+swift test --package-path Examples/AppleChatApp
+bash Examples/AppleChatApp/run-macos.sh
 ```
 
-[ExternalClient](Examples/ExternalClient) 验证通过 public API 使用 SDK。[JevDecision](Examples/JevDecision) 是默认使用 fixture 的 Noul、Choice、Score 可执行示例。其输出是建议，不是执行工具的权限。这些是已核对基线中存在的可执行入口；Apple UI 指南描述的是接入模式，不是已经交付的 SwiftUI App。
+[ExternalClient](Examples/ExternalClient) 验证通过 public API 使用 SDK。[JevDecision](Examples/JevDecision) 是默认使用 fixture 的 Noul、Choice、Score 可执行示例，其输出是建议，不是执行工具的权限。[AppleChatApp](Examples/AppleChatApp) 是无需凭据的 fixture 参考实现，展示 App 自己管理 SwiftUI 生命周期、直接流式输出、验证后缓冲发布、工具进度和取消/drain 所有权。
 
 真实调用 Jev 时，先在本机注入 `TYPESAFE_API_KEY`，再使用兼容 POSIX 的 shell：
 

@@ -4,8 +4,10 @@ last-verified: 2026-09-19
 
 Scope: SwiftUI, UIKit or AppKit hosts using the public Agent/Session/Run API.
 Read [the integration entry](../ai/start-here.md) for the checked SDK revision.
-This is a host implementation guide, not an implemented UI product or a claim of
-UI/device qualification. Companion: [UI streaming](swift-agent-ui-streaming.md).
+The executable fixture-backed reference is
+[Examples/AppleChatApp](../../Examples/AppleChatApp). It demonstrates the host
+architecture in this guide; it is not an SDK UI product or a live-provider/device
+qualification claim. Companion: [UI streaming](swift-agent-ui-streaming.md).
 
 ## Separate display ownership from execution ownership
 
@@ -189,3 +191,16 @@ do not raise the SDK's minimum OS for sample convenience. Manually run the UI an
 check responsiveness, incremental output, terminal labels and navigation. Record
 which devices/simulators and live/fixture modes actually ran. This guide itself
 is not evidence that those acceptance checks passed.
+
+`Examples/AppleChatApp` implements this ownership model with a MainActor app
+model, one actor controller per conversation, one `run.events` consumer, complete
+bounded snapshots, generation fencing and separate logical/drain states. The
+non-UI lifecycle suite uses deterministic gates for startup, cancellation, drain
+and buffered terminal-event delivery. At implementation commit
+`7cc8aa6e333062ee3a20a24daed13de463008fff`, 14 tests pass and the integration
+target cross-builds for `arm64-apple-ios16.0`.
+
+Manual fixture acceptance ran on macOS 27.0 with Xcode/Swift 6.4. Direct
+incremental output, tool progress, a recoverable tool error, terminal labels and
+two app windows were observed. iOS UI/device execution and live Apple model/PCC
+qualification were not run; those narrower gaps must not be reported as passing.

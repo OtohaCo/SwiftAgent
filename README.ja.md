@@ -38,7 +38,7 @@ Provider ごとの契約：
 
 last-verified: 2026-09-19
 
-この README と翻訳版がソースを確認した基準は、RC.2 開発系列の `c5f08c7520c989cf01234e19c1fd011b486ca76f` です。このドキュメントはリリース告知でも、新たなテスト結果でもありません。App に導入した依存関係と同じ revision のドキュメントを参照してください。
+この README と翻訳版がソースを確認した基準は、RC.2 開発系列の `7cc8aa6e333062ee3a20a24daed13de463008fff` です。このドキュメントはリリース告知でも、新たなテスト結果でもありません。App に導入した依存関係と同じ revision のドキュメントを参照してください。
 
 ### 公開済みの rc.1
 
@@ -64,7 +64,7 @@ rc.1 の固定先は `d2347f11c6a78f421708e897dae42a51a98d37ea` です。
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        revision: "c5f08c7520c989cf01234e19c1fd011b486ca76f"
+        revision: "7cc8aa6e333062ee3a20a24daed13de463008fff"
     )
 ]
 ```
@@ -92,9 +92,11 @@ Git submodule でローカル package を提供する場合、SDK commit は親�
 ```sh
 swift test --package-path Examples/ExternalClient
 swift run --package-path Examples/JevDecision JevDecision
+swift test --package-path Examples/AppleChatApp
+bash Examples/AppleChatApp/run-macos.sh
 ```
 
-[ExternalClient](Examples/ExternalClient) は public API を通じた SDK の利用をテストします。[JevDecision](Examples/JevDecision) は、標準では fixture を使う Noul、Choice、Score の実行可能なサンプルです。出力は提案であり、ツール実行の許可ではありません。これらが確認済み基準に存在する実行入口です。Apple UI ガイドは統合パターンを説明しており、完成済みの SwiftUI App を提供しているわけではありません。
+[ExternalClient](Examples/ExternalClient) は public API を通じた SDK の利用をテストします。[JevDecision](Examples/JevDecision) は、標準では fixture を使う Noul、Choice、Score の実行可能なサンプルで、出力は提案でありツール実行の許可ではありません。[AppleChatApp](Examples/AppleChatApp) は認証情報不要の fixture リファレンスで、App 所有の SwiftUI ライフサイクル、直接ストリーミング、検証後のバッファー公開、ツール進捗、キャンセル/drain の所有権を示します。
 
 Jev を実際に呼び出すには、ローカル環境に `TYPESAFE_API_KEY` を設定した後、POSIX 互換の shell で実行します。
 

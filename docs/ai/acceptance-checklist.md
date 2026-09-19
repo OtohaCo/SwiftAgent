@@ -78,3 +78,23 @@ was actually performed.
 Documentation can be source-checked without Apple UI or live credentials.
 Report that narrower result explicitly; never use it as the release gate for
 an executable example still being implemented.
+
+## Recorded AppleChatApp evidence
+
+Implementation baseline: `7cc8aa6e333062ee3a20a24daed13de463008fff`.
+
+| Scope | Command or environment | Result |
+| --- | --- | --- |
+| Lifecycle, projection, fixture tool loop and two-conversation isolation | `swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel` | PASS: 14 Swift Testing tests in 3 suites; 0 failures, 0 skips |
+| macOS build | `swift build --package-path Examples/AppleChatApp` | PASS with Swift 6.4 / Xcode 27.0 |
+| Portable integration layer | `swift build --package-path Examples/AppleChatApp --target AppleChatIntegration --triple arm64-apple-ios16.0` | PASS; no claim of iOS UI execution |
+| macOS fixture UI | `bash Examples/AppleChatApp/run-macos.sh` on macOS 27.0 | PASS: direct incremental text, tool progress/result, recoverable tool error, terminal state and two app windows were observed |
+| Validated route | `validatedRouteIsHonestlyReportedAsBuffered` | PASS: the route removes streaming capability and publishes the accepted complete response; no simulated typing |
+| Live provider or credential path | Not applicable | NOT RUN: the example intentionally uses a deterministic local provider |
+
+The deterministic controller tests cover rapid double Send, Stop during pending
+startup, Stop followed by replacement only after physical drain, buffered terminal
+events before ownership release, late startup cleanup, and failure while draining.
+They use gates and explicit completions rather than timing sleeps. The macOS UI
+itself remains a manual acceptance surface; the tests exercise its non-UI
+lifecycle and projection logic.

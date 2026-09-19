@@ -47,7 +47,7 @@ Provider-specific contracts:
 last-verified: 2026-09-19
 
 The source-checked baseline for this README and its translations is
-`c5f08c7520c989cf01234e19c1fd011b486ca76f` on the RC.2 development line.
+`7cc8aa6e333062ee3a20a24daed13de463008fff` on the RC.2 development line.
 This documentation is not a release announcement or a new test result. Always
 read documentation from the same revision as the dependency installed in your app.
 
@@ -77,7 +77,7 @@ To reproduce the checked source baseline rather than follow a moving branch:
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        revision: "c5f08c7520c989cf01234e19c1fd011b486ca76f"
+        revision: "7cc8aa6e333062ee3a20a24daed13de463008fff"
     )
 ]
 ```
@@ -113,13 +113,16 @@ From the **SwiftAgent repository root**:
 ```sh
 swift test --package-path Examples/ExternalClient
 swift run --package-path Examples/JevDecision JevDecision
+swift test --package-path Examples/AppleChatApp
+bash Examples/AppleChatApp/run-macos.sh
 ```
 
 [ExternalClient](Examples/ExternalClient) tests consumption through public API.
 [JevDecision](Examples/JevDecision) is an executable fixture-first example of
 Noul, Choice and Score. Its output is a proposal, not permission to execute a tool.
-These are the executable entry points present at the checked baseline; the Apple
-UI guides describe an integration pattern, not an already-shipped SwiftUI app.
+[AppleChatApp](Examples/AppleChatApp) is a credential-free fixture reference for
+app-owned SwiftUI lifecycle, direct streaming, validated buffered publication,
+tool progress and cancellation/drain ownership.
 
 For a real Jev call, inject `TYPESAFE_API_KEY` locally, then use a POSIX-compatible
 shell:

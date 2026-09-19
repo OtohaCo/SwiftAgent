@@ -143,6 +143,14 @@ turn off validation or simulate typing to claim lower time-to-first-token.
 Buffered/planning providers should remain usable with the same UI, without a
 promise of token-by-token output.
 
+The two routes are executable in
+[Examples/AppleChatApp](../../Examples/AppleChatApp). **Streaming** uses the local
+provider directly and appends normalized deltas. **Validated** wraps the same
+provider in `ModelProviderRoute`; the descriptor does not claim `.streaming`, and
+the UI labels the mode as “Published after route validation.” Both routes feed
+the same `ConversationProjection`; there is no alternate loop or simulated
+typing path.
+
 ## Privacy and acceptance
 
 Never display or log provider-continuation payloads or credentials. Reasoning
@@ -154,4 +162,6 @@ Acceptance should include a multi-turn tool loop, refusal, valid incomplete
 output, protocol failure after visible deltas, recoverable tool error, Stop,
 slow rendering, navigation, and a buffered route. Verify no duplicate final text,
 no lost accumulated text, no stale-generation repaint and no false tool-success
-label. Run ownership is covered separately in the Apple UI guide.
+label. `Examples/AppleChatApp` covers these protocol and lifecycle cases with 14
+deterministic tests; the direct fixture UI was also run on macOS 27.0. Run
+ownership is covered separately in the Apple UI guide.

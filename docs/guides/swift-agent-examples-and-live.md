@@ -4,7 +4,7 @@ last-verified: 2026-09-19
 
 This guide separates executable examples present at the
 [source-checked baseline](../ai/start-here.md) from requirements for future
-examples. It does not report new live-test or UI-test results.
+examples. Fixture UI evidence and live-service qualification remain separate.
 
 ## Existing executable entry points
 
@@ -12,17 +12,26 @@ examples. It does not report new live-test or UI-test results.
 | --- | --- |
 | `Examples/ExternalClient` | An outside-the-package public-API test consumer |
 | `Examples/JevDecision` | A fixture-first executable with explicit Jev live opt-in |
+| `Examples/AppleChatApp` | A fixture-backed macOS SwiftUI/AppKit reference with app-owned lifecycle, direct streaming and validated buffered routes |
 
 Run from the **SwiftAgent repository root**:
 
 ```sh
 swift test --package-path Examples/ExternalClient
 swift run --package-path Examples/JevDecision JevDecision
+swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
+bash Examples/AppleChatApp/run-macos.sh
 ```
 
 From a parent app repository where SwiftAgent is a submodule, prefix each
-package path with `SwiftAgent/`. Do not assume an unlisted chat or Apple UI
-executable already exists. Inspect [Examples](../../Examples) at your revision.
+package path with `SwiftAgent/`. Inspect [Examples](../../Examples) at your
+revision instead of assuming that a newer example exists in an older release.
+
+`AppleChatApp` defaults to a deterministic local provider and read-only account
+lookup tool. It accepts no key and performs no real external effect. Use the New
+Conversation menu to compare direct **Streaming** with **Validated** publication.
+The controller/projection tests and recorded manual scope are listed in the
+[acceptance checklist](../ai/acceptance-checklist.md).
 
 For the existing Jev live path, inject `TYPESAFE_API_KEY` through your local
 credential mechanism, then run in a POSIX-compatible shell:
