@@ -6,6 +6,89 @@ import XCTest
 @testable import AgentCore
 
 struct AgentIsolationTests {
+    @Test func replacementWaitsWhileSessionIdentityIsBeingReleased() async throws {
+        let releaseGate = ManualGate()
+        let releaseStarted = XCTestExpectation(description: "session identity release started")
+        let drainWaitStarted = XCTestExpectation(description: "replacement waits for drain release")
+        let provider = ScriptedProvider { request, _ in textResponse(request, "Done") }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(
+            drainWaitDidBegin: { _ in drainWaitStarted.fulfill() },
+            drainReleaseDidBegin: { _ in
+                releaseStarted.fulfill()
+                await releaseGate.wait()
+            }
+        )
+        let first = try await session.run("first")
+        _ = try await first.wait()
+        #expect(await XCTWaiter.fulfillment(of: [releaseStarted], timeout: 1) == .completed)
+
+        let replacement = Task { try await session.run("second") }
+        let waitedForDrain = await XCTWaiter.fulfillment(of: [drainWaitStarted], timeout: 1)
+        await releaseGate.open()
+
+        #expect(waitedForDrain == .completed)
+        let second = try await replacement.value
+        _ = try await second.wait()
+        try await second.waitForDrain()
+    }
+
+    @Test(arguments: [false, true])
+    func toolDrainIncludesCompletionCallbacks(fails: Bool) async throws {
+        let scheduler = ToolScheduler()
+        let callbackGate = ManualGate()
+        let sessionID = UUID()
+        let runID = UUID()
+        let call = ToolCall(
+            id: .init(rawValue: "completion-drain"),
+            name: DrainCompletionProbe.name,
+            argumentsJSON: "{}",
+            completeness: .complete
+        )
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        let registry = try ToolRegistry(tools: [AnyAgentTool(DrainCompletionProbe(fails: fails))])
+        let prepared = try registry.prepare(
+            call,
+            context: ToolContext(
+                sessionID: sessionID,
+                runID: runID,
+                callID: call.id,
+                deadline: deadline
+            )
+        )
+
+        let execution = Task {
+            try await scheduler.execute(
+                [prepared],
+                deadline: deadline,
+                onStarted: { _ in },
+                onCompleted: { _, _, _ in await callbackGate.wait() },
+                onFailed: { _, error in
+                    await callbackGate.wait()
+                    throw error
+                }
+            )
+        }
+        await callbackGate.waitUntilBlocked()
+
+        let registration = AsyncStream<Bool>.makeStream()
+        let drainWaiter = Task {
+            await scheduler.waitForRunToDrain(
+                sessionID: sessionID,
+                runID: runID,
+                waiterDidRegister: { registration.continuation.yield($0) }
+            )
+        }
+        var registrations = registration.stream.makeAsyncIterator()
+        #expect(await registrations.next() == true)
+        await callbackGate.open()
+        if fails {
+            await #expect(throws: FixtureError.invalidOperation) { try await execution.value }
+        } else {
+            try await execution.value
+        }
+        await drainWaiter.value
+    }
+
     @Test(arguments: [false, true])
     func timedOutOrCancelledExecutorKeepsItsLeaseUntilItActuallyReturns(cancel: Bool) async throws {
         let scheduler = ToolScheduler()
@@ -147,6 +230,35 @@ struct AgentIsolationTests {
         _ = try await second.wait()
         let labelsAfterSecondWorker = await providerProbe.labels
         #expect(labelsAfterSecondWorker == ["A", "B"])
+    }
+}
+
+private struct DrainCompletionProbe: AgentTool {
+    struct Input: Codable, Sendable {}
+    typealias Output = Bool
+
+    static let name = "drain_completion_probe"
+    static let description = "Return before the completion callback is released"
+    static let inputSchema = ToolSchema.object(properties: [:])
+    static let outputSchema = ToolSchema.boolean
+
+    let fails: Bool
+    let policy: ToolPolicy
+
+    init(fails: Bool) throws {
+        self.fails = fails
+        policy = try ToolPolicy(
+            effect: .readOnly,
+            execution: .sequential,
+            idempotency: .safe,
+            timeout: .seconds(5),
+            authorization: .notRequired
+        )
+    }
+
+    func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Bool> {
+        if fails { throw FixtureError.invalidOperation }
+        return ToolResult(output: true)
     }
 }
 

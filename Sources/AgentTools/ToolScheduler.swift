@@ -8,13 +8,30 @@ import Foundation
 public struct ToolScheduler: Sendable {
     private let coordinator = ToolResourceCoordinator()
     private let drain = ToolExecutionDrain()
+    private let operationCancellationDidResolve: (@Sendable (UUID, UUID, ToolCallID) async -> Void)?
 
-    public init() {}
+    public init() {
+        operationCancellationDidResolve = nil
+    }
+
+    package init(
+        operationCancellationDidResolve: @escaping @Sendable (UUID, UUID, ToolCallID) async -> Void
+    ) {
+        self.operationCancellationDidResolve = operationCancellationDidResolve
+    }
 
     /// Wait until all work belonging to one run has returned from its host
     /// executor, including work that outlived a timeout or cancellation.
     public func waitForRunToDrain(sessionID: UUID, runID: UUID) async {
         await drain.wait(.init(sessionID: sessionID, runID: runID))
+    }
+
+    package func waitForRunToDrain(
+        sessionID: UUID,
+        runID: UUID,
+        waiterDidRegister: @escaping @Sendable (Bool) -> Void
+    ) async {
+        await drain.wait(.init(sessionID: sessionID, runID: runID), waiterDidRegister: waiterDidRegister)
     }
 
     package func pendingWaiterCount() async -> Int {
@@ -26,6 +43,33 @@ public struct ToolScheduler: Sendable {
     }
 
     package func execute(
+        _ calls: [PreparedToolCall], deadline: ContinuousClock.Instant,
+        onStarted: @escaping @Sendable (PreparedToolCall) async throws -> Void,
+        onCompleted: @escaping @Sendable (Int, PreparedToolCall, ToolResult<JSONValue>) async throws -> Void,
+        onFailed: @escaping @Sendable (PreparedToolCall, any Error) async throws -> Void
+    ) async throws {
+        guard let first = calls.first else { return }
+        let drainKey = ToolExecutionDrain.Key(
+            sessionID: first.contextSessionID,
+            runID: first.contextRunID
+        )
+        await drain.begin(drainKey)
+        do {
+            try await executeRegistered(
+                calls,
+                deadline: deadline,
+                onStarted: onStarted,
+                onCompleted: onCompleted,
+                onFailed: onFailed
+            )
+            await drain.end(drainKey)
+        } catch {
+            await drain.end(drainKey)
+            throw error
+        }
+    }
+
+    private func executeRegistered(
         _ calls: [PreparedToolCall], deadline: ContinuousClock.Instant,
         onStarted: @escaping @Sendable (PreparedToolCall) async throws -> Void,
         onCompleted: @escaping @Sendable (Int, PreparedToolCall, ToolResult<JSONValue>) async throws -> Void,
@@ -89,7 +133,16 @@ public struct ToolScheduler: Sendable {
                             await drain.end(drainKey)
                         }
                         return Completion(index: index, call: call, result: .success(result))
-                    } catch { return Completion(index: index, call: call, result: .failure(error)) }
+                    } catch {
+                        if error is CancellationError {
+                            await operationCancellationDidResolve?(
+                                call.contextSessionID,
+                                call.contextRunID,
+                                call.call.id
+                            )
+                        }
+                        return Completion(index: index, call: call, result: .failure(error))
+                    }
                 }
             }
             for try await completion in group {
@@ -144,12 +197,17 @@ private actor ToolExecutionDrain {
         continuations.forEach { $0.resume() }
     }
 
-    func wait(_ key: Key) async {
-        guard active[key] != nil else { return }
+    func wait(_ key: Key, waiterDidRegister: (@Sendable (Bool) -> Void)? = nil) async {
+        guard active[key] != nil else {
+            waiterDidRegister?(false)
+            return
+        }
         await withCheckedContinuation { continuation in
             if active[key] != nil {
                 waiters[key, default: []].append(continuation)
+                waiterDidRegister?(true)
             } else {
+                waiterDidRegister?(false)
                 continuation.resume()
             }
         }

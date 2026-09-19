@@ -737,6 +737,98 @@ final class AgentMutationRecoveryTests: XCTestCase {
         XCTAssertEqual(settledAfter.count, settled.count)
     }
 
+    func testCancellationQuarantineIsDurableBeforeDrainCompletes() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let executorGate = ManualGate()
+        let cancellationGate = ManualGate()
+        let quarantineGate = ManualGate()
+        let entered = expectation(description: "mutation executor entered")
+        let cancellationResolved = expectation(description: "operation cancellation resolved")
+        let quarantineStarted = expectation(description: "mutation quarantine started")
+        let probe = MutationProbe()
+        let journal = try AgentJournal(persistenceURL: url)
+        let tool = try BlockingMutationTool(gate: executorGate, entered: entered, probe: probe)
+        let call = blockingMutationCall()
+        let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
+        let scheduler = ToolScheduler { _, _, callID in
+            XCTAssertEqual(callID, call.id)
+            cancellationResolved.fulfill()
+            await cancellationGate.wait()
+        }
+        let agent = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            tools: [tool],
+            configuration: .init(scheduler: scheduler)
+        )
+        let sessionID = UUID()
+        let session = try agent.makeSession(
+            id: sessionID,
+            journal: journal,
+            mutationQuarantineDidBegin: { _, callID in
+                XCTAssertEqual(callID, call.id)
+                quarantineStarted.fulfill()
+                await quarantineGate.wait()
+            }
+        )
+        let run = try await session.run("Change the listing")
+        await executorGate.waitUntilBlocked()
+        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 0)
+        XCTAssertEqual(enteredResult, .completed)
+
+        let drainRegistration = AsyncStream<Bool>.makeStream()
+        let drainWaiter = Task {
+            try await run.waitForDrain { drainRegistration.continuation.yield($0) }
+        }
+        var registrations = drainRegistration.stream.makeAsyncIterator()
+        let registered = await registrations.next()
+        XCTAssertEqual(registered, true)
+        await run.cancel()
+        let cancellationResult = await XCTWaiter.fulfillment(of: [cancellationResolved], timeout: 1)
+        XCTAssertEqual(cancellationResult, .completed)
+        await executorGate.open()
+        await cancellationGate.open()
+        let quarantineResult = await XCTWaiter.fulfillment(of: [quarantineStarted], timeout: 1)
+        XCTAssertEqual(quarantineResult, .completed)
+        let drainCompletedBeforeQuarantine = await run.isDrainComplete()
+        XCTAssertFalse(drainCompletedBeforeQuarantine)
+
+        let eventsBeforeQuarantine = await journal.snapshot().map(\.event)
+        XCTAssertFalse(eventsBeforeQuarantine.contains {
+            if case .mutationNeedsReconciliation = $0 { return true }
+            return false
+        })
+
+        await quarantineGate.open()
+        do {
+            _ = try await run.wait()
+            XCTFail("A cancelled mutation must not complete successfully")
+        } catch {
+            XCTAssertTrue(error is CancellationError || error is AgentLoopError)
+        }
+        try await drainWaiter.value
+        let drainCompletedAfterQuarantine = await run.isDrainComplete()
+        XCTAssertTrue(drainCompletedAfterQuarantine)
+
+        let events = await journal.snapshot().map(\.event)
+        let settled = events.filter { if case .mutationSettled = $0 { true } else { false } }
+        let quarantined = events.filter {
+            if case .mutationNeedsReconciliation(let callID) = $0 { return callID == call.id }
+            return false
+        }
+        XCTAssertTrue(settled.isEmpty)
+        XCTAssertEqual(quarantined.count, 1)
+        let executionCount = await probe.count
+        XCTAssertEqual(executionCount, 1)
+
+        let restarted = try AgentJournal.load(from: url)
+        let pending = await restarted.pendingMutations()
+        XCTAssertEqual(pending.count, 1)
+        XCTAssertEqual(pending[0].state, .needsReconciliation)
+        XCTAssertEqual(pending[0].intent.call.id, call.id)
+    }
+
     func testPendingMutationBlocksSameSessionAcrossResourcesNotOtherSessions() async throws {
         let url = temporaryURL()
         defer { cleanup(url) }
