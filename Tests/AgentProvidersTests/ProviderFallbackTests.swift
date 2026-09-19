@@ -380,6 +380,50 @@ struct ProviderFallbackTests {
         #expect(await fallbackProbe.requests.count == 2)
     }
 
+    @Test func validatedCandidateFinishingAfterClearCannotRestorePinnedState() async throws {
+        let primaryProbe = RouteProviderProbe()
+        let fallbackProbe = RouteProviderProbe()
+        let fallbackEntered = RouteGate()
+        let releaseFallback = RouteGate()
+        let primary = RouteFixtureProvider(probe: primaryProbe) { request, turn, emit in
+            if turn == 1 {
+                throw ModelProviderError(kind: .unavailable, message: "primary unavailable")
+            }
+            try emitContents(textEvents(request, "primary after clear"), emit: emit)
+        }
+        let fallback = RouteFixtureProvider(probe: fallbackProbe) { request, _, emit in
+            await fallbackEntered.open()
+            await releaseFallback.wait()
+            try emitContents(textEvents(request, "late fallback"), emit: emit)
+        }
+        let route = try ModelProviderRoute(
+            id: "fixture",
+            candidates: [primary, fallback],
+            policy: .init(maxAttempts: 2)
+        )
+        let sessionID = UUID()
+        let runID = UUID()
+        let request = ModelRequest(
+            model: .init(provider: "fixture", name: "test"),
+            messages: [],
+            sessionID: sessionID,
+            runID: runID
+        )
+
+        let lateRequest = Task { try await collectRouteEvents(route.stream(request: request)) }
+        await fallbackEntered.wait()
+        await route.clearMutationBoundary(sessionID: sessionID, runID: runID)
+        await releaseFallback.open()
+        _ = try await lateRequest.value
+
+        await route.markMutationBoundary(sessionID: sessionID, runID: runID)
+        let events = try await collectRouteEvents(route.stream(request: request))
+
+        #expect(events == textEvents(request, "primary after clear"))
+        #expect(await primaryProbe.requests.count == 2)
+        #expect(await fallbackProbe.requests.count == 1)
+    }
+
     @Test func mutationBoundaryPropagatesThroughNestedRoutes() async throws {
         let primaryProbe = RouteProviderProbe()
         let fallbackProbe = RouteProviderProbe()
@@ -523,6 +567,24 @@ private actor RouteProviderProbe {
         await withCheckedContinuation { continuation in
             waiters.append(Waiter(requestCount: requestCount, continuation: continuation))
         }
+    }
+}
+
+private actor RouteGate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        guard !opened else { return }
+        opened = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
     }
 }
 

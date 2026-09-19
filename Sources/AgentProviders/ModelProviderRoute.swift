@@ -116,6 +116,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
                     await boundaryState.recordValidatedCandidate(
                         sessionID: request.sessionID,
                         runID: request.runID,
+                        generation: admission.generation,
                         candidateIndex: candidateIndex
                     )
                     return
@@ -180,6 +181,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
                 await boundaryState.recordValidatedCandidate(
                     sessionID: request.sessionID,
                     runID: request.runID,
+                    generation: admission.generation,
                     candidateIndex: candidateIndex
                 )
             }
@@ -217,6 +219,7 @@ private actor MutationBoundaryState {
     struct Admission: Sendable {
         let boundaryReached: Bool
         let pinnedCandidateIndex: Int?
+        let generation: UUID?
     }
 
     private struct Key: Hashable {
@@ -225,8 +228,13 @@ private actor MutationBoundaryState {
     }
 
     private struct State {
+        let generation: UUID
         var boundaryReached = false
         var pinnedCandidateIndex: Int?
+
+        init(generation: UUID = UUID()) {
+            self.generation = generation
+        }
     }
 
     private var states: [Key: State] = [:]
@@ -240,17 +248,33 @@ private actor MutationBoundaryState {
         states.removeValue(forKey: Key(sessionID: sessionID, runID: runID))
     }
 
-    func recordValidatedCandidate(sessionID: UUID?, runID: UUID?, candidateIndex: Int) {
-        guard let sessionID, let runID else { return }
+    func recordValidatedCandidate(
+        sessionID: UUID?,
+        runID: UUID?,
+        generation: UUID?,
+        candidateIndex: Int
+    ) {
+        guard let sessionID, let runID, let generation else { return }
         let key = Key(sessionID: sessionID, runID: runID)
-        states[key, default: .init()].pinnedCandidateIndex = candidateIndex
+        guard states[key]?.generation == generation else { return }
+        states[key]?.pinnedCandidateIndex = candidateIndex
     }
 
     func admission(sessionID: UUID?, runID: UUID?) -> Admission {
-        guard let sessionID, let runID, let state = states[Key(sessionID: sessionID, runID: runID)] else {
-            return .init(boundaryReached: false, pinnedCandidateIndex: nil)
+        guard let sessionID, let runID else {
+            return .init(boundaryReached: false, pinnedCandidateIndex: nil, generation: nil)
+        }
+        let key = Key(sessionID: sessionID, runID: runID)
+        let state: State
+        if let existing = states[key] {
+            state = existing
+        } else {
+            let created = State()
+            states[key] = created
+            state = created
         }
         return .init(boundaryReached: state.boundaryReached,
-                     pinnedCandidateIndex: state.pinnedCandidateIndex)
+                     pinnedCandidateIndex: state.pinnedCandidateIndex,
+                     generation: state.generation)
     }
 }
