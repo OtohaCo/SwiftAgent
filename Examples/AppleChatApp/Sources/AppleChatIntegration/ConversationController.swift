@@ -78,6 +78,7 @@ public actor ConversationController {
 
     private let session: any ConversationSessionHandle
     private let mailbox: ConversationSnapshotMailbox
+    private let eventDeliveryHook: @Sendable (AgentEvent) async -> Void
     private var projection: ConversationProjection
     private var generation: UInt64 = 0
     private var startupTask: Task<Void, Never>?
@@ -91,8 +92,23 @@ public actor ConversationController {
         session: any ConversationSessionHandle,
         maxDisplayItems: Int = 100
     ) {
+        self.init(
+            conversationID: conversationID,
+            session: session,
+            maxDisplayItems: maxDisplayItems,
+            eventDeliveryHook: { _ in }
+        )
+    }
+
+    init(
+        conversationID: UUID = UUID(),
+        session: any ConversationSessionHandle,
+        maxDisplayItems: Int = 100,
+        eventDeliveryHook: @escaping @Sendable (AgentEvent) async -> Void
+    ) {
         self.conversationID = conversationID
         self.session = session
+        self.eventDeliveryHook = eventDeliveryHook
         let projection = ConversationProjection(conversationID: conversationID, maxItems: maxDisplayItems)
         self.projection = projection
         let mailbox = ConversationSnapshotMailbox(initial: projection.snapshot)
@@ -156,11 +172,14 @@ public actor ConversationController {
         publish()
 
         let events = run.events
-        observationTask = Task { [weak self] in
+        let eventDeliveryHook = self.eventDeliveryHook
+        let observationTask = Task { [weak self] in
             for await event in events {
+                await eventDeliveryHook(event)
                 await self?.receive(event, generation: generation, runID: run.id)
             }
         }
+        self.observationTask = observationTask
         cleanupTask = Task { [weak self] in
             let result: Result<ConversationRunResult, Error>
             do {
@@ -176,6 +195,7 @@ public actor ConversationController {
             } catch {
                 await self?.logicalCompletion(.failure(error), generation: generation, runID: run.id)
             }
+            _ = await observationTask.result
             await self?.drainCompleted(generation: generation, runID: run.id)
         }
 

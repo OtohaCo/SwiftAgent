@@ -71,34 +71,37 @@ struct ConversationControllerTests {
         #expect((await nextSnapshot(&snapshots, phase: .running)).generation == 2)
     }
 
-    @Test func oldGenerationEventsCannotRepaintANewerConversationTurn() async throws {
+    @Test func drainWaitsForBufferedTerminalEventsBeforeReleasingConversation() async throws {
         let session = ControlledSession()
-        let firstRun = ControlledRun()
-        let secondRun = ControlledRun()
-        let controller = ConversationController(session: session)
+        let run = ControlledRun()
+        let deliveryGate = EventDeliveryGate()
+        let controller = ConversationController(
+            session: session,
+            eventDeliveryHook: { event in
+                if case .model(.textDelta("Final answer")) = event {
+                    await deliveryGate.pause()
+                }
+            }
+        )
         var snapshots = controller.snapshots.makeAsyncIterator()
         _ = await snapshots.next()
 
-        _ = try await controller.send("First")
+        _ = try await controller.send("Question")
         _ = await session.nextStartedText()
-        await session.resolveNext(with: firstRun.handle)
+        await session.resolveNext(with: run.handle)
         _ = await nextSnapshot(&snapshots, phase: .running)
-        await firstRun.finishCompleted(text: "First answer", closeEvents: false)
-        await firstRun.releaseDrain()
-        _ = await nextSnapshot(&snapshots, phase: .idle)
+        await run.finishCompleted(text: "Final answer", closeEvents: true)
+        await run.releaseDrain()
+        await deliveryGate.waitUntilPaused()
 
-        _ = try await controller.send("Second")
-        _ = await session.nextStartedText()
-        await session.resolveNext(with: secondRun.handle)
-        _ = await nextSnapshot(&snapshots, phase: .running)
-        await secondRun.emitText("Current answer")
-        _ = await nextSnapshotContaining(&snapshots, text: "Current answer")
-        await firstRun.emitText("STALE")
+        #expect(await controller.snapshot().phase == .draining)
+        await #expect(throws: ConversationControllerError.runInProgress) {
+            try await controller.send("Too early")
+        }
 
-        let snapshot = await controller.snapshot()
-        let text = snapshot.items.compactMap(\.assistant).map(\.text).joined(separator: " ")
-        #expect(text.contains("Current answer"))
-        #expect(!text.contains("STALE"))
+        await deliveryGate.resume()
+        let idle = await nextSnapshot(&snapshots, phase: .idle)
+        #expect(idle.items.compactMap(\.assistant).contains { $0.text == "Final answer" })
     }
 
     @Test func failureRemainsVisibleWhilePhysicalDrainContinues() async throws {
@@ -120,6 +123,30 @@ struct ConversationControllerTests {
         await run.releaseDrain()
         let idle = await nextSnapshot(&snapshots, phase: .idle)
         #expect(idle.terminal == .failed(failure))
+    }
+}
+
+private actor EventDeliveryGate {
+    private var paused = false
+    private var pauseWaiters = [CheckedContinuation<Void, Never>]()
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+    func pause() async {
+        paused = true
+        let waiters = pauseWaiters
+        pauseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { resumeContinuation = $0 }
+    }
+
+    func waitUntilPaused() async {
+        if paused { return }
+        await withCheckedContinuation { pauseWaiters.append($0) }
+    }
+
+    func resume() {
+        resumeContinuation?.resume()
+        resumeContinuation = nil
     }
 }
 
@@ -252,19 +279,6 @@ private func nextSnapshot(
         if snapshot.phase == phase { return snapshot }
     }
     Issue.record("Snapshot stream ended before phase \(phase)")
-    return .init(conversationID: UUID())
-}
-
-private func nextSnapshotContaining(
-    _ iterator: inout AsyncStream<ConversationSnapshot>.Iterator,
-    text: String
-) async -> ConversationSnapshot {
-    while let snapshot = await iterator.next() {
-        if snapshot.items.compactMap(\.assistant).contains(where: { $0.text.contains(text) }) {
-            return snapshot
-        }
-    }
-    Issue.record("Snapshot stream ended before text \(text)")
     return .init(conversationID: UUID())
 }
 
