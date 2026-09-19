@@ -6,30 +6,49 @@ import SwiftUI
 struct ChatConversation: Identifiable, Equatable {
     let id: UUID
     let route: FixtureConversationRoute
+    let modeLabel: String
+    let providerLabel: String
+    let modelLabel: String
     var title: String
     var snapshot: ConversationSnapshot
     var inputError: String?
 
     var routeTitle: String {
+        if modeLabel == "LIVE" { return "\(providerLabel) · LIVE" }
         switch route {
-        case .direct: "Streaming"
-        case .validated: "Validated"
+        case .direct: return "Streaming"
+        case .validated: return "Validated"
         }
     }
+
+    var isLive: Bool { modeLabel == "LIVE" }
 }
 
 @MainActor
 final class AppleChatAppModel: ObservableObject {
     @Published private(set) var conversations: [ChatConversation] = []
+    @Published private(set) var launchError: String?
 
     private var controllers: [UUID: ConversationController] = [:]
     private var observers: [UUID: Task<Void, Never>] = [:]
+    private let launchConfiguration: AppleChatLaunchConfiguration?
 
-    init() {
-        let initialRoute: FixtureConversationRoute = CommandLine.arguments.contains("--validated")
-            ? .validated
-            : .direct
-        createConversation(route: initialRoute)
+    var isLive: Bool { launchConfiguration?.isLive == true }
+
+    init(
+        arguments: [String] = Array(CommandLine.arguments.dropFirst()),
+        process: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        do {
+            let configuration = try AppleChatLaunchConfiguration.resolve(arguments: arguments, process: process)
+            launchConfiguration = configuration
+            launchError = nil
+            let initialRoute: FixtureConversationRoute = arguments.contains("--validated") ? .validated : .direct
+            createConversation(route: initialRoute)
+        } catch {
+            launchConfiguration = nil
+            launchError = "The selected provider configuration is unavailable. Check the local preflight and try again."
+        }
     }
 
     deinit {
@@ -40,22 +59,42 @@ final class AppleChatAppModel: ObservableObject {
     func createConversation(route: FixtureConversationRoute) -> UUID? {
         do {
             let id = UUID()
-            let controller = try makeFixtureConversationController(
-                conversationID: id,
-                route: route,
-                pacing: .visible
-            )
+            let controller: ConversationController
+            let modeLabel: String
+            let providerLabel: String
+            let modelLabel: String
+            if let launchConfiguration, launchConfiguration.isLive {
+                controller = try launchConfiguration.makeController(conversationID: id)
+                modeLabel = launchConfiguration.modeLabel
+                providerLabel = launchConfiguration.providerLabel
+                modelLabel = launchConfiguration.modelLabel
+            } else {
+                controller = try makeFixtureConversationController(
+                    conversationID: id,
+                    route: route,
+                    pacing: .visible
+                )
+                modeLabel = "FIXTURE"
+                providerLabel = "Local fixture"
+                modelLabel = route == .direct ? "streaming" : "validated"
+            }
             controllers[id] = controller
             conversations.insert(.init(
                 id: id,
                 route: route,
-                title: route == .direct ? "Streaming conversation" : "Validated conversation",
+                modeLabel: modeLabel,
+                providerLabel: providerLabel,
+                modelLabel: modelLabel,
+                title: modeLabel == "LIVE"
+                    ? "\(providerLabel) conversation"
+                    : (route == .direct ? "Streaming conversation" : "Validated conversation"),
                 snapshot: .init(conversationID: id),
                 inputError: nil
             ), at: 0)
             observe(controller, conversationID: id)
             return id
         } catch {
+            launchError = "The conversation could not be configured. Run preflight and verify the selected model."
             return nil
         }
     }

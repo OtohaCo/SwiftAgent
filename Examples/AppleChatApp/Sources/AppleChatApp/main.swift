@@ -106,13 +106,27 @@ private extension AppleChatApplicationDelegate {
         }
     }
 }
+#elseif os(iOS) && canImport(SwiftUI)
+import SwiftUI
+
+@main
+struct SwiftAgentAppleChatApp: App {
+    @StateObject private var model = AppleChatAppModel()
+
+    var body: some Scene {
+        WindowGroup {
+            AppleChatRootView()
+                .environmentObject(model)
+        }
+    }
+}
 #else
 import Foundation
 
 @main
 enum SwiftAgentAppleChatApp {
     static func main() {
-        print("AppleChatApp requires macOS with SwiftUI.")
+        print("AppleChatApp requires an Apple platform with SwiftUI.")
     }
 }
 #endif

@@ -196,7 +196,7 @@ private struct StreamingFixtureProvider: ModelProvider {
     }
 }
 
-private struct AccountLookupTool: AgentTool {
+struct AccountLookupTool: AgentTool {
     struct Input: Codable, Sendable { let id: String }
     struct Output: Codable, Sendable { let id: String; let status: String }
 

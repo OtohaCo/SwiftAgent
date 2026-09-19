@@ -18,15 +18,23 @@ struct AppleChatRootView: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
             .toolbar {
                 ToolbarItem {
-                    Menu {
-                        Button("Streaming") {
+                    if model.isLive {
+                        Button {
                             selectedConversationID = model.createConversation(route: .direct)
+                        } label: {
+                            Label("New Conversation", systemImage: "plus")
                         }
-                        Button("Validated") {
-                            selectedConversationID = model.createConversation(route: .validated)
+                    } else {
+                        Menu {
+                            Button("Streaming") {
+                                selectedConversationID = model.createConversation(route: .direct)
+                            }
+                            Button("Validated") {
+                                selectedConversationID = model.createConversation(route: .validated)
+                            }
+                        } label: {
+                            Label("New Conversation", systemImage: "plus")
                         }
-                    } label: {
-                        Label("New Conversation", systemImage: "plus")
                     }
                 }
             }
@@ -34,6 +42,8 @@ struct AppleChatRootView: View {
             if let conversation = model.conversation(selectedConversationID) {
                 ConversationDetail(conversationID: conversation.id)
                     .id(conversation.id)
+            } else if let launchError = model.launchError {
+                UnavailableProviderView(message: launchError)
             } else {
                 VStack(spacing: 12) {
                     Image(systemName: "bubble.left.and.bubble.right")
@@ -61,13 +71,33 @@ struct AppleChatRootView: View {
     }
 }
 
+private struct UnavailableProviderView: View {
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 36))
+                .foregroundStyle(.orange)
+            Text("Provider unavailable")
+                .font(.title3.weight(.semibold))
+            Text(message)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 private struct ConversationRow: View {
     let conversation: ChatConversation
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: conversation.route == .direct ? "waveform" : "checkmark.shield")
-                .foregroundStyle(conversation.route == .direct ? .blue : .green)
+                .foregroundStyle(conversation.isLive ? .orange : (conversation.route == .direct ? .blue : .green))
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 3) {
                 Text(conversation.title)
@@ -130,8 +160,8 @@ private struct ConversationHeader: View {
             .font(.subheadline.weight(.semibold))
 
             Text(conversation.route == .direct
-                 ? "Incremental output"
-                 : "Published after route validation")
+                 ? "\(conversation.modelLabel) · Incremental output"
+                 : "\(conversation.modelLabel) · Published after route validation")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -184,7 +214,7 @@ private struct EmptyConversationView: View {
             Image(systemName: "bubble.left.and.text.bubble.right")
                 .font(.system(size: 34))
                 .foregroundStyle(.secondary)
-            Text("Start a fixture conversation")
+            Text("Start a conversation")
                 .font(.title3.weight(.semibold))
             Text("Ask to look up account A-100, or use account missing to see a recoverable tool error.")
                 .foregroundStyle(.secondary)

@@ -31,5 +31,8 @@ swift test --disable-sandbox --no-parallel
 echo "external client"
 swift test --package-path Examples/ExternalClient --disable-sandbox --no-parallel
 
+echo "provider qualification example"
+swift test --package-path Examples/ProviderQualification --disable-sandbox --no-parallel
+
 echo "Apple chat integration example"
 swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel

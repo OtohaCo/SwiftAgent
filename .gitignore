@@ -3,3 +3,6 @@
 *.xcodeproj/xcuserdata/
 .DS_Store
 DerivedData/
+.env.live
+Examples/**/.env.live
+*.live-budget.json

@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v13), .iOS(.v16)],
     dependencies: [
         .package(name: "SwiftAgent", path: "../.."),
+        .package(name: "SwiftAgentProviderQualification", path: "../ProviderQualification"),
     ],
     targets: [
         .target(
@@ -15,6 +16,7 @@ let package = Package(
                 .product(name: "AgentModels", package: "SwiftAgent"),
                 .product(name: "AgentProviders", package: "SwiftAgent"),
                 .product(name: "AgentTools", package: "SwiftAgent"),
+                .product(name: "LiveProviderSupport", package: "SwiftAgentProviderQualification"),
             ]
         ),
         .executableTarget(
@@ -27,6 +29,7 @@ let package = Package(
                 "AppleChatIntegration",
                 .product(name: "AgentCore", package: "SwiftAgent"),
                 .product(name: "AgentModels", package: "SwiftAgent"),
+                .product(name: "LiveProviderSupport", package: "SwiftAgentProviderQualification"),
             ]
         ),
     ],
