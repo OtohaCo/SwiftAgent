@@ -30,8 +30,8 @@ change runtime semantics during SAI-047.
 | Linux warnings | SwiftAgent must compile on the declared Linux toolchain without unexplained package warnings | Linux exposed an unavailable test-only Sendable conformance and a deprecated URL error key | `ProviderHTTPTransportTests`, final `Scripts/ci-linux.sh` log | Test fixture portability defect | P2 RC blocker | Yes | Gate the Darwin-only conformance and use the URL-typed key | Fixed |
 | Public API inventory | Every public member needs an explicit 1.0 disposition, not only its containing type | The prior review summarized top-level types but did not enumerate every member | `2026-09-19-swift-agent-public-api-members.md`, generated symbol graphs | Member-level audit evidence gap | P2 RC blocker | Yes | Inventory all 956 symbols with module, kind, source location, precise identifier, and disposition | Fixed |
 | Tingting host seal | The embedded SDK must not leave its current product host red or hung | SAI-048 repaired stale source contracts and isolated AppKit/SwiftUI window fixtures from persisted drawer state and host Keychain access | `DrawerChromeTests`, `FirstRunGuideExperienceTests`, final `Tingting SK` full-suite log | Host release seal is green; no SwiftAgent production source changed | P2 RC blocker | Yes | Keep window tests deterministic and fail closed in the XCTest license host | Fixed |
-| Hosted CI | A published RC needs independent macOS/Linux CI outside the Tingting checkout | `SwiftAgent CI` now has explicit macOS 27/Swift 6.4 and Ubuntu 24.04 platform jobs, a separate Apple adapter job, metadata, timeouts, ExternalClient coverage, and a concurrency seal that fails if its 11 resource or 3 completion tests are not discovered; local equivalents pass, but hosted jobs still receive no runner execution | SAI-041; post-change run `35408577928` created all three jobs with zero steps and the same account payment/spending-limit annotation | Release infrastructure evidence is blocked externally, not complete | P2 RC blocker | Yes | Restore GitHub billing, run all three hosted jobs, and audit counts/skips before an RC tag | Open / blocked |
-| Repository release preparation | A public RC needs a repository URL, confirmed license imprint, valid install links, changelog, and tag workflow | Extraction plan exists; repository and release metadata are intentionally not created in this task | `docs/extraction.md`, `docs/releases/1.0-rc-checklist.md` | Release mechanics remain incomplete | P2 RC blocker | Yes | SAI-049 owns extraction and release preparation | Open |
+| Hosted CI | A published RC needs independent macOS/Linux CI outside the Tingting checkout | `SwiftAgent CI` executes explicit macOS 27/Swift 6.4, Ubuntu 24.04/Swift 6.4, and Apple adapter jobs with metadata, timeouts, ExternalClient coverage, and a fail-closed 11-test plus 3-test concurrency seal | SAI-041; `OtohaPlayer/SwiftAgent` run `35410345928`; all three jobs used non-zero runner IDs and completed successfully | The final repository supplies independent hosted evidence without relying on the blocked Tingting account | P2 RC blocker | Yes | Preserve the workflow and audit counts/skips before each RC tag | Fixed |
+| Repository release preparation | An RC needs a canonical repository URL, confirmed license imprint, valid install links, changelog, and tag workflow | `OtohaPlayer/SwiftAgent` is extracted with history; README, MIT license, changelog, release notes, provenance, clean-clone validation, and CI are complete | `docs/extraction.md`, `docs/releases/1.0-rc-checklist.md`, clean remote clone and install smoke | Release preparation is complete; tag and GitHub Release remain intentionally authorization-gated | P2 RC blocker | Yes | Await explicit authorization before creating `1.0.0-rc.1` | Fixed |
 | Workspace adapter | Optional host adapters must not become Core dependencies | `WorkspaceAgent` is a separate product depending on Core, Providers, Tools, Models, and Crypto | `Package.swift`, architecture tests | No dependency inversion; its API is optional/reference-host surface | Not an issue | No | Classify as optional/experimental adapter in release docs | Accepted |
 | Swift tools version | Declared compiler contract must match tested behavior | Manifest uses tools version 6.0 and Swift language mode 6; validation uses Swift 6.4 | `Package.swift`, CI scripts | Tools version is the manifest syntax floor, not a claim of full 6.0 validation | Not an issue | No | Document Swift 6.4 as the validated compiler | Accepted |
 | Synthetic summary | Compaction summaries must not masquerade as semantic user input | Internal wire representation is a `.user` message with one internal prefix | `AgentContextWindow`, context tests | Implementation is portable but third parties must not parse the prefix | P3 | No | Freeze as a private 1.0 implementation detail | Accepted |
@@ -39,9 +39,8 @@ change runtime semantics during SAI-047.
 | Frozen historical fixtures | Backward compatibility should be proven against bytes produced by released historical encoders | Current v1/v2 regressions construct legacy-shaped records with the current test encoder | `AgentJournalTests`, SAI-050 | No checked-in golden v1/v2 journal byte fixtures | P3 | No | Add provenance-recorded immutable v1/v2 fixtures without changing current compatibility semantics | Open |
 | Test wait observers | Test-only exact-count observers should not leak when abandoned | Resource coordinator package hook stores non-cancellable observers | `ToolResourceCoordinator.waitUntilPendingWaiterCountEquals` | Abandoned test observers can remain until coordinator release | P3 | No | Replace with tokenized test instrumentation post-RC | Open |
 
-Finding totals: P0 0; P1 1 fixed / 0 open; P2 RC blocker 15 fixed / 2
-open; P2 post-RC 1; P3 5; Not an issue 2. The two open RC blockers
-are release/host evidence gaps, not open SwiftAgent Core semantic defects.
+Finding totals: P0 0; P1 1 fixed / 0 open; P2 RC blocker 17 fixed / 0
+open; P2 post-RC 1; P3 5; Not an issue 2.
 
 ## Package boundary
 
@@ -127,8 +126,8 @@ for enum expansion before the 1.0 freeze.
 
 ## Backlog judgment
 
-- SAI-041 is release infrastructure work, not a Core correctness contract. A
-  published RC still requires an independent hosted CI result.
+- SAI-041 is complete. The independent repository provides the required hosted
+  macOS, Linux, Apple adapter, ExternalClient, and concurrency evidence.
 - SAI-045 is not an RC blocker; Hosts can await the active Run and start the
   next user turn explicitly.
 - SAI-046 is not an RC blocker; indefinite retention is the conservative safety
@@ -157,15 +156,14 @@ for enum expansion before the 1.0 freeze.
 - Ubuntu 24.04 / Swift 6.4.2-dev `Scripts/ci-linux.sh` passed. Core target
   isolation passed, 124 XCTest cases and 334 Swift Testing cases passed, and
   final logs contain no SwiftAgent warning.
-- SAI-041 local hosted-CI equivalents passed on macOS 27.0 / Xcode 27.0 /
-  Apple Swift 6.4 and a clean Ubuntu 24.04.5 container / Swift 6.4 release.
-  macOS passed 124 XCTest cases and 340 Swift Testing cases with only three
-  documented live-provider skips; Linux passed 124 XCTest cases and 334 Swift
-  Testing cases with only the Anthropic real-cloud skip. The explicit macOS
-  concurrency seal passed `ToolResourceCoordinatorTests` 11/11 and
-  `AgentCompletionCommitTests` 3/3 without skips. Hosted evidence remains open:
-  GitHub run `35408577928` stopped all jobs before runner allocation because of
-  account payment/spending limits.
+- Independent hosted run `35410345928` passed on macOS 27.0 / Xcode 27.0 /
+  Apple Swift 6.4 and Ubuntu 24.04.5 / Swift 6.4. macOS passed 124 XCTest cases
+  and 340 Swift Testing cases with only three documented live-provider skips;
+  Linux passed 124 XCTest cases and 334 Swift Testing cases with only the
+  Anthropic real-cloud skip. ExternalClient passed 6/6 on both platforms. The
+  explicit macOS concurrency seal passed `ToolResourceCoordinatorTests` 11/11
+  and `AgentCompletionCommitTests` 3/3 without skips. The Apple adapter job
+  passed 14 fixture/unit tests with its two live-model tests skipped by policy.
 - ExternalClient: 6/6 passed on macOS and Linux using public API only.
 - Otoha focused seal: 4/4 passed. iOS Simulator `Tingting-iOS` build passed.
 - SAI-048 macOS `Tingting SK` host seal passed: 2850 tests executed, 22
@@ -173,15 +171,15 @@ for enum expansion before the 1.0 freeze.
   The original Preferences runtime regression now completes in 0.25 seconds
   under the same 30-second external guard.
 - Local Markdown links pass. SwiftAgent production sources contain no Tingting
-  or Otoha dependency. The MIT license exists, but the final copyright imprint
-  still requires owner confirmation during SAI-049.
+  or Otoha dependency. The MIT license is confirmed as
+  `Copyright (c) 2026 ChainBow Co., Ltd.`. A clean remote clone passed macOS,
+  Linux, Apple adapter, ExternalClient, concurrency, and authenticated HTTPS
+  SwiftPM installation validation.
 
 ## Verdict
 
-`NOT READY FOR RC`.
+`READY FOR 1.0.0-rc.1`.
 
-SwiftAgent Core has zero remaining P0, P1, or Core-semantic P2 RC blockers, and
-is ready to enter release preparation. An actual `1.0.0-rc.1` tag is blocked by
-independent hosted CI (SAI-041) and repository plus release metadata preparation
-(SAI-049). SAI-045 and SAI-046 remain
-post-RC work and do not weaken current correctness contracts.
+SwiftAgent has zero open P0, P1, or P2 RC blockers. SAI-045, SAI-046, and
+SAI-050 remain post-RC work and do not weaken current correctness contracts.
+Creating the tag and GitHub Release requires explicit release authorization.

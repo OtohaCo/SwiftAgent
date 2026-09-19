@@ -20,6 +20,7 @@ The package, repository, and module family name are frozen as **SwiftAgent**.
 - Source SHA: `9d96070c5b362be56145e3f1701e75c737f0f880`
 - Method: `git subtree split --prefix=SwiftAgent <source-sha>`
 - First extracted SHA: `e6c51f3b8b6d038c96dbc501fb86cea05bd6d180`
+- Repository preparation baseline: `399242dcd7ae1f5c3cfc3eac2567691fdbbf8f82`
 - First independent branch: `main`
 
 The subtree split retains SwiftAgent-related authors, timestamps, and commit
@@ -65,6 +66,16 @@ WorkspaceAgent. AgentCore does not depend on it.
 The concurrency seal first checks `swift test list` for 11
 `ToolResourceCoordinatorTests` and 3 `AgentCompletionCommitTests`, preventing a
 zero-match `swift test --filter` invocation from producing a false green result.
+
+Hosted run `35410345928` executed all three jobs on real GitHub-hosted runners:
+macOS and Apple used macOS 27.0 / Xcode 27.0 / Apple Swift 6.4, and Linux used
+Ubuntu 24.04.5 / Swift 6.4. All jobs passed. The macOS concurrency seal executed
+11 resource-coordinator tests and 3 completion-commit tests without skips.
+
+The repository remains private during RC preparation. An authenticated SwiftPM
+consumer resolved and built the documented HTTPS `main` dependency. Anonymous
+HTTPS resolution is expected to work only after the owner makes the repository
+public.
 
 ## Tingting Overlap
 
