@@ -18,6 +18,10 @@ additions and behavior changes will be recorded here before that release is cut.
 
 - Add an explicit Apple Private Cloud Compute backend for macOS and iOS 27,
   while keeping SwiftAgent Core as the sole tool execution authority.
+- Add an OpenAI Responses API adapter with typed SSE streaming, host-executed
+  function calls, structured output, encrypted reasoning continuation,
+  normalized usage, explicit model-alias identity, classified stream failures,
+  and stateless canonical conversation replay.
 
 ## [1.0.0-rc.1] - 2026-09-19
 

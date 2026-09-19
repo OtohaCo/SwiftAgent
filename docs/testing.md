@@ -10,7 +10,10 @@ swift test --package-path SwiftAgent/ExternalClient
 bash Scripts/ci-linux.sh
 ```
 
-Do not treat skipped live tests as passes. Anthropic live and Apple on-device live tests are env-gated.
+Do not treat skipped live tests as passes. Anthropic, OpenAI, and Apple live
+tests are env-gated. OpenAI live coverage requires
+`SWIFT_AGENT_OPENAI_LIVE=1`, `OPENAI_API_KEY`, and `OPENAI_MODEL`; alias users
+also provide `OPENAI_RESOLVED_MODEL` when the API reports a dated snapshot.
 
 ## What a Core test must prove
 

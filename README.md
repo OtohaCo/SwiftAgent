@@ -231,7 +231,7 @@ waiter does not cancel the Session-owned drain.
 ## Provider Model
 
 `ModelProvider` is the provider-neutral request and event contract.
-`AgentProviders` supplies Anthropic transport and validated routing;
+`AgentProviders` supplies Anthropic and OpenAI Responses transports plus validated routing;
 `AgentAppleProvider` is an optional Apple Foundation Models adapter. Provider
 continuations are opaque and provider-specific, not conversation memory or
 portable trusted state.
@@ -388,3 +388,6 @@ the on-device planning adapter, execution boundary and opt-in live verification.
 
 [Anthropic Messages](docs/guides/swift-agent-anthropic-provider.md) covers cloud
 streaming, signed continuation, structured answers and opt-in gateway verification.
+
+[OpenAI Responses](docs/guides/swift-agent-openai-provider.md) covers stateless
+conversation replay, function calls, structured output, reasoning, and usage.
