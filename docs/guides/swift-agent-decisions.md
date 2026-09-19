@@ -1,6 +1,6 @@
 # SwiftAgent Decision Providers
 
-last-verified: 2026-09-20
+last-verified: 2026-09-19
 
 Decision providers answer typed questions about supplied state. They are not
 language-model conversation providers and they do not run SwiftAgent tools.

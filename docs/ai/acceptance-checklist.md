@@ -1,6 +1,6 @@
 # Accepting an AI-written SwiftAgent integration
 
-last-verified: 2026-09-20
+last-verified: 2026-09-19
 
 This is an acceptance checklist, not a report that the checks have run.
 Use [the integration guide](start-here.md) and record the actual dependency SHA.

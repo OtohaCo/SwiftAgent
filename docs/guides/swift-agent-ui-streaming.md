@@ -1,6 +1,6 @@
 # Rendering Agent events in a UI
 
-last-verified: 2026-09-20
+last-verified: 2026-09-19
 
 Scope: consumers of `AgentRun.events`, not implementers of a vendor SSE decoder.
 See [the integration baseline](../ai/start-here.md) and

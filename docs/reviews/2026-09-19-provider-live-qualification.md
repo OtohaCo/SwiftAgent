@@ -1,6 +1,6 @@
 # Provider Live Qualification
 
-last-verified: 2026-09-20
+last-verified: 2026-09-19
 
 ## Scope and revisions
 

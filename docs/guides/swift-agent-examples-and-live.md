@@ -1,6 +1,6 @@
 # Examples, credentials and live qualification
 
-last-verified: 2026-09-20
+last-verified: 2026-09-19
 
 Executable-example baseline: `c17adeb86f5ea086e9ac9f2d454a41fbe7f85455`.
 Run these commands from the SwiftAgent repository root. In a parent repository
