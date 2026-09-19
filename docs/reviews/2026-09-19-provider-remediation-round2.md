@@ -183,5 +183,6 @@ native metadata replayed by the next request.
   native-item replay shape described in the independent follow-up review.
 - Legacy continuation payloads remain readable but have only the ordering
   evidence present when they were written.
-- `DeepSeekReasoningEffort` is a closed public enum. Adding future vendor values
-  is source-breaking for exhaustive client switches.
+- At this review's candidate, `DeepSeekReasoningEffort` was a closed public
+  enum. SAI-061 later converted it to an extensible raw-value structure before
+  the rc.2 freeze; see the RC.2 full audit.

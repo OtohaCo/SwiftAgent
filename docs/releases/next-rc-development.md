@@ -17,11 +17,11 @@ policy, Evidence, mutation admission, Receipt validation, or Journal settlement.
 Every new public symbol must have a documented cross-vendor purpose and a clear
 stability rationale. Vendor wire formats remain internal to their adapters.
 
-The current audited graph contains 1,013 public member symbols and 105 public
-top-level types. Relative to `1.0.0-rc.1`, the exact symbol diff is 57 additions
+The current audited graph contains 1,156 public member symbols and 121 public
+top-level types. Relative to `1.0.0-rc.1`, the exact symbol diff is 200 additions
 and zero removals. The additions cover OpenAI Responses, DeepSeek Responses,
-Anthropic alias mapping, and Apple Private Cloud Compute. This is development
-inventory, not a release claim.
+Anthropic alias mapping, Apple Private Cloud Compute, AgentDecisions, and the
+Jev adapter. This is development inventory, not a release claim.
 
 ## Release Gate
 

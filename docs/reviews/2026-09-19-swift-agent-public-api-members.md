@@ -4,11 +4,12 @@ last-verified: 2026-09-19
 
 Generated from Swift 6.4 public symbol graphs on `plan/swift-agent-rc2`. The published `1.0.0-rc.1` baseline is `d2347f11c6a78f421708e897dae42a51a98d37ea`; the current audited branch adds provider and decision surface without removing a published symbol. Package and internal symbols are intentionally absent.
 
-All 1,151 currently public symbols are `KEEP`. Compared with `1.0.0-rc.1`,
-the exact precise-identifier diff is 195 additions and 0 removals. The 138
+All 1,156 currently public symbols are `KEEP`. Compared with `1.0.0-rc.1`,
+the exact precise-identifier diff is 200 additions and 0 removals. The 138
 SAI-055 additions are enumerated in the
 [Decision/Jev annex](2026-09-19-sai-055-public-api-additions.md); the table below
-retains the previous 1,013-symbol inventory. The additions are optional for
+contains the 1,018-symbol non-Decision inventory after the RC.2 remediation.
+The additions are optional for
 clients that do not adopt them; public enum expansion remains source-breaking
 for exhaustive switches as documented in the versioning guide.
 
@@ -19,10 +20,10 @@ for exhaustive switches as documented in the versioning guide.
 | AgentDecisions | 0 | 131 | +131 |
 | AgentJevProvider | 0 | 7 | +7 |
 | AgentModels | 260 | 260 | +0 |
-| AgentProviders | 41 | 96 | +55 |
+| AgentProviders | 41 | 101 | +60 |
 | AgentTools | 311 | 311 | +0 |
 | WorkspaceAgent | 56 | 56 | +0 |
-| **Total** | **956** | **1151** | **+195** |
+| **Total** | **956** | **1156** | **+200** |
 
 Top-level public types: **121** current, **100** in rc.1.
 
@@ -34,8 +35,8 @@ The first post-rc.1 provider round added five top-level public types:
 vendor-neutral decision types plus `JevDecisionProvider`; their exact members
 are in the linked annex. Other provider additions are synthesized conformances,
 the Anthropic alias-aware initializer, and Apple Private Cloud Compute members.
-`DeepSeekReasoningEffort` remains a closed enum; adding a future case is
-source-breaking for exhaustive client switches.
+`DeepSeekReasoningEffort` is an extensible validated raw-value structure; new
+non-empty provider values do not require a public enum expansion.
 
 | Module | Kind | Symbol path | Source | Precise identifier | Decision |
 | --- | --- | --- | --- | --- | --- |
@@ -602,17 +603,22 @@ source-breaking for exhaustive client switches.
 | AgentProviders | Case | `AnthropicThinking.adaptive` | `Sources/AgentProviders/AnthropicProvider.swift:9` | `s:14AgentProviders17AnthropicThinkingO8adaptiveyA2CmF` | KEEP |
 | AgentProviders | Case | `AnthropicThinking.disabled` | `Sources/AgentProviders/AnthropicProvider.swift:8` | `s:14AgentProviders17AnthropicThinkingO8disabledyA2CmF` | KEEP |
 | AgentProviders | Case | `AnthropicThinking.enabled(budgetTokens:)` | `Sources/AgentProviders/AnthropicProvider.swift:10` | `s:14AgentProviders17AnthropicThinkingO7enabledyACSi_tcACmF` | KEEP |
-| AgentProviders | Enumeration | `DeepSeekReasoningEffort` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:8` | `s:14AgentProviders23DeepSeekReasoningEffortO` | KEEP |
-| AgentProviders | Operator | `DeepSeekReasoningEffort.!=(_:_:)` | `-` | `s:SQsRi_zRi0_zrlE2neoiySbx_xtFZ::SYNTHESIZED::s:14AgentProviders23DeepSeekReasoningEffortO` | KEEP |
-| AgentProviders | Instance Method | `DeepSeekReasoningEffort.encode(to:)` | `-` | `s:SYsSERzSS8RawValueSYRtzrlE6encode2toys7Encoder_p_tKF::SYNTHESIZED::s:14AgentProviders23DeepSeekReasoningEffortO` | KEEP |
-| AgentProviders | Instance Method | `DeepSeekReasoningEffort.hash(into:)` | `-` | `s:SYsSHRzSH8RawValueSYRpzrlE4hash4intoys6HasherVz_tF::SYNTHESIZED::s:14AgentProviders23DeepSeekReasoningEffortO` | KEEP |
-| AgentProviders | Instance Property | `DeepSeekReasoningEffort.hashValue` | `-` | `s:SYsSHRzSH8RawValueSYRpzrlE04hashB0Sivp::SYNTHESIZED::s:14AgentProviders23DeepSeekReasoningEffortO` | KEEP |
-| AgentProviders | Case | `DeepSeekReasoningEffort.high` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:11` | `s:14AgentProviders23DeepSeekReasoningEffortO4highyA2CmF` | KEEP |
-| AgentProviders | Initializer | `DeepSeekReasoningEffort.init(from:)` | `-` | `s:SYsSeRzSS8RawValueSYRtzrlE4fromxs7Decoder_p_tKcfc::SYNTHESIZED::s:14AgentProviders23DeepSeekReasoningEffortO` | KEEP |
-| AgentProviders | Initializer | `DeepSeekReasoningEffort.init(rawValue:)` | `-` | `s:14AgentProviders23DeepSeekReasoningEffortO8rawValueACSgSS_tcfc` | KEEP |
-| AgentProviders | Case | `DeepSeekReasoningEffort.low` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:10` | `s:14AgentProviders23DeepSeekReasoningEffortO3lowyA2CmF` | KEEP |
-| AgentProviders | Case | `DeepSeekReasoningEffort.max` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:12` | `s:14AgentProviders23DeepSeekReasoningEffortO3maxyA2CmF` | KEEP |
-| AgentProviders | Case | `DeepSeekReasoningEffort.none` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:9` | `s:14AgentProviders23DeepSeekReasoningEffortO4noneyA2CmF` | KEEP |
+| AgentProviders | Structure | `DeepSeekReasoningEffort` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:8` | `s:14AgentProviders23DeepSeekReasoningEffortV` | KEEP |
+| AgentProviders | Initializer | `DeepSeekReasoningEffort.init(from:)` | `-` | `s:SYsSeRzSS8RawValueSYRtzrlE4fromxs7Decoder_p_tKcfc::SYNTHESIZED::s:14AgentProviders23DeepSeekReasoningEffortV` | KEEP |
+| AgentProviders | Instance Property | `DeepSeekReasoningEffort.hashValue` | `-` | `s:SYsSHRzSH8RawValueSYRpzrlE04hashB0Sivp::SYNTHESIZED::s:14AgentProviders23DeepSeekReasoningEffortV` | KEEP |
+| AgentProviders | Instance Method | `DeepSeekReasoningEffort.hash(into:)` | `-` | `s:SYsSHRzSH8RawValueSYRpzrlE4hash4intoys6HasherVz_tF::SYNTHESIZED::s:14AgentProviders23DeepSeekReasoningEffortV` | KEEP |
+| AgentProviders | Operator | `DeepSeekReasoningEffort.!=(_:_:)` | `-` | `s:SQsRi_zRi0_zrlE2neoiySbx_xtFZ::SYNTHESIZED::s:14AgentProviders23DeepSeekReasoningEffortV` | KEEP |
+| AgentProviders | Instance Property | `DeepSeekReasoningEffort.rawValue` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:9` | `s:14AgentProviders23DeepSeekReasoningEffortV8rawValueSSvp` | KEEP |
+| AgentProviders | Initializer | `DeepSeekReasoningEffort.init(rawValue:)` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:10` | `s:14AgentProviders23DeepSeekReasoningEffortV8rawValueACSS_tcfc` | KEEP |
+| AgentProviders | Type Property | `DeepSeekReasoningEffort.none` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:12` | `s:14AgentProviders23DeepSeekReasoningEffortV4noneACvpZ` | KEEP |
+| AgentProviders | Type Property | `DeepSeekReasoningEffort.minimal` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:13` | `s:14AgentProviders23DeepSeekReasoningEffortV7minimalACvpZ` | KEEP |
+| AgentProviders | Type Property | `DeepSeekReasoningEffort.low` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:14` | `s:14AgentProviders23DeepSeekReasoningEffortV3lowACvpZ` | KEEP |
+| AgentProviders | Type Property | `DeepSeekReasoningEffort.medium` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:15` | `s:14AgentProviders23DeepSeekReasoningEffortV6mediumACvpZ` | KEEP |
+| AgentProviders | Type Property | `DeepSeekReasoningEffort.high` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:16` | `s:14AgentProviders23DeepSeekReasoningEffortV4highACvpZ` | KEEP |
+| AgentProviders | Type Property | `DeepSeekReasoningEffort.xhigh` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:17` | `s:14AgentProviders23DeepSeekReasoningEffortV5xhighACvpZ` | KEEP |
+| AgentProviders | Type Property | `DeepSeekReasoningEffort.max` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:18` | `s:14AgentProviders23DeepSeekReasoningEffortV3maxACvpZ` | KEEP |
+| AgentProviders | Initializer | `DeepSeekReasoningEffort.init(from:)` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:20` | `s:14AgentProviders23DeepSeekReasoningEffortV4fromACs7Decoder_p_tKcfc` | KEEP |
+| AgentProviders | Instance Method | `DeepSeekReasoningEffort.encode(to:)` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:24` | `s:14AgentProviders23DeepSeekReasoningEffortV6encode2toys7Encoder_p_tKF` | KEEP |
 | AgentProviders | Structure | `DeepSeekResponsesProvider` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:17` | `s:14AgentProviders25DeepSeekResponsesProviderV` | KEEP |
 | AgentProviders | Instance Property | `DeepSeekResponsesProvider.customMirror` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:32` | `s:14AgentProviders25DeepSeekResponsesProviderV12customMirrors0H0Vvp` | KEEP |
 | AgentProviders | Instance Property | `DeepSeekResponsesProvider.debugDescription` | `Sources/AgentProviders/DeepSeekResponsesProvider.swift:31` | `s:14AgentProviders25DeepSeekResponsesProviderV16debugDescriptionSSvp` | KEEP |

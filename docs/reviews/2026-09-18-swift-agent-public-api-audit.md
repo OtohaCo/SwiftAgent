@@ -24,8 +24,8 @@ surface even though it ships in this package.
 Counts are types (struct/enum/protocol/actor/class), not every property. Members
 follow the type decision unless noted. SAI-047 separately generated and
 reviewed the complete 956-symbol `1.0.0-rc.1` public member graph. The current
-post-rc.1 branch has 1,151 public member symbols and 121 public top-level types:
-195 precise identifiers were added and none removed. See
+post-rc.1 branch has 1,156 public member symbols and 121 public top-level types:
+200 precise identifiers were added and none removed. See
 [the generated member inventory](2026-09-19-swift-agent-public-api-members.md)
 and the [SAI-055 addition annex](2026-09-19-sai-055-public-api-additions.md).
 Every current member is KEEP, with NARROW/REMOVE already absent from the public
@@ -136,7 +136,7 @@ readable and not assignable.
 | --- | --- | --- | --- | --- |
 | AnthropicProvider / AnthropicThinking | public | KEEP | Optional cloud adapter | No |
 | OpenAIResponsesProvider / OpenAIReasoningEffort / OpenAIReasoningSummary | public | KEEP | Stateless Responses adapter and extensible vendor reasoning values | Additive types |
-| DeepSeekResponsesProvider / DeepSeekReasoningEffort | public | KEEP | Independent stateless Responses adapter with explicit validated effort values | Additive types; future enum case would be source-breaking |
+| DeepSeekResponsesProvider / DeepSeekReasoningEffort | public | KEEP | Independent stateless Responses adapter with an extensible validated effort value | Additive types; future wire values do not require enum expansion |
 | ModelProviderRoute / fallback policy types | public | KEEP | Validated fallback among adapters sharing one provider namespace | `candidateProviderIDMismatch` is a 1.0-pre enum expansion |
 | ProviderHTTPTransport / URLSessionProviderHTTPTransport / ProviderHTTPEvent | public | KEEP | Custom transports and deterministic fixtures without linking Apple | No |
 | AppleFoundationProvider | public | KEEP | Isolated in its own target because of FoundationModels; additive on-device/PCC factories and model IDs | Additive members |
@@ -391,11 +391,12 @@ record semantics survive canonical rewrite, valid v2 session-scoped identity
 collisions load conservatively, and all new v3 admissions retain journal-wide
 identity scope.
 
-## Post-rc.1 provider additions
+## Initial post-rc.1 provider additions
 
 The published `1.0.0-rc.1` graph contains 956 public member symbols and 100
-public top-level types. The current branch contains 1,013 and 105 respectively.
-The exact precise-identifier comparison reports 57 additions and zero removals.
+public top-level types. The first provider-only audit contained 1,013 and 105
+respectively, with 57 additions and zero removals. The later Decision/Jev and
+RC.2 remediation totals are recorded in the Summary above.
 The five new top-level types are:
 
 1. `OpenAIReasoningEffort`
@@ -404,10 +405,9 @@ The five new top-level types are:
 4. `DeepSeekReasoningEffort`
 5. `DeepSeekResponsesProvider`
 
-OpenAI reasoning values are extensible raw-value structs so newer vendor wire
-values do not require an enum expansion. DeepSeek reasoning effort is a closed
-enum for the currently validated vocabulary. Adding a new case later is a
-source break for exhaustive client switches and must be treated accordingly.
+OpenAI reasoning values were already extensible raw-value structs. The RC.2
+audit converted DeepSeek reasoning effort to the same extensible pattern before
+freeze, avoiding a future exhaustive-switch source break.
 
 The remaining additions are provider members and synthesized conformances, the
 Anthropic alias-aware initializer, and Apple Private Cloud Compute members. No
