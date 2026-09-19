@@ -223,6 +223,58 @@ struct DeepSeekResponsesProviderTests {
         await expectUnsupportedStream(hosted)
     }
 
+    @Test func malformedEventReportsOnlyTheSafeEventType() async throws {
+        let body = providerNamedSSE([
+            ("response.created", #"{"type":"response.created","response":{"id":"r","model":"deepseek-flash","status":"in_progress"}}"#),
+            ("response.output_text.delta", #"{"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"private-item","delta":"private-response-text"}"#),
+        ])
+        do {
+            let provider = try DeepSeekResponsesProvider(
+                apiKey: "key",
+                transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [body])
+            )
+            for try await _ in provider.stream(request: .init(
+                model: .init(provider: "deepseek", name: "deepseek-flash"),
+                messages: [.user([.text("Hi")])]
+            )) {}
+            Issue.record("Expected invalid response")
+        } catch let error as ModelProviderError {
+            #expect(error.kind == .invalidResponse)
+            #expect(error.message == "Invalid DeepSeek event 'response.output_text.delta'.")
+            #expect(!error.message.contains("private-item"))
+            #expect(!error.message.contains("private-response-text"))
+        }
+    }
+
+    @Test func completedSnapshotMismatchReportsOnlyTheValidationStage() async throws {
+        let body = providerNamedSSE([
+            ("response.created", #"{"type":"response.created","response":{"id":"r","model":"deepseek-flash","status":"in_progress"}}"#),
+            ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"m","type":"message","role":"assistant","status":"in_progress","content":[]}}"#),
+            ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"m","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}"#),
+            ("response.output_text.delta", #"{"type":"response.output_text.delta","item_id":"m","output_index":0,"content_index":0,"delta":"Hello"}"#),
+            ("response.output_text.done", #"{"type":"response.output_text.done","item_id":"m","output_index":0,"content_index":0,"text":"Hello"}"#),
+            ("response.content_part.done", #"{"type":"response.content_part.done","item_id":"m","output_index":0,"content_index":0,"part":{"type":"output_text","text":"Hello"}}"#),
+            ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"m","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Hello"}]}}"#),
+            ("response.completed", #"{"type":"response.completed","response":{"id":"r","model":"deepseek-flash","status":"completed","output":[{"id":"m","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"private-rewrite"}]}],"usage":{"input_tokens":1,"output_tokens":1}}}"#),
+        ])
+        do {
+            let provider = try DeepSeekResponsesProvider(
+                apiKey: "key",
+                reasoningEffort: .none,
+                transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [body])
+            )
+            for try await _ in provider.stream(request: .init(
+                model: .init(provider: "deepseek", name: "deepseek-flash"),
+                messages: [.user([.text("Hi")])]
+            )) {}
+            Issue.record("Expected invalid response")
+        } catch let error as ModelProviderError {
+            #expect(error.kind == .invalidResponse)
+            #expect(error.message == "Invalid DeepSeek completed output snapshot.")
+            #expect(!error.message.contains("private-rewrite"))
+        }
+    }
+
     @Test func configuredModelAliasBindsResponseIdentity() async throws {
         let provider = try DeepSeekResponsesProvider(
             apiKey: "fixture-key",

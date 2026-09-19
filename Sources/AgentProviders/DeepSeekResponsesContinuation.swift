@@ -16,6 +16,7 @@ enum DeepSeekResponsesContinuation {
     static func make(
         items: [JSONValue], content: [ModelContent], calls: [ToolCall], model: ModelID
     ) throws -> ModelProviderContinuation? {
+        let items = try replayableItems(items)
         let validated = try validate(
             items: items, content: content, calls: calls, contentBinding: .observed
         )
@@ -38,9 +39,10 @@ enum DeepSeekResponsesContinuation {
         do {
             guard matching.count == 1, let state = matching.first, state.format == format,
                   let payload = try? JSONDecoder().decode(JSONValue.self, from: state.payload),
-                  case .object(let object) = payload, case .array(let items) = object["items"] else {
+                  case .object(let object) = payload, case .array(let storedItems) = object["items"] else {
                 throw ProviderJSON.invalid()
             }
+            let items = try replayableItems(storedItems)
             let binding: ContentBinding
             if let encodedContent = object["visible_content_order"] {
                 binding = .stored(try decodeVisibleContent(encodedContent))
@@ -77,12 +79,6 @@ enum DeepSeekResponsesContinuation {
             let object = try ProviderJSON.object(item)
             switch try ProviderJSON.string(object["type"]) {
             case "reasoning":
-                if let summary = object["summary"], summary != .null {
-                    guard case .array = summary else { throw ProviderJSON.invalid() }
-                }
-                if let encrypted = object["encrypted_content"], encrypted != .null {
-                    throw ProviderJSON.invalid()
-                }
                 guard case .array(let parts) = object["content"], !parts.isEmpty else {
                     throw ProviderJSON.invalid()
                 }
@@ -135,6 +131,20 @@ enum DeepSeekResponsesContinuation {
             if part.0 == .reasoning { result += part.1 }
         }
         return (hasReasoning, visibleReasoning)
+    }
+
+    private static func replayableItems(_ items: [JSONValue]) throws -> [JSONValue] {
+        try items.map { value in
+            var object = try ProviderJSON.object(value)
+            if try ProviderJSON.string(object["type"]) == "reasoning" {
+                // DeepSeek may return output-only compatibility metadata that its
+                // Responses input does not accept. Plaintext reasoning remains
+                // fully bound to canonical content and is the replay authority.
+                object.removeValue(forKey: "summary")
+                object.removeValue(forKey: "encrypted_content")
+            }
+            return .object(object)
+        }
     }
 
     private static func visibleContent(_ content: [ModelContent]) throws -> [(ContentKind, String)] {

@@ -123,9 +123,13 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
                 case .data(let data):
                     guard receivedHeader else { throw ProviderJSON.invalid() }
                     for frame in try sse.consume(data) {
-                        for normalized in try decoder.consume(frame) {
-                            do { try validation.append(normalized) } catch { throw ProviderJSON.invalid() }
-                            try emit(normalized)
+                        do {
+                            for normalized in try decoder.consume(frame) {
+                                do { try validation.append(normalized) } catch { throw ProviderJSON.invalid() }
+                                try emit(normalized)
+                            }
+                        } catch let error as ModelProviderError {
+                            throw deepSeekEventDiagnostic(error, frame: frame)
                         }
                     }
                 }
@@ -136,4 +140,21 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
             do { _ = try validation.finish() } catch { throw ProviderJSON.invalid() }
         }
     }
+}
+
+private func deepSeekEventDiagnostic(
+    _ error: ModelProviderError,
+    frame: ProviderSSEEvent
+) -> ModelProviderError {
+    guard error.kind == .invalidResponse, error.message == "Invalid provider response." else {
+        return error
+    }
+    let rawType = (try? ProviderJSON.string(ProviderJSON.decode(frame.data)["type"])) ?? "unknown"
+    let safeType = String(String.UnicodeScalarView(rawType.unicodeScalars.lazy.filter { scalar in
+        CharacterSet.alphanumerics.contains(scalar) || scalar == "." || scalar == "_" || scalar == "-"
+    }.prefix(96)))
+    return .init(
+        kind: .invalidResponse,
+        message: "Invalid DeepSeek event '\(safeType.isEmpty ? "unknown" : safeType)'."
+    )
 }

@@ -324,13 +324,24 @@ struct DeepSeekResponsesStreamDecoder {
     private mutating func completed(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         let response = try ProviderJSON.object(object["response"])
         guard let info, try ProviderJSON.string(response["id"]) == info.id,
-              try ProviderJSON.string(response["status"]) == "completed" else { throw ProviderJSON.invalid() }
+              try ProviderJSON.string(response["status"]) == "completed" else {
+            throw deepSeekCompletedInvalid("identity")
+        }
         try validateModel(try ProviderJSON.string(response["model"]))
         guard items.values.allSatisfy(\.done), items.values.allSatisfy({ $0.call?.completed != false }) else {
-            throw ProviderJSON.invalid()
+            throw deepSeekCompletedInvalid("lifecycle")
         }
-        try validateFinalOutput(response["output"], completed: true)
-        let usageEvents = try updateUsage(response["usage"])
+        do {
+            try validateFinalOutput(response["output"], completed: true)
+        } catch let error as ModelProviderError where error.message == "Invalid provider response." {
+            throw deepSeekCompletedInvalid("output snapshot")
+        }
+        let usageEvents: [ModelEvent]
+        do {
+            usageEvents = try updateUsage(response["usage"])
+        } catch let error as ModelProviderError where error.message == "Invalid provider response." {
+            throw deepSeekCompletedInvalid("usage")
+        }
         let calls = orderedCalls()
         if requiresReasoningForTools {
             let reasoning = items.values.filter { $0.kind == .reasoning }.flatMap(\.parts.values).map(\.value).joined()
@@ -339,17 +350,25 @@ struct DeepSeekResponsesStreamDecoder {
         ended = true
         var events = usageEvents
         let nativeItems = items.keys.sorted().compactMap { items[$0]?.native }
-        if let continuation = try DeepSeekResponsesContinuation.make(
-            items: nativeItems, content: content, calls: calls, model: model
-        ) {
-            content.append(.providerContinuation(continuation))
-            events.append(.providerContinuation(continuation))
+        do {
+            if let continuation = try DeepSeekResponsesContinuation.make(
+                items: nativeItems, content: content, calls: calls, model: model
+            ) {
+                content.append(.providerContinuation(continuation))
+                events.append(.providerContinuation(continuation))
+            }
+        } catch let error as ModelProviderError where error.message == "Invalid provider response." {
+            throw deepSeekCompletedInvalid("continuation")
         }
         events.append(.responseCompleted(.init(
             info: info, content: content, toolCalls: calls, usage: usage,
             stopReason: calls.isEmpty ? .endTurn : .toolCalls
         )))
         return events
+    }
+
+    private func deepSeekCompletedInvalid(_ stage: String) -> ModelProviderError {
+        .init(kind: .invalidResponse, message: "Invalid DeepSeek completed \(stage).")
     }
 
     private mutating func incomplete(_ object: [String: JSONValue]) throws -> [ModelEvent] {

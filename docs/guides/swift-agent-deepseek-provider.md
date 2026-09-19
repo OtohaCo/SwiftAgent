@@ -37,10 +37,13 @@ they still match the canonical assistant content and tool calls, and replays
 them in their original item order. It never fabricates reasoning and does not
 use OpenAI reasoning summaries or encrypted content.
 
-DeepSeek responses may include an empty `summary` array or a null
-`encrypted_content` compatibility field on a plaintext reasoning item. Those
-shapes are retained for replay; non-null encrypted reasoning state is rejected
-because it belongs to a different provider contract.
+DeepSeek responses may include `summary` or `encrypted_content` compatibility
+fields on an output reasoning item. The live service does not accept those
+output-only fields when the item is replayed as Responses input. SwiftAgent
+therefore removes both fields from the opaque continuation while retaining and
+validating the plaintext `reasoning_text`, item identity, item order, visible
+content binding and tool-call binding. It never substitutes an encrypted value
+for the plaintext reasoning required by DeepSeek.
 
 The opaque continuation also binds the normalized visible text/reasoning order
 published by the decoder. Adjacent fragments of one kind may merge, while
@@ -102,9 +105,13 @@ and typed HTTP/provider failures. It does not support images, audio,
 provider-hosted tools, custom tools, WebSocket transport, or server-side
 conversation state.
 
-All current DeepSeek verification is deterministic fixture/schema testing.
-No live DeepSeek credentials are used by normal CI, and the package does not
-claim live-cloud qualification for this adapter yet.
+Normal CI remains deterministic and credential-free. A bounded live run on
+2026-09-19 confirmed that the service emitted a complete ordered Responses SSE
+stream with plaintext reasoning, usage and output-only compatibility metadata;
+the normalized continuation completed successfully after those output-only
+fields were omitted from replay. That run did not qualify live multi-turn,
+function-tool, restart, structured-output or incomplete-response shapes, so
+those surfaces remain fixture-verified rather than live-qualified.
 
 Contract sources verified on 2026-09-19:
 
