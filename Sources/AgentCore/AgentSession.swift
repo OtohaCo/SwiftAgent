@@ -24,6 +24,8 @@ public actor AgentSession {
     private let journal: AgentJournal?
     private let checkpointDidExit: (@Sendable (UUID) -> Void)?
     private let drainWaitDidBegin: (@Sendable (UUID) -> Void)?
+    private let drainReleaseDidBegin: (@Sendable (UUID) async -> Void)?
+    private let mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)?
     private var appliedSteeringIDs: Set<UUID> = []
     private var restoredJournalState = false
     private var pendingDrainTask: Task<Void, Never>?
@@ -33,7 +35,9 @@ public actor AgentSession {
     init(id: UUID = UUID(), loop: AgentLoop, instructions: String, structuredOutput: StructuredOutputSchema?, maxModelTurns: Int,
          maxToolCalls: Int, runTimeout: Duration, contextPolicy: AgentContextPolicy, journal: AgentJournal? = nil,
          checkpointDidExit: (@Sendable (UUID) -> Void)? = nil,
-         drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil) {
+         drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil,
+         drainReleaseDidBegin: (@Sendable (UUID) async -> Void)? = nil,
+         mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)? = nil) {
         self.id = id
         self.loop = loop
         self.structuredOutput = structuredOutput
@@ -46,6 +50,8 @@ public actor AgentSession {
         self.journal = journal
         self.checkpointDidExit = checkpointDidExit
         self.drainWaitDidBegin = drainWaitDidBegin
+        self.drainReleaseDidBegin = drainReleaseDidBegin
+        self.mutationQuarantineDidBegin = mutationQuarantineDidBegin
     }
 
     /// Starts one Run. Empty input, an already-active Run, a cancelled caller
@@ -185,6 +191,7 @@ public actor AgentSession {
                 return prepared.history
             },
             markMutationNeedsReconciliation: { callID in
+                await self.mutationQuarantineDidBegin?(runID, callID)
                 try await journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
             },
             beforeFinish: {
@@ -270,13 +277,15 @@ public actor AgentSession {
 
     private func finishDraining(runID: UUID) async {
         guard drainingRunID == runID else { return }
-        drainingRunID = nil
-        pendingDrainTask = nil
+        await drainReleaseDidBegin?(runID)
         await journal?.releaseSessionLease(sessionID: id)
         await AgentSessionIdentityRegistry.shared.release(id)
-        if let drain = drainHandles.removeValue(forKey: runID) {
+        if let drain = drainHandles[runID] {
             await drain.complete()
         }
+        drainHandles.removeValue(forKey: runID)
+        drainingRunID = nil
+        pendingDrainTask = nil
     }
 
     private func restoreJournalStateIfNeeded() async {

@@ -33,6 +33,10 @@ public struct AgentRun: Sendable {
     public func cancel() async { await control.cancel() }
     @discardableResult
     public func steer(_ text: String) async throws -> UUID { try await control.enqueue(text) }
+
+    func waitForDrain(waiterDidRegister: @escaping @Sendable (Bool) -> Void) async throws {
+        try await drain.wait(waiterDidRegister: waiterDidRegister)
+    }
 }
 
 public enum AgentRunError: Error, Equatable, Sendable {
@@ -149,18 +153,24 @@ actor AgentRunDrain {
     private var completed = false
     private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
 
-    func wait() async throws {
+    func wait(waiterDidRegister: (@Sendable (Bool) -> Void)? = nil) async throws {
         try Task.checkCancellation()
-        if completed { return }
+        if completed {
+            waiterDidRegister?(false)
+            return
+        }
         let waiterID = UUID()
         try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 if Task.isCancelled {
+                    waiterDidRegister?(false)
                     continuation.resume(throwing: CancellationError())
                 } else if completed {
+                    waiterDidRegister?(false)
                     continuation.resume()
                 } else {
                     waiters[waiterID] = continuation
+                    waiterDidRegister?(true)
                 }
             }
         }, onCancel: {

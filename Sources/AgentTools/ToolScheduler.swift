@@ -17,6 +17,14 @@ public struct ToolScheduler: Sendable {
         await drain.wait(.init(sessionID: sessionID, runID: runID))
     }
 
+    package func waitForRunToDrain(
+        sessionID: UUID,
+        runID: UUID,
+        waiterDidRegister: @escaping @Sendable (Bool) -> Void
+    ) async {
+        await drain.wait(.init(sessionID: sessionID, runID: runID), waiterDidRegister: waiterDidRegister)
+    }
+
     package func pendingWaiterCount() async -> Int {
         await coordinator.pendingWaiterCount
     }
@@ -26,6 +34,33 @@ public struct ToolScheduler: Sendable {
     }
 
     package func execute(
+        _ calls: [PreparedToolCall], deadline: ContinuousClock.Instant,
+        onStarted: @escaping @Sendable (PreparedToolCall) async throws -> Void,
+        onCompleted: @escaping @Sendable (Int, PreparedToolCall, ToolResult<JSONValue>) async throws -> Void,
+        onFailed: @escaping @Sendable (PreparedToolCall, any Error) async throws -> Void
+    ) async throws {
+        guard let first = calls.first else { return }
+        let drainKey = ToolExecutionDrain.Key(
+            sessionID: first.contextSessionID,
+            runID: first.contextRunID
+        )
+        await drain.begin(drainKey)
+        do {
+            try await executeRegistered(
+                calls,
+                deadline: deadline,
+                onStarted: onStarted,
+                onCompleted: onCompleted,
+                onFailed: onFailed
+            )
+            await drain.end(drainKey)
+        } catch {
+            await drain.end(drainKey)
+            throw error
+        }
+    }
+
+    private func executeRegistered(
         _ calls: [PreparedToolCall], deadline: ContinuousClock.Instant,
         onStarted: @escaping @Sendable (PreparedToolCall) async throws -> Void,
         onCompleted: @escaping @Sendable (Int, PreparedToolCall, ToolResult<JSONValue>) async throws -> Void,
@@ -144,12 +179,17 @@ private actor ToolExecutionDrain {
         continuations.forEach { $0.resume() }
     }
 
-    func wait(_ key: Key) async {
-        guard active[key] != nil else { return }
+    func wait(_ key: Key, waiterDidRegister: (@Sendable (Bool) -> Void)? = nil) async {
+        guard active[key] != nil else {
+            waiterDidRegister?(false)
+            return
+        }
         await withCheckedContinuation { continuation in
             if active[key] != nil {
                 waiters[key, default: []].append(continuation)
+                waiterDidRegister?(true)
             } else {
+                waiterDidRegister?(false)
                 continuation.resume()
             }
         }

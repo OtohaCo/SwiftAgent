@@ -86,14 +86,23 @@ public struct Agent: Sendable {
     /// Creates an isolated Session. Mutation tools require a durable journal;
     /// `nil` and memory-only journals fail here instead of during execution.
     public func makeSession(id: UUID = UUID(), journal: AgentJournal? = nil) throws -> AgentSession {
-        try makeSession(id: id, journal: journal, checkpointDidExit: nil, drainWaitDidBegin: nil)
+        try makeSession(
+            id: id,
+            journal: journal,
+            checkpointDidExit: nil,
+            drainWaitDidBegin: nil,
+            drainReleaseDidBegin: nil,
+            mutationQuarantineDidBegin: nil
+        )
     }
 
     func makeSession(
         id: UUID = UUID(),
         journal: AgentJournal? = nil,
         checkpointDidExit: (@Sendable (UUID) -> Void)? = nil,
-        drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil
+        drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil,
+        drainReleaseDidBegin: (@Sendable (UUID) async -> Void)? = nil,
+        mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)? = nil
     ) throws -> AgentSession {
         if requiresDurableJournal, journal?.storage != .durable {
             throw AgentSessionError.durableJournalRequired
@@ -103,7 +112,9 @@ public struct Agent: Sendable {
             structuredOutput: configuration.structuredOutput, maxModelTurns: configuration.maxModelTurns,
             maxToolCalls: configuration.maxToolCalls, runTimeout: configuration.runTimeout,
             contextPolicy: configuration.contextPolicy, journal: journal,
-            checkpointDidExit: checkpointDidExit, drainWaitDidBegin: drainWaitDidBegin
+            checkpointDidExit: checkpointDidExit, drainWaitDidBegin: drainWaitDidBegin,
+            drainReleaseDidBegin: drainReleaseDidBegin,
+            mutationQuarantineDidBegin: mutationQuarantineDidBegin
         )
     }
 }
