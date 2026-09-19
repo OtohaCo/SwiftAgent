@@ -1,4 +1,6 @@
 import AgentCore
+import AgentDecisions
+import AgentJevProvider
 import AgentModels
 import AgentTools
 import Foundation
@@ -94,6 +96,21 @@ struct ExternalClientTests {
 
         #expect(result.outcome == .completed)
         #expect(result.response.content == [.text("Try another source")])
+    }
+
+    @Test func decisionProductsAreConsumableThroughPublicAPI() throws {
+        let request = try DecisionRequest(
+            state: .object(["message": .string("I was charged twice")]),
+            nouls: ["billing": .init(instructions: .string("Is this about billing?"))],
+            choices: ["route": try .init(criteria: [
+                .init(name: "support"), .init(name: "billing"),
+            ])],
+            scores: ["urgency": try .init(criteria: [.string("Can wait"), .string("Today")])]
+        )
+        let provider: any DecisionProvider = try JevDecisionProvider(apiKey: "fixture-only")
+
+        #expect(request.questionCount == 3)
+        #expect(provider.descriptor.id == "jev")
     }
 }
 

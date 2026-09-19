@@ -8,7 +8,7 @@ cd "$root"
 
 swift package clean
 
-for target in AgentModels AgentTools AgentCore AgentProviders; do
+for target in AgentModels AgentTools AgentCore AgentProviders AgentDecisions AgentJevProvider; do
   echo "swift build --target $target"
   swift build --target "$target"
 done
@@ -23,7 +23,7 @@ if find .build -name 'AgentAppleProvider.swiftmodule' | grep -q .; then
   find .build -name 'AgentAppleProvider.swiftmodule' >&2
   exit 1
 fi
-echo "Core --target builds did not compile WorkspaceAgent or AgentAppleProvider."
+echo "Portable --target builds did not compile WorkspaceAgent or AgentAppleProvider."
 
 echo "swift test"
 swift test --disable-sandbox --no-parallel

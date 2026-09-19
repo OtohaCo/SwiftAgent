@@ -31,3 +31,17 @@ Detailed guides:
 - [OpenAI Responses](guides/swift-agent-openai-provider.md)
 - [DeepSeek Responses](guides/swift-agent-deepseek-provider.md)
 - [Apple on-device and PCC](guides/swift-agent-apple-provider.md)
+
+## Decision Providers
+
+Decision providers do not implement `ModelProvider`, produce conversation
+turns, or participate in AgentCore fallback. They evaluate typed questions and
+return untrusted advice for Host orchestration.
+
+| Provider | Product | Platforms | Decisions | Authentication | Normal CI evidence |
+| --- | --- | --- | --- | --- | --- |
+| TypeSafe Jev System One | AgentJevProvider | macOS, iOS, Linux | Noul, Choice, Score | API key | Fixture protocol tests; live use is operator opt-in |
+
+See the [Decision Provider guide](guides/swift-agent-decisions.md). A decision
+cannot mint Evidence, authorize or execute a tool, create a Receipt, or settle
+an AgentJournal.

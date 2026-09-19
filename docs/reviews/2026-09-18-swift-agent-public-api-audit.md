@@ -1,7 +1,7 @@
 # SwiftAgent Public API Audit
 
 last-verified: 2026-09-19
-status: 1.0.0-rc.1 freeze plus audited post-rc.1 additive provider surface
+status: 1.0.0-rc.1 freeze plus audited post-rc.1 additive provider and decision surface
 
 This inventory is the SAI-026 freeze record, updated by SAI-026B hardening,
 SAI-039 recoverable read-only tool failures, and the SAI-047 RC audit.
@@ -24,9 +24,10 @@ surface even though it ships in this package.
 Counts are types (struct/enum/protocol/actor/class), not every property. Members
 follow the type decision unless noted. SAI-047 separately generated and
 reviewed the complete 956-symbol `1.0.0-rc.1` public member graph. The current
-post-rc.1 branch has 1,013 public member symbols and 105 public top-level types:
-57 precise identifiers were added and none removed. See
-[the generated member inventory](2026-09-19-swift-agent-public-api-members.md).
+post-rc.1 branch has 1,151 public member symbols and 121 public top-level types:
+195 precise identifiers were added and none removed. See
+[the generated member inventory](2026-09-19-swift-agent-public-api-members.md)
+and the [SAI-055 addition annex](2026-09-19-sai-055-public-api-additions.md).
 Every current member is KEEP, with NARROW/REMOVE already absent from the public
 graph.
 
@@ -415,3 +416,24 @@ this remediation round. No Journal schema or continuation format version was
 changed. Current OpenAI v2 and DeepSeek v1 opaque continuation payloads add an
 optional ordered-visible-content binding; readers continue to accept payloads
 written before that field existed.
+
+## SAI-055 decision additions
+
+SAI-055 adds two optional Linux-portable products without changing a published
+rc.1 symbol:
+
+- `AgentDecisions`: 131 public symbols and 15 top-level types for typed Noul,
+  Choice, and Score questions/results, usage, provider identity, validation,
+  deadlines, and extensible classified errors.
+- `AgentJevProvider`: 7 public symbols and one top-level type. Only
+  `JevDecisionProvider` and its configuration/execution members are public;
+  wire DTOs and transport stay internal.
+
+The decision answer categories are separate stored dictionaries rather than a
+closed public enum, avoiding an exhaustive-switch break when a later additive
+primitive is introduced. Error and validation kinds are extensible raw-value
+structs for the same reason. `AgentCore`, `AgentTools`, and `AgentProviders` do
+not depend on either product. The complete 138-symbol classification is in the
+[SAI-055 annex](2026-09-19-sai-055-public-api-additions.md); every entry is
+`KEEP` because it is either the vendor-neutral Host contract or the public Jev
+adapter surface.

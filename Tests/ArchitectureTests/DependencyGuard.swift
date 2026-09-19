@@ -7,13 +7,17 @@ enum DependencyGuard {
         "AgentCore": ["AgentModels", "AgentTools"],
         "AgentProviders": ["AgentModels"],
         "AgentAppleProvider": ["AgentModels"],
+        "AgentDecisions": ["AgentModels"],
+        "AgentJevProvider": ["AgentModels", "AgentDecisions"],
         "WorkspaceAgent": ["AgentModels", "AgentTools", "AgentCore", "AgentProviders"],
     ]
 
     static func violations(_ source: String, module: String) -> [String] {
         var allowed = (dependencies[module] ?? []).union(["Foundation", "Swift"])
         if module == "AgentAppleProvider" { allowed.insert("FoundationModels") }
-        if module == "AgentProviders" { allowed.insert("FoundationNetworking") }
+        if module == "AgentProviders" || module == "AgentJevProvider" {
+            allowed.insert("FoundationNetworking")
+        }
         if module == "WorkspaceAgent" {
             allowed.insert("CryptoKit")
             allowed.insert("Crypto")

@@ -4,7 +4,8 @@ import XCTest
 final class DependencyGuardTests: XCTestCase {
     func testNetworkSDKIsLimitedToHTTPProviders() {
         XCTAssertEqual(DependencyGuard.violations("import FoundationNetworking", module: "AgentProviders"), [])
-        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentAppleProvider", "WorkspaceAgent"] {
+        XCTAssertEqual(DependencyGuard.violations("import FoundationNetworking", module: "AgentJevProvider"), [])
+        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentAppleProvider", "AgentDecisions", "WorkspaceAgent"] {
             XCTAssertFalse(DependencyGuard.violations("import FoundationNetworking", module: module).isEmpty)
         }
     }
@@ -12,7 +13,7 @@ final class DependencyGuardTests: XCTestCase {
     func testCryptoKitIsLimitedToWorkspaceHost() {
         XCTAssertEqual(DependencyGuard.violations("import CryptoKit", module: "WorkspaceAgent"), [])
         XCTAssertEqual(DependencyGuard.violations("import Crypto", module: "WorkspaceAgent"), [])
-        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider"] {
+        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider", "AgentDecisions", "AgentJevProvider"] {
             XCTAssertFalse(DependencyGuard.violations("import CryptoKit", module: module).isEmpty)
             XCTAssertFalse(DependencyGuard.violations("import Crypto", module: module).isEmpty)
         }
@@ -21,7 +22,7 @@ final class DependencyGuardTests: XCTestCase {
     func testPosixIsLimitedToWorkspaceHost() {
         XCTAssertEqual(DependencyGuard.violations("import Darwin", module: "WorkspaceAgent"), [])
         XCTAssertEqual(DependencyGuard.violations("import Glibc", module: "WorkspaceAgent"), [])
-        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider"] {
+        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider", "AgentDecisions", "AgentJevProvider"] {
             XCTAssertFalse(DependencyGuard.violations("import Darwin", module: module).isEmpty)
             XCTAssertFalse(DependencyGuard.violations("import Glibc", module: module).isEmpty)
         }
@@ -139,6 +140,15 @@ final class DependencyGuardTests: XCTestCase {
         XCTAssertFalse(DependencyGuard.violations("import AgentCore", module: "AgentAppleProvider").isEmpty)
         XCTAssertFalse(DependencyGuard.violations("import AgentTools", module: "AgentModels").isEmpty)
         XCTAssertFalse(DependencyGuard.violations("import AgentCore", module: "AgentTools").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentCore", module: "AgentDecisions").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentTools", module: "AgentDecisions").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentCore", module: "AgentJevProvider").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentTools", module: "AgentJevProvider").isEmpty)
+        XCTAssertFalse(DependencyGuard.violations("import AgentProviders", module: "AgentJevProvider").isEmpty)
+        XCTAssertTrue(DependencyGuard.violations(
+            "import Foundation\nimport FoundationNetworking\nimport AgentModels\nimport AgentDecisions",
+            module: "AgentJevProvider"
+        ).isEmpty)
         XCTAssertTrue(DependencyGuard.violations(
             "import Foundation\nimport AgentModels\nimport AgentTools\nimport AgentCore\nimport AgentProviders",
             module: "WorkspaceAgent"
@@ -160,6 +170,8 @@ final class DependencyGuardTests: XCTestCase {
         let manifest = try String(contentsOf: root.appendingPathComponent("Package.swift"), encoding: .utf8)
         XCTAssertTrue(manifest.contains(".package(name: \"SwiftAgent\", path: \"../..\")"))
         XCTAssertTrue(manifest.contains("AgentCore"))
+        XCTAssertTrue(manifest.contains("AgentDecisions"))
+        XCTAssertTrue(manifest.contains("AgentJevProvider"))
         XCTAssertFalse(manifest.contains("WorkspaceAgent"))
         XCTAssertFalse(manifest.contains("AgentAppleProvider"))
         let tests = root.appendingPathComponent("Tests/ExternalClientTests")
@@ -172,6 +184,8 @@ final class DependencyGuardTests: XCTestCase {
             XCTAssertFalse(source.contains("import WorkspaceAgent"), url.path)
             XCTAssertFalse(source.contains("import AgentAppleProvider"), url.path)
             XCTAssertTrue(source.contains("import AgentCore"), url.path)
+            XCTAssertTrue(source.contains("import AgentDecisions"), url.path)
+            XCTAssertTrue(source.contains("import AgentJevProvider"), url.path)
         }
         XCTAssertGreaterThan(count, 0)
     }

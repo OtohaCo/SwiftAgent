@@ -13,7 +13,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development and
 - Swift language mode 6
 - macOS 13+ or iOS 16+ for Core products
 - macOS/iOS 26+ for the optional Apple Foundation Models adapter
-- Linux support for AgentModels, AgentTools, AgentCore, AgentProviders, and WorkspaceAgent
+- Linux support for AgentModels, AgentTools, AgentCore, AgentProviders,
+  AgentDecisions, AgentJevProvider, and WorkspaceAgent
 
 ## Installation
 
@@ -239,6 +240,19 @@ provider-specific, not conversation memory or portable trusted state. See the
 [DeepSeek guide](docs/guides/swift-agent-deepseek-provider.md) for the declared
 capability and live-test boundaries.
 
+## Decision Providers
+
+`DecisionProvider` is a separate, non-conversational contract for typed Noul,
+Choice, and Score questions over JSON state. `AgentDecisions` defines the
+vendor-neutral request and result values; `AgentJevProvider` adapts TypeSafe
+Jev System One. Decision output is untrusted advice. It cannot create Evidence,
+authorize a tool, execute a Host closure, create a Receipt, or settle a journal.
+
+See the [Decision Provider guide](docs/guides/swift-agent-decisions.md) and the
+fixture-first [JevDecision example](Examples/JevDecision). The example runs
+without credentials. Live Jev access requires explicit opt-in with
+`SWIFT_AGENT_JEV_LIVE=1` and `TYPESAFE_API_KEY`.
+
 ## Evidence and Mutation Safety
 
 Conversation memory is not Evidence, and a model proposal is not authorization.
@@ -255,6 +269,7 @@ operation ID represents a new logical mutation.
 | Surface | Platforms |
 | --- | --- |
 | Core products | macOS 13+, iOS 16+, Linux |
+| AgentDecisions / AgentJevProvider | macOS 13+, iOS 16+, Linux |
 | AgentAppleProvider | macOS/iOS 26+ |
 | Validated compiler | Swift 6.4 |
 
@@ -266,6 +281,7 @@ depend on it.
 ```sh
 bash Scripts/ci-macos.sh
 bash Scripts/ci-concurrency-seal.sh
+swift run --package-path Examples/JevDecision JevDecision
 ```
 
 On Ubuntu 24.04, install/verify Swift 6.4 and run:
@@ -288,6 +304,8 @@ opt-ins. DeepSeek currently has deterministic fixture/schema coverage only.
 | AgentCore | AgentModels, AgentTools | The single agent loop, sessions and runs |
 | AgentProviders | AgentModels | Native request and event conversion |
 | AgentAppleProvider | AgentModels | Apple on-device and PCC structured planning; platform SDK isolation |
+| AgentDecisions | AgentModels | Typed, vendor-neutral decision requests and responses |
+| AgentJevProvider | AgentModels, AgentDecisions | TypeSafe Jev HTTP adapter; no execution authority |
 | WorkspaceAgent | AgentModels, AgentTools, AgentCore, AgentProviders | Domain-neutral Reference Host for a sandbox file agent |
 
 Providers receive model data, never a host tool executor. Execution belongs to
@@ -399,3 +417,6 @@ conversation replay, function calls, structured output, reasoning, and usage.
 [DeepSeek Responses](docs/guides/swift-agent-deepseek-provider.md) covers
 stateless replay, legal incomplete output, plaintext reasoning continuation,
 and fixture-only verification scope.
+
+[Decision Providers](docs/guides/swift-agent-decisions.md) defines the separate
+typed decision contract, Jev mapping, error taxonomy, and authorization boundary.

@@ -39,6 +39,16 @@ additions and behavior changes will be recorded here before that release is cut.
   usage normalization, explicit model-alias identity, and fail-closed terminal
   validation. DeepSeek live-cloud qualification is not claimed in this entry.
 
+### Decisions
+
+- Add the Linux-portable `AgentDecisions` product with typed Noul, Choice, and
+  Score requests, responses, usage, deadlines, and an extensible error taxonomy.
+- Add `AgentJevProvider` for the verified TypeSafe Jev System One HTTP contract,
+  including strict response identity/range validation, classified sanitized
+  failures, retry metadata without hidden retries, and cancellation ownership.
+- Keep decisions outside AgentCore: they cannot create Evidence, authorize or
+  execute tools, create Receipts, or settle journals.
+
 ## [1.0.0-rc.1] - 2026-09-19
 
 ### Runtime

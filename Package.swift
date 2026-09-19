@@ -10,6 +10,8 @@ let package = Package(
         .library(name: "AgentCore", targets: ["AgentCore"]),
         .library(name: "AgentProviders", targets: ["AgentProviders"]),
         .library(name: "AgentAppleProvider", targets: ["AgentAppleProvider"]),
+        .library(name: "AgentDecisions", targets: ["AgentDecisions"]),
+        .library(name: "AgentJevProvider", targets: ["AgentJevProvider"]),
         .library(name: "WorkspaceAgent", targets: ["WorkspaceAgent"]),
     ],
     dependencies: [
@@ -21,6 +23,8 @@ let package = Package(
         .target(name: "AgentCore", dependencies: ["AgentModels", "AgentTools"]),
         .target(name: "AgentProviders", dependencies: ["AgentModels"]),
         .target(name: "AgentAppleProvider", dependencies: ["AgentModels"]),
+        .target(name: "AgentDecisions", dependencies: ["AgentModels"]),
+        .target(name: "AgentJevProvider", dependencies: ["AgentModels", "AgentDecisions"]),
         .target(
             name: "WorkspaceAgent",
             dependencies: [
@@ -37,6 +41,11 @@ let package = Package(
         .testTarget(name: "AgentCoreTests", dependencies: ["AgentCore", "AgentTools", "AgentModels"]),
         .testTarget(name: "AgentAppleProviderTests", dependencies: ["AgentAppleProvider", "AgentModels", "AgentTools", "AgentCore"]),
         .testTarget(name: "AgentProvidersTests", dependencies: ["AgentProviders", "AgentModels", "AgentTools", "AgentCore"]),
+        .testTarget(
+            name: "AgentDecisionsTests",
+            dependencies: ["AgentDecisions", "AgentModels", "AgentTools", "AgentCore"]
+        ),
+        .testTarget(name: "AgentJevProviderTests", dependencies: ["AgentJevProvider", "AgentDecisions", "AgentModels"]),
         .testTarget(
             name: "WorkspaceAgentTests",
             dependencies: ["WorkspaceAgent", "AgentCore", "AgentTools", "AgentModels", "AgentProviders"]

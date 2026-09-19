@@ -2,25 +2,40 @@
 
 last-verified: 2026-09-19
 
-Generated from Swift 6.4 public symbol graphs on `plan/swift-agent-rc2`. The published `1.0.0-rc.1` baseline is `d2347f11c6a78f421708e897dae42a51a98d37ea`; the current audited branch adds provider surface without removing a published symbol. Package and internal symbols are intentionally absent.
+Generated from Swift 6.4 public symbol graphs on `plan/swift-agent-rc2`. The published `1.0.0-rc.1` baseline is `d2347f11c6a78f421708e897dae42a51a98d37ea`; the current audited branch adds provider and decision surface without removing a published symbol. Package and internal symbols are intentionally absent.
 
-All 1013 currently public symbols are `KEEP`. Compared with `1.0.0-rc.1`, the exact precise-identifier diff is 57 additions and 0 removals. The additions are additive for clients that do not adopt them; public enum expansion remains source-breaking for exhaustive switches as documented in the versioning guide.
+All 1,151 currently public symbols are `KEEP`. Compared with `1.0.0-rc.1`,
+the exact precise-identifier diff is 195 additions and 0 removals. The 138
+SAI-055 additions are enumerated in the
+[Decision/Jev annex](2026-09-19-sai-055-public-api-additions.md); the table below
+retains the previous 1,013-symbol inventory. The additions are optional for
+clients that do not adopt them; public enum expansion remains source-breaking
+for exhaustive switches as documented in the versioning guide.
 
 | Module | rc.1 symbols | Current symbols | Delta |
 | --- | ---: | ---: | ---: |
 | AgentAppleProvider | 5 | 7 | +2 |
 | AgentCore | 283 | 283 | +0 |
+| AgentDecisions | 0 | 131 | +131 |
+| AgentJevProvider | 0 | 7 | +7 |
 | AgentModels | 260 | 260 | +0 |
 | AgentProviders | 41 | 96 | +55 |
 | AgentTools | 311 | 311 | +0 |
 | WorkspaceAgent | 56 | 56 | +0 |
-| **Total** | **956** | **1013** | **+57** |
+| **Total** | **956** | **1151** | **+195** |
 
-Top-level public types: **105** current, **100** in rc.1.
+Top-level public types: **121** current, **100** in rc.1.
 
 ## Post-rc.1 additions
 
-The five new top-level public types are `OpenAIReasoningEffort`, `OpenAIReasoningSummary`, `OpenAIResponsesProvider`, `DeepSeekReasoningEffort`, and `DeepSeekResponsesProvider`. Other added identifiers are their members, synthesized conformances, the Anthropic alias-aware initializer, and Apple Private Cloud Compute members. `DeepSeekReasoningEffort` is a closed enum; adding a future case is source-breaking for exhaustive client switches.
+The first post-rc.1 provider round added five top-level public types:
+`OpenAIReasoningEffort`, `OpenAIReasoningSummary`, `OpenAIResponsesProvider`,
+`DeepSeekReasoningEffort`, and `DeepSeekResponsesProvider`. SAI-055 adds 15
+vendor-neutral decision types plus `JevDecisionProvider`; their exact members
+are in the linked annex. Other provider additions are synthesized conformances,
+the Anthropic alias-aware initializer, and Apple Private Cloud Compute members.
+`DeepSeekReasoningEffort` remains a closed enum; adding a future case is
+source-breaking for exhaustive client switches.
 
 | Module | Kind | Symbol path | Source | Precise identifier | Decision |
 | --- | --- | --- | --- | --- | --- |

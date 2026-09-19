@@ -2,20 +2,18 @@
 import PackageDescription
 
 let package = Package(
-    name: "SwiftAgentExternalClient",
-    platforms: [.macOS(.v13), .iOS(.v16)],
+    name: "SwiftAgentJevDecisionExample",
+    platforms: [.macOS(.v13)],
     dependencies: [
         .package(name: "SwiftAgent", path: "../.."),
     ],
     targets: [
-        .testTarget(
-            name: "ExternalClientTests",
+        .executableTarget(
+            name: "JevDecision",
             dependencies: [
-                .product(name: "AgentCore", package: "SwiftAgent"),
                 .product(name: "AgentDecisions", package: "SwiftAgent"),
                 .product(name: "AgentJevProvider", package: "SwiftAgent"),
                 .product(name: "AgentModels", package: "SwiftAgent"),
-                .product(name: "AgentTools", package: "SwiftAgent"),
             ]
         ),
     ],

@@ -44,6 +44,9 @@ long-term map so a later bug does not require moving files.
 | A timed-out compactor must exit without overwriting newer memory or durable history | `timedOutCompactorCannotOverwriteNewerMemoryHistory`, `timedOutCompactorCannotOverwriteANewerRunOrDurableCheckpoint` | `Tests/AgentCoreTests/AgentContextPolicyTests.swift` |
 | Terminal completion must wait for a reserved mutation commit and preserve durable settlement | `finishingWaitsForBlockedMutationCommitAndPreservesDurableSettlement` | `Tests/AgentCoreTests/AgentCompletionCommitTests.swift` |
 | A provider candidate finishing after Run clear must not restore stale route pinning | `validatedCandidateFinishingAfterClearCannotRestorePinnedState` | `Tests/AgentProvidersTests/ProviderFallbackTests.swift` |
+| A certain decision must not bypass Evidence or enter a mutation executor | `certainDecisionCannotBypassEvidenceOrReachMutationExecutor` | `Tests/AgentDecisionsTests/DecisionSafetyBoundaryTests.swift` |
+| Jev answer identity, kind, candidate, score index, range, usage, and metadata mismatches must fail closed | `invalidResponseFailsClosed(_:)` | `Tests/AgentJevProviderTests/JevDecisionProviderTests.swift` |
+| Jev cancellation and retry metadata must not create hidden attempts or late completion | `callerCancellationWinsAndLateTransportCompletionCannotReturnAResult`, `exposesSafeRetryMetadataWithoutAutomaticallyRetrying` | `Tests/AgentJevProviderTests/JevDecisionProviderTests.swift` |
 
 When a new production bug lands, add a row here and a focused test next to the
 domain tests. Prefer a precise name over a `Regressions/` directory move.

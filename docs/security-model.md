@@ -12,6 +12,18 @@ output are not authorization, not Evidence, and not a Receipt. The runtime
 must not treat model content as proof that a resource exists, that a mutation
 happened, or that the host should skip policy.
 
+## Decision output is not authorization
+
+`DecisionProvider` returns typed Noul, Choice, and Score advice. Confidence or
+probability, including `1.0`, does not create Evidence or permission. The
+decision API has no tool executor, Receipt, journal, or mutation-admission
+surface. A Host that turns a decision into a later tool proposal still enters
+the normal AgentCore path: schema validation, Evidence, authorization, durable
+mutation intent, executor, Receipt validation, and durable settlement.
+
+Decision providers are also separate from `ModelProvider`. They do not own a
+conversation loop or become a second orchestration authority.
+
 ## A tool call is a proposal
 
 Every complete tool call still passes:
