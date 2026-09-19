@@ -46,6 +46,41 @@ struct DeepSeekResponsesProviderTests {
         ]))
     }
 
+    @Test func reasoningEffortAcceptsAndPreservesFutureWireValues() async throws {
+        let effort = DeepSeekReasoningEffort(rawValue: "medium")
+        let encoded = try JSONEncoder().encode(effort)
+        #expect(try JSONDecoder().decode(DeepSeekReasoningEffort.self, from: encoded) == effort)
+
+        let probe = ProviderRequestProbe()
+        let provider = try DeepSeekResponsesProvider(
+            apiKey: "fixture-key",
+            reasoningEffort: effort,
+            transport: FixtureHTTPTransport(probe: probe, bodies: [deepSeekTextFixture])
+        )
+        for try await _ in provider.stream(request: .init(
+            model: .init(provider: "deepseek", name: "deepseek-flash"),
+            messages: [.user([.text("Hi")])]
+        )) {}
+
+        let body = try requestBody(await probe.requests.first)
+        #expect(body["reasoning"] == .object(["effort": .string("medium")]))
+    }
+
+    @Test func invalidReasoningEffortFailsDuringProviderConstruction() {
+        #expect(throws: ModelProviderError.self) {
+            try DeepSeekResponsesProvider(
+                apiKey: "fixture-key",
+                reasoningEffort: .init(rawValue: "")
+            )
+        }
+        #expect(throws: ModelProviderError.self) {
+            try DeepSeekResponsesProvider(
+                apiKey: "fixture-key",
+                reasoningEffort: .init(rawValue: " high ")
+            )
+        }
+    }
+
     @Test func developerRoleFailsBeforeNetwork() async throws {
         let probe = ProviderRequestProbe()
         let provider = try DeepSeekResponsesProvider(

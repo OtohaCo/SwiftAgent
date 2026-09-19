@@ -4,12 +4,27 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// DeepSeek Responses API thinking-effort values.
-public enum DeepSeekReasoningEffort: String, Hashable, Sendable, Codable {
-    case none
-    case low
-    case high
-    case max
+/// A DeepSeek Responses API thinking-effort wire value.
+public struct DeepSeekReasoningEffort: RawRepresentable, Hashable, Sendable, Codable {
+    public let rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+
+    public static let none = Self(rawValue: "none")
+    public static let minimal = Self(rawValue: "minimal")
+    public static let low = Self(rawValue: "low")
+    public static let medium = Self(rawValue: "medium")
+    public static let high = Self(rawValue: "high")
+    public static let xhigh = Self(rawValue: "xhigh")
+    public static let max = Self(rawValue: "max")
+
+    public init(from decoder: any Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 /// A stateless DeepSeek Responses API adapter. SwiftAgent owns conversation
@@ -43,6 +58,10 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
               !apiKey.contains("\r"), !apiKey.contains("\n"), maximumOutputTokens > 0,
               let endpoint = endpoint ?? URL(string: "https://api.deepseek.com/responses") else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid provider configuration.")
+        }
+        guard reasoningEffort.rawValue == reasoningEffort.rawValue.trimmingCharacters(in: .whitespacesAndNewlines),
+              !reasoningEffort.rawValue.isEmpty else {
+            throw ModelProviderError(kind: .invalidRequest, message: "Invalid DeepSeek reasoning configuration.")
         }
         guard resolvedModelIDsByAlias.allSatisfy({ alias, resolved in
             !alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
