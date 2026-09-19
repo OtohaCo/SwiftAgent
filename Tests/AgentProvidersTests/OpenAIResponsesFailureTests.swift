@@ -122,6 +122,24 @@ struct OpenAIResponsesFailureTests {
         #expect(await execution.count == 0)
     }
 
+    @Test func incompleteContentMismatchFailsClosed() async throws {
+        let body = providerNamedSSE([
+            ("response.created", #"{"type":"response.created","response":{"id":"resp-incomplete","model":"fixture","status":"in_progress"}}"#),
+            ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-1","type":"message","role":"assistant","status":"in_progress","content":[]}}"#),
+            ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"msg-1","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}"#),
+            ("response.output_text.delta", #"{"type":"response.output_text.delta","item_id":"msg-1","output_index":0,"content_index":0,"delta":"Partial"}"#),
+            ("response.incomplete", #"{"type":"response.incomplete","response":{"id":"resp-incomplete","model":"fixture","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"msg-1","type":"message","role":"assistant","status":"incomplete","content":[{"type":"output_text","text":"Different","annotations":[]}]}],"usage":{"input_tokens":5,"output_tokens":4}}}"#),
+        ])
+        let provider = try OpenAIResponsesProvider(apiKey: "key",
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [body]))
+        do {
+            for try await _ in provider.stream(request: request) {}
+            Issue.record("Incomplete content mismatch must fail")
+        } catch {
+            #expect((error as? ModelProviderError)?.kind == .invalidResponse)
+        }
+    }
+
     @Test func explicitResolvedModelAliasIsAcceptedAndUndeclaredSnapshotIsRejected() async throws {
         let resolved = String(decoding: openAITextFixture, as: UTF8.self)
             .replacingOccurrences(of: #""model":"fixture""#, with: #""model":"fixture-2026-09-19""#)
@@ -181,10 +199,15 @@ struct OpenAIResponsesFailureTests {
             ("response.created", #"{"type":"response.created","response":{"id":"resp-1","model":"fixture","status":"in_progress"}}"#),
             ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"new-1","type":"future_item"}}"#),
         ])
-        let unstreamed = String(decoding: openAITextFixture, as: UTF8.self)
-            .replacingOccurrences(of: #""output":[{"id":"msg-1""#,
-                with: #""output":[{"id":"fc-hidden","type":"function_call","call_id":"hidden","name":"calculator","arguments":"{}"},{"id":"msg-1""#)
-        let fixtures: [(Data, ModelProviderError.Kind)] = [(unknown, .unsupportedCapability), (Data(unstreamed.utf8), .invalidResponse)]
+        let unstreamed = providerNamedSSE([
+            ("response.created", #"{"type":"response.created","response":{"id":"resp-1","model":"fixture","status":"in_progress"}}"#),
+            ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-1","type":"message","role":"assistant","status":"in_progress","content":[]}}"#),
+            ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"msg-1","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}"#),
+            ("response.output_text.delta", #"{"type":"response.output_text.delta","item_id":"msg-1","output_index":0,"content_index":0,"delta":"Hello"}"#),
+            ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Hello","annotations":[]}]}}"#),
+            ("response.completed", #"{"type":"response.completed","response":{"id":"resp-1","model":"fixture","status":"completed","output":[{"id":"fc-hidden","type":"function_call","call_id":"hidden","name":"calculator","arguments":"{}"},{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Hello","annotations":[]}]}],"usage":{"input_tokens":5,"output_tokens":3}}}"#),
+        ])
+        let fixtures: [(Data, ModelProviderError.Kind)] = [(unknown, .unsupportedCapability), (unstreamed, .invalidResponse)]
         for (body, kind) in fixtures {
             let provider = try OpenAIResponsesProvider(apiKey: "key",
                 transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [body]))
