@@ -91,6 +91,30 @@ struct LiveEnvironmentTests {
         #expect(!rendered.contains("private-secret"))
     }
 
+    @Test func fixtureResolutionDoesNotParseLiveEndpointConfiguration() throws {
+        let options = QualificationOptions(
+            provider: .openAI,
+            mode: .fixture,
+            scenario: .text,
+            modelOverride: nil,
+            endpointOverride: nil,
+            environmentFile: nil,
+            budgetFile: nil,
+            service: .official
+        )
+        let environment = try LiveEnvironment.load(process: [
+            "OPENAI_BASE_URL": "::not a URL::",
+        ])
+
+        let configuration = try QualificationConfiguration.resolve(
+            options: options,
+            environment: environment
+        )
+
+        #expect(configuration.model == "fixture")
+        #expect(configuration.endpoint.host == "fixture.invalid")
+    }
+
     @Test func explicitLiveModeNeverFallsBackWhenCredentialIsMissing() throws {
         let options = QualificationOptions(
             provider: .openAI,

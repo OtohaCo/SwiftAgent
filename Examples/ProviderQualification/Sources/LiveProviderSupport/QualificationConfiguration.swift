@@ -79,17 +79,20 @@ public struct QualificationConfiguration: Sendable {
         options: QualificationOptions,
         environment: LiveEnvironment
     ) throws -> Self {
-        let values = try resolveValues(options: options, environment: environment)
         if options.mode == .fixture {
+            guard let endpoint = URL(string: "https://fixture.invalid") else {
+                throw LiveConfigurationError.invalidEndpoint
+            }
             return .init(
                 options: options,
                 model: options.modelOverride ?? "fixture",
-                endpoint: values.endpoint,
+                endpoint: endpoint,
                 reasoning: options.reasoning,
                 resolvedModel: nil,
                 credential: "fixture"
             )
         }
+        let values = try resolveValues(options: options, environment: environment)
         guard let credential = values.credential else {
             throw LiveConfigurationError.missingCredential(values.credentialVariable)
         }
