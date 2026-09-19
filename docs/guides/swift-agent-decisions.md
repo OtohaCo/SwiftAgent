@@ -63,6 +63,8 @@ server delay metadata so the Host can apply one total retry/deadline policy.
 Caller cancellation throws `CancellationError`; deadline expiry uses
 `DecisionProviderError.Kind.deadlineExceeded`. Error messages never include the
 API key, request body, response body, endpoint query, or underlying error text.
+Malformed or unrepresentably large retry-delay metadata is ignored; it cannot
+terminate the Host process or change the classified provider failure.
 
 The current wire schema requires exactly one answer for each request question.
 Missing, extra, mismatched, or malformed answers fail closed as

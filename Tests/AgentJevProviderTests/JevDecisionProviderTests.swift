@@ -155,6 +155,29 @@ struct JevDecisionProviderTests {
         }
     }
 
+    @Test(arguments: [
+        ["retry-after-ms": "1e30"],
+        ["Retry-After": "1e300"],
+        ["Retry-After": "0x1p1000"],
+    ])
+    func oversizedRetryMetadataIsIgnoredWithoutCrashing(_ headers: [String: String]) async throws {
+        let probe = JevRequestProbe()
+        let provider = try JevDecisionProvider(apiKey: "key", transport: FixtureJevTransport(
+            probe: probe,
+            responses: [.success(.init(status: 429, headers: headers, body: Data()))]
+        ))
+
+        do {
+            _ = try await provider.decide(try request())
+            Issue.record("Expected rate limit")
+        } catch {
+            let failure = try #require(error as? DecisionProviderError)
+            #expect(failure.kind == .rateLimited)
+            #expect(failure.retryAfter == nil)
+        }
+        #expect(await probe.requests.count == 1)
+    }
+
     @Test func invalidConfigurationAndUnsupportedJevStateFailBeforeNetworking() async throws {
         #expect(throws: DecisionProviderError.self) { try JevDecisionProvider(apiKey: "") }
         #expect(throws: DecisionProviderError.self) {

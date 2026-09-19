@@ -110,8 +110,10 @@ deadline error. The underlying URLSession task is cancelled, and a late
 transport completion cannot settle the call again.
 
 `retry-after-ms`, numeric `Retry-After`, and RFC 1123 HTTP-date metadata are
-parsed for the Host without triggering an adapter retry. Remote request IDs are
-retained only when nonempty, control-free, and at most 256 UTF-8 bytes.
+parsed for the Host without triggering an adapter retry. Numeric values that
+cannot be represented safely as `Duration` are ignored rather than trapping or
+changing the classified HTTP failure. Remote request IDs are retained only when
+nonempty, control-free, and at most 256 UTF-8 bytes.
 
 The adapter has a small private transport seam instead of depending on
 `AgentProviders`. Sharing that target would couple a decision adapter to the

@@ -47,6 +47,7 @@ long-term map so a later bug does not require moving files.
 | A certain decision must not bypass Evidence or enter a mutation executor | `certainDecisionCannotBypassEvidenceOrReachMutationExecutor` | `Tests/AgentDecisionsTests/DecisionSafetyBoundaryTests.swift` |
 | Jev answer identity, kind, candidate, score index, range, usage, and metadata mismatches must fail closed | `invalidResponseFailsClosed(_:)` | `Tests/AgentJevProviderTests/JevDecisionProviderTests.swift` |
 | Jev cancellation and retry metadata must not create hidden attempts or late completion | `callerCancellationWinsAndLateTransportCompletionCannotReturnAResult`, `exposesSafeRetryMetadataWithoutAutomaticallyRetrying` | `Tests/AgentJevProviderTests/JevDecisionProviderTests.swift` |
+| Oversized Jev retry metadata must not overflow `Duration` and terminate the Host | `oversizedRetryMetadataIsIgnoredWithoutCrashing(_:)` | `Tests/AgentJevProviderTests/JevDecisionProviderTests.swift` |
 
 When a new production bug lands, add a row here and a focused test next to the
 domain tests. Prefer a precise name over a `Regressions/` directory move.

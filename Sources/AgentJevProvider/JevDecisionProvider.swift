@@ -312,19 +312,52 @@ private enum JevWire {
 
     private static func retryAfter(_ headers: [String: String]) -> Duration? {
         if let raw = header("retry-after-ms", in: headers),
-           let value = Double(raw), value.isFinite, value >= 0 {
-            return .milliseconds(value)
+           let duration = retryDuration(raw, unit: .milliseconds) {
+            return duration
         }
         guard let raw = header("retry-after", in: headers) else { return nil }
-        if let value = Double(raw), value.isFinite, value >= 0 {
-            return .seconds(value)
+        if let duration = retryDuration(raw, unit: .seconds) {
+            return duration
         }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
         guard let date = formatter.date(from: raw) else { return nil }
-        return .seconds(max(0, date.timeIntervalSinceNow))
+        return retryDuration(max(0, date.timeIntervalSinceNow), unit: .seconds)
+    }
+
+    private enum RetryDurationUnit {
+        case milliseconds
+        case seconds
+    }
+
+    private static func retryDuration(_ raw: String, unit: RetryDurationUnit) -> Duration? {
+        guard let value = Double(raw) else { return nil }
+        return retryDuration(value, unit: unit)
+    }
+
+    private static func retryDuration(_ value: Double, unit: RetryDurationUnit) -> Duration? {
+        guard value.isFinite, value >= 0 else { return nil }
+        let wholeValue = value.rounded(.towardZero)
+        guard let whole = Int64(exactly: wholeValue) else { return nil }
+        let fraction = value - wholeValue
+        guard fraction >= 0, fraction < 1 else { return nil }
+
+        switch unit {
+        case .milliseconds:
+            let fractionalAttoseconds = (fraction * 1_000_000_000_000_000).rounded()
+            guard let attoseconds = Int64(exactly: fractionalAttoseconds) else { return nil }
+            return .milliseconds(whole) + Duration(secondsComponent: 0, attosecondsComponent: attoseconds)
+        case .seconds:
+            let fractionalAttoseconds = (fraction * 1_000_000_000_000_000_000).rounded()
+            guard let attoseconds = Int64(exactly: fractionalAttoseconds) else { return nil }
+            if attoseconds == 1_000_000_000_000_000_000 {
+                guard whole < Int64.max else { return nil }
+                return .seconds(whole + 1)
+            }
+            return Duration(secondsComponent: whole, attosecondsComponent: attoseconds)
+        }
     }
 
     private static func safeRequestID(_ headers: [String: String]) -> String? {
