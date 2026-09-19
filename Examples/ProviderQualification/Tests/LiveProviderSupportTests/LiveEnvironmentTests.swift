@@ -60,6 +60,37 @@ struct LiveEnvironmentTests {
         #expect(!rendered.contains(secret))
     }
 
+    @Test func fixturePreflightDoesNotInspectOrRenderLiveConfiguration() throws {
+        let environment = try LiveEnvironment.load(process: [
+            "ANTHROPIC_API_KEY": "private-secret",
+            "ANTHROPIC_BASE_URL": "https://private-gateway.example",
+            "SWIFT_AGENT_ANTHROPIC_MODEL": "private-model",
+        ])
+        let options = QualificationOptions(
+            provider: .anthropic,
+            mode: .fixture,
+            scenario: .preflight,
+            modelOverride: nil,
+            endpointOverride: nil,
+            environmentFile: nil,
+            budgetFile: nil,
+            service: .official
+        )
+
+        let rendered = try QualificationConfiguration.preflight(
+            options: options,
+            environment: environment
+        ).rendered
+
+        #expect(rendered.contains("origin=FIXTURE"))
+        #expect(rendered.contains("model=fixture"))
+        #expect(rendered.contains("credential=UNUSED"))
+        #expect(rendered.contains("credential_variable=UNUSED"))
+        #expect(!rendered.contains("private-gateway"))
+        #expect(!rendered.contains("private-model"))
+        #expect(!rendered.contains("private-secret"))
+    }
+
     @Test func explicitLiveModeNeverFallsBackWhenCredentialIsMissing() throws {
         let options = QualificationOptions(
             provider: .openAI,

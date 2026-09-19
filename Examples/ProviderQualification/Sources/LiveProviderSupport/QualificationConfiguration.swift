@@ -13,14 +13,18 @@ public struct QualificationPreflight: Equatable, Sendable {
     public let totalLimit: Int
 
     public var rendered: String {
-        [
+        let credentialStatus = mode == .fixture
+            ? "UNUSED"
+            : (credentialConfigured ? "CONFIGURED" : "MISSING")
+        let renderedCredentialVariable = mode == .fixture ? "UNUSED" : credentialVariable
+        return [
             "mode=\(mode.rawValue.uppercased())",
             "provider=\(provider.rawValue)",
             "service=\(service.rawValue)",
             "origin=\(origin)",
             "model=\(model ?? "MISSING")",
-            "credential=\(credentialConfigured ? "CONFIGURED" : "MISSING")",
-            "credential_variable=\(credentialVariable)",
+            "credential=\(credentialStatus)",
+            "credential_variable=\(renderedCredentialVariable)",
             "provider_request_limit=\(perProviderLimit)",
             "total_request_limit=\(totalLimit)",
             "case=\(scenario.rawValue)",
@@ -42,6 +46,20 @@ public struct QualificationConfiguration: Sendable {
         perProviderLimit: Int = 12,
         totalLimit: Int = 48
     ) throws -> QualificationPreflight {
+        if options.mode == .fixture {
+            return .init(
+                provider: options.provider,
+                mode: options.mode,
+                service: options.service,
+                origin: "FIXTURE",
+                model: options.modelOverride ?? "fixture",
+                credentialConfigured: false,
+                credentialVariable: "UNUSED",
+                scenario: options.scenario,
+                perProviderLimit: perProviderLimit,
+                totalLimit: totalLimit
+            )
+        }
         let values = try resolveValues(options: options, environment: environment)
         return .init(
             provider: options.provider,

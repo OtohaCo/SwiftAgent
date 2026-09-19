@@ -6,3 +6,4 @@ DerivedData/
 .env.live
 Examples/**/.env.live
 *.live-budget.json
+*.live-budget.json.lock
