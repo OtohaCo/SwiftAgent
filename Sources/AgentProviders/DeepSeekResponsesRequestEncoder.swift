@@ -29,7 +29,7 @@ enum DeepSeekResponsesRequestEncoder {
                 ) {
                     input.append(contentsOf: restored.items)
                 } else {
-                    if reasoningEffort != .none && !request.tools.isEmpty {
+                    if reasoningEffort != .none && !request.tools.isEmpty && !calls.isEmpty {
                         throw ModelProviderError(
                             kind: .invalidRequest,
                             message: "DeepSeek thinking with tools requires the original plaintext reasoning continuation."

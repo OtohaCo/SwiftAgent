@@ -27,8 +27,10 @@ depend on `previous_response_id`, `conversation`, `store`, or `include`.
 
 ## Thinking And Tools
 
-Thinking defaults to `.high`. The supported efforts are `.none`, `.low`,
-`.high`, and `.max`. DeepSeek requires original plaintext reasoning on later
+Thinking defaults to `.high`. Named efforts include `.none`, `.minimal`,
+`.low`, `.medium`, `.high`, `.xhigh`, and `.max`. The raw-value type also
+preserves future non-empty DeepSeek effort values without requiring a new
+SwiftAgent release. DeepSeek requires original plaintext reasoning on later
 turns when thinking and function tools are used. The adapter stores received
 `reasoning_text` items in a DeepSeek-owned opaque continuation, validates that
 they still match the canonical assistant content and tool calls, and replays
@@ -79,6 +81,12 @@ turn. A completed call mixed with a partial call in the same incomplete
 response also executes nothing. The final snapshot may preserve the observed
 partial state only when it exactly matches the observed bytes; it cannot extend
 or rewrite the item ID, content, or argument prefix.
+
+An incomplete turn is checkpointed without executable tool proposals or opaque
+continuation state. Its visible assistant text remains ordinary conversation,
+so a later Run can continue even when tools remain registered. Historical
+turns that contain tool calls still require their matching plaintext reasoning
+continuation and fail closed when that state is unavailable.
 
 When thinking and host function tools are enabled, the adapter requires the
 same completed assistant turn to contain replayable plaintext reasoning, even

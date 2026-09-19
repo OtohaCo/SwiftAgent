@@ -53,6 +53,46 @@ struct DeepSeekResponsesIncompleteTests {
         #expect(response.content == [.reasoning("Partial reason"), .text("Partial answer")])
     }
 
+    @Test func incompleteTextTurnDoesNotPoisonTheNextRunWhenToolsRemainAvailable() async throws {
+        let probe = ProviderRequestProbe()
+        let execution = ProviderExecutionProbe()
+        let provider = try DeepSeekResponsesProvider(
+            apiKey: "fixture-key",
+            transport: FixtureHTTPTransport(
+                probe: probe,
+                bodies: [partialReasoningAndMessageFixture, completedReasoningAndMessageFixture]
+            )
+        )
+        let session = try Agent(
+            model: deepSeekIncompleteModel,
+            provider: provider,
+            tools: [try ProviderCalculator(probe: execution)]
+        ).makeSession()
+
+        #expect(try await session.run("Think").wait().outcome == .incomplete(.maxOutputTokens))
+        #expect(try await session.run("Continue").wait().outcome == .completed)
+        #expect(await execution.count == 0)
+
+        let requests = await probe.requests
+        #expect(requests.count == 2)
+        guard let body = requests[1].httpBody,
+              case .object(let root) = try JSONDecoder().decode(JSONValue.self, from: body),
+              case .array(let input) = root["input"] else {
+            Issue.record("Missing follow-up request body")
+            return
+        }
+        #expect(input.contains(.object([
+            "type": .string("message"),
+            "role": .string("assistant"),
+            "content": .string("Partial answer"),
+        ])))
+        #expect(input.last == .object([
+            "type": .string("message"),
+            "role": .string("user"),
+            "content": .string("Continue"),
+        ]))
+    }
+
     @Test func completedAndPartialCallsInIncompleteResponseExecuteNone() async throws {
         let execution = ProviderExecutionProbe()
         let provider = try DeepSeekResponsesProvider(
@@ -138,6 +178,19 @@ private let partialReasoningAndMessageFixture = providerNamedSSE([
     ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"msg-1","output_index":1,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}"#),
     ("response.output_text.delta", #"{"type":"response.output_text.delta","item_id":"msg-1","output_index":1,"content_index":0,"delta":"Partial answer"}"#),
     ("response.incomplete", #"{"type":"response.incomplete","response":{"id":"resp-partial-text","model":"deepseek-flash","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"rs-1","type":"reasoning","status":"incomplete","content":[{"type":"reasoning_text","text":"Partial reason"}]},{"id":"msg-1","type":"message","role":"assistant","status":"incomplete","content":[{"type":"output_text","text":"Partial answer","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":2}}}"#),
+])
+
+private let completedReasoningAndMessageFixture = providerNamedSSE([
+    ("response.created", #"{"type":"response.created","response":{"id":"resp-complete-text","model":"deepseek-flash","status":"in_progress"}}"#),
+    ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"rs-complete","type":"reasoning","status":"in_progress","content":[]}}"#),
+    ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"rs-complete","output_index":0,"content_index":0,"part":{"type":"reasoning_text","text":""}}"#),
+    ("response.reasoning_text.delta", #"{"type":"response.reasoning_text.delta","item_id":"rs-complete","output_index":0,"content_index":0,"delta":"Continued reasoning"}"#),
+    ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"rs-complete","type":"reasoning","status":"completed","content":[{"type":"reasoning_text","text":"Continued reasoning"}]}}"#),
+    ("response.output_item.added", #"{"type":"response.output_item.added","output_index":1,"item":{"id":"msg-complete","type":"message","role":"assistant","status":"in_progress","content":[]}}"#),
+    ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"msg-complete","output_index":1,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}"#),
+    ("response.output_text.delta", #"{"type":"response.output_text.delta","item_id":"msg-complete","output_index":1,"content_index":0,"delta":"Finished"}"#),
+    ("response.output_item.done", #"{"type":"response.output_item.done","output_index":1,"item":{"id":"msg-complete","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Finished","annotations":[]}]}}"#),
+    ("response.completed", #"{"type":"response.completed","response":{"id":"resp-complete-text","model":"deepseek-flash","status":"completed","output":[{"id":"rs-complete","type":"reasoning","status":"completed","content":[{"type":"reasoning_text","text":"Continued reasoning"}]},{"id":"msg-complete","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Finished","annotations":[]}]}],"usage":{"input_tokens":3,"output_tokens":2,"output_tokens_details":{"reasoning_tokens":1}}}}"#),
 ])
 
 private let mixedFunctionFixture = providerNamedSSE([

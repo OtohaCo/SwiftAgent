@@ -22,6 +22,9 @@ additions and behavior changes will be recorded here before that release is cut.
   retaining readability of older opaque payloads.
 - Fence provider-route candidate callbacks by Run generation so a response that
   finishes after clear/cancel cannot restore stale pinning.
+- Preserve visible DeepSeek incomplete-turn history without requiring discarded
+  tool/reasoning continuation state on the next Run; incomplete tool proposals
+  remain non-executable.
 - Add deterministic ownership tests proving a timed-out compactor cannot
   overwrite a newer memory or durable checkpoint and terminal completion waits
   for a reserved mutation commit.
@@ -38,6 +41,8 @@ additions and behavior changes will be recorded here before that release is cut.
   host-executed function calls, structured output, plaintext reasoning replay,
   usage normalization, explicit model-alias identity, and fail-closed terminal
   validation. DeepSeek live-cloud qualification is not claimed in this entry.
+- Make DeepSeek reasoning effort an extensible validated raw-value type so new
+  provider effort values do not require expanding a closed public enum.
 
 ### Decisions
 
