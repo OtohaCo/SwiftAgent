@@ -1,7 +1,7 @@
 # SwiftAgent Public API Audit
 
-last-verified: 2026-09-18
-status: Approved for 1.0 freeze (this branch)
+last-verified: 2026-09-19
+status: 1.0.0-rc.1 freeze plus audited post-rc.1 additive provider surface
 
 This inventory is the SAI-026 freeze record, updated by SAI-026B hardening,
 SAI-039 recoverable read-only tool failures, and the SAI-047 RC audit.
@@ -23,10 +23,12 @@ surface even though it ships in this package.
 
 Counts are types (struct/enum/protocol/actor/class), not every property. Members
 follow the type decision unless noted. SAI-047 separately generated and
-reviewed the complete 956-symbol public member graph in
-[the member inventory](2026-09-19-swift-agent-public-api-members.md); every
-currently public member is KEEP, with NARROW/REMOVE already absent from the
-public graph.
+reviewed the complete 956-symbol `1.0.0-rc.1` public member graph. The current
+post-rc.1 branch has 1,013 public member symbols and 105 public top-level types:
+57 precise identifiers were added and none removed. See
+[the generated member inventory](2026-09-19-swift-agent-public-api-members.md).
+Every current member is KEEP, with NARROW/REMOVE already absent from the public
+graph.
 
 ## Breaking changes made now
 
@@ -132,9 +134,11 @@ readable and not assignable.
 | Symbol | Current | Decision | Reason | Breaking? |
 | --- | --- | --- | --- | --- |
 | AnthropicProvider / AnthropicThinking | public | KEEP | Optional cloud adapter | No |
+| OpenAIResponsesProvider / OpenAIReasoningEffort / OpenAIReasoningSummary | public | KEEP | Stateless Responses adapter and extensible vendor reasoning values | Additive types |
+| DeepSeekResponsesProvider / DeepSeekReasoningEffort | public | KEEP | Independent stateless Responses adapter with explicit validated effort values | Additive types; future enum case would be source-breaking |
 | ModelProviderRoute / fallback policy types | public | KEEP | Validated fallback among adapters sharing one provider namespace | `candidateProviderIDMismatch` is a 1.0-pre enum expansion |
-| ProviderHTTPTransport / URLSessionProviderHTTPTransport / ProviderHTTPEvent | public | KEEP | Custom transports without linking Apple | No |
-| AppleFoundationProvider | public | KEEP | Isolated in its own target because of FoundationModels | No |
+| ProviderHTTPTransport / URLSessionProviderHTTPTransport / ProviderHTTPEvent | public | KEEP | Custom transports and deterministic fixtures without linking Apple | No |
+| AppleFoundationProvider | public | KEEP | Isolated in its own target because of FoundationModels; additive on-device/PCC factories and model IDs | Additive members |
 
 Apple stays a separate target. Anthropic stays in AgentProviders: no heavy SDK,
 FoundationNetworking only on Linux. Do not split further until a provider adds a
@@ -385,3 +389,27 @@ Journal v3 remains the write schema. SAI-047 adds no schema version. Legacy v1
 record semantics survive canonical rewrite, valid v2 session-scoped identity
 collisions load conservatively, and all new v3 admissions retain journal-wide
 identity scope.
+
+## Post-rc.1 provider additions
+
+The published `1.0.0-rc.1` graph contains 956 public member symbols and 100
+public top-level types. The current branch contains 1,013 and 105 respectively.
+The exact precise-identifier comparison reports 57 additions and zero removals.
+The five new top-level types are:
+
+1. `OpenAIReasoningEffort`
+2. `OpenAIReasoningSummary`
+3. `OpenAIResponsesProvider`
+4. `DeepSeekReasoningEffort`
+5. `DeepSeekResponsesProvider`
+
+OpenAI reasoning values are extensible raw-value structs so newer vendor wire
+values do not require an enum expansion. DeepSeek reasoning effort is a closed
+enum for the currently validated vocabulary. Adding a new case later is a
+source break for exhaustive client switches and must be treated accordingly.
+
+The remaining additions are provider members and synthesized conformances, the
+Anthropic alias-aware initializer, and Apple Private Cloud Compute members. No
+AgentCore, AgentModels, AgentTools, or WorkspaceAgent public symbol changed in
+this remediation round. No Journal schema or continuation format version was
+changed.

@@ -231,10 +231,13 @@ waiter does not cancel the Session-owned drain.
 ## Provider Model
 
 `ModelProvider` is the provider-neutral request and event contract.
-`AgentProviders` supplies Anthropic and OpenAI Responses transports plus validated routing;
-`AgentAppleProvider` is an optional Apple Foundation Models adapter. Provider
-continuations are opaque and provider-specific, not conversation memory or
-portable trusted state.
+`AgentProviders` supplies Anthropic, OpenAI Responses, and DeepSeek Responses
+transports plus validated routing; `AgentAppleProvider` is an optional Apple
+Foundation Models adapter. Provider continuations are opaque and
+provider-specific, not conversation memory or portable trusted state. See the
+[provider matrix](docs/providers.md) and the
+[DeepSeek guide](docs/guides/swift-agent-deepseek-provider.md) for the declared
+capability and live-test boundaries.
 
 ## Evidence and Mutation Safety
 
@@ -273,7 +276,8 @@ bash Scripts/ci-linux.sh
 ```
 
 The ExternalClient package under `Examples/ExternalClient` imports public API
-only. Live Anthropic and Apple model tests remain explicit operator opt-ins.
+only. Live Anthropic, OpenAI, and Apple model tests remain explicit operator
+opt-ins. DeepSeek currently has deterministic fixture/schema coverage only.
 
 ## Module Boundaries
 
@@ -283,7 +287,7 @@ only. Live Anthropic and Apple model tests remain explicit operator opt-ins.
 | AgentTools | AgentModels | Typed tools, validation and execution policy |
 | AgentCore | AgentModels, AgentTools | The single agent loop, sessions and runs |
 | AgentProviders | AgentModels | Native request and event conversion |
-| AgentAppleProvider | AgentModels | Apple on-device structured planning; platform SDK isolation |
+| AgentAppleProvider | AgentModels | Apple on-device and PCC structured planning; platform SDK isolation |
 | WorkspaceAgent | AgentModels, AgentTools, AgentCore, AgentProviders | Domain-neutral Reference Host for a sandbox file agent |
 
 Providers receive model data, never a host tool executor. Execution belongs to
@@ -391,3 +395,7 @@ streaming, signed continuation, structured answers and opt-in gateway verificati
 
 [OpenAI Responses](docs/guides/swift-agent-openai-provider.md) covers stateless
 conversation replay, function calls, structured output, reasoning, and usage.
+
+[DeepSeek Responses](docs/guides/swift-agent-deepseek-provider.md) covers
+stateless replay, legal incomplete output, plaintext reasoning continuation,
+and fixture-only verification scope.

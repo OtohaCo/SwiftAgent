@@ -1,9 +1,11 @@
 # SwiftAgent Conformance & Regression Matrix
 
-last-verified: 2026-09-18
+last-verified: 2026-09-19
 
 Pi reference: `earendil-works/pi` `5901446094988aa5cd8e11efdaa131c3949106f1` (main, 2026-09-18).
-SwiftAgent baseline: `3e47373eedf89c50d9642f11d0268d00f9e5ea91` plus the SAI-047 RC audit fixes on this branch.
+SwiftAgent baseline: published `1.0.0-rc.1` plus the audited post-rc.1
+Anthropic alias, Apple PCC, OpenAI Responses, and DeepSeek Responses work on
+`plan/swift-agent-rc2`.
 
 Pi tests are a catalog, not a porting checklist. Each row answers: SwiftAgent has the concept? Should it? Already tested? Stronger? Not applicable?
 
@@ -18,7 +20,7 @@ Action values: `Covered` · `Add test` · `Existing backlog` · `New backlog` ·
 | 1 Core Loop | single turn, tool loop, failure, cancel, events | Covered |
 | 2 Stateful Agent | multi-run, steering, context, continuation, compaction | Covered |
 | 3 Durable Agent | journal, restart, mutation, receipt, reconciliation | Covered |
-| 4 Provider | streaming, encoding, tool calls, reasoning, usage, errors | Partial |
+| 4 Provider | streaming, encoding, tool calls, reasoning, usage, errors | Covered for declared adapters |
 | 5 Host Integration | ExternalClient, WorkspaceAgent, Otoha adapter | Partial |
 
 Level 2 is Covered for the declared contract: next `session.run` after `wait()`, in-run `steer`, fail-closed default compaction. Pi's first-class follow-up *queue* is Host responsibility (SAI-045), not a silent gap in the current API.
@@ -27,7 +29,10 @@ Level 3 is Covered for the declared contract. SAI-040 adds journal-wide durable
 deduplication, typed pending/reconciliation failures, receipt-backed settled
 replay without executor invocation, and explicit Host-confirmed abort restart.
 
-Level 4 is Partial because SwiftAgent ships Anthropic + Apple planning adapters, not Pi's multi-cloud catalog. Live cloud/on-device tests remain opt-in skips.
+Level 4 is Covered for the declared Anthropic, OpenAI Responses, DeepSeek
+Responses, and Apple planning adapters. This means fixture/schema coverage of
+their declared contracts; live cloud/on-device qualification remains
+operator-opt-in and DeepSeek currently has no live suite.
 
 Level 5 is Partial: ExternalClient and WorkspaceAgent prove the public API; Otoha is a product host, not Core.
 
@@ -173,7 +178,7 @@ Phases are covered across files, not one checklist suite.
 
 ---
 
-## K–L. Provider stream / Anthropic
+## K–L. Provider stream / adapters
 
 | Scenario | Pi coverage | SwiftAgent coverage | Existing test | Action |
 | --- | --- | --- | --- | --- |
@@ -181,6 +186,8 @@ Phases are covered across files, not one checklist suite.
 | Unicode / combining / CJK / emoji chunk split | unicode-surrogate | Yes | **SAI-044** `chineseJapaneseEmojiSurviveUTF8ChunkBoundaries` | Covered |
 | Unknown top-level Anthropic event ignored | anthropic-sse-parsing | Yes | `AnthropicUnknownEventTests` | Covered |
 | Thinking signature / tool input streaming / usage | anthropic thinking tests | Declared subset | `AnthropicProviderTests`, continuation tests | Covered |
+| OpenAI terminal item status, incomplete calls, native identity, ordered continuation | Responses API | Yes | `ResponsesTerminalValidationTests`, `OpenAIResponsesFailureTests`, `ResponsesContinuationIntegrityTests` | Covered |
+| DeepSeek terminal status, legal partial response, same-turn reasoning, ordered continuation | Responses API | Yes | `ResponsesTerminalValidationTests`, `DeepSeekResponsesIncompleteTests`, `ResponsesContinuationIntegrityTests` | Covered |
 | Adaptive thinking, OAuth, Bedrock, Gemini, … | packages/ai/test catalog | No | — | Not applicable |
 | `event:` vs `data.type` mismatch after `message_stop` | — | Yes | `AnthropicUnknownEventTests` | Covered |
 
@@ -204,7 +211,7 @@ Phases are covered across files, not one checklist suite.
 | --- | --- | --- |
 | Opaque IDs, reuse cannot replay | `ModelIdentityTests`, `AgentLoopBudgetTests.reusedCallIDs…` | Covered |
 | Invalid JSON / wrong type / unknown tool never execute | `AgentLoopContractTests.malformedUnknownAndInvalidBatchMembersNeverExecuteAnyTool` | Covered |
-| Pi foreign toolcall-id normalization / OpenAI Responses IDs | No OpenAI Responses adapter | Not applicable |
+| Pi foreign toolcall-id normalization / OpenAI Responses IDs | OpenAI native function ID and call ID are retained and rebound to canonical calls | `openAIToolOnlyContinuationPreservesNativeIdentityAcrossEncoding` | Covered |
 | Empty / Unicode / very long IDs as identity bytes | opaque UTF-8 identity tests | Covered |
 
 Do not normalize IDs in a way that breaks Receipt / Journal identity.
@@ -272,6 +279,7 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 | Same-provider `retryAfter`; cancellation during delay | `sameProviderRetryHonorsRetryAfter`, `cancellingDuringRetryAfterStopsBeforeAnotherAttempt` | Covered for declared route |
 | Partial stream then fallback never publishes failed candidate | `partialEventsFromFailedCandidateAreNeverPublished` | Covered |
 | Route candidate namespace and buffered capability truthfulness | `routeRejectsCandidateFromAnotherProviderNamespace`, `routeDoesNotAdvertiseStreamingWhenItBuffersCandidateResponses` | Covered |
+| Late candidate completion after Run clear cannot restore stale pinning | `validatedCandidateFinishingAfterClearCannotRestorePinnedState` | Covered |
 
 ---
 
@@ -312,7 +320,7 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 | I Terminal events | Covered (Session onFailed path → SAI-042) |
 | J wait/drain | Covered (drain Task cancel → SAI-042) |
 | K Stream robustness | Covered |
-| L Anthropic | Covered for declared subset |
+| L Provider adapters | Covered for declared subsets; live qualification remains explicit |
 | M Continuation | Covered |
 | N Cross-provider | Covered portable + ignore foreign opaque |
 | O Tool IDs | Covered |
@@ -334,7 +342,8 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 
 1. First-class follow-up queue while a Run is in progress — SAI-045.
 2. Semantic compaction that preserves dropped tool results — **rejected**. Default is fail-closed (`historyTooLarge`). Lossy opt-in is explicit.
-3. Multi-cloud provider catalog (OpenAI Responses, Gemini, Bedrock, …) — N/A until a Host adapter exists.
+3. Additional vendor catalog entries such as Gemini or Bedrock — product scope,
+   not a conformance gap in the declared provider set.
 4. Tool `terminate` / beforeToolCall hooks — Host wrapper, not Core.
 5. Async subscriber `waitForIdle` — SwiftAgent `wait()`/`waitForDrain()` is the contract.
 

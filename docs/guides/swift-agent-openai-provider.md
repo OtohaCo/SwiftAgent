@@ -74,6 +74,28 @@ Actual support remains model-dependent and an unsupported value is returned as
 a typed provider failure. Use `.disabled` for OpenAI's `"none"` effort value;
 the distinct Swift name avoids ambiguity with an absent optional configuration.
 
+## Terminal And Continuation Validation
+
+Response status and output-item status are separate contracts. Message items
+must carry the expected non-null status at add, done, and final snapshot stages.
+Reasoning and function-call status is optional in the current SDK schema and
+may be omitted or `null`; when present it must be one of `in_progress`,
+`completed`, or `incomplete` and must match the event phase. An unknown value
+such as `finalized`, a contradictory known value, or final content that differs
+from the streamed item fails the response before AgentCore dispatches tools.
+
+Argument JSON completion, `function_call_arguments.done`, `output_item.done`,
+and the response terminal are each validated independently. An incomplete
+response can expose an incomplete call to the Run result, but AgentCore does
+not execute any call from an incomplete turn.
+
+Continuation binding preserves provider item order and the ordered visible
+text/reasoning projection. Adjacent fragments of the same kind may merge;
+text/reasoning reordering is rejected. A function-only turn retains the native
+OpenAI function item ID and status for the next stateless request. If a
+reasoning item lacks encrypted content, the adapter keeps only replayable
+native function state rather than inventing reasoning continuation bytes.
+
 The live test is operator-only:
 
 ```sh

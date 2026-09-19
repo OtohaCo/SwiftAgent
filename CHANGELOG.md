@@ -13,6 +13,17 @@ additions and behavior changes will be recorded here before that release is cut.
   conservatively adopt a frame that was written before directory sync failed.
 - Validate Anthropic response model identity, with an explicit mapping for
   legacy aliases that resolve to dated model IDs.
+- Reject illegal or contradictory OpenAI and DeepSeek output-item terminal
+  states before AgentCore can dispatch a tool, while preserving legal
+  incomplete output as non-executable partial state.
+- Bind OpenAI and DeepSeek continuations to ordered canonical visible content,
+  tool-call order, and native function identities; reject reordered or
+  rewritten replay state.
+- Fence provider-route candidate callbacks by Run generation so a response that
+  finishes after clear/cancel cannot restore stale pinning.
+- Add deterministic ownership tests proving a timed-out compactor cannot
+  overwrite a newer memory or durable checkpoint and terminal completion waits
+  for a reserved mutation commit.
 
 ### Providers
 
@@ -22,6 +33,10 @@ additions and behavior changes will be recorded here before that release is cut.
   function calls, structured output, encrypted reasoning continuation,
   normalized usage, explicit model-alias identity, classified stream failures,
   and stateless canonical conversation replay.
+- Add an independent DeepSeek Responses API adapter with typed SSE streaming,
+  host-executed function calls, structured output, plaintext reasoning replay,
+  usage normalization, explicit model-alias identity, and fail-closed terminal
+  validation. DeepSeek live-cloud qualification is not claimed in this entry.
 
 ## [1.0.0-rc.1] - 2026-09-19
 

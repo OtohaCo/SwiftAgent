@@ -1,6 +1,6 @@
 # SwiftAgent Semantic Versioning
 
-last-verified: 2026-09-18
+last-verified: 2026-09-19
 
 SwiftAgent follows Swift Package Manager rules, not a promise of ABI stability.
 A major version is required when a change can fail a client that compiled
@@ -53,6 +53,17 @@ runtime meaning:
 Unknown future provider values belong on typed extension points
 (`StopReason.unknown`, optional usage fields, `ModelProviderContinuation`), not
 `[String: Any]`.
+
+Post-`1.0.0-rc.1`, OpenAI reasoning configuration uses extensible
+`RawRepresentable` structs, so a new wire value does not require a new enum
+case. `DeepSeekReasoningEffort` is intentionally a closed enum for the values
+the adapter currently validates. Adding a future case is a source break for an
+exhaustive client `switch`; unknown future values are not silently accepted.
+
+The current branch adds 57 precise public symbol identifiers and removes none
+relative to `1.0.0-rc.1`. These additions are source-compatible for clients
+that do not adopt the new providers, but that does not make later expansion of
+a closed public enum source-compatible.
 
 ## Enums
 

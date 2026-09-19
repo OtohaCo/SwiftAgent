@@ -1,6 +1,6 @@
 # SwiftAgent Testing
 
-last-verified: 2026-09-18
+last-verified: 2026-09-19
 
 Primary compiler: Swift 6.4. From the package directory:
 
@@ -14,6 +14,17 @@ Do not treat skipped live tests as passes. Anthropic, OpenAI, and Apple live
 tests are env-gated. OpenAI live coverage requires
 `SWIFT_AGENT_OPENAI_LIVE=1`, `OPENAI_API_KEY`, and `OPENAI_MODEL`; alias users
 also provide `OPENAI_RESOLVED_MODEL` when the API reports a dated snapshot.
+DeepSeek currently has fixture/schema coverage only; there is no operator live
+suite, so a green package run is not a DeepSeek cloud qualification.
+
+Provider remediation fixtures can be run directly:
+
+```sh
+swift test --filter ResponsesTerminalValidationTests
+swift test --filter DeepSeekResponsesIncompleteTests
+swift test --filter ResponsesContinuationIntegrityTests
+swift test --filter ProviderFallbackTests
+```
 
 ## What a Core test must prove
 
