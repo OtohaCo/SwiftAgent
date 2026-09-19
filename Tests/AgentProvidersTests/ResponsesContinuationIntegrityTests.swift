@@ -19,10 +19,15 @@ struct ResponsesContinuationIntegrityTests {
             nativeMessage(id: "msg-1", text: "Answer"),
         ]
 
-        #expect(throws: (any Error).self) {
-            try OpenAIResponsesContinuation.make(
-                items: items,
-                content: [.text("Answer"), .reasoning("Reason")],
+        let continuation = try #require(try OpenAIResponsesContinuation.make(
+            items: items,
+            content: [.reasoning("Reason"), .text("Answer")],
+            calls: [],
+            model: model
+        ))
+        #expect(throws: ModelProviderError.self) {
+            try OpenAIResponsesContinuation.restore(
+                content: [.text("Answer"), .reasoning("Reason"), .providerContinuation(continuation)],
                 calls: [],
                 model: model
             )
@@ -36,10 +41,15 @@ struct ResponsesContinuationIntegrityTests {
             nativeMessage(id: "msg-1", text: "Answer"),
         ]
 
-        #expect(throws: (any Error).self) {
-            try DeepSeekResponsesContinuation.make(
-                items: items,
-                content: [.text("Answer"), .reasoning("Reason")],
+        let continuation = try #require(try DeepSeekResponsesContinuation.make(
+            items: items,
+            content: [.reasoning("Reason"), .text("Answer")],
+            calls: [],
+            model: model
+        ))
+        #expect(throws: ModelProviderError.self) {
+            try DeepSeekResponsesContinuation.restore(
+                content: [.text("Answer"), .reasoning("Reason"), .providerContinuation(continuation)],
                 calls: [],
                 model: model
             )
@@ -59,9 +69,14 @@ struct ResponsesContinuationIntegrityTests {
             ]),
             nativeMessage(id: "msg-1", text: "Answer"),
         ]
-        #expect(try OpenAIResponsesContinuation.make(
+        let openAIContinuation = try #require(try OpenAIResponsesContinuation.make(
             items: openAIItems,
             content: [.reasoning("Rea"), .reasoning("son"), .text("Answer")],
+            calls: [],
+            model: openAIModel
+        ))
+        #expect(try OpenAIResponsesContinuation.restore(
+            content: [.reasoning("Reason"), .text("Answer"), .providerContinuation(openAIContinuation)],
             calls: [],
             model: openAIModel
         ) != nil)
@@ -77,9 +92,14 @@ struct ResponsesContinuationIntegrityTests {
             ]),
             nativeMessage(id: "msg-1", text: "Answer"),
         ]
-        #expect(try DeepSeekResponsesContinuation.make(
+        let deepSeekContinuation = try #require(try DeepSeekResponsesContinuation.make(
             items: deepSeekItems,
             content: [.reasoning("Rea"), .reasoning("son"), .text("Answer")],
+            calls: [],
+            model: deepSeekModel
+        ))
+        #expect(try DeepSeekResponsesContinuation.restore(
+            content: [.reasoning("Reason"), .text("Answer"), .providerContinuation(deepSeekContinuation)],
             calls: [],
             model: deepSeekModel
         ) != nil)
@@ -97,10 +117,18 @@ struct ResponsesContinuationIntegrityTests {
             ]),
             nativeMessage(id: "msg-1", text: "Answer"),
         ]
-        #expect(throws: (any Error).self) {
-            try OpenAIResponsesContinuation.make(
-                items: openAIItems,
-                content: [.reasoning("Rea"), .text("Answer"), .reasoning("son")],
+        let openAIContinuation = try #require(try OpenAIResponsesContinuation.make(
+            items: openAIItems,
+            content: [.reasoning("Reason"), .text("Answer")],
+            calls: [],
+            model: openAIModel
+        ))
+        #expect(throws: ModelProviderError.self) {
+            try OpenAIResponsesContinuation.restore(
+                content: [
+                    .reasoning("Rea"), .text("Answer"), .reasoning("son"),
+                    .providerContinuation(openAIContinuation),
+                ],
                 calls: [],
                 model: openAIModel
             )
@@ -111,14 +139,117 @@ struct ResponsesContinuationIntegrityTests {
             deepSeekReasoning(id: "rs-1", text: "Reason"),
             nativeMessage(id: "msg-1", text: "Answer"),
         ]
-        #expect(throws: (any Error).self) {
-            try DeepSeekResponsesContinuation.make(
-                items: deepSeekItems,
-                content: [.reasoning("Rea"), .text("Answer"), .reasoning("son")],
+        let deepSeekContinuation = try #require(try DeepSeekResponsesContinuation.make(
+            items: deepSeekItems,
+            content: [.reasoning("Reason"), .text("Answer")],
+            calls: [],
+            model: deepSeekModel
+        ))
+        #expect(throws: ModelProviderError.self) {
+            try DeepSeekResponsesContinuation.restore(
+                content: [
+                    .reasoning("Rea"), .text("Answer"), .reasoning("son"),
+                    .providerContinuation(deepSeekContinuation),
+                ],
                 calls: [],
                 model: deepSeekModel
             )
         }
+    }
+
+    @Test func interleavedVisibleContentRoundTripsInPublishedOrder() throws {
+        let openAIModel = ModelID(provider: "openai", name: "fixture")
+        let openAIContent: [ModelContent] = [.text("A"), .reasoning("B"), .text("C")]
+        let openAIContinuation = try #require(try OpenAIResponsesContinuation.make(
+            items: [nativeMessage(id: "msg-1", text: "AC"), .object([
+                "type": .string("reasoning"), "id": .string("rs-1"),
+                "summary": .array([.object([
+                    "type": .string("summary_text"), "text": .string("B"),
+                ])]),
+                "encrypted_content": .string("encrypted"),
+            ])],
+            content: openAIContent,
+            calls: [],
+            model: openAIModel
+        ))
+        #expect(try OpenAIResponsesContinuation.restore(
+            content: openAIContent + [.providerContinuation(openAIContinuation)],
+            calls: [],
+            model: openAIModel
+        ) != nil)
+
+        let deepSeekModel = ModelID(provider: "deepseek", name: "deepseek-flash")
+        let deepSeekContent: [ModelContent] = [.text("A"), .reasoning("B"), .text("C")]
+        let deepSeekContinuation = try #require(try DeepSeekResponsesContinuation.make(
+            items: [nativeMessage(id: "msg-1", text: "AC"), deepSeekReasoning(id: "rs-1", text: "B")],
+            content: deepSeekContent,
+            calls: [],
+            model: deepSeekModel
+        ))
+        #expect(try DeepSeekResponsesContinuation.restore(
+            content: deepSeekContent + [.providerContinuation(deepSeekContinuation)],
+            calls: [],
+            model: deepSeekModel
+        ) != nil)
+    }
+
+    @Test func continuationsWithoutOrderedContentFieldRemainReadable() throws {
+        let openAIModel = ModelID(provider: "openai", name: "fixture")
+        let openAIContent: [ModelContent] = [.reasoning("Reason"), .text("Answer")]
+        let currentOpenAI = try #require(try OpenAIResponsesContinuation.make(
+            items: [.object([
+                "type": .string("reasoning"), "id": .string("rs-1"),
+                "summary": .array([.object([
+                    "type": .string("summary_text"), "text": .string("Reason"),
+                ])]),
+                "encrypted_content": .string("encrypted"),
+            ]), nativeMessage(id: "msg-1", text: "Answer")],
+            content: openAIContent,
+            calls: [],
+            model: openAIModel
+        ))
+        let oldOpenAI = try removingOrderedContentField(from: currentOpenAI)
+        #expect(try OpenAIResponsesContinuation.restore(
+            content: openAIContent + [.providerContinuation(oldOpenAI)],
+            calls: [],
+            model: openAIModel
+        ) != nil)
+
+        let deepSeekModel = ModelID(provider: "deepseek", name: "deepseek-flash")
+        let deepSeekContent: [ModelContent] = [.reasoning("Reason"), .text("Answer")]
+        let currentDeepSeek = try #require(try DeepSeekResponsesContinuation.make(
+            items: [deepSeekReasoning(id: "rs-1", text: "Reason"),
+                    nativeMessage(id: "msg-1", text: "Answer")],
+            content: deepSeekContent,
+            calls: [],
+            model: deepSeekModel
+        ))
+        let oldDeepSeek = try removingOrderedContentField(from: currentDeepSeek)
+        #expect(try DeepSeekResponsesContinuation.restore(
+            content: deepSeekContent + [.providerContinuation(oldDeepSeek)],
+            calls: [],
+            model: deepSeekModel
+        ) != nil)
+    }
+
+    @Test func deepSeekInterleavedItemsPreserveCanonicalContentOrder() async throws {
+        let provider = try DeepSeekResponsesProvider(
+            apiKey: "fixture-key",
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(),
+                bodies: [deepSeekInterleavedFixture]
+            )
+        )
+        var accumulator = ModelEventAccumulator()
+        for try await event in provider.stream(request: .init(
+            model: .init(provider: "deepseek", name: "deepseek-flash"),
+            messages: [.user([.text("Interleave")])]
+        )) {
+            try accumulator.append(event)
+        }
+        let response = try accumulator.finish()
+        #expect(Array(response.content.prefix(3)) == [.text("A"), .reasoning("B"), .text("C")])
+        #expect(response.content.contains { if case .providerContinuation = $0 { true } else { false } })
     }
 
     @Test(arguments: [1, 2])
@@ -236,6 +367,32 @@ private func deepSeekReasoning(id: String, text: String) -> JSONValue {
         ])]),
     ])
 }
+
+private func removingOrderedContentField(
+    from continuation: ModelProviderContinuation
+) throws -> ModelProviderContinuation {
+    var object = try ProviderJSON.object(JSONDecoder().decode(JSONValue.self, from: continuation.payload))
+    object.removeValue(forKey: "visible_content_order")
+    return .init(
+        model: continuation.model,
+        format: continuation.format,
+        payload: try JSONEncoder().encode(JSONValue.object(object))
+    )
+}
+
+private let deepSeekInterleavedFixture = providerNamedSSE([
+    ("response.created", #"{"type":"response.created","response":{"id":"resp-interleaved","model":"deepseek-flash","status":"in_progress"}}"#),
+    ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-1","type":"message","role":"assistant","status":"in_progress","content":[]}}"#),
+    ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"msg-1","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}"#),
+    ("response.output_item.added", #"{"type":"response.output_item.added","output_index":1,"item":{"id":"rs-1","type":"reasoning","status":"in_progress","content":[]}}"#),
+    ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"rs-1","output_index":1,"content_index":0,"part":{"type":"reasoning_text","text":""}}"#),
+    ("response.output_text.delta", #"{"type":"response.output_text.delta","item_id":"msg-1","output_index":0,"content_index":0,"delta":"A"}"#),
+    ("response.reasoning_text.delta", #"{"type":"response.reasoning_text.delta","item_id":"rs-1","output_index":1,"content_index":0,"delta":"B"}"#),
+    ("response.output_text.delta", #"{"type":"response.output_text.delta","item_id":"msg-1","output_index":0,"content_index":0,"delta":"C"}"#),
+    ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"AC","annotations":[]}]}}"#),
+    ("response.output_item.done", #"{"type":"response.output_item.done","output_index":1,"item":{"id":"rs-1","type":"reasoning","status":"completed","content":[{"type":"reasoning_text","text":"B"}]}}"#),
+    ("response.completed", #"{"type":"response.completed","response":{"id":"resp-interleaved","model":"deepseek-flash","status":"completed","output":[{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"AC","annotations":[]}]},{"id":"rs-1","type":"reasoning","status":"completed","content":[{"type":"reasoning_text","text":"B"}]}],"usage":{"input_tokens":1,"output_tokens":3}}}"#),
+])
 
 private let deepSeekPlainTextFixture = providerNamedSSE([
     ("response.created", #"{"type":"response.created","response":{"id":"resp-plain","model":"deepseek-flash","status":"in_progress"}}"#),

@@ -5,15 +5,25 @@ enum DeepSeekResponsesContinuation {
     static let format = "deepseek.responses.v1"
 
     struct Restored { let items: [JSONValue] }
-    private enum ContentKind: Equatable { case text, reasoning }
+    private enum ContentKind: String, Equatable { case text, reasoning }
+    private enum ContentBinding {
+        // Final native items retain totals but not cross-item streaming order.
+        case observed
+        case stored([(ContentKind, String)])
+        case legacy
+    }
 
     static func make(
         items: [JSONValue], content: [ModelContent], calls: [ToolCall], model: ModelID
     ) throws -> ModelProviderContinuation? {
-        let validated = try validate(items: items, content: content, calls: calls)
+        let validated = try validate(
+            items: items, content: content, calls: calls, contentBinding: .observed
+        )
         guard validated.hasReasoning else { return nil }
-        return .init(model: model, format: format,
-                     payload: try JSONEncoder().encode(JSONValue.object(["items": .array(items)])))
+        return .init(model: model, format: format, payload: try JSONEncoder().encode(JSONValue.object([
+            "items": .array(items),
+            "visible_content_order": encodeVisibleContent(try visibleContent(content)),
+        ])))
     }
 
     static func restore(
@@ -31,7 +41,15 @@ enum DeepSeekResponsesContinuation {
                   case .object(let object) = payload, case .array(let items) = object["items"] else {
                 throw ProviderJSON.invalid()
             }
-            let validated = try validate(items: items, content: content, calls: calls)
+            let binding: ContentBinding
+            if let encodedContent = object["visible_content_order"] {
+                binding = .stored(try decodeVisibleContent(encodedContent))
+            } else {
+                binding = .legacy
+            }
+            let validated = try validate(
+                items: items, content: content, calls: calls, contentBinding: binding
+            )
             guard validated.hasReasoning else { throw ProviderJSON.invalid() }
             return .init(items: items)
         } catch {
@@ -41,7 +59,7 @@ enum DeepSeekResponsesContinuation {
     }
 
     private static func validate(
-        items: [JSONValue], content: [ModelContent], calls: [ToolCall]
+        items: [JSONValue], content: [ModelContent], calls: [ToolCall], contentBinding: ContentBinding
     ) throws -> (hasReasoning: Bool, visibleReasoning: String) {
         func append(_ value: String, as kind: ContentKind, to sequence: inout [(ContentKind, String)]) {
             guard !value.isEmpty else { return }
@@ -96,18 +114,9 @@ enum DeepSeekResponsesContinuation {
                 throw ProviderJSON.invalid()
             }
         }
-        var canonicalContent: [(ContentKind, String)] = []
-        for part in content {
-            switch part {
-            case .text(let value): append(value, as: .text, to: &canonicalContent)
-            case .json(let value):
-                append(String(decoding: try JSONEncoder().encode(value), as: UTF8.self),
-                       as: .text, to: &canonicalContent)
-            case .reasoning(let value): append(value, as: .reasoning, to: &canonicalContent)
-            case .providerContinuation: break
-            }
-        }
-        guard orderedContentMatches(native: nativeContent, canonical: canonicalContent),
+        let canonicalContent = try visibleContent(content)
+        guard contentTotalsMatch(native: nativeContent, canonical: canonicalContent),
+              contentOrderMatches(native: nativeContent, canonical: canonicalContent, binding: contentBinding),
               functionItems.count == calls.count else { throw ProviderJSON.invalid() }
         for (item, call) in zip(functionItems, calls) {
             guard call.completeness == .complete,
@@ -123,13 +132,90 @@ enum DeepSeekResponsesContinuation {
         return (hasReasoning, visibleReasoning)
     }
 
-    private static func orderedContentMatches(
+    private static func visibleContent(_ content: [ModelContent]) throws -> [(ContentKind, String)] {
+        var result: [(ContentKind, String)] = []
+        func append(_ value: String, as kind: ContentKind) {
+            guard !value.isEmpty else { return }
+            if let last = result.last, last.0 == kind { result[result.count - 1].1 += value }
+            else { result.append((kind, value)) }
+        }
+        for part in content {
+            switch part {
+            case .text(let value): append(value, as: .text)
+            case .json(let value):
+                append(String(decoding: try JSONEncoder().encode(value), as: UTF8.self), as: .text)
+            case .reasoning(let value): append(value, as: .reasoning)
+            case .providerContinuation: break
+            }
+        }
+        return result
+    }
+
+    private static func contentTotalsMatch(
         native: [(ContentKind, String)],
         canonical: [(ContentKind, String)]
     ) -> Bool {
-        guard native.count == canonical.count else { return false }
-        return zip(native, canonical).allSatisfy { nativePart, canonicalPart in
-            nativePart.0 == canonicalPart.0 && nativePart.1 == canonicalPart.1
+        for kind in [ContentKind.text, .reasoning] {
+            guard contentValue(native, kind: kind) == contentValue(canonical, kind: kind) else {
+                return false
+            }
         }
+        return true
+    }
+
+    private static func contentValue(_ content: [(ContentKind, String)], kind: ContentKind) -> String {
+        content.reduce(into: "") { result, part in
+            if part.0 == kind { result += part.1 }
+        }
+    }
+
+    private static func contentOrderMatches(
+        native: [(ContentKind, String)],
+        canonical: [(ContentKind, String)],
+        binding: ContentBinding
+    ) -> Bool {
+        switch binding {
+        case .observed:
+            return true
+        case .stored(let stored):
+            return exactContentMatch(stored, canonical)
+        case .legacy:
+            var nativeIndex = 0
+            for (kind, _) in canonical where nativeIndex < native.count {
+                if native[nativeIndex].0 == kind { nativeIndex += 1 }
+            }
+            return nativeIndex == native.count
+        }
+    }
+
+    private static func exactContentMatch(
+        _ lhs: [(ContentKind, String)],
+        _ rhs: [(ContentKind, String)]
+    ) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return zip(lhs, rhs).allSatisfy { left, right in
+            left.0 == right.0 && left.1 == right.1
+        }
+    }
+
+    private static func encodeVisibleContent(_ content: [(ContentKind, String)]) -> JSONValue {
+        .array(content.map { part in
+            .object(["kind": .string(part.0.rawValue), "value": .string(part.1)])
+        })
+    }
+
+    private static func decodeVisibleContent(_ value: JSONValue) throws -> [(ContentKind, String)] {
+        guard case .array(let values) = value else { throw ProviderJSON.invalid() }
+        var result: [(ContentKind, String)] = []
+        for value in values {
+            let object = try ProviderJSON.object(value)
+            guard let kind = ContentKind(rawValue: try ProviderJSON.string(object["kind"])) else {
+                throw ProviderJSON.invalid()
+            }
+            let text = try ProviderJSON.string(object["value"])
+            guard !text.isEmpty, result.last?.0 != kind else { throw ProviderJSON.invalid() }
+            result.append((kind, text))
+        }
+        return result
     }
 }
