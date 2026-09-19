@@ -21,6 +21,8 @@ SwiftAgent 是一个不绑定模型厂商的 Swift Agent 运行时，提供类�
 | 任务 | 指南 |
 | --- | --- |
 | iOS/macOS UI、MainActor 分离、Run 所有权、停止和导航 | [Apple UI 接入](docs/guides/swift-agent-apple-ui.md) |
+| 运行 Linux HTTP 服务：租户隔离、Run 所有权、SSE 与部署 | [服务器接入](docs/guides/swift-agent-server.md) |
+| 开发 Android 客户端，或评估 Swift/JNI 本机嵌入 | [Android 接入](docs/guides/swift-agent-android.md) |
 | 不在 UI 中解析 SSE，直接显示文字和工具进度 | [UI 流式显示](docs/guides/swift-agent-ui-streaming.md) |
 | 添加只读工具、mutation、重启恢复或结构化回答 | [接入步骤与常用模式](docs/ai/consumer-recipes.md) |
 | 选择对话 Provider 并确认能力边界 | [Provider 矩阵](docs/providers.md) |
@@ -84,6 +86,12 @@ dependencies: [
 | 其他可移植 products | AgentModels、AgentTools、AgentProviders、WorkspaceAgent 支持 Linux |
 
 准确的可用性要求见 [Package.swift](Package.swift) 和 Apple Provider 指南。`swift-tools-version: 6.0` 是 manifest 语言的最低版本，不是验证所用的编译器版本。Core 不依赖 SwiftUI 或 Apple 模型 SDK。
+
+## 服务器与 Android 的支持范围
+
+[服务器指南](docs/guides/swift-agent-server.md)说明 App 自己的 HTTP 服务如何承载 SwiftAgent。Linux package 验证不等于生产服务器部署验收；认证、会话隔离、客户端流式协议和多实例协调仍由 Host 负责。
+
+[Android 指南](docs/guides/swift-agent-android.md)区分 Android 调用上述服务，以及通过 Swift/JNI 将 SwiftAgent 嵌入本机两条路线。前者不需要在 APK 中包含 Swift runtime；后者仍须完成目标模块、桥接、打包和设备验证。Swift 官方支持 Android，不表示 SwiftAgent 已完成这些检查。这两篇指南不新增服务器 executable 或 Android bridge，详细内容使用英文。
 
 ## 运行现有示例
 
