@@ -2,6 +2,9 @@ import AgentCore
 import AgentModels
 import AgentTools
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 import XCTest
 @testable import AgentProviders
