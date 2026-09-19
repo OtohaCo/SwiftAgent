@@ -9,9 +9,14 @@ struct OpenAIResponsesProviderTests {
     @Test func reasoningSummaryAndIncompleteLimitUseProviderNeutralEvents() async throws {
         let reasoning = providerNamedSSE([
             ("response.created", #"{"type":"response.created","response":{"id":"resp-r","model":"fixture","status":"in_progress"}}"#),
-            ("response.reasoning_summary_text.delta", #"{"type":"response.reasoning_summary_text.delta","delta":"Checked constraints."}"#),
-            ("response.output_text.delta", #"{"type":"response.output_text.delta","item_id":"msg-r","output_index":0,"content_index":0,"delta":"Partial"}"#),
-            ("response.incomplete", #"{"type":"response.incomplete","response":{"id":"resp-r","model":"fixture","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"msg-r","type":"message","role":"assistant","status":"incomplete","content":[{"type":"output_text","text":"Partial","annotations":[]}]}],"usage":{"input_tokens":7,"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":12}}}"#),
+            ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"rs-r","type":"reasoning","summary":[]}}"#),
+            ("response.reasoning_summary_part.added", #"{"type":"response.reasoning_summary_part.added","item_id":"rs-r","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}"#),
+            ("response.reasoning_summary_text.delta", #"{"type":"response.reasoning_summary_text.delta","item_id":"rs-r","output_index":0,"summary_index":0,"delta":"Checked constraints."}"#),
+            ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"rs-r","type":"reasoning","summary":[{"type":"summary_text","text":"Checked constraints."}]}}"#),
+            ("response.output_item.added", #"{"type":"response.output_item.added","output_index":1,"item":{"id":"msg-r","type":"message","role":"assistant","status":"in_progress","content":[]}}"#),
+            ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"msg-r","output_index":1,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}"#),
+            ("response.output_text.delta", #"{"type":"response.output_text.delta","item_id":"msg-r","output_index":1,"content_index":0,"delta":"Partial"}"#),
+            ("response.incomplete", #"{"type":"response.incomplete","response":{"id":"resp-r","model":"fixture","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"rs-r","type":"reasoning","summary":[{"type":"summary_text","text":"Checked constraints."}]},{"id":"msg-r","type":"message","role":"assistant","status":"incomplete","content":[{"type":"output_text","text":"Partial","annotations":[]}]}],"usage":{"input_tokens":7,"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":12}}}"#),
         ])
         let provider = try OpenAIResponsesProvider(apiKey: "key", reasoningSummary: .concise,
             transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [reasoning]))
@@ -67,6 +72,7 @@ struct OpenAIResponsesProviderTests {
             .object(["type": .string("message"), "role": .string("developer"), "content": .string("Use verified facts")]),
             .object(["type": .string("message"), "role": .string("user"), "content": .string("Hi")]),
         ]))
+        try OpenAIResponsesRequestContract.validate(.object(body))
     }
 
     @Test func reasoningConfigurationAcceptsFutureWireValuesWithoutEnumExpansion() async throws {
@@ -129,13 +135,23 @@ struct OpenAIResponsesProviderTests {
         #expect(input.contains(.object([
             "type": .string("function_call"), "id": .string("fc-1"), "call_id": .string("call-1"),
             "name": .string("calculator"), "arguments": .string(#"{"a":2,"b":3}"#),
+            "status": .string("completed"),
         ])))
     }
 
     @Test func missingEncryptedReasoningCompletesWithoutProviderContinuation() async throws {
-        let fixture = Data(String(decoding: openAIReasoningToolFixture, as: UTF8.self)
-            .replacingOccurrences(of: #","encrypted_content":"encrypted-reasoning""#, with: "")
-            .utf8)
+        let fixture = providerNamedSSE([
+            ("response.created", #"{"type":"response.created","response":{"id":"resp-reasoning","model":"fixture","status":"in_progress"}}"#),
+            ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"rs-1","type":"reasoning","summary":[]}}"#),
+            ("response.reasoning_summary_part.added", #"{"type":"response.reasoning_summary_part.added","item_id":"rs-1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}"#),
+            ("response.reasoning_summary_text.delta", #"{"type":"response.reasoning_summary_text.delta","item_id":"rs-1","output_index":0,"summary_index":0,"delta":"Checked inputs."}"#),
+            ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"rs-1","type":"reasoning","summary":[{"type":"summary_text","text":"Checked inputs."}]}}"#),
+            ("response.output_item.added", #"{"type":"response.output_item.added","output_index":1,"item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"","status":"in_progress"}}"#),
+            ("response.function_call_arguments.delta", #"{"type":"response.function_call_arguments.delta","item_id":"fc-1","output_index":1,"delta":"{\"a\":2,\"b\":3}"}"#),
+            ("response.function_call_arguments.done", #"{"type":"response.function_call_arguments.done","item_id":"fc-1","output_index":1,"arguments":"{\"a\":2,\"b\":3}"}"#),
+            ("response.output_item.done", #"{"type":"response.output_item.done","output_index":1,"item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"{\"a\":2,\"b\":3}","status":"completed"}}"#),
+            ("response.completed", #"{"type":"response.completed","response":{"id":"resp-reasoning","model":"fixture","status":"completed","output":[{"id":"rs-1","type":"reasoning","summary":[{"type":"summary_text","text":"Checked inputs."}]},{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"{\"a\":2,\"b\":3}","status":"completed"}],"usage":{"input_tokens":8,"output_tokens":7,"output_tokens_details":{"reasoning_tokens":2}}}}"#),
+        ])
         let provider = try OpenAIResponsesProvider(apiKey: "fixture-key", reasoningEffort: .medium,
             transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [fixture]))
         var accumulator = ModelEventAccumulator()
@@ -158,12 +174,14 @@ struct OpenAIResponsesProviderTests {
         let items: [JSONValue] = [
             .object(["type": .string("function_call"), "id": .string("fc-1"),
                      "call_id": .string("call-1"), "name": .string("first"),
-                     "arguments": .string(#"{"value":1}"#)]),
-            .object(["type": .string("reasoning"), "id": .string("rs-1"), "summary": .array([]),
+                     "arguments": .string(#"{"value":1}"#), "status": .string("completed")]),
+            .object(["type": .string("reasoning"), "id": .string("rs-1"),
+                     "summary": .array([.object(["type": .string("summary_text"),
+                                                "text": .string("considered")])]),
                      "encrypted_content": .string("encrypted")]),
             .object(["type": .string("function_call"), "id": .string("fc-2"),
                      "call_id": .string("call-2"), "name": .string("second"),
-                     "arguments": .string(#"{"value":2}"#)]),
+                     "arguments": .string(#"{"value":2}"#), "status": .string("completed")]),
         ]
         let candidate = try OpenAIResponsesContinuation.make(
             items: items, content: [.reasoning("considered")], calls: calls, model: model
@@ -202,6 +220,7 @@ struct OpenAIResponsesProviderTests {
         let fixture = providerNamedSSE([
             ("response.created", #"{"type":"response.created","response":{"id":"resp-refusal","model":"fixture","status":"in_progress"}}"#),
             ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-refusal","type":"message","role":"assistant","status":"in_progress","content":[]}}"#),
+            ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"msg-refusal","output_index":0,"content_index":0,"part":{"type":"refusal","refusal":""}}"#),
             ("response.refusal.delta", #"{"type":"response.refusal.delta","item_id":"msg-refusal","output_index":0,"content_index":0,"delta":"I cannot help with that."}"#),
             ("response.refusal.done", #"{"type":"response.refusal.done","item_id":"msg-refusal","output_index":0,"content_index":0,"refusal":"I cannot help with that."}"#),
             ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-refusal","type":"message","role":"assistant","status":"completed","content":[{"type":"refusal","refusal":"I cannot help with that."}]}}"#),
@@ -212,7 +231,13 @@ struct OpenAIResponsesProviderTests {
         let result = try await Agent(model: .init(provider: "openai", name: "fixture"), provider: provider)
             .makeSession().run("Disallowed request").wait()
         #expect(result.outcome == .refused)
-        #expect(result.response.content == [.text("I cannot help with that.")])
+        #expect(result.response.content.first == .text("I cannot help with that."))
+        #expect(result.response.content.contains { part in
+            if case .providerContinuation(let continuation) = part {
+                return continuation.format == OpenAIResponsesContinuation.format
+            }
+            return false
+        })
     }
 
     @Test func toolRoundUsesCallIDAndReturnsOutputThroughCanonicalTranscript() async throws {
@@ -260,9 +285,10 @@ struct OpenAIResponsesProviderTests {
             "type": .string("json_schema"), "name": .string("answer"), "description": .string("Answer"),
             "schema": schema, "strict": .bool(true),
         ])]))
+        try OpenAIResponsesRequestContract.validate(.object(body))
     }
 
-    @Test func assistantHistoryUsesOutputTextPartsAndRecoverableErrorsUseDocumentedEnvelope() async throws {
+    @Test func assistantHistoryUsesEasyMessageAndRecoverableErrorsUseDocumentedEnvelope() async throws {
         let probe = ProviderRequestProbe()
         let provider = try OpenAIResponsesProvider(apiKey: "fixture-key",
             transport: FixtureHTTPTransport(probe: probe, bodies: [openAITextFixture]))
@@ -276,8 +302,7 @@ struct OpenAIResponsesProviderTests {
             from: #require(await probe.requests.first?.httpBody)),
               case .array(let input) = body["input"] else { Issue.record("Missing input"); return }
         #expect(input[0] == .object([
-            "type": .string("message"), "role": .string("assistant"),
-            "content": .array([.object(["type": .string("output_text"), "text": .string("Earlier")])]),
+            "type": .string("message"), "role": .string("assistant"), "content": .string("Earlier"),
         ]))
         guard case .object(let errorItem) = input[1],
               errorItem["type"] == .string("function_call_output"),
@@ -286,12 +311,196 @@ struct OpenAIResponsesProviderTests {
         #expect(try JSONValue.decodeToolArguments(output) == .object([
             "content": .string("Not found"), "is_error": .bool(true),
         ]))
+        try OpenAIResponsesRequestContract.validate(.object(body))
+    }
+
+    @Test func nativeContinuationPreservesMessageMetadataAndMultipleParts() throws {
+        let model = ModelID(provider: "openai", name: "fixture")
+        let call = ToolCall(id: .init(rawValue: "call-1"), name: "lookup",
+                            argumentsJSON: #"{"id":"A"}"#, completeness: .complete)
+        let items: [JSONValue] = [
+            .object([
+                "type": .string("reasoning"), "id": .string("rs-1"),
+                "summary": .array([.object(["type": .string("summary_text"), "text": .string("Checked.")])]),
+                "encrypted_content": .string("encrypted"),
+            ]),
+            .object([
+                "type": .string("message"), "id": .string("msg-1"), "role": .string("assistant"),
+                "status": .string("completed"), "phase": .string("commentary"),
+                "content": .array([
+                    .object(["type": .string("output_text"), "text": .string("Found "),
+                             "annotations": .array([.object([
+                                 "type": .string("url_citation"), "url": .string("https://example.com"),
+                                 "title": .string("Example"), "start_index": .number(0), "end_index": .number(5),
+                             ])])]),
+                    .object(["type": .string("output_text"), "text": .string("A"),
+                             "annotations": .array([])]),
+                ]),
+            ]),
+            .object([
+                "type": .string("function_call"), "id": .string("fc-1"), "call_id": .string("call-1"),
+                "name": .string("lookup"), "arguments": .string(#"{"id":"A"}"#),
+            ]),
+        ]
+        let content: [ModelContent] = [.reasoning("Checked."), .text("Found A")]
+        let continuation = try #require(try OpenAIResponsesContinuation.make(
+            items: items, content: content, calls: [call], model: model
+        ))
+        #expect(continuation.format == OpenAIResponsesContinuation.format)
+        let restored = try #require(try OpenAIResponsesContinuation.restore(
+            content: content + [.providerContinuation(continuation)], calls: [call], model: model
+        ))
+        #expect(restored.items == items)
+
+        let body = try OpenAIResponsesRequestEncoder.encode(.init(
+            model: model,
+            messages: [.assistant(content: content + [.providerContinuation(continuation)], toolCalls: [call])]
+        ), maximumOutputTokens: 100, reasoningEffort: .medium, reasoningSummary: nil)
+        guard case .object(let object) = body, case .array(let input) = object["input"] else {
+            Issue.record("Missing input"); return
+        }
+        #expect(input == items)
+        try OpenAIResponsesRequestContract.validate(.object(object))
+    }
+
+    @Test func requestContractRejectsNativeOutputMessageWithoutIdentity() throws {
+        let model = ModelID(provider: "openai", name: "fixture")
+        let body = try OpenAIResponsesRequestEncoder.encode(.init(
+            model: model,
+            messages: [.assistant(content: [.text("Earlier")], toolCalls: [])]
+        ), maximumOutputTokens: 100, reasoningEffort: nil, reasoningSummary: nil)
+        guard case .object(var object) = body, case .array(var input) = object["input"],
+              case .object(var message) = input[0] else {
+            Issue.record("Missing input"); return
+        }
+        message["content"] = .array([.object([
+            "type": .string("output_text"), "text": .string("Earlier"), "annotations": .array([]),
+        ])])
+        input[0] = .object(message)
+        object["input"] = .array(input)
+        #expect(throws: OpenAIResponsesRequestContract.Violation.self) {
+            try OpenAIResponsesRequestContract.validate(.object(object))
+        }
+    }
+
+    @Test func requestContractDoesNotRequireFunctionToolStrictField() throws {
+        let model = ModelID(provider: "openai", name: "fixture")
+        let tool = ModelToolDefinition(name: "lookup", description: "Look up",
+                                       inputSchema: .object(["type": .string("string")]))
+        let body = try OpenAIResponsesRequestEncoder.encode(.init(
+            model: model, messages: [.user([.text("Hi")])], tools: [tool]
+        ), maximumOutputTokens: 100, reasoningEffort: nil, reasoningSummary: nil)
+        guard case .object(var object) = body, case .array(var tools) = object["tools"],
+              case .object(var function) = tools[0] else { Issue.record("Missing tool"); return }
+        function.removeValue(forKey: "strict")
+        tools[0] = .object(function)
+        object["tools"] = .array(tools)
+        try OpenAIResponsesRequestContract.validate(.object(object))
+    }
+
+    @Test func reasoningContinuationDoesNotRequireFunctionCalls() throws {
+        let model = ModelID(provider: "openai", name: "fixture")
+        let item = JSONValue.object([
+            "type": .string("reasoning"), "id": .string("rs-1"),
+            "summary": .array([.object(["type": .string("summary_text"), "text": .string("Considered.")])]),
+            "encrypted_content": .string("encrypted"),
+        ])
+        let message = JSONValue.object([
+            "type": .string("message"), "id": .string("msg-1"), "role": .string("assistant"),
+            "status": .string("completed"),
+            "content": .array([.object(["type": .string("output_text"), "text": .string("Answer"),
+                                        "annotations": .array([])])]),
+        ])
+        let content: [ModelContent] = [.reasoning("Considered."), .text("Answer")]
+        let continuation = try #require(try OpenAIResponsesContinuation.make(
+            items: [item, message], content: content, calls: [], model: model
+        ))
+        let restored = try #require(try OpenAIResponsesContinuation.restore(
+            content: content + [.providerContinuation(continuation)], calls: [], model: model
+        ))
+        #expect(restored.items == [item, message])
+    }
+
+    @Test func legacyContinuationWithoutNativeMessageIdentityMigratesSafely() throws {
+        let model = ModelID(provider: "openai", name: "fixture")
+        let call = ToolCall(id: .init(rawValue: "call-1"), name: "lookup",
+                            argumentsJSON: #"{"id":"A"}"#, completeness: .complete)
+        let payload = JSONValue.object([
+            "items": .array([
+                .object([
+                    "type": .string("reasoning"), "id": .string("rs-1"),
+                    "summary": .array([.object(["type": .string("summary_text"),
+                                               "text": .string("Considered.")])]),
+                    "encrypted_content": .string("encrypted"),
+                ]),
+                .object([
+                    "type": .string("message"), "role": .string("assistant"),
+                    "content": .array([.object(["type": .string("output_text"), "text": .string("Found")])]),
+                ]),
+                .object([
+                    "type": .string("function_call"), "id": .string("fc-1"), "call_id": .string("call-1"),
+                    "name": .string("lookup"), "arguments": .string(#"{"id":"A"}"#),
+                    "status": .string("completed"),
+                ]),
+            ]),
+            "visible_reasoning": .array([.string("Considered.")]),
+        ])
+        let state = ModelProviderContinuation(
+            model: model, format: OpenAIResponsesContinuation.legacyFormat,
+            payload: try JSONEncoder().encode(payload)
+        )
+        let restored = try #require(try OpenAIResponsesContinuation.restore(
+            content: [.reasoning("Considered."), .text("Found"), .providerContinuation(state)],
+            calls: [call], model: model
+        ))
+        #expect(restored.items[1] == .object([
+            "type": .string("message"), "role": .string("assistant"), "content": .string("Found"),
+        ]))
+    }
+
+    @Test func tamperedContinuationTextAndCallsFailClosed() throws {
+        let model = ModelID(provider: "openai", name: "fixture")
+        let call = ToolCall(id: .init(rawValue: "call-1"), name: "lookup",
+                            argumentsJSON: #"{"id":"A"}"#, completeness: .complete)
+        let items: [JSONValue] = [
+            .object([
+                "type": .string("reasoning"), "id": .string("rs-1"),
+                "summary": .array([.object(["type": .string("summary_text"),
+                                           "text": .string("Considered.")])]),
+                "encrypted_content": .string("encrypted"),
+            ]),
+            .object([
+                "type": .string("message"), "id": .string("msg-1"), "role": .string("assistant"),
+                "status": .string("completed"),
+                "content": .array([.object(["type": .string("output_text"), "text": .string("Found"),
+                                            "annotations": .array([])])]),
+            ]),
+            .object([
+                "type": .string("function_call"), "id": .string("fc-1"),
+                "call_id": .string("call-1"), "name": .string("lookup"),
+                "arguments": .string(#"{"id":"A"}"#), "status": .string("completed"),
+            ]),
+        ]
+        let continuation = try #require(try OpenAIResponsesContinuation.make(
+            items: items, content: [.reasoning("Considered."), .text("Found")],
+            calls: [call], model: model
+        ))
+        let cases: [([ModelContent], [ToolCall])] = [
+            ([.reasoning("Considered."), .text("Tampered"), .providerContinuation(continuation)], [call]),
+            ([.reasoning("Considered."), .text("Found"), .providerContinuation(continuation)], []),
+        ]
+        for (content, calls) in cases {
+            #expect(throws: ModelProviderError.self) {
+                try OpenAIResponsesContinuation.restore(content: content, calls: calls, model: model)
+            }
+        }
     }
 }
 
 private let openAIReasoningToolFixture = providerNamedSSE([
     ("response.created", #"{"type":"response.created","response":{"id":"resp-reasoning","model":"fixture","status":"in_progress"}}"#),
     ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"rs-1","type":"reasoning","summary":[]}}"#),
+    ("response.reasoning_summary_part.added", #"{"type":"response.reasoning_summary_part.added","item_id":"rs-1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}"#),
     ("response.reasoning_summary_text.delta", #"{"type":"response.reasoning_summary_text.delta","item_id":"rs-1","output_index":0,"summary_index":0,"delta":"Checked inputs."}"#),
     ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"rs-1","type":"reasoning","summary":[{"type":"summary_text","text":"Checked inputs."}],"encrypted_content":"encrypted-reasoning"}}"#),
     ("response.output_item.added", #"{"type":"response.output_item.added","output_index":1,"item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"","status":"in_progress"}}"#),

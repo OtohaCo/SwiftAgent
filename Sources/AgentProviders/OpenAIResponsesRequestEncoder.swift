@@ -25,7 +25,7 @@ enum OpenAIResponsesRequestEncoder {
                     continue
                 }
                 let text = try text(content)
-                if !text.isEmpty { input.append(outputMessage(text: text)) }
+                if !text.isEmpty { input.append(inputMessage(role: "assistant", text: text)) }
                 for call in calls {
                     guard call.completeness == .complete,
                           (try? JSONValue.decodeToolArguments(call.argumentsJSON)) != nil,
@@ -83,11 +83,6 @@ enum OpenAIResponsesRequestEncoder {
 
     private static func inputMessage(role: String, text: String) -> JSONValue {
         .object(["type": .string("message"), "role": .string(role), "content": .string(text)])
-    }
-
-    private static func outputMessage(text: String) -> JSONValue {
-        .object(["type": .string("message"), "role": .string("assistant"),
-                 "content": .array([.object(["type": .string("output_text"), "text": .string(text)])])])
     }
 
     private static func text(_ content: [ModelContent]) throws -> String {
