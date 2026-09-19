@@ -53,7 +53,7 @@ struct ProviderFactoryTests {
             base: OneResponseTransport()
         )
         var request = URLRequest(url: URL(string: "https://api.openai.example/v1/responses")!)
-        request.httpBody = Data(#"{"model":"m","input":[{"type":"message","role":"assistant","content":"hidden"},{"type":"function_call_output","call_id":"call-1","output":"hidden"}]}"#.utf8)
+        request.httpBody = Data(#"{"model":"m","input":[{"type":"message","role":"assistant","content":"hidden"},{"type":"function_call","call_id":"call-1","name":"add_numbers","arguments":"{}"},{"type":"function_call_output","call_id":"call-1","output":"hidden"}]}"#.utf8)
 
         for try await _ in transport.stream(request) {}
 
@@ -62,8 +62,32 @@ struct ProviderFactoryTests {
         #expect(entries.count == 1)
         #expect(entries[0].hasAssistantHistory)
         #expect(entries[0].hasToolResult)
+        #expect(entries[0].hasBoundToolResult)
         #expect(entries[0].model == "m")
         #expect(!entries[0].description.contains("hidden"))
+    }
+
+    @Test func requestEvidenceRejectsUnboundToolResultsAndRecognizesTheSyntheticHistoryMarker() async throws {
+        let budget = try LiveRequestBudget(fileURL: nil, perProviderLimit: 2, totalLimit: 2)
+        let evidence = RequestEvidenceLedger()
+        let transport = BudgetedProviderHTTPTransport(
+            provider: .openAI,
+            budget: budget,
+            evidence: evidence,
+            base: OneResponseTransport()
+        )
+        var request = URLRequest(url: URL(string: "https://api.openai.example/v1/responses")!)
+        request.httpBody = Data(#"{"model":"m","input":[{"type":"message","role":"user","content":"Remember BLUE-17"},{"type":"message","role":"assistant","content":"acknowledged"},{"type":"function_call","call_id":"call-1","name":"add_numbers","arguments":"{}"},{"type":"function_call_output","call_id":"different-call","output":"{}"}]}"#.utf8)
+
+        for try await _ in transport.stream(request) {}
+
+        let entry = try #require((await evidence.entries).first)
+        #expect(entry.hasQualificationHistoryMarker)
+        #expect(entry.hasToolCall)
+        #expect(entry.hasToolResult)
+        #expect(!entry.hasBoundToolResult)
+        #expect(!entry.description.contains("BLUE-17"))
+        #expect(!entry.description.contains("call-1"))
     }
 
     @Test func responseEvidenceKeepsOnlyBoundedProtocolMetadata() async throws {

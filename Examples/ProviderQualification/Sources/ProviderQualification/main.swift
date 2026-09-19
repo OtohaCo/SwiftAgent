@@ -21,9 +21,11 @@ enum ProviderQualificationMain {
             write(renderedEnvironmentFileStatus(environmentFile))
 
             guard options.scenario != .preflight else { return }
-            let budgetFile = options.budgetFile
-                ?? environment.value(for: "SWIFT_AGENT_LIVE_BUDGET_FILE")
-                    .map { URL(fileURLWithPath: $0).standardizedFileURL }
+            let budgetFile = try resolvedBudgetFile(
+                options: options,
+                environment: environment,
+                required: options.mode == .live
+            )
             let budget = try LiveRequestBudget(fileURL: budgetFile)
             let configuration = try QualificationConfiguration.resolve(options: options, environment: environment)
             let evidence = RequestEvidenceLedger()
@@ -73,6 +75,7 @@ private func safeConfigurationMessage(_ error: LiveConfigurationError) -> String
     case .unsafeEnvironmentFile: "UNSAFE_ENVIRONMENT_FILE"
     case .unreadableEnvironmentFile: "UNREADABLE_ENVIRONMENT_FILE"
     case .invalidEndpoint: "INVALID_ENDPOINT"
+    case .missingBudgetFile: "MISSING_PERSISTENT_BUDGET_FILE"
     case .missingCredential(let variable): "MISSING_\(variable)"
     case .missingModel(let variable): "MISSING_\(variable)"
     case .unsupportedCombination(let provider, let scenario):

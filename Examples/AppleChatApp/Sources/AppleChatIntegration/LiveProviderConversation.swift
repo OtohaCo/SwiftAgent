@@ -38,11 +38,9 @@ public struct AppleChatLaunchConfiguration: Sendable {
         let environmentFile = options.environmentFile
             ?? process["SWIFT_AGENT_LIVE_ENV_FILE"].map { URL(fileURLWithPath: $0).standardizedFileURL }
         let environment = try LiveEnvironment.load(process: process, fileURL: environmentFile)
-        let budgetFile = options.budgetFile
-            ?? environment.value(for: "SWIFT_AGENT_LIVE_BUDGET_FILE")
-                .map { URL(fileURLWithPath: $0).standardizedFileURL }
-        let budget = try LiveRequestBudget(fileURL: budgetFile)
         let configuration = try QualificationConfiguration.resolve(options: options, environment: environment)
+        let budgetFile = try resolvedBudgetFile(options: options, environment: environment, required: true)
+        let budget = try LiveRequestBudget(fileURL: budgetFile)
         let selection = try LiveProviderFactory.makeModelProvider(
             configuration: configuration,
             budget: budget,

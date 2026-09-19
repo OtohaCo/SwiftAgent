@@ -37,9 +37,24 @@ public enum LiveConfigurationError: Error, Equatable, Sendable {
     case unsafeEnvironmentFile(line: Int)
     case unreadableEnvironmentFile
     case invalidEndpoint
+    case missingBudgetFile
     case missingCredential(String)
     case missingModel(String)
     case unsupportedCombination(provider: QualificationProvider, scenario: QualificationScenario)
+}
+
+public func resolvedBudgetFile(
+    options: QualificationOptions,
+    environment: LiveEnvironment,
+    required: Bool
+) throws -> URL? {
+    let file = options.budgetFile
+        ?? environment.value(for: "SWIFT_AGENT_LIVE_BUDGET_FILE")
+            .map { URL(fileURLWithPath: $0).standardizedFileURL }
+    if options.mode == .live, required, file == nil {
+        throw LiveConfigurationError.missingBudgetFile
+    }
+    return file
 }
 
 public struct QualificationOptions: Equatable, Sendable {

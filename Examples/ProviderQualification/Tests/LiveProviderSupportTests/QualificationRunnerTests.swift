@@ -38,6 +38,11 @@ struct QualificationRunnerTests {
             #expect(results[0].toolCalls == 1)
             #expect(results[0].toolExecutions == 1)
         }
+        if scenario == .restart {
+            #expect(results[0].toolCalls == 1)
+            #expect(results[0].toolExecutions == 1)
+            #expect(results[0].note == "durable_tool_history_replayed_without_reexecution")
+        }
     }
 
     @Test func providerFailureNotesStaySanitizedAndPauseProtocolFailures() {

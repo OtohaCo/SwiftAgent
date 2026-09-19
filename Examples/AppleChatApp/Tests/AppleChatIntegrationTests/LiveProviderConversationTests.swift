@@ -60,6 +60,7 @@ struct LiveProviderConversationTests {
             arguments: [
                 "--provider", "deepseek", "--mode", "live", "--model", "deepseek-test",
                 "--endpoint", "https://api.deepseek.example/responses",
+                "--budget-file", "/tmp/swiftagent-apple-chat-test-budget.json",
             ],
             process: ["DEEPSEEK_API_KEY": "secret-value"]
         )
@@ -68,6 +69,18 @@ struct LiveProviderConversationTests {
         #expect(launch.providerLabel == "DeepSeek")
         #expect(launch.modelLabel == "deepseek-test")
         #expect(!launch.displayLabel.contains("secret-value"))
+    }
+
+    @Test func explicitLiveConfigurationRequiresPersistentBudgetOwnership() {
+        #expect(throws: LiveConfigurationError.missingBudgetFile) {
+            try AppleChatLaunchConfiguration.resolve(
+                arguments: [
+                    "--provider", "deepseek", "--mode", "live", "--model", "deepseek-test",
+                    "--endpoint", "https://api.deepseek.example/responses",
+                ],
+                process: ["DEEPSEEK_API_KEY": "secret-value"]
+            )
+        }
     }
 }
 

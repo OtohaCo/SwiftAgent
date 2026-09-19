@@ -69,9 +69,14 @@ struct QualificationFixtureProvider: ModelProvider {
             let priorAssistantCount = request.messages.reduce(into: 0) { count, message in
                 if case .assistant = message { count += 1 }
             }
-            let text = prompt.contains("BLUE-17") || priorAssistantCount > 0
-                ? "BLUE-17"
-                : "SwiftAgent fixture response."
+            let text: String
+            if prompt.contains("RESTART-TOOL-17") {
+                text = "RESTART-TOOL-17 5"
+            } else if prompt.contains("BLUE-17") || priorAssistantCount > 0 {
+                text = "BLUE-17"
+            } else {
+                text = "SwiftAgent fixture response."
+            }
             try complete(text: text, info: info, input: 10 + priorAssistantCount, output: 4, emit: emit)
         }
     }

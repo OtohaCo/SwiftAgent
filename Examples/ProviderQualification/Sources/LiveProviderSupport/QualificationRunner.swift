@@ -196,7 +196,8 @@ public struct QualificationRunner: Sendable {
         let second = try await execute(session: session, prompt: "Reply with only the synthetic code from my previous message.")
         let lastEvidence = await evidence.entries.last
         let historyAccepted = configuration.options.mode == .fixture
-            || lastEvidence?.hasAssistantHistory == true
+            || (lastEvidence?.hasAssistantHistory == true
+                && lastEvidence?.hasQualificationHistoryMarker == true)
         let status: QualificationCaseStatus = historyAccepted ? .pass : .fail
         return .init(
             scenario: .text,
@@ -221,7 +222,7 @@ public struct QualificationRunner: Sendable {
         let executions = await probe.count
         let lastEvidence = await evidence.entries.last
         let requestAcceptedToolResult = configuration.options.mode == .fixture
-            || lastEvidence?.hasToolResult == true
+            || lastEvidence?.hasBoundToolResult == true
         let exercised = result.toolCalls == 1 && executions == 1 && result.modelTurns == 2
         return .init(
             scenario: .tool,
@@ -245,33 +246,46 @@ public struct QualificationRunner: Sendable {
         defer { try? FileManager.default.removeItem(at: directory) }
         let journalURL = directory.appendingPathComponent("journal.log")
         let sessionID = UUID()
+        let probe = ToolExecutionProbe()
+        let tool = try AddNumbersTool(probe: probe)
         let firstJournal = try AgentJournal(persistenceURL: journalURL)
-        let firstAgent = try makeAgent(selection: selection)
+        let firstAgent = try makeAgent(selection: selection, tools: [tool])
         let firstSession = try firstAgent.makeSession(id: sessionID, journal: firstJournal)
         let first = try await execute(
             session: firstSession,
-            prompt: "Remember the synthetic code BLUE-17 and reply acknowledged."
+            prompt: "Use add_numbers exactly once with lhs 2 and rhs 3. Remember marker RESTART-TOOL-17 with the verified sum."
         )
+        let executionsAfterFirstRun = await probe.count
 
         let restarted = try AgentJournal.load(from: journalURL)
-        let secondAgent = try makeAgent(selection: selection)
+        let secondAgent = try makeAgent(selection: selection, tools: [tool])
         let secondSession = try secondAgent.makeSession(id: sessionID, journal: restarted)
         let second = try await execute(
             session: secondSession,
-            prompt: "After restart, reply with only the synthetic code from the prior conversation."
+            prompt: "After restart, report marker RESTART-TOOL-17 and the prior verified sum without calling add_numbers again."
         )
+        let finalExecutions = await probe.count
         let lastEvidence = await evidence.entries.last
-        let replayAccepted = configuration.options.mode == .fixture
-            || lastEvidence?.hasAssistantHistory == true
+        let requestHasDurableToolHistory = configuration.options.mode == .fixture
+            || (lastEvidence?.hasAssistantHistory == true
+                && lastEvidence?.hasQualificationHistoryMarker == true
+                && lastEvidence?.hasBoundToolResult == true)
+        let replayAccepted = first.toolCalls == 1
+            && second.toolCalls == 0
+            && executionsAfterFirstRun == 1
+            && finalExecutions == 1
+            && requestHasDurableToolHistory
         return .init(
             scenario: .restart,
             status: replayAccepted ? .pass : .fail,
             requestAttempts: first.modelTurns + second.modelTurns,
             modelTurns: first.modelTurns + second.modelTurns,
-            toolCalls: 0,
-            toolExecutions: 0,
+            toolCalls: first.toolCalls + second.toolCalls,
+            toolExecutions: finalExecutions,
             usage: merge(first.response.usage, second.response.usage),
-            note: replayAccepted ? "durable_history_replayed_without_tool_execution" : "restart_history_not_observed"
+            note: replayAccepted
+                ? "durable_tool_history_replayed_without_reexecution"
+                : "restart_tool_history_or_execution_count_mismatch"
         )
     }
 
@@ -586,6 +600,7 @@ private func configurationNote(_ error: LiveConfigurationError) -> String {
     case .unsupportedCombination(let provider, let scenario): "unsupported_\(provider.rawValue)_\(scenario.rawValue)"
     case .invalidArgument: "invalid_argument"
     case .invalidEndpoint: "invalid_endpoint"
+    case .missingBudgetFile: "missing_persistent_budget_file"
     case .unsafeEnvironmentFile: "unsafe_environment_file"
     case .unreadableEnvironmentFile: "unreadable_environment_file"
     }

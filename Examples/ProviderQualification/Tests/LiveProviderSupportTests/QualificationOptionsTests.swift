@@ -43,4 +43,41 @@ struct QualificationOptionsTests {
             try QualificationOptions.parse(["--endpoint", "http://example.com"])
         }
     }
+
+    @Test func liveRequestsRequireAPersistentBudgetLedger() throws {
+        let live = QualificationOptions(
+            provider: .openAI,
+            mode: .live,
+            scenario: .tool,
+            modelOverride: "test-model",
+            endpointOverride: URL(string: "https://api.openai.example/v1/responses"),
+            environmentFile: nil,
+            budgetFile: nil,
+            service: .official
+        )
+        let environment = LiveEnvironment(process: [:])
+
+        #expect(throws: LiveConfigurationError.missingBudgetFile) {
+            try resolvedBudgetFile(options: live, environment: environment, required: true)
+        }
+
+        let fromEnvironment = try resolvedBudgetFile(
+            options: live,
+            environment: LiveEnvironment(process: ["SWIFT_AGENT_LIVE_BUDGET_FILE": "/tmp/shared-budget.json"]),
+            required: true
+        )
+        #expect(fromEnvironment?.path == "/tmp/shared-budget.json")
+
+        let fixture = QualificationOptions(
+            provider: .openAI,
+            mode: .fixture,
+            scenario: .tool,
+            modelOverride: nil,
+            endpointOverride: nil,
+            environmentFile: nil,
+            budgetFile: nil,
+            service: .official
+        )
+        #expect(try resolvedBudgetFile(options: fixture, environment: environment, required: true) == nil)
+    }
 }

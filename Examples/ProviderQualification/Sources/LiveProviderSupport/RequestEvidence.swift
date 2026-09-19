@@ -14,12 +14,15 @@ public struct RequestEvidenceEntry: Equatable, Sendable, CustomStringConvertible
     public let hasAssistantHistory: Bool
     public let hasToolCall: Bool
     public let hasToolResult: Bool
+    public let hasBoundToolResult: Bool
+    public let hasQualificationHistoryMarker: Bool
     public let hasProviderContinuation: Bool
 
     public var description: String {
         "request=\(ordinal) provider=\(provider.rawValue) origin=\(origin) model=\(model ?? "MISSING") "
             + "messages=\(messageCount) assistant_history=\(hasAssistantHistory) tool_call=\(hasToolCall) "
-            + "tool_result=\(hasToolResult) continuation=\(hasProviderContinuation)"
+            + "tool_result=\(hasToolResult) bound_tool_result=\(hasBoundToolResult) "
+            + "history_marker=\(hasQualificationHistoryMarker) continuation=\(hasProviderContinuation)"
     }
 }
 
@@ -60,6 +63,8 @@ public actor RequestEvidenceLedger {
         let object = body as? [String: Any]
         let messages = (object?["input"] as? [Any]) ?? (object?["messages"] as? [Any]) ?? []
         let allObjects = flattenObjects(body)
+        let toolCallIDs = Set(allObjects.compactMap(toolCallID))
+        let toolResultIDs = Set(allObjects.compactMap(toolResultID))
         let entry = RequestEvidenceEntry(
             provider: provider,
             ordinal: entries.count + 1,
@@ -75,6 +80,8 @@ public actor RequestEvidenceLedger {
                 let type = $0["type"] as? String
                 return type == "function_call_output" || type == "tool_result"
             },
+            hasBoundToolResult: !toolResultIDs.isEmpty && toolResultIDs.isSubset(of: toolCallIDs),
+            hasQualificationHistoryMarker: containsQualificationHistoryMarker(body),
             hasProviderContinuation: allObjects.contains {
                 let type = $0["type"] as? String
                 return type == "reasoning" || type == "thinking" || $0["encrypted_content"] != nil
@@ -105,6 +112,34 @@ public actor RequestEvidenceLedger {
         guard let observation = observations.removeValue(forKey: requestOrdinal) else { return }
         responses.append(observation.result(requestOrdinal: requestOrdinal))
     }
+}
+
+private func toolCallID(_ object: [String: Any]) -> String? {
+    switch object["type"] as? String {
+    case "function_call": return object["call_id"] as? String
+    case "tool_use": return object["id"] as? String
+    default: return nil
+    }
+}
+
+private func toolResultID(_ object: [String: Any]) -> String? {
+    switch object["type"] as? String {
+    case "function_call_output": return object["call_id"] as? String
+    case "tool_result": return object["tool_use_id"] as? String
+    default: return nil
+    }
+}
+
+private func containsQualificationHistoryMarker(_ value: Any?) -> Bool {
+    let markers = ["BLUE-17", "RESTART-TOOL-17"]
+    if let text = value as? String { return markers.contains(where: text.contains) }
+    if let object = value as? [String: Any] {
+        return object.values.contains(where: containsQualificationHistoryMarker)
+    }
+    if let array = value as? [Any] {
+        return array.contains(where: containsQualificationHistoryMarker)
+    }
+    return false
 }
 
 public struct BudgetedProviderHTTPTransport: ProviderHTTPTransport {
