@@ -27,6 +27,7 @@ public actor AgentSession {
     private let checkpointDidExit: (@Sendable (UUID) -> Void)?
     private let drainWaitDidBegin: (@Sendable (UUID) -> Void)?
     private let drainReleaseDidBegin: (@Sendable (UUID) async -> Void)?
+    private let startupReleaseDidFinish: (@Sendable (UUID) async -> Void)?
     private let mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)?
     private var appliedSteeringIDs: Set<UUID> = []
     private var restoredJournalState = false
@@ -50,6 +51,7 @@ public actor AgentSession {
          checkpointDidExit: (@Sendable (UUID) -> Void)? = nil,
          drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil,
          drainReleaseDidBegin: (@Sendable (UUID) async -> Void)? = nil,
+        startupReleaseDidFinish: (@Sendable (UUID) async -> Void)? = nil,
         mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)? = nil) {
         self.id = id
         self.defaultBinding = defaultBinding
@@ -66,6 +68,7 @@ public actor AgentSession {
         self.checkpointDidExit = checkpointDidExit
         self.drainWaitDidBegin = drainWaitDidBegin
         self.drainReleaseDidBegin = drainReleaseDidBegin
+        self.startupReleaseDidFinish = startupReleaseDidFinish
         self.mutationQuarantineDidBegin = mutationQuarantineDidBegin
     }
 
@@ -185,6 +188,7 @@ public actor AgentSession {
         }
         await AgentSessionIdentityRegistry.shared.release(id)
         startingRun = false
+        await startupReleaseDidFinish?(startupID)
     }
 
     public func conversationSnapshot() async -> AgentConversationSnapshot {
@@ -218,16 +222,31 @@ public actor AgentSession {
         if let expectedConversationRevision, expectedConversationRevision != conversationRevision {
             throw AgentModelBindingError.staleConversationRevision
         }
-        try await compactHistoryIfNeeded(runID: nil, budget: budget, startupID: startupID)
+        let prepared = try await withStartupDeadline(budget.deadline, startupID: startupID) { [weak self] in
+            guard let self else { throw CancellationError() }
+            return try await self.prepareCheckpoint(self.history)
+        }
+        try budget.checkActive()
+        if prepared.history != history, expectedConversationRevision != nil {
+            throw AgentModelBindingError.staleConversationRevision
+        }
         if let expectedConversationRevision, expectedConversationRevision != conversationRevision {
             throw AgentModelBindingError.staleConversationRevision
         }
-        guard let candidateRevision = nextConversationRevision else {
+        let candidateRevision: UInt64?
+        if history == prepared.history {
+            candidateRevision = nextConversationRevision
+        } else if conversationRevision < .max {
+            candidateRevision = conversationRevision + 1
+        } else {
+            candidateRevision = nil
+        }
+        guard let candidateRevision else {
             throw AgentModelBindingError.staleConversationRevision
         }
         let runID = UUID()
         let loop = AgentLoop(binding: binding, tools: tools, scheduler: scheduler)
-        let candidateMessages = history + [.user([.text(text)])]
+        let candidateMessages = prepared.history + [.user([.text(text)])]
         let preparedRequest: AgentPreparedModelRequest
         preparedRequest = try await withStartupDeadline(budget.deadline, startupID: startupID) { [weak self] in
             guard let self else { throw CancellationError() }
@@ -240,27 +259,39 @@ public actor AgentSession {
             )
         }
         try Task.checkCancellation()
+        try budget.checkActive()
         if let journal {
             _ = try await journal.recoverPendingMutations(sessionID: id)
             try Task.checkCancellation()
+            try budget.checkActive()
             let hasSessionRecord = await journal.snapshot().contains { record in
                 guard record.sessionID == id else { return false }
                 if case .sessionCreated = record.event { return true }
                 return false
             }
             var lifecycleEvents: [AgentJournalEvent] = hasSessionRecord ? [] : [.sessionCreated]
+            if let summary = prepared.summary {
+                lifecycleEvents.append(.compaction(summary))
+                lifecycleEvents.append(.checkpoint(history: prepared.history, steeringIDs: Array(appliedSteeringIDs)))
+            }
             lifecycleEvents.append(.userMessage(text))
             try Task.checkCancellation()
+            try budget.checkActive()
             try await journal.appendCheckpoint(
                 lifecycleEvents,
                 sessionID: id,
                 runID: runID,
                 durability: journal.storage == .durable ? .durable : .memory
             )
+            // The durable startup frame is the admission boundary. Once the
+            // append begins, cancellation/deadline cannot roll back an
+            // atomic journal commit; continue creating the corresponding Run
+            // rather than leaving a durable user event without an owner.
         }
         let control = AgentRunControl()
         let channel = AsyncStream<AgentEvent>.makeStream()
         let emitter = AgentEventEmitter(channel.continuation, requiresConsumer: false)
+        if history != prepared.history { history = prepared.history }
         history.append(.user([.text(text)]))
         conversationRevision = candidateRevision
         activeRunID = runID
@@ -447,30 +478,6 @@ public actor AgentSession {
         history = restored
     }
 
-    private func compactHistoryIfNeeded(runID: UUID?, budget: AgentBudget, startupID: UUID) async throws {
-        try budget.checkActive()
-        let prepared = try await withStartupDeadline(budget.deadline, startupID: startupID) { [weak self] in
-            guard let self else { throw CancellationError() }
-            return try await self.prepareCheckpoint(self.history)
-        }
-        try budget.checkActive()
-        guard let summary = prepared.summary else { return }
-        if let journal {
-            try await journal.appendCheckpoint(
-                [
-                    .compaction(summary),
-                    .checkpoint(history: prepared.history, steeringIDs: Array(appliedSteeringIDs)),
-                ],
-                sessionID: id,
-                runID: runID,
-                durability: journal.storage == .durable ? .durable : .memory
-            )
-            _ = try? await journal.compactIfNeeded()
-        }
-        if history != prepared.history { advanceConversationRevision() }
-        history = prepared.history
-    }
-
     private func withStartupDeadline<Value: Sendable>(
         _ deadline: ContinuousClock.Instant,
         startupID: UUID,
@@ -481,8 +488,8 @@ public actor AgentSession {
             return try await withAgentDeadline(
                 deadline,
                 operation: operation,
-                onOperationFinished: { [weak self] in
-                    await self?.preflightDidFinish(startupID)
+                onOperationFinished: { [self] in
+                    await self.preflightDidFinish(startupID)
                 }
             )
         } catch {

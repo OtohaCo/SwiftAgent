@@ -91,6 +91,7 @@ public struct Agent: Sendable {
             checkpointDidExit: nil,
             drainWaitDidBegin: nil,
             drainReleaseDidBegin: nil,
+            startupReleaseDidFinish: nil,
             mutationQuarantineDidBegin: nil
         )
     }
@@ -101,6 +102,7 @@ public struct Agent: Sendable {
         checkpointDidExit: (@Sendable (UUID) -> Void)? = nil,
         drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil,
         drainReleaseDidBegin: (@Sendable (UUID) async -> Void)? = nil,
+        startupReleaseDidFinish: (@Sendable (UUID) async -> Void)? = nil,
         mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)? = nil
     ) throws -> AgentSession {
         if requiresDurableJournal, journal?.storage != .durable {
@@ -114,6 +116,7 @@ public struct Agent: Sendable {
             contextPolicy: configuration.contextPolicy, journal: journal,
             checkpointDidExit: checkpointDidExit, drainWaitDidBegin: drainWaitDidBegin,
             drainReleaseDidBegin: drainReleaseDidBegin,
+            startupReleaseDidFinish: startupReleaseDidFinish,
             mutationQuarantineDidBegin: mutationQuarantineDidBegin
         )
     }
