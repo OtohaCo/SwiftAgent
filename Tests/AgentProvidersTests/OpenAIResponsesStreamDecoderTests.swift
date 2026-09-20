@@ -169,7 +169,7 @@ struct OpenAIResponsesStreamDecoderTests {
         #expect(throws: ModelProviderError.self) { try decode(finalMismatch) }
     }
 
-    @Test func completedReasoningMustPreserveEncryptedContent() {
+    @Test func itemDoneEncryptedReasoningRemainsAuthoritativeWhenTerminalSnapshotDiffers() throws {
         let frames = [
             ("response.created", lifecycle("resp-encrypted", status: "in_progress")),
             reasoningAdded(id: "rs-1"),
@@ -178,7 +178,43 @@ struct OpenAIResponsesStreamDecoderTests {
             ("response.output_item.done", reasoningDone(id: "rs-1", text: "Checked", encrypted: "a")),
             completed(responseID: "resp-encrypted", output: [reasoningOutput(id: "rs-1", text: "Checked", encrypted: "b")]),
         ]
-        #expect(throws: ModelProviderError.self) { try decode(frames) }
+        let response = try decode(frames)
+        let continuation = try #require(response.content.compactMap { content -> ModelProviderContinuation? in
+            guard case .providerContinuation(let continuation) = content else { return nil }
+            return continuation
+        }.first)
+        guard case .object(let payload) = try JSONDecoder().decode(JSONValue.self, from: continuation.payload),
+              case .array(let items) = payload["items"],
+              case .object(let reasoning) = items.first else {
+            Issue.record("Missing native reasoning continuation")
+            return
+        }
+        #expect(reasoning["encrypted_content"] == .string("a"))
+    }
+
+    @Test func completedReasoningMustPreserveEncryptedContentPresence() {
+        let missingFromTerminal = [
+            ("response.created", lifecycle("resp-encrypted", status: "in_progress")),
+            reasoningAdded(id: "rs-1"),
+            reasoningSummaryPartAdded(itemID: "rs-1"),
+            reasoningDelta("Checked", itemID: "rs-1"),
+            ("response.output_item.done", reasoningDone(id: "rs-1", text: "Checked", encrypted: "a")),
+            completed(responseID: "resp-encrypted", output: [reasoningOutput(id: "rs-1", text: "Checked")]),
+        ]
+        #expect(throws: ModelProviderError.self) { try decode(missingFromTerminal) }
+
+        let addedOnlyAtTerminal = [
+            ("response.created", lifecycle("resp-encrypted", status: "in_progress")),
+            reasoningAdded(id: "rs-1"),
+            reasoningSummaryPartAdded(itemID: "rs-1"),
+            reasoningDelta("Checked", itemID: "rs-1"),
+            ("response.output_item.done", reasoningDone(id: "rs-1", text: "Checked")),
+            completed(
+                responseID: "resp-encrypted",
+                output: [reasoningOutput(id: "rs-1", text: "Checked", encrypted: "b")]
+            ),
+        ]
+        #expect(throws: ModelProviderError.self) { try decode(addedOnlyAtTerminal) }
     }
 
     @Test func sequenceNumbersMustBeIntegerAndStrictlyIncreasing() {

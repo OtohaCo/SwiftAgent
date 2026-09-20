@@ -755,7 +755,13 @@ struct ResponsesStreamDecoder {
                 streamedEncrypted = nil
             }
             let finalEncrypted = try optionalString(item["encrypted_content"])
-            guard streamedEncrypted == finalEncrypted else { throw ProviderJSON.invalid() }
+            // OpenAI defines output_item.done as the authoritative replay item.
+            // The terminal snapshot may re-encrypt the same reasoning state, but
+            // it must preserve whether encrypted replay state was present.
+            guard (streamedEncrypted == nil) == (finalEncrypted == nil) else {
+                throw ProviderJSON.invalid()
+            }
+            if let finalEncrypted, finalEncrypted.isEmpty { throw ProviderJSON.invalid() }
             for index in summary.indices {
                 let part = try ProviderJSON.object(summary[index])
                 guard try partKind(part) == .summaryText,
