@@ -169,7 +169,7 @@ struct OpenAIResponsesStreamDecoderTests {
         #expect(throws: ModelProviderError.self) { try decode(finalMismatch) }
     }
 
-    @Test func itemDoneEncryptedReasoningRemainsAuthoritativeWhenTerminalSnapshotDiffers() throws {
+    @Test func completedReasoningUsesFinalEncryptedContentWhenStreamingSnapshotDiffers() throws {
         let frames = [
             ("response.created", lifecycle("resp-encrypted", status: "in_progress")),
             reasoningAdded(id: "rs-1"),
@@ -180,16 +180,18 @@ struct OpenAIResponsesStreamDecoderTests {
         ]
         let response = try decode(frames)
         let continuation = try #require(response.content.compactMap { content -> ModelProviderContinuation? in
-            guard case .providerContinuation(let continuation) = content else { return nil }
-            return continuation
+            guard case .providerContinuation(let value) = content else { return nil }
+            return value
         }.first)
-        guard case .object(let payload) = try JSONDecoder().decode(JSONValue.self, from: continuation.payload),
-              case .array(let items) = payload["items"],
-              case .object(let reasoning) = items.first else {
-            Issue.record("Missing native reasoning continuation")
+        let payload = try JSONDecoder().decode(JSONValue.self, from: continuation.payload)
+        guard case .object(let object) = payload,
+              case .array(let items) = object["items"],
+              case .object(let item) = items.first,
+              case .string(let encrypted) = item["encrypted_content"] else {
+            Issue.record("Missing reasoning continuation payload")
             return
         }
-        #expect(reasoning["encrypted_content"] == .string("a"))
+        #expect(encrypted == "b")
     }
 
     @Test func completedReasoningMustPreserveEncryptedContentPresence() {

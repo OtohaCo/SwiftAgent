@@ -556,6 +556,13 @@ struct ResponsesStreamDecoder {
               items.values.allSatisfy({ $0.functionCall?.completed != false }) else { throw ProviderJSON.invalid() }
         try validateFinalOutput(response["output"], requireCompleted: true)
 
+        guard case .array(let finalOutput) = response["output"] else { throw ProviderJSON.invalid() }
+        for index in finalOutput.indices {
+            guard var state = items[index] else { throw ProviderJSON.invalid() }
+            state.native = finalOutput[index]
+            items[index] = state
+        }
+
         let usageEvents = try updateUsage(response["usage"])
         let modelCalls = orderedCalls()
         let stop: StopReason = !modelCalls.isEmpty ? .toolCalls : (refusal ? .refusal : .endTurn)
