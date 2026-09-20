@@ -2,6 +2,9 @@ import AgentCatalog
 import AgentModels
 import AgentProviders
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 
 struct ModelCatalogProviderTests {
