@@ -136,6 +136,15 @@ public actor ModelCatalogCache {
             stored[scope] = .init(snapshot: snapshot, refreshGeneration: nil)
             refreshGenerations.removeValue(forKey: scope)
             return snapshot
+        } catch is CancellationError {
+            if refreshGenerations[scope] == generation {
+                if var current = stored[scope], current.refreshGeneration == generation {
+                    current.refreshGeneration = nil
+                    stored[scope] = current
+                }
+                refreshGenerations.removeValue(forKey: scope)
+            }
+            throw CancellationError()
         } catch {
             if refreshGenerations[scope] == generation, var current = stored[scope] {
                 current.snapshot = stale(current.snapshot, failureAt: now())

@@ -183,8 +183,10 @@ public actor AgentSession {
             conversationRevision: candidateRevision,
             structuredOutput: structuredOutput
         )
+        try Task.checkCancellation()
         if let journal {
             _ = try await journal.recoverPendingMutations(sessionID: id)
+            try Task.checkCancellation()
             let hasSessionRecord = await journal.snapshot().contains { record in
                 guard record.sessionID == id else { return false }
                 if case .sessionCreated = record.event { return true }
@@ -192,6 +194,7 @@ public actor AgentSession {
             }
             var lifecycleEvents: [AgentJournalEvent] = hasSessionRecord ? [] : [.sessionCreated]
             lifecycleEvents.append(.userMessage(text))
+            try Task.checkCancellation()
             try await journal.appendCheckpoint(
                 lifecycleEvents,
                 sessionID: id,

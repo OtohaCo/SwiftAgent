@@ -124,6 +124,8 @@ package struct AgentLoop: Sendable {
         var modelTurns = 0
         var toolCalls = 0
         var receipts: [AgentToolReceipt] = []
+        var projectionRevision = initialRequest?.projection.plan.sourceRevision ?? 0
+        var contextEpoch = initialRequest?.projection.plan.contextEpoch ?? 0
         var usedCallIDs = Set<ToolCallID>()
         for message in messages {
             switch message {
@@ -137,7 +139,13 @@ package struct AgentLoop: Sendable {
             guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
             if let lifecycle {
                 let inputs = try await lifecycle.control.takeSteering(atTermination: false)
-                try await applySteering(inputs, to: &history, lifecycle: lifecycle, emitter: emitter)
+                if !inputs.isEmpty {
+                    try await applySteering(inputs, to: &history, lifecycle: lifecycle, emitter: emitter)
+                    (projectionRevision, contextEpoch) = try advancedProjectionCoordinates(
+                        revision: projectionRevision,
+                        contextEpoch: contextEpoch
+                    )
+                }
             }
             if modelTurns > 0 && !provider.descriptor.capabilities.contains(.multiTurn) {
                 throw AgentLoopError.unsupportedCapabilities(.multiTurn)
@@ -155,8 +163,8 @@ package struct AgentLoop: Sendable {
                     messages: history,
                     sessionID: sessionID,
                     runID: runID,
-                    conversationRevision: initialRequest?.projection.plan.sourceRevision ?? 0,
-                    contextEpoch: initialRequest?.projection.plan.contextEpoch ?? 0,
+                    conversationRevision: projectionRevision,
+                    contextEpoch: contextEpoch,
                     modelTurn: modelTurns,
                     structuredOutput: structuredOutput,
                     allowUnresolvedToolTail: initialRequest == nil && modelTurns == 1
@@ -182,6 +190,10 @@ package struct AgentLoop: Sendable {
                 if !inputs.isEmpty {
                     guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
                     try await applySteering(inputs, to: &history, lifecycle: lifecycle, emitter: emitter)
+                    (projectionRevision, contextEpoch) = try advancedProjectionCoordinates(
+                        revision: projectionRevision,
+                        contextEpoch: contextEpoch
+                    )
                     continue
                 }
             }
@@ -238,6 +250,10 @@ package struct AgentLoop: Sendable {
                 await markMutationBoundaryIfNeeded(sessionID: sessionID, runID: runID)
             }
             history = completed.history
+            (projectionRevision, contextEpoch) = try advancedProjectionCoordinates(
+                revision: projectionRevision,
+                contextEpoch: contextEpoch
+            )
             receipts.append(contentsOf: completed.receipts)
             toolCalls += completed.count
         }
@@ -260,6 +276,13 @@ package struct AgentLoop: Sendable {
         history = try await lifecycle.checkpoint(history, inputs)
         await lifecycle.control.acknowledge(inputs)
         for input in inputs { try await emitter?.send(.steeringApplied(id: input.id, text: input.text)) }
+    }
+
+    private func advancedProjectionCoordinates(revision: UInt64, contextEpoch: UInt64) throws -> (UInt64, UInt64) {
+        guard revision < .max, contextEpoch < .max else {
+            throw AgentModelBindingError.staleConversationRevision
+        }
+        return (revision + 1, contextEpoch + 1)
     }
 
     private func requireConfiguredModel(_ responseModel: ModelID) throws {
@@ -381,11 +404,15 @@ package struct AgentLoop: Sendable {
 
     private func validToolPairs(_ messages: [ModelMessage], allowUnresolvedToolTail: Bool) -> Bool {
         var pending = Set<ToolCallID>()
+        var seenCallIDs = Set<ToolCallID>()
         for (index, message) in messages.enumerated() {
             switch message {
             case .assistant(_, let calls):
                 guard pending.isEmpty else { return false }
-                pending.formUnion(calls.map(\.id))
+                for call in calls {
+                    guard seenCallIDs.insert(call.id).inserted else { return false }
+                    pending.insert(call.id)
+                }
             case .tool(let result):
                 guard pending.remove(result.callID) != nil else { return false }
             case .user, .system, .developer:

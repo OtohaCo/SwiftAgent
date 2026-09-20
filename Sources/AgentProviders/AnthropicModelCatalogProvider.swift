@@ -41,15 +41,17 @@ public struct AnthropicModelCatalogProvider: ModelCatalogDetailProvider {
     }
 
     public func listModels(_ request: ModelCatalogRequest) async throws -> ModelCatalogPage {
-        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
-        var query: [URLQueryItem] = []
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            throw ModelCatalogError(kind: .invalidConfiguration)
+        }
+        var query = components.queryItems ?? []
         if let cursor = request.cursor { query.append(.init(name: "after_id", value: cursor)) }
         if let pageSize = request.pageSize {
             guard pageSize > 0 else { throw ModelCatalogError(kind: .invalidConfiguration) }
             query.append(.init(name: "limit", value: String(pageSize)))
         }
-        components?.queryItems = query.isEmpty ? nil : query
-        guard let url = components?.url else { throw ModelCatalogError(kind: .invalidConfiguration) }
+        components.queryItems = query.isEmpty ? nil : query
+        guard let url = components.url else { throw ModelCatalogError(kind: .invalidConfiguration) }
         let response: AnthropicModelList = try await decode(url: url)
         guard !response.hasMore || response.lastID?.isEmpty == false else {
             throw ModelCatalogError(kind: .invalidResponse)

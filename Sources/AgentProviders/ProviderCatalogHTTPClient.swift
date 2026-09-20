@@ -73,6 +73,9 @@ func validateCatalogCredential(_ value: String) throws {
 }
 
 func validateCatalogEndpoint(_ endpoint: URL) throws {
+    guard let components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+        throw ModelCatalogError(kind: .invalidConfiguration)
+    }
     let host = endpoint.host?.lowercased() ?? ""
     let loopback = ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
     guard !host.isEmpty,
@@ -80,6 +83,18 @@ func validateCatalogEndpoint(_ endpoint: URL) throws {
           endpoint.password == nil,
           endpoint.fragment == nil,
           endpoint.scheme?.lowercased() == "https" || (endpoint.scheme?.lowercased() == "http" && loopback) else {
+        throw ModelCatalogError(kind: .invalidConfiguration)
+    }
+    let sensitiveNames: Set<String> = [
+        "api_key", "apikey", "authorization", "access_token", "token", "key", "x-api-key", "signature", "sig"
+    ]
+    guard components.queryItems?.allSatisfy({ item in
+        let name = item.name.lowercased()
+        let value = item.value ?? ""
+        return !sensitiveNames.contains(name)
+            && !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+            && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }) ?? true else {
         throw ModelCatalogError(kind: .invalidConfiguration)
     }
 }
@@ -93,6 +108,7 @@ func catalogEndpointScope(_ endpoint: URL) throws -> String {
     components.host = endpoint.host?.lowercased()
     components.port = endpoint.port
     components.percentEncodedPath = endpointComponents.percentEncodedPath
+    components.percentEncodedQuery = endpointComponents.percentEncodedQuery
     guard let scope = components.url?.absoluteString else {
         throw ModelCatalogError(kind: .invalidConfiguration)
     }

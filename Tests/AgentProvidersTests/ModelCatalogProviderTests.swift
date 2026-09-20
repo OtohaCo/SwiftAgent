@@ -111,7 +111,7 @@ struct ModelCatalogProviderTests {
         ], headers: ["Content-Type": "application/json"])
         let provider = try OpenAIModelCatalogProvider(
             apiKey: "fixture-secret",
-            endpoint: URL(string: "https://api.example.test/v1/models")!,
+            endpoint: URL(string: "https://api.example.test/v1/models?api-version=2026-01")!,
             serviceInstanceID: "openai-project",
             transport: transport
         )
@@ -123,10 +123,11 @@ struct ModelCatalogProviderTests {
         #expect(first.nextCursor == "model-a")
         #expect(second.models.map(\.model.name) == ["model-b"])
         #expect(second.nextCursor == nil)
+        #expect(provider.scope.endpointScope.contains("api-version=2026-01"))
         let requests = await probe.requests
         #expect(requests.map(\.url?.absoluteString) == [
-            "https://api.example.test/v1/models?limit=1",
-            "https://api.example.test/v1/models?after=model-a&limit=1",
+            "https://api.example.test/v1/models?api-version=2026-01&limit=1",
+            "https://api.example.test/v1/models?api-version=2026-01&after=model-a&limit=1",
         ])
     }
 
@@ -135,7 +136,7 @@ struct ModelCatalogProviderTests {
         let body = #"{"data":[{"id":"claude-future","display_name":"Claude Future","created_at":"2026-09-20T00:00:00Z","type":"model","capabilities":{"effort":{"supported":true,"values":["low","high","future"]},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":["adaptive","enabled"]}},"max_input_tokens":200000,"max_tokens":64000},{"id":"claude-unknown","display_name":"Claude Unknown","created_at":"2026-09-20T00:00:00Z","type":"model","capabilities":null,"max_input_tokens":null,"max_tokens":null}],"has_more":true,"first_id":"claude-future","last_id":"claude-unknown"}"#
         let provider = try AnthropicModelCatalogProvider(
             apiKey: "fixture-secret",
-            endpoint: URL(string: "https://api.example.test/v1/models")!,
+            endpoint: URL(string: "https://api.example.test/v1/models?api-version=2026-01")!,
             serviceInstanceID: "anthropic-workspace",
             authorizationScopeID: "workspace-a",
             transport: FixtureHTTPTransport(
@@ -159,6 +160,8 @@ struct ModelCatalogProviderTests {
         #expect(page.models[0].reasoningControls[2].requires == ["thinking.type": .string("enabled")])
         #expect(page.models[1].capabilities == .unknown)
         let request = try #require(await probe.requests.first)
+        #expect(provider.scope.endpointScope.contains("api-version=2026-01"))
+        #expect(request.url?.query?.contains("api-version=2026-01") == true)
         #expect(request.url?.query?.contains("after_id=after-model") == true)
         #expect(request.url?.query?.contains("limit=2") == true)
         #expect(request.value(forHTTPHeaderField: "anthropic-version") == "2023-06-01")

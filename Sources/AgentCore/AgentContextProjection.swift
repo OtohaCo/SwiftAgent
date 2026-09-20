@@ -201,7 +201,10 @@ public struct AgentResolvedReadOnlyToolProjector: AgentContextProjector {
             guard case .assistant(_, let calls) = messages[index], calls.contains(where: { $0.id == callID }) else {
                 continue
             }
-            let names = Dictionary(uniqueKeysWithValues: calls.map { ($0.id, $0.name) })
+            var names: [ToolCallID: String] = [:]
+            for call in calls {
+                guard names.updateValue(call.name, forKey: call.id) == nil else { return nil }
+            }
             var results: [ToolCallID: ToolResultMessage] = [:]
             var cursor = index + 1
             while cursor < messages.count, case .tool(let result) = messages[cursor] {

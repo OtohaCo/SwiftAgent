@@ -191,6 +191,64 @@ struct HostModelRouterTests {
         #expect(result.candidate.id == "current")
         #expect(result.source == .current)
     }
+
+    @Test func invalidCandidateIDFailsBeforeRemoteDecision() async throws {
+        let decision = DecisionProbe(selected: "bad\nid")
+        let valid = try candidate("valid", remote: false)
+        let malformed = HostModelCandidate(
+            id: "bad\nid",
+            binding: valid.binding,
+            catalogEntry: valid.catalogEntry,
+            isRemote: valid.isRemote,
+            adapterCanEncodeConfiguration: valid.adapterCanEncodeConfiguration,
+            automaticSelectionAllowed: valid.automaticSelectionAllowed,
+            routingDescription: valid.routingDescription,
+            forecast: valid.forecast,
+            pricing: valid.pricing
+        )
+
+        await #expect(throws: HostModelRoutingError.invalidCandidateID("bad\nid")) {
+            try await HostModelRouter().select(.init(
+                conversation: .init(revision: 1, messages: []),
+                catalogRevision: "catalog-1",
+                taskSummary: "Route",
+                latestInput: "Continue",
+                candidates: [valid, malformed],
+                requirements: .init(),
+                decisionProvider: decision,
+                revisionReader: { .init(conversation: 1, catalog: "catalog-1") }
+            ))
+        }
+        #expect(await decision.requestCount == 0)
+    }
+
+    @Test func catalogEntryMustMatchBindingIdentity() async throws {
+        let local = try candidate("local", remote: false)
+        let other = try candidate("other", remote: false)
+        let mismatched = HostModelCandidate(
+            id: "local",
+            binding: local.binding,
+            catalogEntry: other.catalogEntry,
+            isRemote: local.isRemote,
+            adapterCanEncodeConfiguration: true,
+            automaticSelectionAllowed: true,
+            forecast: local.forecast,
+            pricing: local.pricing
+        )
+
+        await #expect(throws: HostModelRoutingError.invalidManualCandidate("local")) {
+            try await HostModelRouter().select(.init(
+                conversation: .init(revision: 1, messages: []),
+                catalogRevision: "catalog-1",
+                taskSummary: "Route",
+                latestInput: "Continue",
+                candidates: [mismatched],
+                manualCandidateID: "local",
+                requirements: .init(),
+                revisionReader: { .init(conversation: 1, catalog: "catalog-1") }
+            ))
+        }
+    }
 }
 
 private actor DecisionProbe: DecisionProvider {

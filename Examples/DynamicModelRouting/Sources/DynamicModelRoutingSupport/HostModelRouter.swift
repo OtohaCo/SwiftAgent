@@ -180,6 +180,7 @@ public struct HostModelRoutingResult: Sendable {
 
 public enum HostModelRoutingError: Error, Equatable, Sendable {
     case noLegalCandidate
+    case invalidCandidateID(String)
     case invalidManualCandidate(String)
     case invalidDecisionCandidate(String)
     case staleInput
@@ -196,6 +197,7 @@ public struct HostModelRouter: Sendable {
     }
 
     public func select(_ input: HostModelRoutingInput) async throws -> HostModelRoutingResult {
+        try validateCandidateIDs(input.candidates)
         let current = input.currentCandidateID.flatMap { id in input.candidates.first { $0.id == id } }
 
         if let manualID = input.manualCandidateID {
@@ -261,18 +263,44 @@ public struct HostModelRouter: Sendable {
     }
 
     private func manuallyLegal(_ candidate: HostModelCandidate, requirements: HostRoutingRequirements) -> Bool {
-        guard candidate.adapterCanEncodeConfiguration,
+        guard candidateIdentityMatchesCatalog(candidate),
+              candidate.adapterCanEncodeConfiguration,
               requirements.allowsRemoteExecution || !candidate.isRemote else { return false }
         guard let catalog = candidate.catalogEntry else { return true }
         return supports(catalog, requirements: requirements, unknownIsAllowed: true)
     }
 
     private func automaticallyLegal(_ candidate: HostModelCandidate, requirements: HostRoutingRequirements) -> Bool {
-        guard candidate.adapterCanEncodeConfiguration,
+        guard candidateIdentityMatchesCatalog(candidate),
+              candidate.adapterCanEncodeConfiguration,
               candidate.automaticSelectionAllowed,
               requirements.allowsRemoteExecution || !candidate.isRemote,
               let catalog = candidate.catalogEntry else { return false }
         return supports(catalog, requirements: requirements, unknownIsAllowed: false)
+    }
+
+    private func validateCandidateIDs(_ candidates: [HostModelCandidate]) throws {
+        var seen = Set<String>()
+        for candidate in candidates {
+            guard !candidate.id.isEmpty,
+                  candidate.id == candidate.id.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !candidate.id.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+                  seen.insert(candidate.id).inserted else {
+                throw HostModelRoutingError.invalidCandidateID(candidate.id)
+            }
+        }
+    }
+
+    private func candidateIdentityMatchesCatalog(_ candidate: HostModelCandidate) -> Bool {
+        guard let catalog = candidate.catalogEntry else { return true }
+        let deployment = candidate.binding.deployment
+        let scope = catalog.serviceScope
+        return catalog.model == candidate.binding.model
+            && scope.provider == candidate.binding.model.provider
+            && scope.serviceInstanceID == deployment.serviceInstanceID
+            && scope.endpointScope == deployment.endpointScope
+            && scope.apiDialect == deployment.apiDialect
+            && scope.apiVersion == deployment.apiVersion
     }
 
     private func supports(

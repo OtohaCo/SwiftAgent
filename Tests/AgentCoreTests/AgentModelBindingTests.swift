@@ -1,5 +1,6 @@
 import AgentCore
 import AgentModels
+import AgentTools
 import Foundation
 import Testing
 @testable import AgentCore
@@ -482,6 +483,51 @@ struct AgentModelBindingTests {
         _ = try await next.wait()
     }
 
+    @Test func cancellationAfterNonCooperativePreflightDoesNotCommitUserInput() async throws {
+        let gate = NonCooperativeProjectionGate()
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unused") }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let binding = try AgentModelBinding(
+            profileID: "non-cooperative",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("non-cooperative"),
+            projector: NonCooperativeBlockingProjector(gate: gate)
+        )
+
+        let task = Task { try await session.run("must not commit", using: binding) }
+        await gate.waitUntilBlocked()
+        task.cancel()
+        await gate.release()
+
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(await session.history.contains(.user([.text("must not commit")])) == false)
+        #expect(await session.activeRunID == nil)
+    }
+
+    @Test func duplicateToolCallIDsAreRejectedBeforeProviderExecution() async throws {
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unused") }
+        let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: []))
+        let duplicateID = ToolCallID(rawValue: "duplicate")
+        let messages: [ModelMessage] = [
+            .assistant(content: [], toolCalls: [
+                ToolCall(id: duplicateID, name: "first", argumentsJSON: "{}", completeness: .complete),
+                ToolCall(id: duplicateID, name: "second", argumentsJSON: "{}", completeness: .complete),
+            ]),
+        ]
+
+        await #expect(throws: AgentModelBindingError.invalidProjection) {
+            _ = try await loop.preflight(
+                messages: messages,
+                sessionID: UUID(),
+                runID: UUID(),
+                conversationRevision: 1,
+                structuredOutput: nil
+            )
+        }
+    }
+
     @Test func replacementRunWaitsForTheCapturedProviderToPhysicallyDrain() async throws {
         let drain = ProviderDrainGate()
         let replacementWait = AsyncSignal()
@@ -572,6 +618,43 @@ private struct BlockingProjector: AgentContextProjector {
     func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
         try await gate.wait()
         return try await AgentIdentityContextProjector().project(input)
+    }
+}
+
+private struct NonCooperativeBlockingProjector: AgentContextProjector {
+    let gate: NonCooperativeProjectionGate
+
+    func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
+        await gate.wait()
+        return try await AgentIdentityContextProjector().project(input)
+    }
+}
+
+private actor NonCooperativeProjectionGate {
+    private var released = false
+    private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var blockedObservers: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if released { return }
+        await withCheckedContinuation { continuation in
+            blockedWaiters.append(continuation)
+            let observers = blockedObservers
+            blockedObservers.removeAll()
+            observers.forEach { $0.resume() }
+        }
+    }
+
+    func waitUntilBlocked() async {
+        if !blockedWaiters.isEmpty { return }
+        await withCheckedContinuation { blockedObservers.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiters = blockedWaiters
+        blockedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
     }
 }
 

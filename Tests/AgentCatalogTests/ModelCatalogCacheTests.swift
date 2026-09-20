@@ -59,6 +59,29 @@ struct ModelCatalogCacheTests {
         #expect(retained.lastRefreshFailureAt == Date(timeIntervalSince1970: 100))
     }
 
+    @Test func cancelledRefreshRetainsLastKnownGoodAsFresh() async throws {
+        let scope = try fixtureScope(service: "cancelled")
+        let cache = ModelCatalogCache(now: { Date(timeIntervalSince1970: 100) })
+        let good = StaticModelCatalogProvider(manifest: try .init(
+            scope: scope,
+            revision: "good",
+            models: [fixtureEntry("alpha", scope: scope)]
+        ))
+        _ = try await cache.refresh(using: good, policy: .init(timeToLive: 60))
+
+        let provider = CancellableCatalogProvider(scope: scope)
+        let refresh = Task { try await cache.refresh(using: provider, policy: .init(timeToLive: 60)) }
+        await provider.waitUntilStarted()
+        refresh.cancel()
+        await provider.release()
+
+        await #expect(throws: CancellationError.self) { try await refresh.value }
+        let retained = try #require(await cache.snapshot(for: scope))
+        #expect(retained.state == .fresh)
+        #expect(retained.lastRefreshFailureAt == nil)
+        #expect(retained.models.map(\.model.name) == ["alpha"])
+    }
+
     @Test func repeatedCursorFailsWithoutReplacingThePriorSnapshot() async throws {
         let scope = try fixtureScope(service: "west")
         let good = FixtureCatalogProvider(scope: scope, pages: [
@@ -173,6 +196,42 @@ private actor OverlappingCatalogProvider: ModelCatalogProvider {
     func releaseOlderRefresh() {
         olderContinuation?.resume()
         olderContinuation = nil
+    }
+}
+
+private actor CancellableCatalogProvider: ModelCatalogProvider {
+    nonisolated let scope: ModelServiceScope
+    private var started = false
+    private var released = false
+    private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(scope: ModelServiceScope) {
+        self.scope = scope
+    }
+
+    func listModels(_ request: ModelCatalogRequest) async throws -> ModelCatalogPage {
+        started = true
+        let observers = startedWaiters
+        startedWaiters.removeAll()
+        observers.forEach { $0.resume() }
+        if !released {
+            await withCheckedContinuation { releaseWaiters.append($0) }
+        }
+        try Task.checkCancellation()
+        return .init(models: [fixtureEntry("cancelled", scope: scope)])
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startedWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
     }
 }
 
