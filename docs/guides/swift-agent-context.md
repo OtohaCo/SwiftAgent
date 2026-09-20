@@ -1,6 +1,6 @@
 # SwiftAgent Context Policy
 
-last-verified: 2026-09-18
+last-verified: 2026-09-20
 
 SwiftAgent keeps three layers of context. They are not interchangeable.
 
@@ -9,6 +9,38 @@ SwiftAgent keeps three layers of context. They are not interchangeable.
 | Runtime configuration | Current system instructions, developer instructions if the model supports them, model, tools, structured output, limits, `AgentContextPolicy` | The `Agent` that opens the Session |
 | Conversation context | Canonical transcript the model may see: user, assistant, assistant tool calls, tool results, committed provider continuation, accepted steering | The Session, restored from the journal checkpoint |
 | Trusted runtime state | Evidence, mutation intents, receipts, reconciliation, scheduler/resource ownership | In-process runtime. Not reconstructed from transcript |
+
+## Run-specific model selection
+
+`AgentSession` keeps the canonical conversation while each explicit Run may use
+an immutable `AgentModelBinding`. The binding captures the provider, model,
+deployment scope, configuration revision, projector, and optional token budget.
+It is not stored as a replacement for the Session's runtime state. A failed
+preflight leaves canonical history unchanged; a replacement Run waits for the
+previous provider/tool drain before it starts.
+
+Before a binding is used, Core checks provider/model identity, configured
+capabilities, continuation origin, projection digest, and optional context
+budget. Opaque continuation is accepted only for a compatible deployment by
+default. A Host may explicitly use `AgentSemanticHandoffProjector` to remove
+private provider state for a semantic handoff, but this is lossy and never
+fabricates a native continuation or tool result.
+
+## Request projection
+
+`AgentContextProjector` receives a canonical snapshot and produces the messages
+for one provider request. Its plan records source revision, source digest,
+context epoch, version, and whether the result is lossy. The result is not
+written back as Session history. Canonical checkpoints, tool identity checks,
+budget accounting, Evidence, and mutation settlement continue to use formal
+runtime state.
+
+The default projector is identity. A Host-approved
+`AgentResolvedReadOnlyToolSpan` can replace a complete failed/read-only and
+later successful tool group with a source-marked summary. Permission failures,
+mutation uncertainty, active calls, unresolved pairs, and constraints needed by
+future work remain visible. A summary is not a user claim and cannot elevate
+message authority.
 
 The model remembering Resource A in the transcript is not permission to operate Resource A. Evidence still has to be in the `EvidenceLedger` for the required scope.
 

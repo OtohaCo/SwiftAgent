@@ -1,6 +1,6 @@
 # Contributing to SwiftAgent
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
 This package is a provider-neutral Agent engine. Product UI, domain tools, and
 host-specific policy do not belong in the portable modules.
@@ -13,6 +13,7 @@ host-specific policy do not belong in the portable modules.
 | `Sources/AgentTools` | Typed tools, Evidence, Receipt, scheduler |
 | `Sources/AgentCore` | Agent / Session / Run / Journal |
 | `Sources/AgentProviders` | Anthropic and HTTP transport |
+| `Sources/AgentCatalog` | Optional model/deployment discovery and bounded metadata cache |
 | `Sources/AgentAppleProvider` | Apple Foundation Models adapter |
 | `Sources/AgentDecisions` | Vendor-neutral typed decisions |
 | `Sources/AgentJevProvider` | TypeSafe Jev adapter |

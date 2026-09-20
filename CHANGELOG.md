@@ -28,6 +28,10 @@ additions and behavior changes will be recorded here before that release is cut.
 - Add deterministic ownership tests proving a timed-out compactor cannot
   overwrite a newer memory or durable checkpoint and terminal completion waits
   for a reserved mutation commit.
+- Capture an immutable provider/model binding per Run, with preflight revision
+  checks and provider-continuation origin validation across Session restarts.
+- Add request-only context projection and explicit resolved read-only tool-span
+  denoising without replacing canonical history or trusted runtime state.
 
 ### Providers
 
@@ -48,6 +52,9 @@ additions and behavior changes will be recorded here before that release is cut.
   validation. DeepSeek live-cloud qualification is not claimed in this entry.
 - Make DeepSeek reasoning effort an extensible validated raw-value type so new
   provider effort values do not require expanding a closed public enum.
+- Add the optional `AgentCatalog` product and documented OpenAI, Anthropic, and
+  DeepSeek model discovery clients with tri-state capabilities, provenance,
+  bounded pagination, and last-known-good caching.
 
 ### Decisions
 
@@ -58,6 +65,9 @@ additions and behavior changes will be recorded here before that release is cut.
   failures, retry metadata without hidden retries, and cancellation ownership.
 - Keep decisions outside AgentCore: they cannot create Evidence, authorize or
   execute tools, create Receipts, or settle journals.
+- Add a fixture-first `DynamicModelRouting` Host example that lets Jev choose
+  only from legal candidates after deterministic capability, privacy, revision,
+  cooldown, and cache-aware cost checks.
 
 ### Usage accounting
 

@@ -43,7 +43,10 @@ global deduplication key.
 `model` is part of that identity and must stay stable for every observation of
 one invocation. Event consumers should use `ResponseInfo.model` from the
 started response rather than switching between a requested alias and a resolved
-model name mid-response.
+model name mid-response. A Host that changes model between Runs can also record
+`bindingProfileID`, `bindingProfileRevision`, deployment scope, context epoch,
+and route source on the identity; these dimensions distinguish otherwise
+identical response IDs without exposing credentials.
 
 The first release accepts two explicit sources: `.modelResponse` and
 `.decision`. Decoding an unknown source preserves its raw value for inspection,
