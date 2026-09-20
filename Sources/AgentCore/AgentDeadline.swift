@@ -3,7 +3,13 @@ import AgentModels
 func withAgentDeadline<Value: Sendable>(
     _ deadline: ContinuousClock.Instant,
     timeoutError: AgentLoopError = .deadlineExceeded,
-    operation: @escaping @Sendable () async throws -> Value
+    operation: @escaping @Sendable () async throws -> Value,
+    onOperationFinished: @escaping @Sendable () async -> Void = {}
 ) async throws -> Value {
-    try await withOperationDeadline(deadline, timeoutError: timeoutError, operation: operation)
+    try await withOperationDeadline(
+        deadline,
+        timeoutError: timeoutError,
+        operation: operation,
+        onOperationFinished: onOperationFinished
+    )
 }

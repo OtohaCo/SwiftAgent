@@ -35,7 +35,14 @@ public actor AgentSession {
     private var drainHandles: [UUID: AgentRunDrain] = [:]
     private var loopsByRunID: [UUID: AgentLoop] = [:]
     private var startingRun = false
+    private var preflightOperations: Set<UUID> = []
+    private var deferredStartupReleases: Set<UUID> = []
+    private var startupReservations: [UUID: StartupReservation] = [:]
     private var conversationRevision: UInt64 = 0
+
+    private struct StartupReservation {
+        let journalLeaseAcquired: Bool
+    }
 
     init(id: UUID = UUID(), defaultBinding: AgentModelBinding, tools: ToolRegistry, scheduler: ToolScheduler,
          instructions: String, structuredOutput: StructuredOutputSchema?, maxModelTurns: Int,
@@ -91,47 +98,93 @@ public actor AgentSession {
         try Task.checkCancellation()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentSessionError.emptyInput }
         try contextPolicy.checkInput(text)
+        let runBudget = try budget ?? AgentBudget(
+            maxModelTurns: maxModelTurns,
+            maxToolCalls: maxToolCalls,
+            deadline: .now.advanced(by: runTimeout)
+        )
         guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
+        try runBudget.checkActive()
         startingRun = true
+        let startupID = UUID()
+        var identityAcquired = false
+        var journalLeaseAcquired = false
         do {
             if let pendingDrainTask {
                 if let drainingRunID { drainWaitDidBegin?(drainingRunID) }
                 await pendingDrainTask.value
-                try Task.checkCancellation()
+                try runBudget.checkActive()
             }
             try await AgentSessionIdentityRegistry.shared.acquire(id)
+            identityAcquired = true
             do {
-                do {
-                    if let journal {
-                        do {
-                            try await journal.acquireSessionLease(sessionID: id)
-                        } catch AgentJournalError.sessionLeaseUnavailable {
-                            throw AgentSessionError.runInProgress
-                        }
-                    }
+                if let journal {
                     do {
-                        let run = try await startRun(
-                            text,
-                            binding: binding,
-                            expectedConversationRevision: expectedConversationRevision,
-                            budget: budget,
-                            operationID: operationID
-                        )
-                        startingRun = false
-                        return run
-                    } catch {
-                        await journal?.releaseSessionLease(sessionID: id)
-                        throw error
+                        try await journal.acquireSessionLease(sessionID: id)
+                    } catch AgentJournalError.sessionLeaseUnavailable {
+                        throw AgentSessionError.runInProgress
                     }
+                    journalLeaseAcquired = true
+                }
+                startupReservations[startupID] = .init(journalLeaseAcquired: journalLeaseAcquired)
+                do {
+                    let run = try await startRun(
+                        text,
+                        binding: binding,
+                        expectedConversationRevision: expectedConversationRevision,
+                        budget: runBudget,
+                        operationID: operationID,
+                        startupID: startupID
+                    )
+                    startupReservations.removeValue(forKey: startupID)
+                    startingRun = false
+                    return run
                 } catch {
-                    await AgentSessionIdentityRegistry.shared.release(id)
+                    if !deferredStartupReleases.contains(startupID) {
+                        await releaseStartupReservation(startupID)
+                        identityAcquired = false
+                        journalLeaseAcquired = false
+                        startingRun = false
+                    }
                     throw error
                 }
+            } catch {
+                if !deferredStartupReleases.contains(startupID) {
+                    if journalLeaseAcquired {
+                        await journal?.releaseSessionLease(sessionID: id)
+                        journalLeaseAcquired = false
+                    }
+                    if identityAcquired {
+                        await AgentSessionIdentityRegistry.shared.release(id)
+                        identityAcquired = false
+                    }
+                    startupReservations.removeValue(forKey: startupID)
+                    startingRun = false
+                }
+                throw error
             }
         } catch {
-            startingRun = false
+            if !deferredStartupReleases.contains(startupID) {
+                startingRun = false
+            }
             throw error
         }
+    }
+
+    private func preflightDidFinish(_ startupID: UUID) async {
+        preflightOperations.remove(startupID)
+        guard deferredStartupReleases.contains(startupID) else { return }
+        await releaseStartupReservation(startupID)
+    }
+
+    private func releaseStartupReservation(_ startupID: UUID) async {
+        guard let reservation = startupReservations.removeValue(forKey: startupID) else { return }
+        deferredStartupReleases.remove(startupID)
+        if reservation.journalLeaseAcquired {
+            await journal?.releaseSessionLease(sessionID: id)
+        }
+        await AgentSessionIdentityRegistry.shared.release(id)
+        startingRun = false
     }
 
     public func conversationSnapshot() async -> AgentConversationSnapshot {
@@ -156,17 +209,16 @@ public actor AgentSession {
         _ text: String,
         binding: AgentModelBinding,
         expectedConversationRevision: UInt64?,
-        budget: AgentBudget?,
-        operationID: String?
+        budget: AgentBudget,
+        operationID: String?,
+        startupID: UUID
     ) async throws -> AgentRun {
-        let budget = try budget ?? AgentBudget(maxModelTurns: maxModelTurns, maxToolCalls: maxToolCalls,
-                                               deadline: .now.advanced(by: runTimeout))
         try budget.checkActive()
         await restoreJournalStateIfNeeded()
         if let expectedConversationRevision, expectedConversationRevision != conversationRevision {
             throw AgentModelBindingError.staleConversationRevision
         }
-        try await compactHistoryIfNeeded(runID: nil, budget: budget)
+        try await compactHistoryIfNeeded(runID: nil, budget: budget, startupID: startupID)
         if let expectedConversationRevision, expectedConversationRevision != conversationRevision {
             throw AgentModelBindingError.staleConversationRevision
         }
@@ -176,13 +228,17 @@ public actor AgentSession {
         let runID = UUID()
         let loop = AgentLoop(binding: binding, tools: tools, scheduler: scheduler)
         let candidateMessages = history + [.user([.text(text)])]
-        let preparedRequest = try await loop.preflight(
-            messages: candidateMessages,
-            sessionID: id,
-            runID: runID,
-            conversationRevision: candidateRevision,
-            structuredOutput: structuredOutput
-        )
+        let preparedRequest: AgentPreparedModelRequest
+        preparedRequest = try await withStartupDeadline(budget.deadline, startupID: startupID) { [weak self] in
+            guard let self else { throw CancellationError() }
+            return try await loop.preflight(
+                messages: candidateMessages,
+                sessionID: self.id,
+                runID: runID,
+                conversationRevision: candidateRevision,
+                structuredOutput: self.structuredOutput
+            )
+        }
         try Task.checkCancellation()
         if let journal {
             _ = try await journal.recoverPendingMutations(sessionID: id)
@@ -391,9 +447,13 @@ public actor AgentSession {
         history = restored
     }
 
-    private func compactHistoryIfNeeded(runID: UUID?, budget: AgentBudget) async throws {
+    private func compactHistoryIfNeeded(runID: UUID?, budget: AgentBudget, startupID: UUID) async throws {
         try budget.checkActive()
-        let prepared = try await prepareCheckpoint(history)
+        let prepared = try await withStartupDeadline(budget.deadline, startupID: startupID) { [weak self] in
+            guard let self else { throw CancellationError() }
+            return try await self.prepareCheckpoint(self.history)
+        }
+        try budget.checkActive()
         guard let summary = prepared.summary else { return }
         if let journal {
             try await journal.appendCheckpoint(
@@ -409,6 +469,28 @@ public actor AgentSession {
         }
         if history != prepared.history { advanceConversationRevision() }
         history = prepared.history
+    }
+
+    private func withStartupDeadline<Value: Sendable>(
+        _ deadline: ContinuousClock.Instant,
+        startupID: UUID,
+        operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        preflightOperations.insert(startupID)
+        do {
+            return try await withAgentDeadline(
+                deadline,
+                operation: operation,
+                onOperationFinished: { [weak self] in
+                    await self?.preflightDidFinish(startupID)
+                }
+            )
+        } catch {
+            if preflightOperations.contains(startupID) {
+                deferredStartupReleases.insert(startupID)
+            }
+            throw error
+        }
     }
 
     private var nextConversationRevision: UInt64? {
