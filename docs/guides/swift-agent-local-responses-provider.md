@@ -2,6 +2,10 @@
 
 > last-verified: 2026-09-20
 
+For model/backend selection, capability rollout, context and performance tradeoffs,
+device/network topology, debugging, and production re-qualification, see
+[Developing with Local Models](swift-agent-local-model-development.md).
+
 `AgentProviders` includes `LocalResponsesProvider` for local or self-hosted
 endpoints that implement the tested OpenAI-compatible `/v1/responses` wire
 contract. LM Studio is the first qualification target. Compatibility with one
