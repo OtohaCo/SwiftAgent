@@ -174,6 +174,47 @@ struct DeepSeekResponsesProviderTests {
         #expect(body["reasoning"] == .object(["effort": .string("none")]))
     }
 
+    @Test func thinkingWithAvailableToolsAllowsATextOnlyTerminalResponse() async throws {
+        let provider = try DeepSeekResponsesProvider(
+            apiKey: "fixture-key",
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(),
+                bodies: [deepSeekTextWithoutReasoningFixture]
+            )
+        )
+
+        var accumulator = ModelEventAccumulator()
+        for try await event in provider.stream(request: .init(
+            model: .init(provider: "deepseek", name: "deepseek-flash"),
+            messages: [.user([.text("Answer without another tool call")])],
+            tools: [.init(name: "calculator", description: "Add", inputSchema: .object([:]))]
+        )) {
+            try accumulator.append(event)
+        }
+
+        let response = try accumulator.finish()
+        #expect(response.toolCalls.isEmpty)
+        #expect(response.content == [.text("Hello")])
+    }
+
+    @Test func thinkingToolCallWithoutReasoningStillFailsClosed() async throws {
+        let provider = try DeepSeekResponsesProvider(
+            apiKey: "fixture-key",
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(),
+                bodies: [openAIToolFixture]
+            )
+        )
+
+        await #expect(throws: ModelProviderError.self) {
+            for try await _ in provider.stream(request: .init(
+                model: .init(provider: "deepseek", name: "fixture"),
+                messages: [.user([.text("Use the calculator")])],
+                tools: [.init(name: "calculator", description: "Add", inputSchema: .object([:]))]
+            )) {}
+        }
+    }
+
     @Test func structuredOutputAndFunctionToolsUseDeepSeekShapes() async throws {
         let probe = ProviderRequestProbe()
         let provider = try DeepSeekResponsesProvider(

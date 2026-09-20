@@ -373,7 +373,7 @@ struct ResponsesContinuationIntegrityTests {
         #expect(Array(input.prefix(items.count)) == items)
     }
 
-    @Test func deepSeekThinkingWithToolsRejectsPlainTextWithoutReasoningInSameTurn() async throws {
+    @Test func deepSeekThinkingWithAvailableToolsAcceptsPlainTextWithoutAToolCall() async throws {
         let probe = ProviderRequestProbe()
         let provider = try DeepSeekResponsesProvider(
             apiKey: "fixture-key",
@@ -385,12 +385,12 @@ struct ResponsesContinuationIntegrityTests {
             tools: [ProviderCalculator()]
         ).makeSession()
 
-        await #expect(throws: ModelProviderError.self) {
-            _ = try await session.run("Answer without a tool").wait()
-        }
-        #expect(await session.history.allSatisfy { message in
-            if case .assistant = message { return false }
-            return true
+        let result = try await session.run("Answer without a tool").wait()
+
+        #expect(result.response.content.contains(.text("Answer")))
+        #expect(await session.history.contains { message in
+            guard case .assistant(let content, let calls) = message else { return false }
+            return content.contains(.text("Answer")) && calls.isEmpty
         })
         #expect(await probe.requests.count == 1)
     }

@@ -86,6 +86,54 @@ struct LiveEnvironmentTests {
         #expect(!rendered.contains(secret))
     }
 
+    @Test func gatewayUsesThePublicSUB2APIConfigurationNamespace() throws {
+        let secret = "gateway-secret"
+        let environment = try LiveEnvironment.load(process: [
+            "SUB2API_API_KEY": secret,
+            "SUB2API_MODEL": "gateway-model",
+            "SUB2API_BASE_URL": "https://gateway.example/v1",
+        ])
+        let options = QualificationOptions(
+            provider: .openAI,
+            mode: .live,
+            scenario: .preflight,
+            modelOverride: nil,
+            endpointOverride: nil,
+            environmentFile: nil,
+            budgetFile: nil,
+            service: .gateway
+        )
+
+        let preflight = try QualificationConfiguration.preflight(options: options, environment: environment)
+        let rendered = preflight.rendered
+        #expect(rendered.contains("service=gateway"))
+        #expect(rendered.contains("origin=https://gateway.example"))
+        #expect(rendered.contains("model=gateway-model"))
+        #expect(rendered.contains("credential_variable=SUB2API_API_KEY"))
+        #expect(!rendered.contains(secret))
+    }
+
+    @Test func gatewayRequiresAnExplicitEndpoint() throws {
+        let options = QualificationOptions(
+            provider: .openAI,
+            mode: .live,
+            scenario: .preflight,
+            modelOverride: nil,
+            endpointOverride: nil,
+            environmentFile: nil,
+            budgetFile: nil,
+            service: .gateway
+        )
+        let environment = try LiveEnvironment.load(process: [
+            "SUB2API_API_KEY": "gateway-secret",
+            "SUB2API_MODEL": "gateway-model",
+        ])
+
+        #expect(throws: LiveConfigurationError.invalidEndpoint) {
+            try QualificationConfiguration.preflight(options: options, environment: environment)
+        }
+    }
+
     @Test func fixturePreflightDoesNotInspectOrRenderLiveConfiguration() throws {
         let environment = try LiveEnvironment.load(process: [
             "ANTHROPIC_API_KEY": "private-secret",

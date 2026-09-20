@@ -33,7 +33,7 @@ implicit `.env.live`; select a file with `--env-file` or
 | Provider | Credential | Model | Optional endpoint/profile |
 | --- | --- | --- | --- |
 | OpenAI official | `OPENAI_API_KEY` | `OPENAI_MODEL` | `OPENAI_RESOLVED_MODEL`, `OPENAI_BASE_URL` |
-| OpenAI-compatible gateway | `CHAINBOW_API_KEY` | `CHAINBOW_MODEL` | `CHAINBOW_RESOLVED_MODEL`, `CHAINBOW_BASE_URL`; legacy `CHAINBOW_MODLE` is accepted |
+| OpenAI-compatible gateway / SUB2API | `SUB2API_API_KEY` | `SUB2API_MODEL` | `SUB2API_RESOLVED_MODEL`, `SUB2API_BASE_URL`; legacy `SUB2API_MODLE` is accepted |
 | DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_MODEL` | `DEEPSEEK_RESOLVED_MODEL`, `DEEPSEEK_BASE_URL`; legacy `DEEPSEEK_MODLE` is accepted |
 | Anthropic | `ANTHROPIC_API_KEY` | `SWIFT_AGENT_ANTHROPIC_MODEL` | `ANTHROPIC_RESOLVED_MODEL`, `ANTHROPIC_BASE_URL` |
 | Local Responses | optional `SWIFTAGENT_LOCAL_API_KEY` | `SWIFTAGENT_LOCAL_MODEL` | `SWIFTAGENT_LOCAL_BASE_URL`; defaults to `http://127.0.0.1:1234/v1` |
@@ -93,6 +93,16 @@ swift run --package-path Examples/ProviderQualification ProviderQualification \
   --provider anthropic --service official --mode live --case tool \
   --reasoning enabled \
   --env-file /absolute/path/to/.env.live --budget-file "$budget"
+```
+
+The OpenAI `gateway` service uses the public `SUB2API_*` configuration
+namespace and remains separate from official OpenAI evidence:
+
+```sh
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider openai --service gateway --mode live --case text \
+  --env-file /absolute/path/to/.env.live \
+  --budget-file /absolute/path/to/sub2api-budget.json
 ```
 
 Chat cases are `text`, `tool`, `restart`, `structured`, `usage`, `cancel` and

@@ -18,6 +18,18 @@ swift run --package-path Examples/ProviderQualification ProviderQualification \
   --provider local --service local --mode fixture --case all
 ```
 
+The `gateway` service is the explicit SUB2API qualification path. It reads
+`SUB2API_API_KEY`, `SUB2API_BASE_URL`, and `SUB2API_MODEL` (with the legacy
+`SUB2API_MODLE` alias) from the selected environment file. Gateway evidence is
+kept separate from official OpenAI endpoint evidence.
+
+```sh
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider openai --service gateway --mode live --case text \
+  --env-file /absolute/path/to/.env.live \
+  --budget-file /absolute/path/to/sub2api-budget.json
+```
+
 Live mode requires an explicit `--mode live`. A missing credential, model,
 unsupported case, failed request or exhausted budget never falls back to a
 fixture. Environment variables override values loaded from `--env-file`.

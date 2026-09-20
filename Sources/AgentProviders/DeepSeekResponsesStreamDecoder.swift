@@ -343,7 +343,7 @@ struct DeepSeekResponsesStreamDecoder {
             throw deepSeekCompletedInvalid("usage")
         }
         let calls = orderedCalls()
-        if requiresReasoningForTools {
+        if requiresReasoningForTools, !calls.isEmpty {
             let reasoning = items.values.filter { $0.kind == .reasoning }.flatMap(\.parts.values).map(\.value).joined()
             guard !reasoning.isEmpty else { throw ProviderJSON.invalid() }
         }

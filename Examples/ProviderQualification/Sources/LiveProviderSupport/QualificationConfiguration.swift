@@ -125,21 +125,20 @@ public struct QualificationConfiguration: Sendable {
         switch options.provider {
         case .openAI:
             if options.service == .gateway {
-                credentialVariable = "CHAINBOW_API_KEY"
-                modelVariable = "CHAINBOW_MODEL"
+                credentialVariable = "SUB2API_API_KEY"
+                modelVariable = "SUB2API_MODEL"
                 credential = environment.value(for: credentialVariable)
                 model = options.modelOverride ?? environment.value(
                     for: modelVariable,
-                    aliases: ["CHAINBOW_MODLE"]
+                    aliases: ["SUB2API_MODLE"]
                 )
-                endpoint = try configuredEndpoint(
+                endpoint = try configuredRequiredEndpoint(
                     override: options.endpointOverride,
                     environment: environment,
-                    key: "CHAINBOW_BASE_URL",
-                    fallback: "https://api.openai.com/v1/responses",
+                    key: "SUB2API_BASE_URL",
                     suffix: "v1/responses"
                 )
-                resolvedModel = environment.value(for: "CHAINBOW_RESOLVED_MODEL")
+                resolvedModel = environment.value(for: "SUB2API_RESOLVED_MODEL")
             } else {
                 credentialVariable = "OPENAI_API_KEY"
                 modelVariable = "OPENAI_MODEL"
@@ -250,6 +249,10 @@ private func configuredEndpoint(
 ) throws -> URL {
     if let override { return override }
     let source = environment.value(for: key) ?? fallback
+    return try normalizedEndpoint(source, suffix: suffix)
+}
+
+private func normalizedEndpoint(_ source: String, suffix: String) throws -> URL {
     guard var components = URLComponents(string: source), components.query == nil,
           let rawURL = components.url, isAllowedEndpoint(rawURL) else {
         throw LiveConfigurationError.invalidEndpoint
@@ -264,6 +267,19 @@ private func configuredEndpoint(
         throw LiveConfigurationError.invalidEndpoint
     }
     return endpoint
+}
+
+private func configuredRequiredEndpoint(
+    override: URL?,
+    environment: LiveEnvironment,
+    key: String,
+    suffix: String
+) throws -> URL {
+    if let override { return override }
+    guard let source = environment.value(for: key) else {
+        throw LiveConfigurationError.invalidEndpoint
+    }
+    return try normalizedEndpoint(source, suffix: suffix)
 }
 
 private func redactedOrigin(_ url: URL) -> String {
