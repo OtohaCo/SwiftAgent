@@ -1,6 +1,6 @@
 # SwiftAgent Testing
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
 Primary compiler: Swift 6.4. From the package directory:
 
@@ -15,7 +15,7 @@ swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
 swift test --filter UsageLedgerTests
 ```
 
-Do not treat skipped live tests as passes. Anthropic, OpenAI, and Apple live
+Do not treat skipped live tests as passes. Anthropic, OpenAI, Local Responses, and Apple live
 tests are env-gated. OpenAI live coverage requires
 `SWIFT_AGENT_OPENAI_LIVE=1`, `OPENAI_API_KEY`, and `OPENAI_MODEL`; alias users
 also provide `OPENAI_RESOLVED_MODEL` when the API reports a dated snapshot.
@@ -30,6 +30,21 @@ preflight and explicitly bounded live cases. Its persistent ledger defaults to
 fixture. See the [qualification guide](guides/swift-agent-examples-and-live.md).
 Usage aggregation semantics and event ownership are documented in the
 [usage accounting guide](guides/swift-agent-usage.md).
+
+Local Responses fixture coverage includes canonical text/tool replay, stream
+validation, cancellation, usage, and durable text/tool restart. Run the
+credential-free matrix with:
+
+```sh
+swift test --filter LocalResponsesProviderTests
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider local --service local --mode fixture --case all
+```
+
+LM Studio live qualification is operator-only and requires
+`SWIFTAGENT_LOCAL_MODEL`; `SWIFTAGENT_LOCAL_BASE_URL` defaults to
+`http://127.0.0.1:1234/v1`, and `SWIFTAGENT_LOCAL_API_KEY` is optional. See the
+[Local Responses guide](guides/swift-agent-local-responses-provider.md).
 
 Provider remediation fixtures can be run directly:
 

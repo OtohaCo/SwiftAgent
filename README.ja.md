@@ -34,13 +34,14 @@ Provider ごとの契約：
 [Anthropic Messages](docs/guides/swift-agent-anthropic-provider.md) ·
 [OpenAI Responses](docs/guides/swift-agent-openai-provider.md) ·
 [DeepSeek Responses](docs/guides/swift-agent-deepseek-provider.md) ·
+[Local Responses / LM Studio](docs/guides/swift-agent-local-responses-provider.md) ·
 [Apple オンデバイス/PCC](docs/guides/swift-agent-apple-provider.md)。
 
 ## 対象バージョンとインストール
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
-この README と翻訳版の実行可能サンプル基準は、RC.2 開発系列の `c17adeb86f5ea086e9ac9f2d454a41fbe7f85455` です。このドキュメントはリリース告知ではありません。App に導入した依存関係と同じ revision のドキュメントを参照してください。
+この README と翻訳版の実行可能サンプル基準は、RC.2 開発系列の `833e5f691fa8e832cbdb94afc6a6ff54a3498cc0` です。このドキュメントはリリース告知ではありません。App に導入した依存関係と同じ revision のドキュメントを参照してください。
 
 ### 公開済みの rc.1
 
@@ -66,7 +67,7 @@ rc.1 の固定先は `d2347f11c6a78f421708e897dae42a51a98d37ea` です。
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        revision: "c17adeb86f5ea086e9ac9f2d454a41fbe7f85455"
+        revision: "833e5f691fa8e832cbdb94afc6a6ff54a3498cc0"
     )
 ]
 ```
@@ -102,11 +103,13 @@ swift test --package-path Examples/ExternalClient
 swift run --package-path Examples/JevDecision JevDecision
 swift run --package-path Examples/ProviderQualification ProviderQualification \
   --provider openai --mode fixture --case all
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider local --service local --mode fixture --case all
 swift test --package-path Examples/AppleChatApp
 bash Examples/AppleChatApp/run-macos.sh
 ```
 
-[ExternalClient](Examples/ExternalClient) は public API を通じた SDK 利用をテストします。[JevDecision](Examples/JevDecision) は fixture-first の typed Decision サンプルです。[ProviderQualification](Examples/ProviderQualification) は OpenAI、DeepSeek、Anthropic、Jev のオフライン preflight と明示的 live case を共有予算で実行します。[AppleChatApp](Examples/AppleChatApp) は同じ安全な設定層を使い、fixture または明示的 live 会話 Provider と App 所有の SwiftUI ライフサイクル、ツール進捗、キャンセル/drain を示します。
+[ExternalClient](Examples/ExternalClient) は public API を通じた SDK 利用をテストします。[JevDecision](Examples/JevDecision) は fixture-first の typed Decision サンプルです。[ProviderQualification](Examples/ProviderQualification) は OpenAI、DeepSeek、Anthropic、Local Responses、Jev のオフライン preflight と明示的 live case を共有予算で実行します。[AppleChatApp](Examples/AppleChatApp) は同じ安全な設定層を使い、fixture または明示的 live 会話 Provider と App 所有の SwiftUI ライフサイクル、ツール進捗、キャンセル/drain を示します。
 
 live 設定はプロセス環境、または `--env-file` が指すローカルの literal assignment ファイルから読み取れます。loader は shell を実行せず、プロセス環境が優先されます。ネットワーク接続前にオフライン preflight を実行してください。
 
@@ -147,7 +150,7 @@ Mutation ツールには、Session 作成時の永続 `AgentJournal`、実行前
 | AgentModels | なし | モデルの値と Provider 契約 |
 | AgentTools | AgentModels | 型付きツール、検証、実行ポリシー |
 | AgentCore | AgentModels, AgentTools | 唯一の Agent loop、Session、Run |
-| AgentProviders | AgentModels | Anthropic、OpenAI Responses、DeepSeek Responses、検証後のルーティング |
+| AgentProviders | AgentModels | Anthropic、OpenAI Responses、DeepSeek Responses、Local Responses、検証後のルーティング |
 | AgentAppleProvider | AgentModels | Apple オンデバイス/PCC のプランニングとプラットフォーム SDK の分離 |
 | AgentDecisions | AgentModels | 型付きでベンダーに依存しない Decision リクエストとレスポンス |
 | AgentJevProvider | AgentModels, AgentDecisions | TypeSafe Jev adapter。実行権限なし |

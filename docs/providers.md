@@ -1,6 +1,6 @@
 # SwiftAgent Providers
 
-> last-verified: 2026-09-19
+> last-verified: 2026-09-20
 
 `ModelProvider` is the vendor-neutral request and event boundary. Provider
 adapters translate vendor transport and stream contracts into `ModelEvent`;
@@ -11,6 +11,7 @@ adapters translate vendor transport and stream contracts into `ModelEvent`;
 | Anthropic Messages | AgentProviders | macOS, iOS, Linux | Yes | Yes | Yes | Signed thinking continuation | Yes | API key | Fixtures; operator live test available |
 | OpenAI Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Encrypted opaque continuation and visible summaries | Yes | API key | Fixtures; operator live test available |
 | DeepSeek Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Plaintext opaque continuation | Yes | API key | Fixtures; bounded terminal/usage live evidence |
+| Local Responses (LM Studio qualification target) | AgentProviders | macOS, iOS, Linux | Yes | Explicit model opt-in | Explicit model opt-in | Visible normalized content only; no opaque continuation | Yes when reported | None or bearer | Fixtures; operator live qualification available |
 | Apple on-device | AgentAppleProvider | macOS/iOS 26+ | No; one validated plan per request | Yes | No | Not advertised | SDK 27 where available | None | Compile and fixtures; operator live test available |
 | Apple Private Cloud Compute | AgentAppleProvider | macOS/iOS 27+ | No; one validated plan per request | Yes | No | Not advertised | Yes where reported by SDK | None | Compile and fixtures; operator live test available |
 
@@ -30,6 +31,7 @@ Detailed guides:
 - [Anthropic](guides/swift-agent-anthropic-provider.md)
 - [OpenAI Responses](guides/swift-agent-openai-provider.md)
 - [DeepSeek Responses](guides/swift-agent-deepseek-provider.md)
+- [Local Responses and LM Studio](guides/swift-agent-local-responses-provider.md)
 - [Apple on-device and PCC](guides/swift-agent-apple-provider.md)
 
 ## Decision Providers

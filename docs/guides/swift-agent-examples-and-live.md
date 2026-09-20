@@ -1,8 +1,8 @@
 # Examples, credentials and live qualification
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
-Executable-example baseline: `c17adeb86f5ea086e9ac9f2d454a41fbe7f85455`.
+Executable-example baseline: `833e5f691fa8e832cbdb94afc6a6ff54a3498cc0`.
 Run these commands from the SwiftAgent repository root. In a parent repository
 where SwiftAgent is a submodule, prefix package paths with `SwiftAgent/`.
 
@@ -16,7 +16,8 @@ where SwiftAgent is a submodule, prefix package paths with `SwiftAgent/`.
 | `Examples/AppleChatApp` | macOS/iOS SwiftUI example reusing one Controller for fixture or explicit live chat providers |
 
 The qualification CLI and AppleChatApp use the existing `AnthropicProvider`,
-`OpenAIResponsesProvider`, `DeepSeekResponsesProvider` and `JevDecisionProvider`.
+`OpenAIResponsesProvider`, `DeepSeekResponsesProvider`,
+`LocalResponsesProvider` and `JevDecisionProvider`.
 They do not implement a second provider or Agent loop.
 
 ## Configuration
@@ -35,6 +36,7 @@ implicit `.env.live`; select a file with `--env-file` or
 | OpenAI-compatible gateway | `CHAINBOW_API_KEY` | `CHAINBOW_MODEL` | `CHAINBOW_RESOLVED_MODEL`, `CHAINBOW_BASE_URL`; legacy `CHAINBOW_MODLE` is accepted |
 | DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_MODEL` | `DEEPSEEK_RESOLVED_MODEL`, `DEEPSEEK_BASE_URL`; legacy `DEEPSEEK_MODLE` is accepted |
 | Anthropic | `ANTHROPIC_API_KEY` | `SWIFT_AGENT_ANTHROPIC_MODEL` | `ANTHROPIC_RESOLVED_MODEL`, `ANTHROPIC_BASE_URL` |
+| Local Responses | optional `SWIFTAGENT_LOCAL_API_KEY` | `SWIFTAGENT_LOCAL_MODEL` | `SWIFTAGENT_LOCAL_BASE_URL`; defaults to `http://127.0.0.1:1234/v1` |
 | TypeSafe Jev | `TYPESAFE_API_KEY` | `TYPESAFE_MODEL` | `TYPESAFE_BASE_URL` |
 
 Apple on-device and PCC use platform availability rather than an API key. Do
@@ -63,6 +65,22 @@ swift run --package-path Examples/ProviderQualification ProviderQualification \
 Preflight reports only mode, provider, service, redacted origin, requested model,
 credential presence, budget limits and case. It reports the environment file as
 `CONFIGURED` or `NONE`, never its local path or contents.
+
+Local fixture and live preflight:
+
+```sh
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider local --service local --mode fixture --case all
+
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider local --service local --mode live --case preflight \
+  --env-file /absolute/path/to/.env.live
+```
+
+The Local base URL stops before `/responses`. Its credential is optional, but a
+bearer token is accepted only over HTTPS or loopback HTTP. Tool and structured
+output reliability depend on the exact loaded model. See the
+[Local Responses guide](swift-agent-local-responses-provider.md).
 
 ## Bounded live commands
 

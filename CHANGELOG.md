@@ -31,6 +31,11 @@ additions and behavior changes will be recorded here before that release is cut.
 
 ### Providers
 
+- Add `LocalResponsesProvider` for explicitly configured local or self-hosted
+  OpenAI-compatible Responses endpoints. It replays canonical SwiftAgent
+  history on every turn, never depends on `previous_response_id` or OpenAI
+  encrypted continuation state, keeps tools Host-executed, and makes tool and
+  structured-output capabilities explicit per configured model.
 - Add an explicit Apple Private Cloud Compute backend for macOS and iOS 27,
   while keeping SwiftAgent Core as the sole tool execution authority.
 - Add an OpenAI Responses API adapter with typed SSE streaming, host-executed

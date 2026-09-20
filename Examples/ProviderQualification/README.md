@@ -13,6 +13,9 @@ swift run --package-path Examples/ProviderQualification ProviderQualification \
 swift run --package-path Examples/ProviderQualification ProviderQualification \
   --provider deepseek --mode live --case preflight \
   --env-file Examples/ProviderQualification/.env.live
+
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider local --service local --mode fixture --case all
 ```
 
 Live mode requires an explicit `--mode live`. A missing credential, model,
@@ -49,6 +52,14 @@ Supported chat cases are `text`, `tool`, `restart`, `structured`, `usage`,
 `cancel`, and `all`; `all` runs all six chat cases. Jev supports `noul`,
 `choice`, `score`, `mixed`, and `all`.
 `preflight` never sends a request.
+
+Local Responses live mode uses `SWIFTAGENT_LOCAL_BASE_URL` (default
+`http://127.0.0.1:1234/v1`), required `SWIFTAGENT_LOCAL_MODEL`, and optional
+`SWIFTAGENT_LOCAL_API_KEY`. The URL is a base URL; the provider appends
+`/responses`. A bearer token requires HTTPS unless the endpoint is loopback.
+The loaded model, not merely the server, must support the selected tool or
+structured-output case. See the
+[Local Responses guide](../../docs/guides/swift-agent-local-responses-provider.md).
 
 For script compatibility, `usage_input`, `usage_output`, and
 `usage_reasoning` remain present, but now mean the reported subtotal across all

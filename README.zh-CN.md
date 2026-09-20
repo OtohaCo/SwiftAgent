@@ -34,13 +34,14 @@ SwiftAgent 是一个不绑定模型厂商的 Swift Agent 运行时，提供类�
 [Anthropic Messages](docs/guides/swift-agent-anthropic-provider.md) ·
 [OpenAI Responses](docs/guides/swift-agent-openai-provider.md) ·
 [DeepSeek Responses](docs/guides/swift-agent-deepseek-provider.md) ·
+[Local Responses / LM Studio](docs/guides/swift-agent-local-responses-provider.md) ·
 [Apple 端侧/PCC](docs/guides/swift-agent-apple-provider.md)。
 
 ## 版本范围与安装
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
-本 README 及其翻译所核对的可执行示例基线是 RC.2 开发线上的 `c17adeb86f5ea086e9ac9f2d454a41fbe7f85455`。这些文档不是发布公告。应始终阅读与 App 实际安装的依赖版本一致的文档。
+本 README 及其翻译所核对的可执行示例基线是 RC.2 开发线上的 `833e5f691fa8e832cbdb94afc6a6ff54a3498cc0`。这些文档不是发布公告。应始终阅读与 App 实际安装的依赖版本一致的文档。
 
 ### 已发布的 rc.1
 
@@ -66,7 +67,7 @@ rc.1 的固定提交为 `d2347f11c6a78f421708e897dae42a51a98d37ea`。
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        revision: "c17adeb86f5ea086e9ac9f2d454a41fbe7f85455"
+        revision: "833e5f691fa8e832cbdb94afc6a6ff54a3498cc0"
     )
 ]
 ```
@@ -102,11 +103,13 @@ swift test --package-path Examples/ExternalClient
 swift run --package-path Examples/JevDecision JevDecision
 swift run --package-path Examples/ProviderQualification ProviderQualification \
   --provider openai --mode fixture --case all
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider local --service local --mode fixture --case all
 swift test --package-path Examples/AppleChatApp
 bash Examples/AppleChatApp/run-macos.sh
 ```
 
-[ExternalClient](Examples/ExternalClient) 验证通过 public API 使用 SDK。[JevDecision](Examples/JevDecision) 是 fixture-first 的 typed Decision 示例。[ProviderQualification](Examples/ProviderQualification) 为 OpenAI、DeepSeek、Anthropic 和 Jev 提供受预算约束的离线 preflight 与显式 live case。[AppleChatApp](Examples/AppleChatApp) 复用同一安全配置层，支持 fixture 或显式 live 对话 Provider，同时保持 App 自己管理的 SwiftUI 生命周期、工具进度和取消/drain 所有权。
+[ExternalClient](Examples/ExternalClient) 验证通过 public API 使用 SDK。[JevDecision](Examples/JevDecision) 是 fixture-first 的 typed Decision 示例。[ProviderQualification](Examples/ProviderQualification) 为 OpenAI、DeepSeek、Anthropic、Local Responses 和 Jev 提供受预算约束的离线 preflight 与显式 live case。[AppleChatApp](Examples/AppleChatApp) 复用同一安全配置层，支持 fixture 或显式 live 对话 Provider，同时保持 App 自己管理的 SwiftUI 生命周期、工具进度和取消/drain 所有权。
 
 live 配置可以来自进程环境，或 `--env-file` 指向的本机 literal assignment 文件；loader 不执行 shell，进程环境优先。联网前先执行无网络 preflight：
 
@@ -147,7 +150,7 @@ Mutation 工具要求在创建 Session 时提供持久化 `AgentJournal`，在 e
 | AgentModels | 无 | 模型值与 Provider 契约 |
 | AgentTools | AgentModels | 类型化工具、验证与执行策略 |
 | AgentCore | AgentModels, AgentTools | 唯一的 Agent loop、Session 与 Run |
-| AgentProviders | AgentModels | Anthropic、OpenAI Responses、DeepSeek Responses 与验证后路由 |
+| AgentProviders | AgentModels | Anthropic、OpenAI Responses、DeepSeek Responses、Local Responses 与验证后路由 |
 | AgentAppleProvider | AgentModels | Apple 端侧/PCC 规划与平台 SDK 隔离 |
 | AgentDecisions | AgentModels | 类型化、厂商无关的 Decision 请求与响应 |
 | AgentJevProvider | AgentModels, AgentDecisions | TypeSafe Jev adapter；没有执行权 |

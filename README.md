@@ -42,14 +42,15 @@ Provider-specific contracts:
 [Anthropic Messages](docs/guides/swift-agent-anthropic-provider.md) ·
 [OpenAI Responses](docs/guides/swift-agent-openai-provider.md) ·
 [DeepSeek Responses](docs/guides/swift-agent-deepseek-provider.md) ·
+[Local Responses / LM Studio](docs/guides/swift-agent-local-responses-provider.md) ·
 [Apple on-device/PCC](docs/guides/swift-agent-apple-provider.md).
 
 ## Version scope and installation
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
 The executable-example baseline for this README and its translations is
-`c17adeb86f5ea086e9ac9f2d454a41fbe7f85455` on the RC.2 development line.
+`833e5f691fa8e832cbdb94afc6a6ff54a3498cc0` on the RC.2 development line.
 This documentation is not a release announcement. Always
 read documentation from the same revision as the dependency installed in your app.
 
@@ -79,7 +80,7 @@ To reproduce the checked source baseline rather than follow a moving branch:
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        revision: "c17adeb86f5ea086e9ac9f2d454a41fbe7f85455"
+        revision: "833e5f691fa8e832cbdb94afc6a6ff54a3498cc0"
     )
 ]
 ```
@@ -131,6 +132,8 @@ swift test --package-path Examples/ExternalClient
 swift run --package-path Examples/JevDecision JevDecision
 swift run --package-path Examples/ProviderQualification ProviderQualification \
   --provider openai --mode fixture --case all
+swift run --package-path Examples/ProviderQualification ProviderQualification \
+  --provider local --service local --mode fixture --case all
 swift test --package-path Examples/AppleChatApp
 bash Examples/AppleChatApp/run-macos.sh
 ```
@@ -139,7 +142,7 @@ bash Examples/AppleChatApp/run-macos.sh
 [JevDecision](Examples/JevDecision) is an executable fixture-first example of
 Noul, Choice and Score. Its output is a proposal, not permission to execute a tool.
 [ProviderQualification](Examples/ProviderQualification) is the fixture-first,
-bounded CLI for OpenAI, DeepSeek, Anthropic and Jev preflight or operator live
+bounded CLI for OpenAI, DeepSeek, Anthropic, Local Responses and Jev preflight or operator live
 checks. [AppleChatApp](Examples/AppleChatApp) uses the same safe configuration
 layer for fixture or explicit live chat-provider runs while retaining its
 app-owned SwiftUI lifecycle, tool progress and cancellation/drain ownership.
@@ -218,7 +221,7 @@ create a trusted Receipt or settle the Journal.
 | AgentModels | None | Model values and provider contracts |
 | AgentTools | AgentModels | Typed tools, validation and execution policy |
 | AgentCore | AgentModels, AgentTools | The single agent loop, sessions and runs |
-| AgentProviders | AgentModels | Anthropic, OpenAI Responses, DeepSeek Responses and validated routing |
+| AgentProviders | AgentModels | Anthropic, OpenAI Responses, DeepSeek Responses, Local Responses and validated routing |
 | AgentAppleProvider | AgentModels | Apple on-device/PCC planning and platform SDK isolation |
 | AgentDecisions | AgentModels | Typed, vendor-neutral decision requests and responses |
 | AgentJevProvider | AgentModels, AgentDecisions | TypeSafe Jev adapter; no execution authority |

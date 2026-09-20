@@ -1,6 +1,6 @@
 # SwiftAgent Named Regressions
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
 Keep production bugs as named tests in their domain files. This index is the
 long-term map so a later bug does not require moving files.
@@ -55,6 +55,8 @@ long-term map so a later bug does not require moving files.
 | Multi-turn tool usage must include every visible response rather than only the last `AgentLoopResult.response` | `multiTurnToolRunSumsEveryFinalizedResponse`, `fixtureCasesUseTheRealAgentSessionRunAndDrainPath(_:)` | `Tests/AgentUsageTests/UsageLedgerTests.swift`, `Examples/ProviderQualification/Tests/LiveProviderSupportTests/QualificationRunnerTests.swift` |
 | Cross-response missing usage must remain partial while same-response sparse cumulative snapshots preserve prior fields | `crossResponseMissingFieldsRemainPartialInsteadOfBecomingZero`, `cumulativeSnapshotsReplaceWithinAResponseAndSparseFieldsArePreserved` | `Tests/AgentUsageTests/UsageLedgerTests.swift` |
 | Qualification results must join their sole event observer before publishing final usage | `resultWaitsForTheSingleEventObserverToProcessTheFinalUsage` | `Examples/ProviderQualification/Tests/LiveProviderSupportTests/QualificationRunnerTests.swift` |
+| Local Responses must rebuild every turn from canonical history without OpenAI continuation state | `toolRoundUsesCanonicalReplayAndExecutesExactlyOnce`, `durableTextRestartRebuildsTheNextRequestFromCanonicalHistory`, `durableToolRestartReplaysCommittedCallAndResultWithoutReexecution` | `Tests/AgentProvidersTests/LocalResponsesProviderTests.swift` |
+| Local Responses cancellation must terminate transport and drain without dispatching a partial tool | `cancellationTerminatesUnderlyingRequestAndDrains` | `Tests/AgentProvidersTests/LocalResponsesProviderTests.swift` |
 
 When a new production bug lands, add a row here and a focused test next to the
 domain tests. Prefer a precise name over a `Regressions/` directory move.

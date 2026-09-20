@@ -26,8 +26,10 @@ bash Examples/AppleChatApp/run-macos.sh \
 Missing live configuration fails visibly and never falls back to the fixture.
 Every live launch also requires the shared persistent budget file shown above.
 Do not place credentials in the app bundle, `Info.plist`, resources or a committed
-Scheme. The app accepts OpenAI, DeepSeek and Anthropic chat providers; Jev remains
-a non-conversational Decision example.
+Scheme. The app accepts OpenAI, DeepSeek, Anthropic and Local Responses chat
+providers; Jev remains a non-conversational Decision example. A Local live run
+uses the same `SWIFTAGENT_LOCAL_BASE_URL`, `SWIFTAGENT_LOCAL_MODEL`, and optional
+`SWIFTAGENT_LOCAL_API_KEY` configuration as ProviderQualification.
 
 The header displays the latest Run and current in-memory Session accounting
 window. Assistant turns show the current response, while provisional responses
