@@ -59,9 +59,10 @@ Post-`1.0.0-rc.1`, OpenAI and DeepSeek reasoning configuration use extensible
 new enum case. Provider construction still validates values that cannot form a
 legal request.
 
-The RC.2 audit candidate adds 200 precise public symbol identifiers and removes
-none relative to `1.0.0-rc.1`. These additions are source-compatible for
-clients that do not adopt the new providers or decision products.
+The current RC.2 development graph adds 339 precise public symbol identifiers
+and removes none relative to `1.0.0-rc.1`. The latest 139 identifiers are the
+optional `AgentUsage` product. These additions are source-compatible for clients
+that do not adopt the new providers, decision products, or usage accounting.
 
 ## Enums
 

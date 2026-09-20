@@ -54,6 +54,10 @@ not exceed a reported input total, and reasoning must not exceed a reported outp
 total. Absent totals remain unreported, not zero or inferred values. Providers must
 normalize provisional estimates before reporting authoritative cumulative counts.
 
+Hosts that need response, Run, or Session-window summaries can map this stream
+through the optional [AgentUsage product](swift-agent-usage.md). That mapping
+belongs in the existing event consumer; it does not change this protocol.
+
 If a native provider only sends a final snapshot, its adapter emits the equivalent
 normalized start/delta/completion events before the response terminal. Native
 frames and provider-specific fallback logic do not enter this contract.

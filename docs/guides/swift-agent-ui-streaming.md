@@ -104,6 +104,9 @@ Usage events are cumulative snapshots. A missing field is unreported, not zero;
 do not sum repeated snapshots or double-count reasoning/cache subsets. Usage is
 not necessarily the provider's complete billing invoice. See
 [ModelMetadata.swift](../../Sources/AgentModels/ModelMetadata.swift).
+The optional [AgentUsage product](swift-agent-usage.md) provides per-field
+completeness plus separate finalized and provisional summaries. Keep it in the
+same event projection pipeline rather than opening a second stream consumer.
 
 ## Decouple event consumption from drawing
 

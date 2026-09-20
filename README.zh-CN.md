@@ -83,7 +83,7 @@ dependencies: [
 | Core products | macOS 13+、iOS 16+、Linux |
 | AgentDecisions / AgentJevProvider | macOS 13+、iOS 16+、Linux |
 | 可选 Apple Foundation Models adapter | macOS/iOS 26+；PCC 等具体 API 另有可用性要求 |
-| 其他可移植 products | AgentModels、AgentTools、AgentProviders、WorkspaceAgent 支持 Linux |
+| 其他可移植 products | AgentModels、AgentTools、AgentProviders、AgentUsage、WorkspaceAgent 支持 Linux |
 
 准确的可用性要求见 [Package.swift](Package.swift) 和 Apple Provider 指南。`swift-tools-version: 6.0` 是 manifest 语言的最低版本，不是验证所用的编译器版本。Core 不依赖 SwiftUI 或 Apple 模型 SDK。
 
@@ -151,6 +151,7 @@ Mutation 工具要求在创建 Session 时提供持久化 `AgentJournal`，在 e
 | AgentAppleProvider | AgentModels | Apple 端侧/PCC 规划与平台 SDK 隔离 |
 | AgentDecisions | AgentModels | 类型化、厂商无关的 Decision 请求与响应 |
 | AgentJevProvider | AgentModels, AgentDecisions | TypeSafe Jev adapter；没有执行权 |
+| AgentUsage | AgentModels | 可选的 response、Run 与 Session 统计窗口用量汇总 |
 | WorkspaceAgent | AgentModels, AgentTools, AgentCore, AgentProviders | 沙盒文件 Reference Host；不是 Core 的依赖 |
 
 WorkspaceAgent 还通过 [swift-crypto](https://github.com/apple/swift-crypto) 计算 SHA-256，不会将该依赖引入 Core。媒体服务 Client、任务存储与资产属于使用 SDK 的 App 或可选扩展，不属于 AgentCore。多媒体指南没有新增服务实现。
@@ -161,6 +162,7 @@ WorkspaceAgent 还通过 [swift-crypto](https://github.com/apple/swift-crypto) �
 | --- | --- |
 | 模型数据与 wire 转换 | [ModelRequest](Sources/AgentModels/ModelRequest.swift)、[ModelMessage](Sources/AgentModels/ModelMessage.swift)、[ModelMetadata](Sources/AgentModels/ModelMetadata.swift)、[模型事件契约](docs/guides/swift-agent-model-events.md) |
 | Runtime 与进度 | [Agent loop](docs/guides/swift-agent-loop.md)、[Session/Run](docs/guides/swift-agent-sessions.md)、[Agent 事件](docs/guides/swift-agent-events.md) |
+| Usage 统计 | [Response、Run 与 Session 统计窗口用量](docs/guides/swift-agent-usage.md) |
 | 工具与副作用 | [类型化工具](docs/guides/swift-agent-tools.md)、[Evidence](docs/guides/swift-agent-evidence.md)、[Receipts](docs/guides/swift-agent-receipts.md)、[调度](docs/guides/swift-agent-scheduler.md) |
 | 持久化与生命周期 | [Journal](docs/guides/swift-agent-journal.md)、[mutation 恢复](docs/guides/swift-agent-mutation-recovery.md)、[上下文策略](docs/guides/swift-agent-context.md)、[并发](docs/guides/swift-agent-concurrency.md) |
 | 错误与兼容性 | [类型化错误](docs/guides/swift-agent-errors.md)、[版本策略](docs/guides/swift-agent-versioning.md) |

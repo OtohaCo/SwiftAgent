@@ -14,6 +14,9 @@ host-specific policy do not belong in the portable modules.
 | `Sources/AgentCore` | Agent / Session / Run / Journal |
 | `Sources/AgentProviders` | Anthropic and HTTP transport |
 | `Sources/AgentAppleProvider` | Apple Foundation Models adapter |
+| `Sources/AgentDecisions` | Vendor-neutral typed decisions |
+| `Sources/AgentJevProvider` | TypeSafe Jev adapter |
+| `Sources/AgentUsage` | Optional in-memory usage aggregation |
 | `Sources/WorkspaceAgent` | Reference Host, not Core SDK |
 
 ## Commands

@@ -43,6 +43,24 @@ endpoint values during non-preflight fixture cases. Budget lock artifacts are
 also ignored. The focused qualification package passed 22 tests in five suites;
 this local-only hardening sent no cloud request.
 
+## Usage accounting correction
+
+The Results table below is preserved as the original operator record. Its token
+columns were emitted before the reusable AgentUsage accounting added in SAI-069:
+
+- Tool-case usage represented only the last `AgentLoopResult.response`, so it
+  omitted the model response that proposed the tool.
+- Text and text-history restart cases manually added the last response from each
+  Run. A missing field was treated as zero, so those totals did not carry
+  per-field completeness.
+- Intermediate usage that was not retained in the report cannot be reconstructed
+  from conversation checkpoints or estimated after the fact.
+
+This correction changes only the interpretation of the historical token fields.
+It does not change the tool execution, history replay, cancellation, or typed
+Decision PASS results. SAI-069 used fixtures only, sent no new provider request,
+and therefore is not new live qualification evidence.
+
 ## Results
 
 | Provider/service | Model | Case | Result | Evidence |

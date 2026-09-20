@@ -12,6 +12,7 @@ bash Scripts/ci-linux.sh
 bash Scripts/ci-concurrency-seal.sh
 swift test --package-path Examples/ProviderQualification --disable-sandbox --no-parallel
 swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
+swift test --filter UsageLedgerTests
 ```
 
 Do not treat skipped live tests as passes. Anthropic, OpenAI, and Apple live
@@ -27,6 +28,8 @@ Use `Examples/ProviderQualification` for credential-free fixtures, no-network
 preflight and explicitly bounded live cases. Its persistent ledger defaults to
 12 sends per provider and 48 total; explicit live mode never falls back to a
 fixture. See the [qualification guide](guides/swift-agent-examples-and-live.md).
+Usage aggregation semantics and event ownership are documented in the
+[usage accounting guide](guides/swift-agent-usage.md).
 
 Provider remediation fixtures can be run directly:
 

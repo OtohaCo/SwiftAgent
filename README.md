@@ -102,7 +102,7 @@ gitlink. Do not silently follow a remote branch or upgrade to make guessed APIs 
 | Core products | macOS 13+, iOS 16+, Linux |
 | AgentDecisions / AgentJevProvider | macOS 13+, iOS 16+, Linux |
 | Optional Apple Foundation Models adapter | macOS/iOS 26+; individual APIs, including PCC, have additional availability requirements |
-| Other portable products | AgentModels, AgentTools, AgentProviders and WorkspaceAgent support Linux |
+| Other portable products | AgentModels, AgentTools, AgentProviders, AgentUsage and WorkspaceAgent support Linux |
 
 Check [Package.swift](Package.swift) and the Apple provider guide for exact
 availability. `swift-tools-version: 6.0` is the manifest language floor, not the
@@ -222,6 +222,7 @@ create a trusted Receipt or settle the Journal.
 | AgentAppleProvider | AgentModels | Apple on-device/PCC planning and platform SDK isolation |
 | AgentDecisions | AgentModels | Typed, vendor-neutral decision requests and responses |
 | AgentJevProvider | AgentModels, AgentDecisions | TypeSafe Jev adapter; no execution authority |
+| AgentUsage | AgentModels | Optional response, Run, and Session-window usage accounting |
 | WorkspaceAgent | AgentModels, AgentTools, AgentCore, AgentProviders | Sandbox-file Reference Host; not a Core dependency |
 
 WorkspaceAgent also uses [swift-crypto](https://github.com/apple/swift-crypto) for
@@ -235,6 +236,7 @@ in AgentCore. The multimedia guide does not add a service implementation.
 | --- | --- |
 | Model data and wire conversion | [ModelRequest](Sources/AgentModels/ModelRequest.swift), [ModelMessage](Sources/AgentModels/ModelMessage.swift), [ModelMetadata](Sources/AgentModels/ModelMetadata.swift), [model event contract](docs/guides/swift-agent-model-events.md) |
 | Runtime and progress | [Agent loop](docs/guides/swift-agent-loop.md), [Sessions/Runs](docs/guides/swift-agent-sessions.md), [Agent events](docs/guides/swift-agent-events.md) |
+| Usage accounting | [Response, Run, and Session-window usage](docs/guides/swift-agent-usage.md) |
 | Tools and effects | [Typed tools](docs/guides/swift-agent-tools.md), [Evidence](docs/guides/swift-agent-evidence.md), [Receipts](docs/guides/swift-agent-receipts.md), [scheduling](docs/guides/swift-agent-scheduler.md) |
 | Persistence and lifetime | [Journal](docs/guides/swift-agent-journal.md), [mutation recovery](docs/guides/swift-agent-mutation-recovery.md), [context policy](docs/guides/swift-agent-context.md), [concurrency](docs/guides/swift-agent-concurrency.md) |
 | Errors and compatibility | [Typed errors](docs/guides/swift-agent-errors.md), [versioning](docs/guides/swift-agent-versioning.md) |

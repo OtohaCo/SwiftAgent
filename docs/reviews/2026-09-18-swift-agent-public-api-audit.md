@@ -24,10 +24,11 @@ surface even though it ships in this package.
 Counts are types (struct/enum/protocol/actor/class), not every property. Members
 follow the type decision unless noted. SAI-047 separately generated and
 reviewed the complete 956-symbol `1.0.0-rc.1` public member graph. The current
-post-rc.1 branch has 1,156 public member symbols and 121 public top-level types:
-200 precise identifiers were added and none removed. See
+post-rc.1 branch has 1,295 public member symbols and 136 public top-level types:
+339 precise identifiers were added and none removed. See
 [the generated member inventory](2026-09-19-swift-agent-public-api-members.md)
-and the [SAI-055 addition annex](2026-09-19-sai-055-public-api-additions.md).
+plus the [SAI-055](2026-09-19-sai-055-public-api-additions.md) and
+[SAI-069](2026-09-19-sai-069-public-api-additions.md) addition annexes.
 Every current member is KEEP, with NARROW/REMOVE already absent from the public
 graph.
 

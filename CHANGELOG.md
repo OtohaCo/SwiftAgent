@@ -54,6 +54,19 @@ additions and behavior changes will be recorded here before that release is cut.
 - Keep decisions outside AgentCore: they cannot create Evidence, authorize or
   execute tools, create Receipts, or settle journals.
 
+### Usage accounting
+
+- Add the optional `AgentUsage` product for response, Run, Session-window, and
+  provider/model aggregation without adding a dependency to AgentCore.
+- Preserve per-field reported and missing counts, distinguish explicit zero
+  from unreported values, and keep finalized and provisional totals separate.
+- Make duplicate observations idempotent and reject conflicts, regressions,
+  invalid subsets, negative values, and checked-arithmetic overflow without
+  changing the underlying Run or mutation result.
+- Correct ProviderQualification to count every visible response in multi-turn,
+  tool, restart, failure, and cancellation paths; AppleChatApp now displays
+  response, Run, and Session-window usage with cost explicitly unestimated.
+
 ## [1.0.0-rc.1] - 2026-09-19
 
 ### Runtime

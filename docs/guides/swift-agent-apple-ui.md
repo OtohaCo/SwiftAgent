@@ -146,6 +146,13 @@ app-owned snapshots instead. A disconnected SDK event observer cannot request
 replay of missed events; journal checkpoints restore canonical conversation, not
 the live event outlet.
 
+AppleChatApp feeds usage into the optional `AgentUsage` product from that same
+event consumer, then publishes response, latest-Run, and in-memory Session-window
+summaries in its complete display snapshot. View refresh, navigation, multiple
+windows, and display-history trimming must not re-record or reduce the totals.
+Provisional responses stay separate from finalized totals, and cost remains
+unestimated. See [Usage accounting](swift-agent-usage.md).
+
 ## System backgrounding and restart
 
 Leaving a page and entering the iOS background are different lifecycle events.

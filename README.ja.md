@@ -83,7 +83,7 @@ Git submodule でローカル package を提供する場合、SDK commit は親�
 | Core products | macOS 13+、iOS 16+、Linux |
 | AgentDecisions / AgentJevProvider | macOS 13+、iOS 16+、Linux |
 | オプションの Apple Foundation Models adapter | macOS/iOS 26+。PCC を含む個別 API には追加の可用性条件があります |
-| その他の移植可能な products | AgentModels、AgentTools、AgentProviders、WorkspaceAgent は Linux に対応 |
+| その他の移植可能な products | AgentModels、AgentTools、AgentProviders、AgentUsage、WorkspaceAgent は Linux に対応 |
 
 正確な可用性は [Package.swift](Package.swift) と Apple Provider ガイドで確認してください。`swift-tools-version: 6.0` は manifest 言語の下限であり、検証に使うコンパイラーのバージョンではありません。Core は SwiftUI や Apple のモデル SDK に依存しません。
 
@@ -151,6 +151,7 @@ Mutation ツールには、Session 作成時の永続 `AgentJournal`、実行前
 | AgentAppleProvider | AgentModels | Apple オンデバイス/PCC のプランニングとプラットフォーム SDK の分離 |
 | AgentDecisions | AgentModels | 型付きでベンダーに依存しない Decision リクエストとレスポンス |
 | AgentJevProvider | AgentModels, AgentDecisions | TypeSafe Jev adapter。実行権限なし |
+| AgentUsage | AgentModels | オプションの response、Run、Session 集計ウィンドウ用 Usage 集計 |
 | WorkspaceAgent | AgentModels, AgentTools, AgentCore, AgentProviders | サンドボックスファイルの Reference Host。Core の依存先ではない |
 
 WorkspaceAgent は SHA-256 に [swift-crypto](https://github.com/apple/swift-crypto) も使用しますが、その依存を Core には持ち込みません。メディアサービスの Client、ジョブ保存、アセットは利用側 App またはオプションの拡張に置き、AgentCore には置きません。マルチメディアガイドによるサービス実装の追加はありません。
@@ -161,6 +162,7 @@ WorkspaceAgent は SHA-256 に [swift-crypto](https://github.com/apple/swift-cry
 | --- | --- |
 | モデルデータと wire 変換 | [ModelRequest](Sources/AgentModels/ModelRequest.swift)、[ModelMessage](Sources/AgentModels/ModelMessage.swift)、[ModelMetadata](Sources/AgentModels/ModelMetadata.swift)、[モデルイベント契約](docs/guides/swift-agent-model-events.md) |
 | Runtime と進捗 | [Agent loop](docs/guides/swift-agent-loop.md)、[Session/Run](docs/guides/swift-agent-sessions.md)、[Agent イベント](docs/guides/swift-agent-events.md) |
+| Usage 集計 | [Response、Run、Session 集計ウィンドウの Usage](docs/guides/swift-agent-usage.md) |
 | ツールと副作用 | [型付きツール](docs/guides/swift-agent-tools.md)、[Evidence](docs/guides/swift-agent-evidence.md)、[Receipts](docs/guides/swift-agent-receipts.md)、[スケジューリング](docs/guides/swift-agent-scheduler.md) |
 | 永続化とライフサイクル | [Journal](docs/guides/swift-agent-journal.md)、[mutation 復旧](docs/guides/swift-agent-mutation-recovery.md)、[コンテキストポリシー](docs/guides/swift-agent-context.md)、[並行処理](docs/guides/swift-agent-concurrency.md) |
 | エラーと互換性 | [型付きエラー](docs/guides/swift-agent-errors.md)、[バージョン方針](docs/guides/swift-agent-versioning.md) |

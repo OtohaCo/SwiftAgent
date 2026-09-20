@@ -98,6 +98,18 @@ Exit codes are `0` for all selected cases passing, `2` for configuration errors,
 `3` for a failed/not-exercised case or exhausted budget, and `1` for an
 unclassified failure. Explicit live mode never falls back to fixtures.
 
+Qualification usage is a case-scoped `AgentUsage` window over responses visible
+to the existing event consumer. It includes all observed responses from tool and
+restart loops, keeps finalized and provisional subtotals separate, and reports
+per-field missing counts. HTTP `attempts` remain the independent budget-ledger
+count. Hidden route candidates are outside usage coverage, and cost is reported
+as `UNKNOWN`; see the [usage guide](swift-agent-usage.md).
+
+The legacy output names `usage_input`, `usage_output`, and `usage_reasoning`
+now represent reported case subtotals rather than the final response alone.
+Consumers must inspect the reported/missing counts and finalized/provisional
+totals; the old names are retained only to avoid a silent parser break.
+
 The CLI prints sanitized request shape and bounded protocol metadata. It does not
 print credentials, request bodies, response text, reasoning, signatures, opaque
 continuation values or arbitrary underlying error descriptions. Raw wire data is
@@ -126,6 +138,10 @@ It retains one event consumer, separates logical terminal from physical drain,
 and keeps the local account tool read-only. Use the Stop button during an active
 Run. In fixture automation, `--stop` requests Stop after startup; it is not a
 timing-based proof that cancellation won.
+
+The app uses the same `AgentUsage` component to show current response, latest
+Run, and in-memory Session-window usage. Display-history trimming does not reduce
+the Session total. Journal reload alone does not reconstruct earlier usage.
 
 The package includes an iOS SwiftUI entry and cross-builds the executable target
 for `arm64-apple-ios16.0`. That is not simulator/device UI acceptance. Live

@@ -35,7 +35,13 @@ request requires a persistent ledger through `--budget-file` or
 `SWIFT_AGENT_LIVE_BUDGET_FILE`; restarting a command cannot reset the limit.
 Runs are sequential, use at most three model turns and two local read-only tool
 calls, and have a 120-second deadline. Output contains only status, counts,
-usage fields and sanitized request-shape evidence. It never prints credentials,
+usage fields and sanitized request-shape evidence. Usage covers every response
+visible through the case's single `AgentRun.events` consumer, with separate
+observed, finalized, provisional, reported and missing counts. `attempts` still
+comes from the request-budget ledger; it is not inferred from response count.
+Fixture cases therefore report `attempts=0` even when their Agent Run exposes
+one or more model responses.
+`cost=UNKNOWN` is intentional. Output never prints credentials,
 request bodies, signed/encrypted continuation data or arbitrary underlying
 error descriptions.
 
@@ -43,6 +49,13 @@ Supported chat cases are `text`, `tool`, `restart`, `structured`, `usage`,
 `cancel`, and `all`; `all` runs all six chat cases. Jev supports `noul`,
 `choice`, `score`, `mixed`, and `all`.
 `preflight` never sends a request.
+
+For script compatibility, `usage_input`, `usage_output`, and
+`usage_reasoning` remain present, but now mean the reported subtotal across all
+responses visible in the selected case. Read the adjacent reported/missing
+counts before treating them as complete. `usage_finalized_total` and
+`usage_provisional_total` keep completed and in-progress response totals
+separate. No field is a price or bill.
 
 Environment files are loaded only when selected with `--env-file` or
 `SWIFT_AGENT_LIVE_ENV_FILE`; the CLI does not implicitly load `.env.live` from

@@ -52,6 +52,9 @@ long-term map so a later bug does not require moving files.
 | Jev answer identity, kind, candidate, score index, range, usage, and metadata mismatches must fail closed | `invalidResponseFailsClosed(_:)` | `Tests/AgentJevProviderTests/JevDecisionProviderTests.swift` |
 | Jev cancellation and retry metadata must not create hidden attempts or late completion | `callerCancellationWinsAndLateTransportCompletionCannotReturnAResult`, `exposesSafeRetryMetadataWithoutAutomaticallyRetrying` | `Tests/AgentJevProviderTests/JevDecisionProviderTests.swift` |
 | Oversized Jev retry metadata must not overflow `Duration` and terminate the Host | `oversizedRetryMetadataIsIgnoredWithoutCrashing(_:)` | `Tests/AgentJevProviderTests/JevDecisionProviderTests.swift` |
+| Multi-turn tool usage must include every visible response rather than only the last `AgentLoopResult.response` | `multiTurnToolRunSumsEveryFinalizedResponse`, `fixtureCasesUseTheRealAgentSessionRunAndDrainPath(_:)` | `Tests/AgentUsageTests/UsageLedgerTests.swift`, `Examples/ProviderQualification/Tests/LiveProviderSupportTests/QualificationRunnerTests.swift` |
+| Cross-response missing usage must remain partial while same-response sparse cumulative snapshots preserve prior fields | `crossResponseMissingFieldsRemainPartialInsteadOfBecomingZero`, `cumulativeSnapshotsReplaceWithinAResponseAndSparseFieldsArePreserved` | `Tests/AgentUsageTests/UsageLedgerTests.swift` |
+| Qualification results must join their sole event observer before publishing final usage | `resultWaitsForTheSingleEventObserverToProcessTheFinalUsage` | `Examples/ProviderQualification/Tests/LiveProviderSupportTests/QualificationRunnerTests.swift` |
 
 When a new production bug lands, add a row here and a focused test next to the
 domain tests. Prefer a precise name over a `Regressions/` directory move.

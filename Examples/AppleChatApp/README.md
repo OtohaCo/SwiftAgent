@@ -29,6 +29,11 @@ Do not place credentials in the app bundle, `Info.plist`, resources or a committ
 Scheme. The app accepts OpenAI, DeepSeek and Anthropic chat providers; Jev remains
 a non-conversational Decision example.
 
+The header displays the latest Run and current in-memory Session accounting
+window. Assistant turns show the current response, while provisional responses
+remain separate from finalized totals. This is public-event accounting, not a
+billing estimate or a persistent lifetime Session ledger; cost remains unknown.
+
 See [the examples guide](../../docs/guides/swift-agent-examples-and-live.md),
 [Apple UI ownership](../../docs/guides/swift-agent-apple-ui.md) and
 [UI streaming](../../docs/guides/swift-agent-ui-streaming.md).

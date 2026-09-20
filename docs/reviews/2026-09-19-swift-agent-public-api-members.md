@@ -4,11 +4,13 @@ last-verified: 2026-09-19
 
 Generated from Swift 6.4 public symbol graphs on `plan/swift-agent-rc2`. The published `1.0.0-rc.1` baseline is `d2347f11c6a78f421708e897dae42a51a98d37ea`; the current audited branch adds provider and decision surface without removing a published symbol. Package and internal symbols are intentionally absent.
 
-All 1,156 currently public symbols are `KEEP`. Compared with `1.0.0-rc.1`,
-the exact precise-identifier diff is 200 additions and 0 removals. The 138
+All 1,295 currently public symbols are `KEEP`. Compared with `1.0.0-rc.1`,
+the exact precise-identifier diff is 339 additions and 0 removals. The 138
 SAI-055 additions are enumerated in the
-[Decision/Jev annex](2026-09-19-sai-055-public-api-additions.md); the table below
-contains the 1,018-symbol non-Decision inventory after the RC.2 remediation.
+[Decision/Jev annex](2026-09-19-sai-055-public-api-additions.md), and the 139
+SAI-069 additions are enumerated in the
+[AgentUsage annex](2026-09-19-sai-069-public-api-additions.md). The table below
+contains the 1,018-symbol pre-AgentUsage non-Decision inventory after the RC.2 remediation.
 The additions are optional for
 clients that do not adopt them; public enum expansion remains source-breaking
 for exhaustive switches as documented in the versioning guide.
@@ -22,10 +24,11 @@ for exhaustive switches as documented in the versioning guide.
 | AgentModels | 260 | 260 | +0 |
 | AgentProviders | 41 | 101 | +60 |
 | AgentTools | 311 | 311 | +0 |
+| AgentUsage | 0 | 139 | +139 |
 | WorkspaceAgent | 56 | 56 | +0 |
-| **Total** | **956** | **1156** | **+200** |
+| **Total** | **956** | **1295** | **+339** |
 
-Top-level public types: **121** current, **100** in rc.1.
+Top-level public types: **136** current, **100** in rc.1.
 
 ## Post-rc.1 additions
 
@@ -37,6 +40,9 @@ are in the linked annex. Other provider additions are synthesized conformances,
 the Anthropic alias-aware initializer, and Apple Private Cloud Compute members.
 `DeepSeekReasoningEffort` is an extensible validated raw-value structure; new
 non-empty provider values do not require a public enum expansion.
+SAI-069 adds 15 AgentUsage top-level types for extensible identities, cumulative
+observations, typed diagnostics, per-field completeness, and actor-owned or
+Host-owned explicit accounting windows.
 
 | Module | Kind | Symbol path | Source | Precise identifier | Decision |
 | --- | --- | --- | --- | --- | --- |
