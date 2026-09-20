@@ -506,6 +506,133 @@ struct AgentModelBindingTests {
         #expect(await session.activeRunID == nil)
     }
 
+    @Test func projectorExceedingRunDeadlineDoesNotCommitInput() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-preflight-projector-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let journal = try AgentJournal(persistenceURL: url)
+        let gate = NonCooperativeProjectionGate()
+        let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(journal: journal)
+        let binding = try AgentModelBinding(
+            profileID: "deadline-projector",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("deadline-projector"),
+            projector: NonCooperativeBlockingProjector(gate: gate)
+        )
+        let budget = try AgentBudget(maxModelTurns: 1, maxToolCalls: 0,
+                                     deadline: .now.advanced(by: .milliseconds(100)))
+
+        let first = Task { try await session.run("must not commit", using: binding, budget: budget) }
+        await gate.waitUntilBlocked()
+        try await Task.sleep(for: .milliseconds(150))
+        await #expect(throws: AgentSessionError.runInProgress) {
+            try await session.run("overlap")
+        }
+
+        await gate.release()
+        await gate.waitUntilFinished()
+        await #expect(throws: AgentLoopError.deadlineExceeded) { try await first.value }
+        #expect(await session.history == [])
+        #expect(await session.activeRunID == nil)
+        #expect(await provider.log.requests.isEmpty)
+        #expect(await journal.snapshot().contains { record in
+            if case .userMessage("must not commit") = record.event { return true }
+            return false
+        } == false)
+
+        let next = try await session.run("next")
+        _ = try await next.wait()
+    }
+
+    @Test func tokenEstimatorExceedingRunDeadlineDoesNotCommitInput() async throws {
+        let gate = NonCooperativeEstimatorGate()
+        let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let tokenBudget = try AgentContextTokenBudget(
+            maximumContextTokens: 100,
+            reservedOutputTokens: 10,
+            estimator: NonCooperativeTokenEstimator(gate: gate)
+        )
+        let binding = try AgentModelBinding(
+            profileID: "deadline-estimator",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("deadline-estimator"),
+            tokenBudget: tokenBudget
+        )
+        let budget = try AgentBudget(maxModelTurns: 1, maxToolCalls: 0,
+                                     deadline: .now.advanced(by: .milliseconds(100)))
+
+        let first = Task { try await session.run("must not commit", using: binding, budget: budget) }
+        await gate.waitUntilBlocked()
+        try await Task.sleep(for: .milliseconds(150))
+        await #expect(throws: AgentSessionError.runInProgress) {
+            try await session.run("overlap")
+        }
+
+        await gate.release()
+        await gate.waitUntilFinished()
+        await #expect(throws: AgentLoopError.deadlineExceeded) { try await first.value }
+        #expect(await session.history == [])
+        #expect(await session.activeRunID == nil)
+        #expect(await provider.log.requests.isEmpty)
+    }
+
+    @Test func latePreflightResultCannotCommitAfterDeadline() async throws {
+        let gate = NonCooperativeProjectionGate()
+        let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let binding = try AgentModelBinding(
+            profileID: "late-preflight",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("late-preflight"),
+            projector: NonCooperativeBlockingProjector(gate: gate)
+        )
+        let budget = try AgentBudget(maxModelTurns: 1, maxToolCalls: 0,
+                                     deadline: .now.advanced(by: .milliseconds(100)))
+
+        let first = Task { try await session.run("late result", using: binding, budget: budget) }
+        await gate.waitUntilBlocked()
+        try await Task.sleep(for: .milliseconds(150))
+        await #expect(throws: AgentLoopError.deadlineExceeded) { try await first.value }
+
+        await gate.release()
+        await gate.waitUntilFinished()
+        #expect(await session.history == [])
+        #expect(await provider.log.requests.isEmpty)
+    }
+
+    @Test func cancelledPreflightRemainsCancellationWithDeadlineWrapper() async throws {
+        let gate = CancellableProjectionGate()
+        let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let binding = try AgentModelBinding(
+            profileID: "cancelled-preflight",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("cancelled-preflight"),
+            projector: BlockingProjector(gate: gate)
+        )
+        let budget = try AgentBudget(maxModelTurns: 1, maxToolCalls: 0,
+                                     deadline: .now.advanced(by: .seconds(5)))
+        let first = Task { try await session.run("cancel me", using: binding, budget: budget) }
+        await gate.waitUntilBlocked()
+        first.cancel()
+        await #expect(throws: CancellationError.self) { try await first.value }
+        #expect(await session.history == [])
+        #expect(await provider.log.requests.isEmpty)
+    }
+
     @Test func duplicateToolCallIDsAreRejectedBeforeProviderExecution() async throws {
         let provider = ScriptedProvider { request, _ in textResponse(request, "unused") }
         let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: []))
@@ -626,7 +753,9 @@ private struct NonCooperativeBlockingProjector: AgentContextProjector {
 
     func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
         await gate.wait()
-        return try await AgentIdentityContextProjector().project(input)
+        let projection = try await AgentIdentityContextProjector().project(input)
+        await gate.finished()
+        return projection
     }
 }
 
@@ -634,6 +763,8 @@ private actor NonCooperativeProjectionGate {
     private var released = false
     private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
     private var blockedObservers: [CheckedContinuation<Void, Never>] = []
+    private var finishedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var didFinish = false
 
     func wait() async {
         if released { return }
@@ -655,6 +786,70 @@ private actor NonCooperativeProjectionGate {
         let waiters = blockedWaiters
         blockedWaiters.removeAll()
         waiters.forEach { $0.resume() }
+    }
+
+    func finished() {
+        didFinish = true
+        let waiters = finishedWaiters
+        finishedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilFinished() async {
+        if didFinish { return }
+        await withCheckedContinuation { finishedWaiters.append($0) }
+    }
+}
+
+private struct NonCooperativeTokenEstimator: AgentContextTokenEstimator {
+    let gate: NonCooperativeEstimatorGate
+
+    func estimate(_ input: AgentContextTokenEstimationInput) async throws -> AgentContextTokenEstimate {
+        await gate.wait()
+        await gate.finished()
+        return .init(inputTokens: 1, accuracy: .exact)
+    }
+}
+
+private actor NonCooperativeEstimatorGate {
+    private var released = false
+    private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var blockedObservers: [CheckedContinuation<Void, Never>] = []
+    private var finishedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var didFinish = false
+
+    func wait() async {
+        if released { return }
+        await withCheckedContinuation { continuation in
+            blockedWaiters.append(continuation)
+            let observers = blockedObservers
+            blockedObservers.removeAll()
+            observers.forEach { $0.resume() }
+        }
+    }
+
+    func waitUntilBlocked() async {
+        if !blockedWaiters.isEmpty { return }
+        await withCheckedContinuation { blockedObservers.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiters = blockedWaiters
+        blockedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func finished() {
+        didFinish = true
+        let waiters = finishedWaiters
+        finishedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilFinished() async {
+        if didFinish { return }
+        await withCheckedContinuation { finishedWaiters.append($0) }
     }
 }
 
