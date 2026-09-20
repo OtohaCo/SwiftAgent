@@ -37,9 +37,14 @@ public struct AppleChatLaunchConfiguration: Sendable {
 
         let environmentFile = resolvedEnvironmentFile(options: options, process: process)
         let environment = try LiveEnvironment.load(process: process, fileURL: environmentFile)
+        let budgetLimits = try resolvedBudgetLimits(environment: environment)
         let configuration = try QualificationConfiguration.resolve(options: options, environment: environment)
         let budgetFile = try resolvedBudgetFile(options: options, environment: environment, required: true)
-        let budget = try LiveRequestBudget(fileURL: budgetFile)
+        let budget = try LiveRequestBudget(
+            fileURL: budgetFile,
+            perProviderLimit: budgetLimits.perProviderLimit,
+            totalLimit: budgetLimits.totalLimit
+        )
         let selection = try LiveProviderFactory.makeModelProvider(
             configuration: configuration,
             budget: budget,
@@ -117,6 +122,8 @@ public func renderedLaunchConfigurationError(_ error: any Error) -> String {
             return "Set \(safeConfigurationVariable(variable)) to an available model, run preflight, and try again."
         case .missingBudgetFile:
             return "Choose a persistent live request budget file, then try again."
+        case .invalidBudgetLimit(let variable):
+            return "Set \(safeConfigurationVariable(variable)) to a valid positive integer, then try again."
         case .invalidEndpoint:
             return "The provider endpoint is invalid. Check the local configuration and try again."
         case .unsafeEnvironmentFile, .unreadableEnvironmentFile:

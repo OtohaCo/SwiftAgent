@@ -108,6 +108,9 @@ struct LiveProviderConversationTests {
         let credential = renderedLaunchConfigurationError(
             LiveConfigurationError.missingCredential("OPENAI_API_KEY")
         )
+        let invalidLimit = renderedLaunchConfigurationError(
+            LiveConfigurationError.invalidBudgetLimit("SWIFT_AGENT_LIVE_TOTAL_LIMIT")
+        )
         let budget = renderedLaunchConfigurationError(
             LiveBudgetError.providerLimit(provider: .openAI, limit: 12)
         )
@@ -115,8 +118,24 @@ struct LiveProviderConversationTests {
         #expect(credential.contains("OPENAI_API_KEY"))
         #expect(credential.contains("preflight"))
         #expect(!credential.contains("secret"))
+        #expect(invalidLimit.contains("SWIFT_AGENT_LIVE_TOTAL_LIMIT"))
+        #expect(invalidLimit.contains("positive integer"))
         #expect(budget.contains("budget"))
         #expect(budget.contains("12"))
+    }
+
+    @Test func invalidLiveBudgetOverridesFailBeforeProviderConstruction() {
+        #expect(throws: LiveConfigurationError.invalidBudgetLimit("SWIFT_AGENT_LIVE_TOTAL_LIMIT")) {
+            try AppleChatLaunchConfiguration.resolve(
+                arguments: ["--provider", "openai", "--mode", "live", "--model", "test-model"],
+                process: [
+                    "OPENAI_API_KEY": "secret-value",
+                    "SWIFT_AGENT_LIVE_BUDGET_FILE": "/tmp/swiftagent-invalid-budget.json",
+                    "SWIFT_AGENT_LIVE_PER_PROVIDER_LIMIT": "100",
+                    "SWIFT_AGENT_LIVE_TOTAL_LIMIT": "99",
+                ]
+            )
+        }
     }
 }
 
