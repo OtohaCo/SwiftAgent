@@ -247,7 +247,10 @@ private func configuredEndpoint(
     fallback: String,
     suffix: String
 ) throws -> URL {
-    if let override { return override }
+    if let override {
+        guard isAllowedEndpoint(override) else { throw LiveConfigurationError.invalidEndpoint }
+        return override
+    }
     let source = environment.value(for: key) ?? fallback
     return try normalizedEndpoint(source, suffix: suffix)
 }
@@ -275,7 +278,10 @@ private func configuredRequiredEndpoint(
     key: String,
     suffix: String
 ) throws -> URL {
-    if let override { return override }
+    if let override {
+        guard isAllowedEndpoint(override) else { throw LiveConfigurationError.invalidEndpoint }
+        return override
+    }
     guard let source = environment.value(for: key) else {
         throw LiveConfigurationError.invalidEndpoint
     }

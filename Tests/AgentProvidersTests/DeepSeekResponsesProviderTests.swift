@@ -197,6 +197,38 @@ struct DeepSeekResponsesProviderTests {
         #expect(response.content == [.text("Hello")])
     }
 
+    @Test func thinkingToolResultCanFinishWithTextWithoutMoreReasoning() async throws {
+        let probe = ProviderRequestProbe()
+        let provider = try DeepSeekResponsesProvider(
+            apiKey: "fixture-key",
+            transport: FixtureHTTPTransport(
+                probe: probe,
+                bodies: [deepSeekReasoningToolFixture(call: 1), deepSeekTextWithoutReasoningFixture]
+            )
+        )
+        let result = try await Agent(
+            model: .init(provider: "deepseek", name: "deepseek-flash"),
+            provider: provider,
+            tools: [ProviderCalculator()],
+            configuration: .init(maxModelTurns: 2, maxToolCalls: 1)
+        ).makeSession().run("Use the calculator, then answer").wait()
+
+        #expect(result.modelTurns == 2)
+        #expect(result.toolCalls == 1)
+        #expect(result.response.content == [.text("Hello")])
+
+        let requests = await probe.requests
+        #expect(requests.count == 2)
+        let second = try requestBody(requests[1])
+        guard case .array(let input) = second["input"] else {
+            Issue.record("Missing stateless input")
+            return
+        }
+        #expect(input.contains(deepSeekReasoningItem(call: 1)))
+        #expect(input.contains(deepSeekFunctionItem(call: 1)))
+        #expect(input.contains(deepSeekFunctionOutput(call: 1)))
+    }
+
     @Test func thinkingToolCallWithoutReasoningStillFailsClosed() async throws {
         let provider = try DeepSeekResponsesProvider(
             apiKey: "fixture-key",

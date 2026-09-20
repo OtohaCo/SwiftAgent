@@ -134,6 +134,26 @@ struct LiveEnvironmentTests {
         }
     }
 
+    @Test func programmaticGatewayOverrideCannotBypassEndpointValidation() throws {
+        let options = QualificationOptions(
+            provider: .openAI,
+            mode: .live,
+            scenario: .preflight,
+            modelOverride: "gateway-model",
+            endpointOverride: URL(string: "https://operator:secret@gateway.example/v1?route=private")!,
+            environmentFile: nil,
+            budgetFile: nil,
+            service: .gateway
+        )
+
+        #expect(throws: LiveConfigurationError.invalidEndpoint) {
+            try QualificationConfiguration.preflight(
+                options: options,
+                environment: LiveEnvironment(process: ["SUB2API_API_KEY": "gateway-secret"])
+            )
+        }
+    }
+
     @Test func fixturePreflightDoesNotInspectOrRenderLiveConfiguration() throws {
         let environment = try LiveEnvironment.load(process: [
             "ANTHROPIC_API_KEY": "private-secret",
