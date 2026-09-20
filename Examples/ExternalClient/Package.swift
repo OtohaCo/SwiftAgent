@@ -16,6 +16,7 @@ let package = Package(
                 .product(name: "AgentJevProvider", package: "SwiftAgent"),
                 .product(name: "AgentModels", package: "SwiftAgent"),
                 .product(name: "AgentTools", package: "SwiftAgent"),
+                .product(name: "AgentUsage", package: "SwiftAgent"),
             ]
         ),
     ],

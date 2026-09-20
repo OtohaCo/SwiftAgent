@@ -2,6 +2,7 @@
 import AppleChatIntegration
 import AgentCore
 import AgentModels
+import AgentUsage
 import SwiftUI
 
 struct AppleChatRootView: View {
@@ -152,22 +153,31 @@ private struct ConversationHeader: View {
     let conversation: ChatConversation
 
     var body: some View {
-        HStack(spacing: 12) {
-            Label(
-                conversation.routeTitle,
-                systemImage: conversation.route == .direct ? "waveform" : "checkmark.shield"
-            )
-            .font(.subheadline.weight(.semibold))
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 12) {
+                Label(
+                    conversation.routeTitle,
+                    systemImage: conversation.route == .direct ? "waveform" : "checkmark.shield"
+                )
+                .font(.subheadline.weight(.semibold))
 
-            Text(conversation.route == .direct
-                 ? "\(conversation.modelLabel) · Incremental output"
-                 : "\(conversation.modelLabel) · Published after route validation")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text(conversation.route == .direct
+                     ? "\(conversation.modelLabel) · Incremental output"
+                     : "\(conversation.modelLabel) · Published after route validation")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-            Spacer()
+                Spacer()
 
-            PhaseLabel(phase: conversation.snapshot.phase)
+                PhaseLabel(phase: conversation.snapshot.phase)
+            }
+            HStack(spacing: 16) {
+                Text("Run: \(usageSummaryText(conversation.snapshot.latestRunUsage))")
+                Text("Session window: \(usageSummaryText(conversation.snapshot.sessionUsage))")
+                Text("Cost not estimated")
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
@@ -266,7 +276,11 @@ private struct AssistantTurnView: View {
                 .foregroundStyle(turn.text.isEmpty ? .secondary : .primary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-            if turn.usage.inputTokens != nil || turn.usage.outputTokens != nil {
+            if turn.usageSummary.observedResponseCount > 0 {
+                Text(responseUsageText(turn.usageSummary))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            } else if turn.usage.inputTokens != nil || turn.usage.outputTokens != nil {
                 Text(usageText(turn.usage))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
@@ -288,6 +302,32 @@ private struct AssistantTurnView: View {
         }
         return "Waiting for output..."
     }
+}
+
+private func responseUsageText(_ summary: UsageSummary) -> String {
+    let state: String
+    if summary.provisionalResponseCount > 0 {
+        state = "In progress"
+    } else if summary.inputTokens.complete && summary.outputTokens.complete {
+        state = "Final"
+    } else {
+        state = "Partial report"
+    }
+    return "Input \(fieldText(summary.inputTokens)) · Output \(fieldText(summary.outputTokens)) · \(state)"
+}
+
+private func usageSummaryText(_ summary: UsageSummary) -> String {
+    guard summary.observedResponseCount > 0 else { return "No usage reported" }
+    let finalized = summary.finalizedUsage.totalTokens.map(String.init) ?? "partial"
+    guard summary.provisionalResponseCount > 0 else {
+        return "\(finalized) tokens · \(summary.finalizedResponseCount) final"
+    }
+    let provisional = summary.provisionalUsage.totalTokens.map(String.init) ?? "partial"
+    return "\(finalized) final + \(provisional) in progress"
+}
+
+private func fieldText(_ field: UsageFieldSummary) -> String {
+    field.reportedSubtotal.map(String.init) ?? "not reported"
 }
 
 private struct ToolCallView: View {

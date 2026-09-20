@@ -21,6 +21,7 @@ let package = Package(
                 .product(name: "AgentModels", package: "SwiftAgent"),
                 .product(name: "AgentProviders", package: "SwiftAgent"),
                 .product(name: "AgentTools", package: "SwiftAgent"),
+                .product(name: "AgentUsage", package: "SwiftAgent"),
             ]
         ),
         .executableTarget(

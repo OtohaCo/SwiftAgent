@@ -5,7 +5,7 @@ final class DependencyGuardTests: XCTestCase {
     func testNetworkSDKIsLimitedToHTTPProviders() {
         XCTAssertEqual(DependencyGuard.violations("import FoundationNetworking", module: "AgentProviders"), [])
         XCTAssertEqual(DependencyGuard.violations("import FoundationNetworking", module: "AgentJevProvider"), [])
-        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentAppleProvider", "AgentDecisions", "WorkspaceAgent"] {
+        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentAppleProvider", "AgentDecisions", "AgentUsage", "WorkspaceAgent"] {
             XCTAssertFalse(DependencyGuard.violations("import FoundationNetworking", module: module).isEmpty)
         }
     }
@@ -13,7 +13,7 @@ final class DependencyGuardTests: XCTestCase {
     func testCryptoKitIsLimitedToWorkspaceHost() {
         XCTAssertEqual(DependencyGuard.violations("import CryptoKit", module: "WorkspaceAgent"), [])
         XCTAssertEqual(DependencyGuard.violations("import Crypto", module: "WorkspaceAgent"), [])
-        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider", "AgentDecisions", "AgentJevProvider"] {
+        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider", "AgentDecisions", "AgentJevProvider", "AgentUsage"] {
             XCTAssertFalse(DependencyGuard.violations("import CryptoKit", module: module).isEmpty)
             XCTAssertFalse(DependencyGuard.violations("import Crypto", module: module).isEmpty)
         }
@@ -22,7 +22,7 @@ final class DependencyGuardTests: XCTestCase {
     func testPosixIsLimitedToWorkspaceHost() {
         XCTAssertEqual(DependencyGuard.violations("import Darwin", module: "WorkspaceAgent"), [])
         XCTAssertEqual(DependencyGuard.violations("import Glibc", module: "WorkspaceAgent"), [])
-        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider", "AgentDecisions", "AgentJevProvider"] {
+        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider", "AgentDecisions", "AgentJevProvider", "AgentUsage"] {
             XCTAssertFalse(DependencyGuard.violations("import Darwin", module: module).isEmpty)
             XCTAssertFalse(DependencyGuard.violations("import Glibc", module: module).isEmpty)
         }
@@ -172,6 +172,7 @@ final class DependencyGuardTests: XCTestCase {
         XCTAssertTrue(manifest.contains("AgentCore"))
         XCTAssertTrue(manifest.contains("AgentDecisions"))
         XCTAssertTrue(manifest.contains("AgentJevProvider"))
+        XCTAssertTrue(manifest.contains("AgentUsage"))
         XCTAssertFalse(manifest.contains("WorkspaceAgent"))
         XCTAssertFalse(manifest.contains("AgentAppleProvider"))
         let tests = root.appendingPathComponent("Tests/ExternalClientTests")
@@ -186,8 +187,17 @@ final class DependencyGuardTests: XCTestCase {
             XCTAssertTrue(source.contains("import AgentCore"), url.path)
             XCTAssertTrue(source.contains("import AgentDecisions"), url.path)
             XCTAssertTrue(source.contains("import AgentJevProvider"), url.path)
+            XCTAssertTrue(source.contains("import AgentUsage"), url.path)
         }
         XCTAssertGreaterThan(count, 0)
+    }
+
+    func testLinuxPortableTargetSealIncludesUsageAccounting() throws {
+        let script = try String(
+            contentsOf: packageRoot.appendingPathComponent("Scripts/ci-linux.sh"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(script.contains("AgentModels AgentTools AgentCore AgentProviders AgentDecisions AgentJevProvider AgentUsage"))
     }
 
     func testRejectsForbiddenImportsIncludingInactiveAndScopedImports() {

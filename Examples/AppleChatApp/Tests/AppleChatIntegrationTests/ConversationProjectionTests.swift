@@ -1,6 +1,7 @@
 @testable import AppleChatIntegration
 import AgentCore
 import AgentModels
+import AgentUsage
 import Foundation
 import Testing
 
@@ -32,6 +33,22 @@ struct ConversationProjectionTests {
         #expect(assistant.responseID == "response-1")
         #expect(assistant.usage == .init(inputTokens: 4, outputTokens: 3))
         #expect(snapshot.terminal == .completed)
+    }
+
+    @Test func sparseUsageSnapshotsDoNotErasePreviouslyReportedFields() throws {
+        let conversationID = UUID()
+        let model = ModelID(provider: "apple-chat-fixture", name: "streaming")
+        var projection = ConversationProjection(conversationID: conversationID)
+
+        projection.beginUserTurn("Hello", generation: 1)
+        projection.apply(.runStarted(.init(sessionID: conversationID, runID: UUID(), model: model)))
+        projection.apply(.turnStarted(1))
+        projection.apply(.model(.usage(.init(inputTokens: 10, outputTokens: 2))))
+        projection.apply(.model(.usage(.init(outputTokens: 5))))
+
+        let assistant = try #require(projection.snapshot.items.compactMap(\.assistant).first)
+        #expect(assistant.usage.inputTokens == 10)
+        #expect(assistant.usage.outputTokens == 5)
     }
 
     @Test func toolCallsStayKeyedByCallIdentityAndExposeRecoverableErrors() throws {

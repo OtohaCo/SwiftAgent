@@ -1,6 +1,7 @@
 import AgentCore
 import AgentModels
 import AgentTools
+import AgentUsage
 import Foundation
 
 public enum ConversationControllerError: Error, Equatable, Sendable {
@@ -86,6 +87,11 @@ public actor ConversationController {
     private var cleanupTask: Task<Void, Never>?
     private var activeRun: ConversationRunHandle?
     private var abandonedCleanups: [UUID: Task<Void, Never>] = [:]
+    private var usageAccumulator = UsageAccumulator()
+    private var usageRunInfo: AgentRunInfo?
+    private var usageTurn = 0
+    private var usageResponseInfo: ResponseInfo?
+    private var usageDiagnosticCount = 0
 
     public init(
         conversationID: UUID = UUID(),
@@ -217,7 +223,55 @@ public actor ConversationController {
     private func receive(_ event: AgentEvent, generation: UInt64, runID: UUID) {
         guard generation == self.generation, activeRun?.id == runID else { return }
         projection.apply(event)
+        recordUsage(event)
         publish()
+    }
+
+    private func recordUsage(_ event: AgentEvent) {
+        switch event {
+        case .runStarted(let info):
+            usageRunInfo = info
+            usageTurn = 0
+            usageResponseInfo = nil
+        case .turnStarted(let number):
+            usageTurn = number
+            usageResponseInfo = nil
+        case .model(.responseStarted(let info)):
+            usageResponseInfo = info
+            recordUsage(.init(), status: .provisional, info: info)
+        case .model(.usage(let usage)):
+            guard let usageResponseInfo else { return }
+            recordUsage(usage, status: .provisional, info: usageResponseInfo)
+        case .model(.responseCompleted(let response)):
+            usageResponseInfo = response.info
+            recordUsage(response.usage, status: .finalized, info: response.info)
+        default:
+            break
+        }
+    }
+
+    private func recordUsage(
+        _ usage: ModelUsage,
+        status: UsageObservationStatus,
+        info: ResponseInfo
+    ) {
+        guard let runInfo = usageRunInfo else { return }
+        let identity = UsageRecordIdentity(
+            source: .modelResponse,
+            sessionID: runInfo.sessionID,
+            runID: runInfo.runID,
+            invocationID: "\(runInfo.runID.uuidString):turn-\(usageTurn)",
+            providerResponseID: info.id,
+            model: info.model
+        )
+        let result = usageAccumulator.record(.init(identity: identity, usage: usage, status: status))
+        if result.diagnostic != nil { usageDiagnosticCount += 1 }
+        projection.updateUsage(
+            response: usageAccumulator.summary(identity: identity),
+            run: usageAccumulator.summary(sessionID: runInfo.sessionID, runID: runInfo.runID),
+            session: usageAccumulator.summary(sessionID: runInfo.sessionID),
+            diagnosticCount: usageDiagnosticCount
+        )
     }
 
     private func logicalCompletion(

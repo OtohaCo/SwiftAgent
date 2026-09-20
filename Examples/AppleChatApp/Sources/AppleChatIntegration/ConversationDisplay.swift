@@ -1,5 +1,6 @@
 import AgentCore
 import AgentModels
+import AgentUsage
 import Foundation
 
 public enum ConversationPhase: String, Equatable, Sendable {
@@ -34,19 +35,22 @@ public struct DisplayAssistantTurn: Identifiable, Equatable, Sendable {
     public var text: String
     public var reasoning: String
     public var usage: ModelUsage
+    public var usageSummary: UsageSummary
 
     public init(
         id: Int,
         responseID: String? = nil,
         text: String = "",
         reasoning: String = "",
-        usage: ModelUsage = .init()
+        usage: ModelUsage = .init(),
+        usageSummary: UsageSummary = .empty
     ) {
         self.id = id
         self.responseID = responseID
         self.text = text
         self.reasoning = reasoning
         self.usage = usage
+        self.usageSummary = usageSummary
     }
 }
 
@@ -104,6 +108,10 @@ public struct ConversationSnapshot: Equatable, Sendable {
     public var terminal: ConversationTerminal?
     public var model: ModelID?
     public var items: [ConversationItem]
+    public var currentResponseUsage: UsageSummary
+    public var latestRunUsage: UsageSummary
+    public var sessionUsage: UsageSummary
+    public var usageDiagnosticCount: Int
 
     public init(
         conversationID: UUID,
@@ -112,7 +120,11 @@ public struct ConversationSnapshot: Equatable, Sendable {
         phase: ConversationPhase = .idle,
         terminal: ConversationTerminal? = nil,
         model: ModelID? = nil,
-        items: [ConversationItem] = []
+        items: [ConversationItem] = [],
+        currentResponseUsage: UsageSummary = .empty,
+        latestRunUsage: UsageSummary = .empty,
+        sessionUsage: UsageSummary = .empty,
+        usageDiagnosticCount: Int = 0
     ) {
         self.conversationID = conversationID
         self.generation = generation
@@ -121,6 +133,10 @@ public struct ConversationSnapshot: Equatable, Sendable {
         self.terminal = terminal
         self.model = model
         self.items = items
+        self.currentResponseUsage = currentResponseUsage
+        self.latestRunUsage = latestRunUsage
+        self.sessionUsage = sessionUsage
+        self.usageDiagnosticCount = usageDiagnosticCount
     }
 }
 
@@ -139,6 +155,8 @@ public struct ConversationProjection: Sendable {
         snapshot.runID = nil
         snapshot.phase = .starting
         snapshot.terminal = nil
+        snapshot.currentResponseUsage = .empty
+        snapshot.latestRunUsage = .empty
         append(.user(.init(text: text)))
     }
 
@@ -161,6 +179,7 @@ public struct ConversationProjection: Sendable {
             snapshot.runID = info.runID
             snapshot.model = info.model
         case .turnStarted(let number):
+            snapshot.currentResponseUsage = .empty
             append(.assistant(.init(id: number)))
         case .model(let event):
             apply(event)
@@ -204,12 +223,28 @@ public struct ConversationProjection: Sendable {
                 $0.argumentsJSON = call.argumentsJSON
             }
         case .usage(let usage):
-            updateCurrentAssistant { $0.usage = usage }
+            updateCurrentAssistant { $0.usage = Self.merge($0.usage, usage) }
         case .responseCompleted(let response):
             updateCurrentAssistant {
                 $0.responseID = response.info.id
-                $0.usage = response.usage
+                $0.usage = Self.merge($0.usage, response.usage)
             }
+        }
+    }
+
+    public mutating func updateUsage(
+        response: UsageSummary,
+        run: UsageSummary,
+        session: UsageSummary,
+        diagnosticCount: Int
+    ) {
+        snapshot.currentResponseUsage = response
+        snapshot.latestRunUsage = run
+        snapshot.sessionUsage = session
+        snapshot.usageDiagnosticCount = diagnosticCount
+        updateCurrentAssistant {
+            $0.usage = response.reportedUsage
+            $0.usageSummary = response
         }
     }
 
@@ -259,6 +294,16 @@ public struct ConversationProjection: Sendable {
         case .failed(let failure): .failed(failure)
         case .cancelled: .cancelled
         }
+    }
+
+    private static func merge(_ existing: ModelUsage, _ newer: ModelUsage) -> ModelUsage {
+        .init(
+            inputTokens: newer.inputTokens ?? existing.inputTokens,
+            outputTokens: newer.outputTokens ?? existing.outputTokens,
+            cachedInputTokens: newer.cachedInputTokens ?? existing.cachedInputTokens,
+            cacheWriteInputTokens: newer.cacheWriteInputTokens ?? existing.cacheWriteInputTokens,
+            reasoningTokens: newer.reasoningTokens ?? existing.reasoningTokens
+        )
     }
 }
 

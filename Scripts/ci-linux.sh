@@ -8,7 +8,7 @@ cd "$root"
 
 swift package clean
 
-for target in AgentModels AgentTools AgentCore AgentProviders AgentDecisions AgentJevProvider; do
+for target in AgentModels AgentTools AgentCore AgentProviders AgentDecisions AgentJevProvider AgentUsage; do
   echo "swift build --target $target"
   swift build --target "$target"
 done

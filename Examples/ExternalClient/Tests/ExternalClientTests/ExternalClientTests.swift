@@ -3,6 +3,7 @@ import AgentDecisions
 import AgentJevProvider
 import AgentModels
 import AgentTools
+import AgentUsage
 import Foundation
 import Testing
 
@@ -111,6 +112,27 @@ struct ExternalClientTests {
 
         #expect(request.questionCount == 3)
         #expect(provider.descriptor.id == "jev")
+    }
+
+    @Test func usageAccountingIsConsumableWithoutAgentCoreIntegration() throws {
+        let sessionID = UUID()
+        let runID = UUID()
+        var usage = UsageAccumulator()
+        let result = usage.record(.init(
+            identity: .init(
+                source: .modelResponse,
+                sessionID: sessionID,
+                runID: runID,
+                invocationID: "turn-1",
+                providerResponseID: "response-1",
+                model: .init(provider: "external-client", name: "fixture")
+            ),
+            usage: .init(inputTokens: 9, outputTokens: 3),
+            status: .finalized
+        ))
+
+        #expect(result.disposition == .inserted)
+        #expect(usage.summary(sessionID: sessionID, runID: runID).totalTokens == 12)
     }
 }
 

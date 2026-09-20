@@ -16,12 +16,16 @@ let package = Package(
                 .product(name: "AgentModels", package: "SwiftAgent"),
                 .product(name: "AgentProviders", package: "SwiftAgent"),
                 .product(name: "AgentTools", package: "SwiftAgent"),
+                .product(name: "AgentUsage", package: "SwiftAgent"),
                 .product(name: "LiveProviderSupport", package: "SwiftAgentProviderQualification"),
             ]
         ),
         .executableTarget(
             name: "AppleChatApp",
-            dependencies: ["AppleChatIntegration"]
+            dependencies: [
+                "AppleChatIntegration",
+                .product(name: "AgentUsage", package: "SwiftAgent"),
+            ]
         ),
         .testTarget(
             name: "AppleChatIntegrationTests",
@@ -29,6 +33,7 @@ let package = Package(
                 "AppleChatIntegration",
                 .product(name: "AgentCore", package: "SwiftAgent"),
                 .product(name: "AgentModels", package: "SwiftAgent"),
+                .product(name: "AgentUsage", package: "SwiftAgent"),
                 .product(name: "LiveProviderSupport", package: "SwiftAgentProviderQualification"),
             ]
         ),
