@@ -155,6 +155,7 @@ private func displayName(_ provider: QualificationProvider) -> String {
     case .openAI: "OpenAI"
     case .deepSeek: "DeepSeek"
     case .anthropic: "Anthropic"
+    case .local: "Local Responses"
     case .jev: "Jev"
     }
 }

@@ -10,6 +10,21 @@ struct QualificationOptionsTests {
         #expect(options.provider == .openAI)
     }
 
+    @Test func localProviderAcceptsExplicitLANHTTPBaseURL() throws {
+        let options = try QualificationOptions.parse([
+            "--provider", "local",
+            "--mode", "live",
+            "--case", "text",
+            "--model", "local-model",
+            "--endpoint", "http://192.168.1.10:1234/v1",
+            "--service", "local",
+        ])
+
+        #expect(options.provider == .local)
+        #expect(options.endpointOverride?.absoluteString == "http://192.168.1.10:1234/v1")
+        #expect(options.service == .local)
+    }
+
     @Test func parsesOneExplicitProviderAndScenario() throws {
         let options = try QualificationOptions.parse([
             "--provider", "deepseek",

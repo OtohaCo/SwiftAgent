@@ -71,6 +71,21 @@ struct LiveProviderConversationTests {
         #expect(!launch.displayLabel.contains("secret-value"))
     }
 
+    @Test func localResponsesLaunchUsesTheExistingLiveConversationBoundaryWithoutAKey() throws {
+        let launch = try AppleChatLaunchConfiguration.resolve(
+            arguments: [
+                "--provider", "local", "--service", "local", "--mode", "live",
+                "--model", "local-test", "--endpoint", "http://127.0.0.1:1234/v1",
+                "--budget-file", "/tmp/swiftagent-local-chat-test-budget.json",
+            ],
+            process: [:]
+        )
+
+        #expect(launch.modeLabel == "LIVE")
+        #expect(launch.providerLabel == "Local Responses")
+        #expect(launch.modelLabel == "local-test")
+    }
+
     @Test func explicitLiveConfigurationRequiresPersistentBudgetOwnership() {
         #expect(throws: LiveConfigurationError.missingBudgetFile) {
             try AppleChatLaunchConfiguration.resolve(

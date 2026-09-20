@@ -4,6 +4,7 @@ public enum QualificationProvider: String, CaseIterable, Codable, Sendable {
     case openAI = "openai"
     case deepSeek = "deepseek"
     case anthropic
+    case local
     case jev
 }
 
@@ -30,6 +31,7 @@ public enum QualificationScenario: String, CaseIterable, Codable, Sendable {
 public enum QualificationService: String, Codable, Sendable {
     case official
     case gateway
+    case local
 }
 
 public enum LiveConfigurationError: Error, Equatable, Sendable {
@@ -147,7 +149,7 @@ public struct QualificationOptions: Equatable, Sendable {
                 index += 2
             case "--endpoint":
                 let raw = try value(after: argument)
-                guard let parsed = URL(string: raw), isAllowedEndpoint(parsed) else {
+                guard let parsed = URL(string: raw), isSafeEndpointSyntax(parsed) else {
                     throw LiveConfigurationError.invalidEndpoint
                 }
                 endpoint = parsed
@@ -161,7 +163,7 @@ public struct QualificationOptions: Equatable, Sendable {
             case "--service":
                 let raw = try value(after: argument)
                 guard let parsed = QualificationService(rawValue: raw) else {
-                    throw LiveConfigurationError.invalidArgument("Service must be official or gateway.")
+                    throw LiveConfigurationError.invalidArgument("Service must be official, gateway, or local.")
                 }
                 service = parsed
                 index += 2
@@ -173,6 +175,9 @@ public struct QualificationOptions: Equatable, Sendable {
             }
         }
 
+        if provider != .local, let endpoint, !isAllowedEndpoint(endpoint) {
+            throw LiveConfigurationError.invalidEndpoint
+        }
         return .init(
             provider: provider,
             mode: mode,
@@ -194,9 +199,15 @@ func normalized(_ value: String?) -> String? {
 }
 
 func isAllowedEndpoint(_ url: URL) -> Bool {
-    guard url.user == nil, url.password == nil, url.fragment == nil, url.query == nil,
-          let host = url.host?.lowercased(), !host.isEmpty else { return false }
+    guard isSafeEndpointSyntax(url), let host = url.host?.lowercased() else { return false }
     if url.scheme?.lowercased() == "https" { return true }
     let loopback = ["localhost", "127.0.0.1", "::1", "[::1]"]
     return url.scheme?.lowercased() == "http" && loopback.contains(host)
+}
+
+func isSafeEndpointSyntax(_ url: URL) -> Bool {
+    guard url.user == nil, url.password == nil, url.fragment == nil, url.query == nil,
+          let host = url.host, !host.isEmpty,
+          let scheme = url.scheme?.lowercased() else { return false }
+    return scheme == "http" || scheme == "https"
 }

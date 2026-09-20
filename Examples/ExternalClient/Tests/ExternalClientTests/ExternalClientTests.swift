@@ -2,6 +2,7 @@ import AgentCore
 import AgentDecisions
 import AgentJevProvider
 import AgentModels
+import AgentProviders
 import AgentTools
 import AgentUsage
 import Foundation
@@ -133,6 +134,22 @@ struct ExternalClientTests {
 
         #expect(result.disposition == .inserted)
         #expect(usage.summary(sessionID: sessionID, runID: runID).totalTokens == 12)
+    }
+
+    @Test func localResponsesProviderIsConsumableThroughPublicAPI() throws {
+        let authentication = LocalResponsesAuthentication.bearer("fixture-only")
+        let provider: any ModelProvider = try LocalResponsesProvider(configuration: .init(
+            baseURL: URL(string: "https://models.example.test/v1")!,
+            model: "local-fixture",
+            authentication: authentication,
+            maximumOutputTokens: 256,
+            capabilities: [.tools, .structuredOutput]
+        ))
+
+        #expect(provider.descriptor.id == "local-responses")
+        #expect(provider.descriptor.capabilities.contains([.streaming, .multiTurn, .tools, .structuredOutput]))
+        #expect(String(describing: authentication) == "bearer")
+        #expect(!String(reflecting: authentication).contains("fixture-only"))
     }
 }
 

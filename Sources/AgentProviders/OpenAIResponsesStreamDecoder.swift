@@ -1,7 +1,12 @@
 import AgentModels
 import Foundation
 
-struct OpenAIResponsesStreamDecoder {
+struct ResponsesStreamDecoder {
+    enum ContinuationPolicy {
+        case none
+        case openAI
+    }
+
     private enum ItemKind {
         case message
         case reasoning
@@ -103,6 +108,8 @@ struct OpenAIResponsesStreamDecoder {
 
     let model: ModelID
     let responseModelName: String
+    let providerLabel: String
+    let continuationPolicy: ContinuationPolicy
     private var info: ResponseInfo?
     private var content: [ModelContent] = []
     private var items: [Int: ItemState] = [:]
@@ -112,9 +119,16 @@ struct OpenAIResponsesStreamDecoder {
     private var ended = false
     private var lastSequenceNumber: Int?
 
-    init(model: ModelID, responseModelName: String? = nil) {
+    init(
+        model: ModelID,
+        responseModelName: String? = nil,
+        providerLabel: String = "OpenAI",
+        continuationPolicy: ContinuationPolicy = .openAI
+    ) {
         self.model = model
         self.responseModelName = responseModelName ?? model.name
+        self.providerLabel = providerLabel
+        self.continuationPolicy = continuationPolicy
     }
 
     mutating func consume(_ event: ProviderSSEEvent) throws -> [ModelEvent] {
@@ -275,7 +289,7 @@ struct OpenAIResponsesStreamDecoder {
                                      message: "Provider-hosted tools are not supported by this adapter.")
         default:
             throw ModelProviderError(kind: .unsupportedCapability,
-                                     message: "OpenAI returned an unsupported output item type.")
+                                     message: "\(providerLabel) returned an unsupported output item type.")
         }
     }
 
@@ -548,7 +562,8 @@ struct OpenAIResponsesStreamDecoder {
         ended = true
         var events = usageEvents
         let nativeItems = items.keys.sorted().compactMap { items[$0]?.native }
-        if !nativeItems.isEmpty,
+        if continuationPolicy == .openAI,
+           !nativeItems.isEmpty,
            let continuation = try OpenAIResponsesContinuation.make(
                items: nativeItems, content: content, calls: modelCalls, model: model
            ) {
@@ -860,7 +875,7 @@ struct OpenAIResponsesStreamDecoder {
         guard observed.utf8.elementsEqual(responseModelName.utf8) else {
             throw ModelProviderError(
                 kind: .invalidResponse,
-                message: "OpenAI returned model '\(diagnostic(observed))' but expected '\(diagnostic(responseModelName))'."
+                message: "\(providerLabel) returned model '\(diagnostic(observed))' but expected '\(diagnostic(responseModelName))'."
             )
         }
     }
@@ -876,7 +891,7 @@ struct OpenAIResponsesStreamDecoder {
         case "insufficient_quota": kind = .permissionDenied
         default: kind = .invalidResponse
         }
-        return .init(kind: kind, message: "OpenAI generation failed with code '\(diagnostic(code))'.")
+        return .init(kind: kind, message: "\(providerLabel) generation failed with code '\(diagnostic(code))'.")
     }
 
     private func optionalString(_ value: JSONValue?) throws -> String? {
@@ -889,3 +904,5 @@ struct OpenAIResponsesStreamDecoder {
         return String(String.UnicodeScalarView(filtered))
     }
 }
+
+typealias OpenAIResponsesStreamDecoder = ResponsesStreamDecoder

@@ -15,7 +15,9 @@ public struct QualificationPreflight: Equatable, Sendable {
     public var rendered: String {
         let credentialStatus = mode == .fixture
             ? "UNUSED"
-            : (credentialConfigured ? "CONFIGURED" : "MISSING")
+            : (provider == .local && !credentialConfigured
+                ? "OPTIONAL_UNSET"
+                : (credentialConfigured ? "CONFIGURED" : "MISSING"))
         let renderedCredentialVariable = mode == .fixture ? "UNUSED" : credentialVariable
         return [
             "mode=\(mode.rawValue.uppercased())",
@@ -93,7 +95,7 @@ public struct QualificationConfiguration: Sendable {
             )
         }
         let values = try resolveValues(options: options, environment: environment)
-        guard let credential = values.credential else {
+        guard options.provider == .local || values.credential != nil else {
             throw LiveConfigurationError.missingCredential(values.credentialVariable)
         }
         guard let model = values.model else {
@@ -105,7 +107,7 @@ public struct QualificationConfiguration: Sendable {
             endpoint: values.endpoint,
             reasoning: options.reasoning,
             resolvedModel: values.resolvedModel,
-            credential: credential
+            credential: values.credential ?? ""
         )
     }
 
@@ -180,6 +182,18 @@ public struct QualificationConfiguration: Sendable {
                 suffix: "v1/messages"
             )
             resolvedModel = environment.value(for: "ANTHROPIC_RESOLVED_MODEL")
+        case .local:
+            credentialVariable = "SWIFTAGENT_LOCAL_API_KEY"
+            modelVariable = "SWIFTAGENT_LOCAL_MODEL"
+            credential = environment.value(for: credentialVariable)
+            model = options.modelOverride ?? environment.value(for: modelVariable)
+            endpoint = try configuredLocalBaseURL(
+                override: options.endpointOverride,
+                environment: environment,
+                key: "SWIFTAGENT_LOCAL_BASE_URL",
+                fallback: "http://127.0.0.1:1234/v1"
+            )
+            resolvedModel = nil
         case .jev:
             credentialVariable = "TYPESAFE_API_KEY"
             modelVariable = "TYPESAFE_MODEL"
@@ -203,6 +217,19 @@ public struct QualificationConfiguration: Sendable {
             resolvedModel: resolvedModel
         )
     }
+}
+
+private func configuredLocalBaseURL(
+    override: URL?,
+    environment: LiveEnvironment,
+    key: String,
+    fallback: String
+) throws -> URL {
+    let value = override ?? environment.value(for: key).flatMap(URL.init(string:)) ?? URL(string: fallback)
+    guard let value, isSafeEndpointSyntax(value) else {
+        throw LiveConfigurationError.invalidEndpoint
+    }
+    return value
 }
 
 private struct ResolvedValues {

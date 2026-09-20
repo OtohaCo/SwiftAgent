@@ -17,11 +17,12 @@ public enum LiveProviderFactory {
         transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
     ) throws -> ConfiguredModelProvider {
         let options = configuration.options
-        let model = ModelID(provider: options.provider.rawValue, name: configuration.model)
+        let providerID = options.provider == .local ? "local-responses" : options.provider.rawValue
+        let model = ModelID(provider: providerID, name: configuration.model)
         if options.mode == .fixture {
             return .init(
                 model: model,
-                provider: QualificationFixtureProvider(providerID: options.provider.rawValue),
+                provider: QualificationFixtureProvider(providerID: providerID),
                 modeLabel: "FIXTURE",
                 serviceLabel: "local"
             )
@@ -65,6 +66,19 @@ public enum LiveProviderFactory {
                 resolvedModelIDsByAlias: aliases,
                 transport: budgeted
             )
+        case .local:
+            provider = try LocalResponsesProvider(
+                configuration: .init(
+                    baseURL: configuration.endpoint,
+                    model: configuration.model,
+                    authentication: configuration.credential.isEmpty
+                        ? .none
+                        : .bearer(configuration.credential),
+                    maximumOutputTokens: 512,
+                    capabilities: [.tools, .structuredOutput]
+                ),
+                transport: budgeted
+            )
         case .jev:
             throw LiveConfigurationError.unsupportedCombination(provider: .jev, scenario: options.scenario)
         }
@@ -72,7 +86,7 @@ public enum LiveProviderFactory {
             model: model,
             provider: provider,
             modeLabel: "LIVE",
-            serviceLabel: options.service.rawValue
+            serviceLabel: options.provider == .local ? "local" : options.service.rawValue
         )
     }
 }

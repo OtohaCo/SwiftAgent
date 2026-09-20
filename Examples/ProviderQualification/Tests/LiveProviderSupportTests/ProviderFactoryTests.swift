@@ -12,6 +12,7 @@ struct ProviderFactoryTests {
         (QualificationProvider.openAI, "OPENAI_API_KEY", "OPENAI_MODEL", "openai"),
         (.deepSeek, "DEEPSEEK_API_KEY", "DEEPSEEK_MODEL", "deepseek"),
         (.anthropic, "ANTHROPIC_API_KEY", "SWIFT_AGENT_ANTHROPIC_MODEL", "anthropic"),
+        (.local, "SWIFTAGENT_LOCAL_API_KEY", "SWIFTAGENT_LOCAL_MODEL", "local-responses"),
     ])
     func liveFactoryBuildsTheExistingProviderAdapter(
         provider: QualificationProvider,
@@ -41,6 +42,34 @@ struct ProviderFactoryTests {
 
         #expect(selection.model.name == "test-model")
         #expect(selection.provider.descriptor.id == expectedDescriptor)
+    }
+
+    @Test func localLiveFactoryAllowsNoAuthenticationAndUsesConfiguredBaseURL() throws {
+        let options = QualificationOptions(
+            provider: .local,
+            mode: .live,
+            scenario: .text,
+            modelOverride: nil,
+            endpointOverride: nil,
+            environmentFile: nil,
+            budgetFile: nil,
+            service: .local
+        )
+        let environment = LiveEnvironment(process: [
+            "SWIFTAGENT_LOCAL_MODEL": "local-model",
+            "SWIFTAGENT_LOCAL_BASE_URL": "http://192.168.1.10:1234/v1",
+        ])
+        let configuration = try QualificationConfiguration.resolve(options: options, environment: environment)
+        let selection = try LiveProviderFactory.makeModelProvider(
+            configuration: configuration,
+            budget: try LiveRequestBudget(fileURL: nil),
+            evidence: RequestEvidenceLedger(),
+            transport: EmptyHTTPTransport()
+        )
+
+        #expect(selection.model == .init(provider: "local-responses", name: "local-model"))
+        #expect(selection.provider.descriptor.id == "local-responses")
+        #expect(selection.serviceLabel == "local")
     }
 
     @Test func budgetedTransportCountsAndRecordsOnlySanitizedRequestShape() async throws {

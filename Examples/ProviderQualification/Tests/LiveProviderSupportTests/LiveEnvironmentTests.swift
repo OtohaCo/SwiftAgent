@@ -22,6 +22,32 @@ struct LiveEnvironmentTests {
         #expect(environment.value(for: "DEEPSEEK_MODEL", aliases: ["DEEPSEEK_MODLE"]) == "legacy-model")
     }
 
+    @Test func localPreflightTreatsAuthenticationAsOptionalButStillRequiresAModelForExecution() throws {
+        let options = QualificationOptions(
+            provider: .local,
+            mode: .live,
+            scenario: .preflight,
+            modelOverride: nil,
+            endpointOverride: nil,
+            environmentFile: nil,
+            budgetFile: nil,
+            service: .local
+        )
+        let missing = try QualificationConfiguration.preflight(
+            options: options,
+            environment: LiveEnvironment(process: [:])
+        ).rendered
+        #expect(missing.contains("credential=OPTIONAL_UNSET"))
+        #expect(missing.contains("model=MISSING"))
+
+        #expect(throws: LiveConfigurationError.missingModel("SWIFTAGENT_LOCAL_MODEL")) {
+            try QualificationConfiguration.resolve(
+                options: options,
+                environment: LiveEnvironment(process: [:])
+            )
+        }
+    }
+
     @Test(arguments: [
         "OPENAI_API_KEY=$(security find-generic-password)",
         "OPENAI_API_KEY=`printenv SECRET`",
