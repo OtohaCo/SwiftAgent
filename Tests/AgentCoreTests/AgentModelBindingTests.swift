@@ -833,6 +833,26 @@ struct AgentModelBindingTests {
         #expect(try await next.wait().outcome == .completed)
     }
 
+    @Test func expiredMemoryStartupAdmissionDoesNotPublishAFrame() async throws {
+        let journal = AgentJournal()
+        var didThrowDeadline = false
+        do {
+            try await journal.appendStartupCheckpoint(
+                [.userMessage("expired before memory admission")],
+                sessionID: UUID(),
+                runID: UUID(),
+                deadline: .now.advanced(by: .milliseconds(-1)),
+                durability: .memory
+            )
+        } catch AgentJournalStartupAdmissionError.deadlineExceeded {
+            didThrowDeadline = true
+        } catch {
+            Issue.record("unexpected startup admission error: \(error)")
+        }
+        #expect(didThrowDeadline)
+        #expect(await journal.snapshot().isEmpty)
+    }
+
     @Test func admittedStartupCheckpointSurvivesFailureBeforeFirstLoopCheckpoint() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("swift-agent-admitted-checkpoint-\(UUID().uuidString).log")

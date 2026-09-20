@@ -574,6 +574,10 @@ public actor AgentJournal {
         if durability == .durable, recoveryState == .corruptTail {
             throw AgentJournalError.repairRequired
         }
+        try checkStartupAdmission(
+            deadline: admissionDeadline,
+            checkCancellation: checkAdmissionCancellation
+        )
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
             throw AgentJournalError.mutationSettlementRequiresReconciliation
@@ -1183,6 +1187,10 @@ public actor AgentJournal {
         admissionDeadline: ContinuousClock.Instant? = nil,
         checkAdmissionCancellation: Bool = false
     ) throws {
+        try checkStartupAdmission(
+            deadline: admissionDeadline,
+            checkCancellation: checkAdmissionCancellation
+        )
         guard durability == .durable else { return }
         guard let url = persistenceURL else {
             throw AgentJournalError.persistenceUnavailable("no persistence URL configured")
@@ -1220,6 +1228,17 @@ public actor AgentJournal {
                     throw error
                 }
             }
+        }
+    }
+
+    private func checkStartupAdmission(
+        deadline: ContinuousClock.Instant?,
+        checkCancellation: Bool
+    ) throws {
+        guard checkCancellation else { return }
+        try Task.checkCancellation()
+        if let deadline, ContinuousClock.now >= deadline {
+            throw AgentJournalStartupAdmissionError.deadlineExceeded
         }
     }
 
