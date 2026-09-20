@@ -25,6 +25,9 @@ additions and behavior changes will be recorded here before that release is cut.
 - Preserve visible DeepSeek incomplete-turn history without requiring discarded
   tool/reasoning continuation state on the next Run; incomplete tool proposals
   remain non-executable.
+- Accept DeepSeek `response.output_item.done` frames whose item is explicitly
+  incomplete before the `response.incomplete` terminal, without dispatching
+  partial function calls.
 - Accept a DeepSeek text-only terminal response after a completed Host tool
   result while still requiring replayable reasoning on turns that emit tools.
 - Use the public `SUB2API_*` namespace for opt-in gateway qualification and

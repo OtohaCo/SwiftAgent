@@ -53,6 +53,57 @@ struct DeepSeekResponsesIncompleteTests {
         #expect(response.content == [.reasoning("Partial reason"), .text("Partial answer")])
     }
 
+    @Test func incompleteItemDoneBeforeTerminalPreservesPartialMessage() async throws {
+        let provider = try DeepSeekResponsesProvider(
+            apiKey: "fixture-key",
+            reasoningEffort: .none,
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(),
+                bodies: [incompleteMessageWithItemDoneFixture]
+            )
+        )
+        var accumulator = ModelEventAccumulator()
+        for try await event in provider.stream(request: .init(
+            model: deepSeekIncompleteModel,
+            messages: [.user([.text("Continue")])]
+        )) {
+            try accumulator.append(event)
+        }
+        let response = try accumulator.finish()
+
+        #expect(response.stopReason == .maxOutputTokens)
+        #expect(response.content == [.text("Partial answer")])
+        #expect(response.toolCalls.isEmpty)
+    }
+
+    @Test func incompleteFunctionItemDoneNeverDispatchesTool() async throws {
+        let execution = ProviderExecutionProbe()
+        let provider = try DeepSeekResponsesProvider(
+            apiKey: "fixture-key",
+            reasoningEffort: .none,
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(),
+                bodies: [incompleteFunctionWithItemDoneFixture]
+            )
+        )
+        let result = try await Agent(
+            model: deepSeekIncompleteModel,
+            provider: provider,
+            tools: [try ProviderCalculator(probe: execution)]
+        ).makeSession().run("Add").wait()
+
+        #expect(result.outcome == .incomplete(.maxOutputTokens))
+        #expect(result.response.toolCalls == [
+            .init(
+                id: .init(rawValue: "call-partial-item-done"),
+                name: "calculator",
+                argumentsJSON: #"{"a":"#,
+                completeness: .incomplete
+            ),
+        ])
+        #expect(await execution.count == 0)
+    }
+
     @Test func incompleteTextTurnDoesNotPoisonTheNextRunWhenToolsRemainAvailable() async throws {
         let probe = ProviderRequestProbe()
         let execution = ProviderExecutionProbe()
@@ -178,6 +229,25 @@ private let partialReasoningAndMessageFixture = providerNamedSSE([
     ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"msg-1","output_index":1,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}"#),
     ("response.output_text.delta", #"{"type":"response.output_text.delta","item_id":"msg-1","output_index":1,"content_index":0,"delta":"Partial answer"}"#),
     ("response.incomplete", #"{"type":"response.incomplete","response":{"id":"resp-partial-text","model":"deepseek-flash","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"rs-1","type":"reasoning","status":"incomplete","content":[{"type":"reasoning_text","text":"Partial reason"}]},{"id":"msg-1","type":"message","role":"assistant","status":"incomplete","content":[{"type":"output_text","text":"Partial answer","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":2}}}"#),
+])
+
+private let incompleteMessageWithItemDoneFixture = providerNamedSSE([
+    ("response.created", #"{"type":"response.created","response":{"id":"resp-partial-item-done","model":"deepseek-flash","status":"in_progress"}}"#),
+    ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-partial-item-done","type":"message","role":"assistant","status":"in_progress","content":[]}}"#),
+    ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"msg-partial-item-done","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}"#),
+    ("response.output_text.delta", #"{"type":"response.output_text.delta","item_id":"msg-partial-item-done","output_index":0,"content_index":0,"delta":"Partial answer"}"#),
+    ("response.output_text.done", #"{"type":"response.output_text.done","item_id":"msg-partial-item-done","output_index":0,"content_index":0,"text":"Partial answer"}"#),
+    ("response.content_part.done", #"{"type":"response.content_part.done","item_id":"msg-partial-item-done","output_index":0,"content_index":0,"part":{"type":"output_text","text":"Partial answer","annotations":[]}}"#),
+    ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-partial-item-done","type":"message","role":"assistant","status":"incomplete","content":[{"type":"output_text","text":"Partial answer","annotations":[]}]}}"#),
+    ("response.incomplete", #"{"type":"response.incomplete","response":{"id":"resp-partial-item-done","model":"deepseek-flash","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"msg-partial-item-done","type":"message","role":"assistant","status":"incomplete","content":[{"type":"output_text","text":"Partial answer","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":2}}}"#),
+])
+
+private let incompleteFunctionWithItemDoneFixture = providerNamedSSE([
+    ("response.created", #"{"type":"response.created","response":{"id":"resp-partial-function-item-done","model":"deepseek-flash","status":"in_progress"}}"#),
+    ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"fc-partial-item-done","type":"function_call","call_id":"call-partial-item-done","name":"calculator","arguments":"","status":"in_progress"}}"#),
+    ("response.function_call_arguments.delta", #"{"type":"response.function_call_arguments.delta","item_id":"fc-partial-item-done","output_index":0,"delta":"{\"a\":"}"#),
+    ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"fc-partial-item-done","type":"function_call","call_id":"call-partial-item-done","name":"calculator","arguments":"{\"a\":","status":"incomplete"}}"#),
+    ("response.incomplete", #"{"type":"response.incomplete","response":{"id":"resp-partial-function-item-done","model":"deepseek-flash","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"fc-partial-item-done","type":"function_call","call_id":"call-partial-item-done","name":"calculator","arguments":"{\"a\":","status":"incomplete"}],"usage":{"input_tokens":1,"output_tokens":2}}}"#),
 ])
 
 private let completedReasoningAndMessageFixture = providerNamedSSE([

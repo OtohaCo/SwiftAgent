@@ -77,13 +77,15 @@ For function calls, `function_call_arguments.done`, `output_item.done`, and the
 response terminal are independent required transitions; a later event cannot
 silently replace an earlier missing transition.
 
-A legal `response.incomplete` can end without `output_item.done`. SwiftAgent
-keeps the observed partial text, reasoning, and truncated function arguments,
-but does not invent a done event, repair JSON, or execute any call from that
-turn. A completed call mixed with a partial call in the same incomplete
-response also executes nothing. The final snapshot may preserve the observed
-partial state only when it exactly matches the observed bytes; it cannot extend
-or rewrite the item ID, content, or argument prefix.
+A legal `response.incomplete` can end without `output_item.done`. Some
+Responses deployments also emit `response.output_item.done` with an explicit
+`incomplete` item status immediately before that terminal event. SwiftAgent
+accepts both forms, keeps the observed partial text, reasoning, and truncated
+function arguments, but does not invent a completed transition, repair JSON,
+or execute any call from that turn. A completed call mixed with a partial call
+in the same incomplete response also executes nothing. The final snapshot may
+preserve the observed partial state only when it exactly matches the observed
+bytes; it cannot extend or rewrite the item ID, content, or argument prefix.
 
 An incomplete turn is checkpointed without executable tool proposals or opaque
 continuation state. Its visible assistant text remains ordinary conversation,
