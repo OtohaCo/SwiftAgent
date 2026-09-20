@@ -194,13 +194,6 @@ private struct ConversationHeader: View {
 private struct TranscriptView: View {
     let snapshot: ConversationSnapshot
 
-    private var currentAssistantTurnID: Int? {
-        for item in snapshot.items.reversed() {
-            if case .assistant(let turn) = item { return turn.id }
-        }
-        return nil
-    }
-
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -212,7 +205,7 @@ private struct TranscriptView: View {
                         TranscriptItemView(
                             item: item,
                             phase: snapshot.phase,
-                            currentAssistantTurnID: currentAssistantTurnID
+                            currentAssistantTurnID: snapshot.currentAssistantTurnID
                         )
                             .id(item.id)
                     }

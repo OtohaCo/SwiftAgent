@@ -133,6 +133,7 @@ public struct ConversationSnapshot: Equatable, Sendable {
     public var terminal: ConversationTerminal?
     public var model: ModelID?
     public var items: [ConversationItem]
+    public var currentAssistantTurnID: Int?
     public var currentResponseUsage: UsageSummary
     public var latestRunUsage: UsageSummary
     public var sessionUsage: UsageSummary
@@ -146,6 +147,7 @@ public struct ConversationSnapshot: Equatable, Sendable {
         terminal: ConversationTerminal? = nil,
         model: ModelID? = nil,
         items: [ConversationItem] = [],
+        currentAssistantTurnID: Int? = nil,
         currentResponseUsage: UsageSummary = .empty,
         latestRunUsage: UsageSummary = .empty,
         sessionUsage: UsageSummary = .empty,
@@ -158,6 +160,7 @@ public struct ConversationSnapshot: Equatable, Sendable {
         self.terminal = terminal
         self.model = model
         self.items = items
+        self.currentAssistantTurnID = currentAssistantTurnID
         self.currentResponseUsage = currentResponseUsage
         self.latestRunUsage = latestRunUsage
         self.sessionUsage = sessionUsage
@@ -168,6 +171,7 @@ public struct ConversationSnapshot: Equatable, Sendable {
 public struct ConversationProjection: Sendable {
     public private(set) var snapshot: ConversationSnapshot
     private let maxItems: Int
+    private var nextAssistantTurnID = 0
 
     public init(conversationID: UUID, maxItems: Int = 100) {
         precondition(maxItems > 0)
@@ -180,6 +184,7 @@ public struct ConversationProjection: Sendable {
         snapshot.runID = nil
         snapshot.phase = .starting
         snapshot.terminal = nil
+        snapshot.currentAssistantTurnID = nil
         snapshot.currentResponseUsage = .empty
         snapshot.latestRunUsage = .empty
         append(.user(.init(text: text)))
@@ -203,9 +208,11 @@ public struct ConversationProjection: Sendable {
         case .runStarted(let info):
             snapshot.runID = info.runID
             snapshot.model = info.model
-        case .turnStarted(let number):
+        case .turnStarted:
             snapshot.currentResponseUsage = .empty
-            append(.assistant(.init(id: number)))
+            nextAssistantTurnID += 1
+            snapshot.currentAssistantTurnID = nextAssistantTurnID
+            append(.assistant(.init(id: nextAssistantTurnID)))
         case .model(let event):
             apply(event)
         case .toolStarted(let call):

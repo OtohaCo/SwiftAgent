@@ -51,6 +51,31 @@ struct ConversationProjectionTests {
         #expect(assistant.usage.outputTokens == 5)
     }
 
+    @Test func assistantDisplayIdentityIsUniqueAcrossRunsAndTracksOnlyTheCurrentResponse() throws {
+        let conversationID = UUID()
+        let model = ModelID(provider: "apple-chat-fixture", name: "streaming")
+        var projection = ConversationProjection(conversationID: conversationID)
+
+        projection.beginUserTurn("First", generation: 1)
+        projection.apply(.runStarted(.init(sessionID: conversationID, runID: UUID(), model: model)))
+        projection.apply(.turnStarted(1))
+        let firstAssistant = try #require(projection.snapshot.items.compactMap(\.assistant).last)
+
+        projection.setTerminal(.cancelled)
+        projection.clearRunAfterDrain()
+        projection.beginUserTurn("Second", generation: 2)
+        projection.apply(.runStarted(.init(sessionID: conversationID, runID: UUID(), model: model)))
+        projection.apply(.turnStarted(1))
+
+        let assistants = projection.snapshot.items.compactMap(\.assistant)
+        let secondAssistant = try #require(assistants.last)
+        #expect(assistants.count == 2)
+        #expect(firstAssistant.id != secondAssistant.id)
+        #expect(Set(projection.snapshot.items.map(\.id)).count == projection.snapshot.items.count)
+        #expect(projection.snapshot.currentAssistantTurnID == secondAssistant.id)
+        #expect(assistants.filter { $0.id == projection.snapshot.currentAssistantTurnID }.count == 1)
+    }
+
     @Test func toolCallsStayKeyedByCallIdentityAndExposeRecoverableErrors() throws {
         let conversationID = UUID()
         let model = ModelID(provider: "apple-chat-fixture", name: "streaming")
