@@ -1,6 +1,6 @@
 # SwiftAgent Sessions and Runs
 
-last-verified: 2026-09-18
+last-verified: 2026-09-20
 
 Agent holds Sendable configuration: provider, model, typed tools, instructions,
 structured-output schema, default run limits and a shared scheduler. Each

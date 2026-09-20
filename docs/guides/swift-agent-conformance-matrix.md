@@ -1,6 +1,6 @@
 # SwiftAgent Conformance & Regression Matrix
 
-last-verified: 2026-09-19
+last-verified: 2026-09-20
 
 This stable matrix records the long-lived capability and regression contract.
 One-time release evidence belongs in the parent project's Kanban records, not
