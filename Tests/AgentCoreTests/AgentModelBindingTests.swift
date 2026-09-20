@@ -515,8 +515,12 @@ struct AgentModelBindingTests {
         }
         let journal = try AgentJournal(persistenceURL: url)
         let gate = NonCooperativeProjectionGate()
+        let startupReleased = AsyncSignal()
         let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
-        let session = try Agent(model: fixtureModel, provider: provider).makeSession(journal: journal)
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(
+            journal: journal,
+            startupReleaseDidFinish: { _ in await startupReleased.signal() }
+        )
         let binding = try AgentModelBinding(
             profileID: "deadline-projector",
             profileRevision: "1",
@@ -538,6 +542,7 @@ struct AgentModelBindingTests {
         await gate.release()
         await gate.waitUntilFinished()
         await #expect(throws: AgentLoopError.deadlineExceeded) { try await first.value }
+        await startupReleased.wait()
         #expect(await session.history == [])
         #expect(await session.activeRunID == nil)
         #expect(await provider.log.requests.isEmpty)
@@ -552,8 +557,11 @@ struct AgentModelBindingTests {
 
     @Test func tokenEstimatorExceedingRunDeadlineDoesNotCommitInput() async throws {
         let gate = NonCooperativeEstimatorGate()
+        let startupReleased = AsyncSignal()
         let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
-        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(
+            startupReleaseDidFinish: { _ in await startupReleased.signal() }
+        )
         let tokenBudget = try AgentContextTokenBudget(
             maximumContextTokens: 100,
             reservedOutputTokens: 10,
@@ -580,6 +588,7 @@ struct AgentModelBindingTests {
         await gate.release()
         await gate.waitUntilFinished()
         await #expect(throws: AgentLoopError.deadlineExceeded) { try await first.value }
+        await startupReleased.wait()
         #expect(await session.history == [])
         #expect(await session.activeRunID == nil)
         #expect(await provider.log.requests.isEmpty)
@@ -609,6 +618,57 @@ struct AgentModelBindingTests {
         await gate.waitUntilFinished()
         #expect(await session.history == [])
         #expect(await provider.log.requests.isEmpty)
+    }
+
+    @Test func latePreflightRetainsCleanupUntilTheSessionIdentityCanBeReused() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-preflight-late-release-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let journal = try AgentJournal(persistenceURL: url)
+        let sessionID = UUID()
+        let gate = NonCooperativeProjectionGate()
+        let startupReleased = AsyncSignal()
+        let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
+        weak var releasedSession: AgentSession?
+        let first: Task<AgentRun, Error>
+        do {
+            let session = try Agent(model: fixtureModel, provider: provider).makeSession(
+                id: sessionID,
+                journal: journal,
+                startupReleaseDidFinish: { _ in await startupReleased.signal() }
+            )
+            releasedSession = session
+            let binding = try AgentModelBinding(
+                profileID: "late-release",
+                profileRevision: "1",
+                model: fixtureModel,
+                provider: provider,
+                deployment: deployment("late-release"),
+                projector: NonCooperativeBlockingProjector(gate: gate)
+            )
+            let budget = try AgentBudget(maxModelTurns: 1, maxToolCalls: 0,
+                                         deadline: .now.advanced(by: .milliseconds(100)))
+            first = Task { try await session.run("must not commit", using: binding, budget: budget) }
+        }
+
+        await gate.waitUntilBlocked()
+        try await Task.sleep(for: .milliseconds(150))
+        await #expect(throws: AgentLoopError.deadlineExceeded) { try await first.value }
+
+        await gate.release()
+        await gate.waitUntilFinished()
+        await startupReleased.wait()
+        #expect(releasedSession == nil)
+
+        let replacement = try Agent(model: fixtureModel, provider: provider).makeSession(
+            id: sessionID,
+            journal: journal
+        )
+        let next = try await replacement.run("next")
+        _ = try await next.wait()
     }
 
     @Test func cancelledPreflightRemainsCancellationWithDeadlineWrapper() async throws {
