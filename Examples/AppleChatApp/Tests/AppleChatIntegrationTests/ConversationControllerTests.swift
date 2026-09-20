@@ -153,6 +153,11 @@ struct ConversationControllerTests {
         #expect(idle.currentResponseUsage.provisionalResponseCount == 1)
         #expect(idle.currentResponseUsage.totalTokens == 10)
         #expect(usageDisplayState(idle.currentResponseUsage, phase: idle.phase) == .partial)
+        #expect(usageDisplayState(
+            idle.currentResponseUsage,
+            phase: .running,
+            isCurrentResponse: false
+        ) == .partial)
     }
 }
 

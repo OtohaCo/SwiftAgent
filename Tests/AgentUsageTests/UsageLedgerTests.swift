@@ -1,5 +1,5 @@
 import AgentModels
-import AgentUsage
+@testable import AgentUsage
 import Foundation
 import Testing
 
@@ -187,6 +187,15 @@ struct UsageLedgerTests {
             from: Data(#"{"reportedSubtotal":null,"reportedCount":3,"missingCount":0}"#.utf8)
         )
 
+        #expect(!field.complete)
+    }
+
+    @Test func fieldSummationStaysIncompleteAfterOverflow() {
+        let field = summarizeUsageField([Int.max, Int.max, 5])
+
+        #expect(field.reportedSubtotal == nil)
+        #expect(field.reportedCount == 3)
+        #expect(field.missingCount == 0)
         #expect(!field.complete)
     }
 

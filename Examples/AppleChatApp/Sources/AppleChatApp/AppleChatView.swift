@@ -194,6 +194,13 @@ private struct ConversationHeader: View {
 private struct TranscriptView: View {
     let snapshot: ConversationSnapshot
 
+    private var currentAssistantTurnID: Int? {
+        for item in snapshot.items.reversed() {
+            if case .assistant(let turn) = item { return turn.id }
+        }
+        return nil
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -202,7 +209,11 @@ private struct TranscriptView: View {
                         EmptyConversationView()
                     }
                     ForEach(snapshot.items) { item in
-                        TranscriptItemView(item: item, phase: snapshot.phase)
+                        TranscriptItemView(
+                            item: item,
+                            phase: snapshot.phase,
+                            currentAssistantTurnID: currentAssistantTurnID
+                        )
                             .id(item.id)
                     }
                     if let terminal = snapshot.terminal {
@@ -243,6 +254,7 @@ private struct EmptyConversationView: View {
 private struct TranscriptItemView: View {
     let item: ConversationItem
     let phase: ConversationPhase
+    let currentAssistantTurnID: Int?
 
     var body: some View {
         switch item {
@@ -256,7 +268,11 @@ private struct TranscriptItemView: View {
                     .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
             }
         case .assistant(let turn):
-            AssistantTurnView(turn: turn, phase: phase)
+            AssistantTurnView(
+                turn: turn,
+                phase: phase,
+                isCurrentResponse: turn.id == currentAssistantTurnID
+            )
         case .tool(let call):
             ToolCallView(call: call)
         }
@@ -266,6 +282,7 @@ private struct TranscriptItemView: View {
 private struct AssistantTurnView: View {
     let turn: DisplayAssistantTurn
     let phase: ConversationPhase
+    let isCurrentResponse: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -285,7 +302,11 @@ private struct AssistantTurnView: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if turn.usageSummary.observedResponseCount > 0 {
-                Text(responseUsageText(turn.usageSummary, phase: phase))
+                Text(responseUsageText(
+                    turn.usageSummary,
+                    phase: phase,
+                    isCurrentResponse: isCurrentResponse
+                ))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
             } else if turn.usage.inputTokens != nil || turn.usage.outputTokens != nil {
@@ -312,8 +333,16 @@ private struct AssistantTurnView: View {
     }
 }
 
-private func responseUsageText(_ summary: UsageSummary, phase: ConversationPhase) -> String {
-    let state = switch usageDisplayState(summary, phase: phase) {
+private func responseUsageText(
+    _ summary: UsageSummary,
+    phase: ConversationPhase,
+    isCurrentResponse: Bool
+) -> String {
+    let state = switch usageDisplayState(
+        summary,
+        phase: phase,
+        isCurrentResponse: isCurrentResponse
+    ) {
     case .noSamples: "Not reported"
     case .inProgress: "In progress"
     case .finalized: "Final"

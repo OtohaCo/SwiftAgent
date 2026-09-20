@@ -20,10 +20,12 @@ package enum UsageDisplayState: Equatable, Sendable {
 
 package func usageDisplayState(
     _ summary: UsageSummary,
-    phase: ConversationPhase
+    phase: ConversationPhase,
+    isCurrentResponse: Bool = true
 ) -> UsageDisplayState {
     guard summary.observedResponseCount > 0 else { return .noSamples }
     if summary.provisionalResponseCount > 0 {
+        guard isCurrentResponse else { return .partial }
         switch phase {
         case .starting, .running, .stopRequested:
             return .inProgress

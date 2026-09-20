@@ -370,11 +370,11 @@ public struct UsageAccumulator: Sendable {
     }
 
     private static func summarizeTokens(_ observations: [UsageObservation]) -> UsageTokenSummary {
-        let input = summarize(observations.map(\.usage.inputTokens))
-        let output = summarize(observations.map(\.usage.outputTokens))
-        let cached = summarize(observations.map(\.usage.cachedInputTokens))
-        let cacheWrite = summarize(observations.map(\.usage.cacheWriteInputTokens))
-        let reasoning = summarize(observations.map(\.usage.reasoningTokens))
+        let input = summarizeUsageField(observations.map(\.usage.inputTokens))
+        let output = summarizeUsageField(observations.map(\.usage.outputTokens))
+        let cached = summarizeUsageField(observations.map(\.usage.cachedInputTokens))
+        let cacheWrite = summarizeUsageField(observations.map(\.usage.cacheWriteInputTokens))
+        let reasoning = summarizeUsageField(observations.map(\.usage.reasoningTokens))
 
         let totalTokens: Int?
         if input.complete, output.complete,
@@ -394,35 +394,6 @@ public struct UsageAccumulator: Sendable {
             cacheWriteInputTokens: cacheWrite,
             reasoningTokens: reasoning,
             totalTokens: totalTokens
-        )
-    }
-
-    private static func summarize(_ values: [Int?]) -> UsageFieldSummary {
-        var subtotal: Int?
-        var reportedCount = 0
-        var overflowed = false
-
-        for value in values {
-            guard let value else { continue }
-            reportedCount += 1
-            guard !overflowed else { continue }
-            if let existing = subtotal {
-                let (sum, overflow) = existing.addingReportingOverflow(value)
-                if overflow {
-                    subtotal = nil
-                    overflowed = true
-                } else {
-                    subtotal = sum
-                }
-            } else {
-                subtotal = value
-            }
-        }
-
-        return UsageFieldSummary(
-            reportedSubtotal: subtotal,
-            reportedCount: reportedCount,
-            missingCount: values.count - reportedCount
         )
     }
 
@@ -571,6 +542,35 @@ public struct UsageAccumulator: Sendable {
         if sources == [.decision] { return .decisionResponses }
         return .mixedVisibleResponses
     }
+}
+
+func summarizeUsageField(_ values: [Int?]) -> UsageFieldSummary {
+    var subtotal: Int?
+    var reportedCount = 0
+    var overflowed = false
+
+    for value in values {
+        guard let value else { continue }
+        reportedCount += 1
+        guard !overflowed else { continue }
+        if let existing = subtotal {
+            let (sum, overflow) = existing.addingReportingOverflow(value)
+            if overflow {
+                subtotal = nil
+                overflowed = true
+            } else {
+                subtotal = sum
+            }
+        } else {
+            subtotal = value
+        }
+    }
+
+    return UsageFieldSummary(
+        reportedSubtotal: subtotal,
+        reportedCount: reportedCount,
+        missingCount: values.count - reportedCount
+    )
 }
 
 /// An actor-isolated accounting window for consumers that do not already own synchronization.
