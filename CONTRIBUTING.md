@@ -48,7 +48,9 @@ WorkspaceAgent may import `Crypto` from `apple/swift-crypto`. Core must not.
 - Non-UI engine behavior uses TDD.
 - Do not put `MainActor` in Core, Models, Tools, or portable Providers.
 - Mutation tools need `AgentJournalStorage.durable` at `makeSession`.
-- Public API changes belong in `docs/reviews/` and `docs/guides/swift-agent-versioning.md`.
+- Public API changes belong in the release checklist, a stable guide or ADR,
+  and `docs/guides/swift-agent-versioning.md`; one-time review evidence stays
+  in the parent project's Kanban records.
 - WorkspaceAgent may use CryptoKit or `Crypto` from swift-crypto. Core must not.
 
 See [docs/extraction.md](docs/extraction.md) for repository provenance

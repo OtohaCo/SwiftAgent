@@ -247,13 +247,13 @@ in AgentCore. The multimedia guide does not add a service implementation.
 | Dynamic model selection | [Catalog, Run binding, history compatibility and Host routing](docs/guides/swift-agent-dynamic-model-selection.md) |
 | Errors and compatibility | [Typed errors](docs/guides/swift-agent-errors.md), [versioning](docs/guides/swift-agent-versioning.md) |
 | Another app using the public API | [Workspace File Agent](docs/guides/swift-agent-workspace-host.md) |
-| Verification records | [Testing commands](docs/testing.md), [named regressions](docs/testing-regressions.md), [review records](docs/reviews), [release records](docs/releases) |
+| Verification records | [Testing commands](docs/testing.md), [named regressions](docs/testing-regressions.md), [release records](docs/releases), [conformance matrix](docs/guides/swift-agent-conformance-matrix.md) |
 
 Model Codable data is not a vendor wire format or a frozen journal format.
 Usage is cumulative; unreported is not zero, and cache/reasoning subsets must not
 be added to totals. Match typed errors instead of `localizedDescription` strings.
-Read each review record's baseline and scope; a historical clean review is not
-new evidence for a different commit.
+Use the release checklist and parent-project Kanban for candidate-specific
+evidence; a historical clean result is not new evidence for a different commit.
 
 ## Developing and testing the SDK
 

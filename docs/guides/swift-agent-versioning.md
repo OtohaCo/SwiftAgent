@@ -59,18 +59,19 @@ Post-`1.0.0-rc.1`, OpenAI and DeepSeek reasoning configuration use extensible
 new enum case. Provider construction still validates values that cannot form a
 legal request.
 
-The dynamic-model-selection RC.2 working graph at the current development
-candidate contains 1,759 precise public identifiers and 188 top-level public
-types. Relative to the adopted pre-feature RC.2 baseline of 1,316 identifiers
-and 138 top-level types, the additions are the optional `AgentCatalog` product,
-catalog adapters, immutable Run bindings, projection contracts, provider
-continuation origin metadata, usage dimensions, and the existing Host example
-surface. The additions are source-compatible for clients that continue using
-the original `Agent` and `AgentSession.run(_:)` APIs. This is a development
-inventory, not a release claim; regenerate it before an RC.2 freeze.
+The RC.2 candidate graph contains 1,759 precise public identifiers and 188
+top-level public types. Relative to the immutable rc.1 graph of 956
+identifiers and 100 top-level types, the candidate adds 803 identifiers and
+removes none. The additions are the optional `AgentCatalog`, `AgentDecisions`,
+`AgentJevProvider`, `AgentUsage`, model bindings, projection contracts,
+continuation origin metadata, provider adapters and the existing Host example
+surface. They are source-compatible for clients that continue using the
+original `Agent` and `AgentSession.run(_:)` APIs. The reproducible command and
+module breakdown are in [the public API inventory](swift-agent-public-api.md).
 
-The current public API addition inventory is recorded in
-`docs/reviews/2026-09-20-sai-072-public-api-additions.md`.
+The release checklist records the final candidate SHA. The public API policy in
+this guide is normative; one-time audit evidence stays in the parent project's
+Kanban records.
 
 ## Enums
 

@@ -3,10 +3,10 @@
 last-verified: 2026-09-19
 
 Status: **host integration guidance, not a shipped HTTP server or deployment
-qualification**. The SDK contract baseline is
-`c5f08c7520c989cf01234e19c1fd011b486ca76f`; the accompanying integration-docs
-revision is `4d3f3b784a95ec4528782d1245862e01a9024c6a`. Read the installed
-revision's [integration entry](../../INTEGRATION.md) before using its API.
+qualification**. Read the installed revision's
+[integration entry](../../INTEGRATION.md) and the
+[RC.2 release checklist](../releases/1.0.0-rc.2-preparation-checklist.md)
+before using its API.
 
 ## What is supported, and what this guide adds
 

@@ -101,8 +101,7 @@ tool result, signed continuation, structured answer and usage. Missing credentia
 or service failures fail an opted-in run. This is a bounded gateway verification,
 not qualification of every model, endpoint, or host production path.
 
-The bounded 2026-09-19 gateway run covered two-turn text, a Host Calculator
-loop, text-history restart, structured output, cumulative usage, cancellation
-and configured thinking. The later durable-tool restart case remains unexecuted
-live. It is gateway evidence, not an official-endpoint claim. See the
-[qualification report](../reviews/2026-09-19-provider-live-qualification.md).
+Live qualification is operator-controlled and endpoint-specific. Gateway
+evidence is not an official-endpoint claim, and fixture coverage is not live
+qualification; candidate-specific evidence belongs in the parent project's
+SAI-068 qualification task.

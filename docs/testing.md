@@ -66,7 +66,7 @@ swift test --filter ProviderFallbackTests
 - Concurrency: gates and expectations, not `sleep`.
 
 The Pi comparison and coverage tables live in
-[the conformance matrix](reviews/2026-09-18-swift-agent-conformance-matrix.md).
+[the conformance matrix](guides/swift-agent-conformance-matrix.md).
 Named production bugs live in [testing-regressions.md](testing-regressions.md).
 
 Dynamic model selection tests use fixture catalogs and providers. They verify

@@ -90,9 +90,7 @@ is a failed opted-in test, never a pass. Default skipped live tests do not estab
 device or PCC readiness. These bounded cases do not establish broad planning
 reliability or production qualification.
 
-On 2026-09-19, the opted-in on-device suite completed two cases: a one-token
-truncation produced no tool execution, and a real model proposed the read-only
-Calculator through two Core turns with exactly one Host execution. The separate
-PCC case returned the typed `unavailable` failure on the test machine and is
-therefore `BLOCKED_PLATFORM`, not a pass. See the
-[qualification report](../reviews/2026-09-19-provider-live-qualification.md).
+Live Apple evidence is operator-controlled and platform-specific. An unavailable
+PCC or on-device model is `BLOCKED_PLATFORM`, not a pass; fixture and compile
+coverage do not establish device qualification. Candidate-specific evidence
+belongs in the parent project's SAI-068 qualification task.

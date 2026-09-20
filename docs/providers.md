@@ -48,5 +48,6 @@ See the [Decision Provider guide](guides/swift-agent-decisions.md). A decision
 cannot mint Evidence, authorize or execute a tool, create a Receipt, or settle
 an AgentJournal.
 
-Bounded operator evidence and explicit gaps are recorded in the
-[2026-09-19 provider qualification report](reviews/2026-09-19-provider-live-qualification.md).
+Bounded operator evidence and explicit gaps are recorded in the parent
+project's SAI-068 qualification task. This package guide defines the provider
+contract and the commands; it is not a per-machine live-test report.

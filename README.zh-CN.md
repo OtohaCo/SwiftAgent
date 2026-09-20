@@ -173,9 +173,9 @@ WorkspaceAgent 还通过 [swift-crypto](https://github.com/apple/swift-crypto) �
 | 动态模型选择 | [目录、Run 绑定、历史兼容和 Host 路由](docs/guides/swift-agent-dynamic-model-selection.md) |
 | 错误与兼容性 | [类型化错误](docs/guides/swift-agent-errors.md)、[版本策略](docs/guides/swift-agent-versioning.md) |
 | 另一个使用 public API 的 App | [Workspace File Agent](docs/guides/swift-agent-workspace-host.md) |
-| 验证记录 | [测试命令](docs/testing.md)、[命名回归](docs/testing-regressions.md)、[审查记录](docs/reviews)、[发布记录](docs/releases) |
+| 验证记录 | [测试命令](docs/testing.md)、[命名回归](docs/testing-regressions.md)、[发布记录](docs/releases)、[契约矩阵](docs/guides/swift-agent-conformance-matrix.md) |
 
-模型的 Codable 数据不是厂商 wire format，也不是已冻结的 Journal 格式。Usage 是累计快照；未报告不等于零，缓存/推理子集不能再次加到总量中。匹配类型化错误，不要解析 `localizedDescription` 字符串。阅读审查记录时，检查其基线和范围；历史上的 CLEAN 结论不是另一个 commit 的新验证证据。
+模型的 Codable 数据不是厂商 wire format，也不是已冻结的 Journal 格式。Usage 是累计快照；未报告不等于零，缓存/推理子集不能再次加到总量中。匹配类型化错误，不要解析 `localizedDescription` 字符串。候选版本的验收证据记录在发布清单和父项目 Kanban 中；历史结论不是另一个 commit 的新验证证据。
 
 ## 开发与测试 SDK
 

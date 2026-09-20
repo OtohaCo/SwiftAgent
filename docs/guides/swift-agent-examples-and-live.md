@@ -183,8 +183,7 @@ acceptance are separate evidence. A model that answers without calling the
 required tool produces `NOT_EXERCISED`, not a fabricated pass. Missing config,
 platform unavailability and exhausted budget are also distinct statuses.
 
-The 2026-09-19 bounded operator run is recorded in
-[provider live qualification](../reviews/2026-09-19-provider-live-qualification.md).
-It includes successful OpenAI-compatible gateway, Anthropic gateway, Jev and
-Apple on-device evidence, plus the exact DeepSeek and PCC limitations. Normal CI
-remains credential-free.
+Candidate-specific operator evidence and remaining gaps are recorded in the
+parent project's SAI-068 qualification task. Normal CI remains credential-free;
+fixture, hosted SDK CI, Host integration and live service qualification remain
+separate claims.

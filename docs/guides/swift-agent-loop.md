@@ -1,6 +1,6 @@
 # SwiftAgent Agent Loop
 
-last-verified: 2026-09-18
+last-verified: 2026-09-20
 
 The package-internal loop owns the single model-to-tool-to-model cycle. Public
 clients do not construct it. Use `Agent`, `AgentSession` and `AgentRun`. Providers
@@ -52,7 +52,19 @@ contains model-ready messages and omits those unexecuted proposals. Empty termin
 content does not add an empty assistant message. This history is not a journal or
 a mutation receipt.
 
-## Budgets and Cancellation
+## Startup, Budgets and Cancellation
+
+`AgentSession.run` starts the absolute Run budget before asynchronous restore,
+compaction, projection, token estimation or Provider request preparation. A
+preflight that reaches the deadline fails with `AgentLoopError.deadlineExceeded`
+before the new user message is journaled or appended to canonical history. A
+preflight result that arrives after the deadline is discarded. If a projector or
+estimator ignores cancellation, the Session retains its startup reservation
+until that operation actually exits; a replacement Run cannot overlap it.
+
+Caller cancellation remains `CancellationError`. A failed startup does not
+create a visible `AgentRun`, mutation intent, Evidence, Receipt or Provider
+request.
 
 `maxModelTurns` includes the final answer turn. The loop does not dispatch a tool
 batch unless another model turn remains. `maxToolCalls` applies across turns and

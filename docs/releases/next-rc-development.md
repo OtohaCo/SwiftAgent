@@ -4,8 +4,8 @@
 
 SwiftAgent `1.0.0-rc.1` is frozen at
 `d2347f11c6a78f421708e897dae42a51a98d37ea`. The tag and GitHub Release are
-immutable. Development on `main` targets the next release candidate and does
-not rewrite the published release.
+immutable. RC.2 development uses a dedicated feature branch and does not
+rewrite the published release or merge to `main`.
 
 ## Scope
 
@@ -17,12 +17,12 @@ policy, Evidence, mutation admission, Receipt validation, or Journal settlement.
 Every new public symbol must have a documented cross-vendor purpose and a clear
 stability rationale. Vendor wire formats remain internal to their adapters.
 
-The current development graph is regenerated per audit. The dynamic-model
-selection slice adds the optional `AgentCatalog` product, immutable per-Run
-model bindings, request-only context projection, provider deployment-scoped
-continuation metadata, and a fixture-first Host routing example. The exact
-current symbol inventory is recorded in the SAI-072 review annex; it is a
-development snapshot, not a release claim.
+The dynamic-model selection slice adds the optional `AgentCatalog` product,
+immutable per-Run model bindings, request-only context projection, provider
+deployment-scoped continuation metadata, and a fixture-first Host routing
+example. The stable [public API inventory](../guides/swift-agent-public-api.md)
+records the reproducible symbol-graph comparison; candidate-specific evidence
+belongs in the parent project's Kanban.
 
 ## Release Gate
 

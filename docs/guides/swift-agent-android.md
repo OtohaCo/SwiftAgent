@@ -3,10 +3,9 @@
 last-verified: 2026-09-19
 
 Status: **two integration routes, not a claim of Android-native qualification**.
-The checked SDK contract baseline is
-`c5f08c7520c989cf01234e19c1fd011b486ca76f`; the integration-docs revision is
-`4d3f3b784a95ec4528782d1245862e01a9024c6a`. No Android bridge, Gradle target,
-APK/AAR or device test is added by this document.
+No Android bridge, Gradle target, APK/AAR or device test is added by this
+document. Use the [RC.2 release checklist](../releases/1.0.0-rc.2-preparation-checklist.md)
+for the candidate-specific support boundary.
 
 ## 1. Choose where the Agent runs
 

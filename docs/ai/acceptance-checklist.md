@@ -101,4 +101,4 @@ itself remains a manual acceptance surface; the tests exercise its non-UI
 lifecycle and projection logic.
 
 Provider-by-provider service evidence, request budgets and unexercised cases are
-recorded in the [2026-09-19 qualification report](../reviews/2026-09-19-provider-live-qualification.md).
+recorded in the parent project's SAI-068 qualification task.

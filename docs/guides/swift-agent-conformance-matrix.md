@@ -2,6 +2,10 @@
 
 last-verified: 2026-09-19
 
+This stable matrix records the long-lived capability and regression contract.
+One-time release evidence belongs in the parent project's Kanban records, not
+in this package.
+
 Pi reference: `earendil-works/pi` `5901446094988aa5cd8e11efdaa131c3949106f1` (main, 2026-09-18).
 SwiftAgent baseline: published `1.0.0-rc.1` plus the audited post-rc.1
 Anthropic alias, Apple PCC, OpenAI Responses, and DeepSeek Responses work on

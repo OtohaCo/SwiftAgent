@@ -173,9 +173,9 @@ WorkspaceAgent は SHA-256 に [swift-crypto](https://github.com/apple/swift-cry
 | 動的モデル選択 | [カタログ、Run バインディング、履歴互換性、Host ルーティング](docs/guides/swift-agent-dynamic-model-selection.md) |
 | エラーと互換性 | [型付きエラー](docs/guides/swift-agent-errors.md)、[バージョン方針](docs/guides/swift-agent-versioning.md) |
 | public API を使う別の App | [Workspace File Agent](docs/guides/swift-agent-workspace-host.md) |
-| 検証記録 | [テストコマンド](docs/testing.md)、[名前付き回帰テスト](docs/testing-regressions.md)、[レビュー記録](docs/reviews)、[リリース記録](docs/releases) |
+| 検証記録 | [テストコマンド](docs/testing.md)、[名前付き回帰テスト](docs/testing-regressions.md)、[リリース記録](docs/releases)、[適合マトリクス](docs/guides/swift-agent-conformance-matrix.md) |
 
-モデルの Codable データは、ベンダーの wire format でも、固定された Journal 形式でもありません。Usage は累積スナップショットです。未報告はゼロではなく、キャッシュ/推論の内数を合計へ再加算してはいけません。`localizedDescription` の文字列ではなく、型付きエラーで分岐してください。レビュー記録は対象の基準と範囲を確認してください。過去の CLEAN 判定は、別の commit に対する新たな検証根拠にはなりません。
+モデルの Codable データは、ベンダーの wire format でも、固定された Journal 形式でもありません。Usage は累積スナップショットです。未報告はゼロではなく、キャッシュ/推論の内数を合計へ再加算してはいけません。`localizedDescription` の文字列ではなく、型付きエラーで分岐してください。候補固有の検証はリリースチェックリストと親プロジェクトの Kanban に記録します。過去の CLEAN 判定は、別の commit に対する新たな検証根拠にはなりません。
 
 ## SDK の開発とテスト
 
