@@ -289,18 +289,27 @@ public actor AgentSession {
             var lifecycleEvents: [AgentJournalEvent] = hasSessionRecord ? [] : [.sessionCreated]
             if let summary = prepared.summary {
                 lifecycleEvents.append(.compaction(summary))
-                lifecycleEvents.append(.checkpoint(history: prepared.history, steeringIDs: Array(appliedSteeringIDs)))
             }
+            // The startup frame is also the first recoverable checkpoint. If
+            // the admitted Run fails before its first loop checkpoint, a
+            // replacement Session must still recover the committed input.
+            lifecycleEvents.append(.checkpoint(
+                history: candidateMessages,
+                steeringIDs: Array(appliedSteeringIDs)
+            ))
             lifecycleEvents.append(.userMessage(text))
             try Task.checkCancellation()
             try budget.checkActive()
             do {
-                try await journal.appendCheckpoint(
+                try await journal.appendStartupCheckpoint(
                     lifecycleEvents,
                     sessionID: id,
                     runID: runID,
+                    deadline: budget.deadline,
                     durability: journal.storage == .durable ? .durable : .memory
                 )
+            } catch AgentJournalStartupAdmissionError.deadlineExceeded {
+                throw AgentLoopError.deadlineExceeded
             } catch {
                 // A durable append can report an uncertain directory sync
                 // after adopting the complete frame in memory. The new run

@@ -190,6 +190,10 @@ package enum AgentJournalPersistenceFault: Sendable {
     case directorySync
 }
 
+package enum AgentJournalStartupAdmissionError: Error, Sendable {
+    case deadlineExceeded
+}
+
 public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     case invalidHeader
     case invalidFrame
@@ -512,6 +516,30 @@ public actor AgentJournal {
                              durability: durability, allowMutationSettlement: false)
     }
 
+    /// Appends the startup frame while the session is still pre-admission.
+    /// Lock acquisition is cancellation/deadline aware; once the frame write
+    /// begins, the append is the atomic admission boundary for the Run.
+    @discardableResult
+    package func appendStartupCheckpoint(
+        _ events: [AgentJournalEvent],
+        sessionID: UUID,
+        runID: UUID,
+        deadline: ContinuousClock.Instant,
+        timestamp: Date = Date(),
+        durability: AgentJournalDurability
+    ) throws -> [AgentJournalRecord] {
+        try appendCheckpoint(
+            events,
+            sessionID: sessionID,
+            runID: runID,
+            timestamp: timestamp,
+            durability: durability,
+            allowMutationSettlement: false,
+            admissionDeadline: deadline,
+            checkAdmissionCancellation: true
+        )
+    }
+
     @discardableResult
     package func appendCheckpointForCurrentRun(
         _ events: [AgentJournalEvent],
@@ -539,7 +567,9 @@ public actor AgentJournal {
         runID: UUID?,
         timestamp: Date,
         durability: AgentJournalDurability,
-        allowMutationSettlement: Bool
+        allowMutationSettlement: Bool,
+        admissionDeadline: ContinuousClock.Instant? = nil,
+        checkAdmissionCancellation: Bool = false
     ) throws -> [AgentJournalRecord] {
         if durability == .durable, recoveryState == .corruptTail {
             throw AgentJournalError.repairRequired
@@ -564,7 +594,12 @@ public actor AgentJournal {
                 event: event
             )
         }
-        try commit(committed, durability: durability)
+        try commit(
+            committed,
+            durability: durability,
+            admissionDeadline: admissionDeadline,
+            checkAdmissionCancellation: checkAdmissionCancellation
+        )
         records.append(contentsOf: committed)
         nextSequence += UInt64(committed.count)
         recoveryState = .clean
@@ -1142,14 +1177,23 @@ public actor AgentJournal {
         return true
     }
 
-    private func commit(_ committed: [AgentJournalRecord], durability: AgentJournalDurability) throws {
+    private func commit(
+        _ committed: [AgentJournalRecord],
+        durability: AgentJournalDurability,
+        admissionDeadline: ContinuousClock.Instant? = nil,
+        checkAdmissionCancellation: Bool = false
+    ) throws {
         guard durability == .durable else { return }
         guard let url = persistenceURL else {
             throw AgentJournalError.persistenceUnavailable("no persistence URL configured")
         }
         let expectedRecords = records
         let frame = try Self.encodeFrame(records: committed)
-        try Self.withFileLock(for: url) {
+        try Self.withFileLock(
+            for: url,
+            waitDeadline: admissionDeadline,
+            checkCancellation: checkAdmissionCancellation
+        ) {
             let current = try Self.read(from: url)
             if current.recovery == .corruptTail {
                 throw AgentJournalError.repairRequired
@@ -1431,7 +1475,12 @@ public actor AgentJournal {
         }
     }
 
-    private static func withFileLock<T>(for url: URL, _ body: () throws -> T) throws -> T {
+    private static func withFileLock<T>(
+        for url: URL,
+        waitDeadline: ContinuousClock.Instant? = nil,
+        checkCancellation: Bool = false,
+        _ body: () throws -> T
+    ) throws -> T {
         let lockURL = URL(fileURLWithPath: url.path + ".lock")
         do {
             try FileManager.default.createDirectory(
@@ -1465,17 +1514,32 @@ public actor AgentJournal {
         }
 
         let deadline = Date().addingTimeInterval(5)
+        var didAcquireLock = false
+        defer {
+            if didAcquireLock {
+                _ = swiftAgentFlock(handle.fileDescriptor, SwiftAgentFileLockOperation.unlock)
+            }
+            try? handle.close()
+        }
         #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Linux)
         while swiftAgentFlock(handle.fileDescriptor, SwiftAgentFileLockOperation.exclusiveNonBlocking) != 0 {
+            if checkCancellation {
+                try Task.checkCancellation()
+                if let waitDeadline, ContinuousClock.now >= waitDeadline {
+                    throw AgentJournalStartupAdmissionError.deadlineExceeded
+                }
+            }
             guard Date() < deadline else {
-                try? handle.close()
                 throw AgentJournalError.persistenceUnavailable("journal lock is busy")
             }
             Thread.sleep(forTimeInterval: 0.005)
         }
-        defer {
-            _ = swiftAgentFlock(handle.fileDescriptor, SwiftAgentFileLockOperation.unlock)
-            try? handle.close()
+        didAcquireLock = true
+        if checkCancellation {
+            try Task.checkCancellation()
+            if let waitDeadline, ContinuousClock.now >= waitDeadline {
+                throw AgentJournalStartupAdmissionError.deadlineExceeded
+            }
         }
         return try body()
         #else

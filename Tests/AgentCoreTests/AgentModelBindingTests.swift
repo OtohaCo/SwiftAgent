@@ -5,6 +5,12 @@ import Foundation
 import Testing
 @testable import AgentCore
 
+#if os(macOS)
+import Darwin
+#elseif os(Linux)
+import Glibc
+#endif
+
 struct AgentModelBindingTests {
     @Test func sameSessionCanSelectAnImmutableBindingForTheNextRun() async throws {
         let defaultProvider = ScriptedProvider { request, _ in textResponse(request, "default") }
@@ -798,6 +804,69 @@ struct AgentModelBindingTests {
             return false
         })
     }
+
+    @Test func deadlineDuringJournalAdmissionDoesNotCommitInput() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-admission-deadline-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let journal = try AgentJournal(persistenceURL: url)
+        let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
+        let sessionID = UUID()
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(
+            id: sessionID,
+            journal: journal
+        )
+        let lock = try HeldFileLock(url: URL(fileURLWithPath: url.path + ".lock"))
+        defer { lock.release() }
+
+        let budget = try AgentBudget(
+            maxModelTurns: 1,
+            maxToolCalls: 0,
+            deadline: .now.advanced(by: .milliseconds(120))
+        )
+        await #expect(throws: AgentLoopError.deadlineExceeded) {
+            _ = try await session.run("blocked before admission", budget: budget)
+        }
+        #expect(await session.history.isEmpty)
+        #expect(await session.activeRunID == nil)
+        #expect(await provider.log.requests.isEmpty)
+
+        lock.release()
+        let next = try await session.run("after admission wait")
+        #expect(try await next.wait().outcome == .completed)
+    }
+
+    @Test func admittedStartupCheckpointSurvivesFailureBeforeFirstLoopCheckpoint() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-admitted-checkpoint-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let sessionID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        let failure = ModelProviderError(kind: .rateLimited, message: "fixture failure")
+        let failing = ScriptedProvider { _, _ in throw failure }
+        let firstSession = try Agent(model: fixtureModel, provider: failing).makeSession(
+            id: sessionID,
+            journal: journal
+        )
+
+        let run = try await firstSession.run("recover after provider failure")
+        await #expect(throws: ModelProviderError.self) { try await run.wait() }
+        try await run.waitForDrain()
+
+        let restartedJournal = try AgentJournal.load(from: url)
+        let restarted = try Agent(model: fixtureModel, provider: failing).makeSession(
+            id: sessionID,
+            journal: restartedJournal
+        )
+        let snapshot = await restarted.conversationSnapshot()
+        #expect(snapshot.messages == [.user([.text("recover after provider failure")])])
+    }
 }
 
 private struct FixedProjector: AgentContextProjector {
@@ -1058,3 +1127,36 @@ private func deployment(_ value: String) throws -> AgentModelDeployment {
         apiVersion: "1"
     )
 }
+
+#if os(macOS) || os(Linux)
+private final class HeldFileLock: @unchecked Sendable {
+    private let handle: FileHandle
+    private var isHeld = true
+
+    init(url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if !FileManager.default.fileExists(atPath: url.path) {
+            guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+        }
+        handle = try FileHandle(forUpdating: url)
+        guard flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) == 0 else {
+            try? handle.close()
+            throw CocoaError(.fileLocking)
+        }
+    }
+
+    func release() {
+        guard isHeld else { return }
+        isHeld = false
+        _ = flock(handle.fileDescriptor, LOCK_UN)
+        try? handle.close()
+    }
+
+    deinit { release() }
+}
+#endif

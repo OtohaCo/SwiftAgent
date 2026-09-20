@@ -65,9 +65,13 @@ unknown, the journal adopts the written records and reports the persistence
 error so recovery cannot duplicate or discard a committed prefix.
 
 Session startup checks cancellation and deadline before appending its durable
-startup frame. Once that atomic append begins, it is the admission boundary:
-the runtime creates the corresponding Run for the durable user event rather
-than leaving an orphaned history entry if the deadline expires during the I/O.
+startup frame, and the journal lock wait remains cancellation/deadline aware.
+The startup frame includes the candidate history checkpoint and user event.
+Once that atomic append begins, it is the admission boundary: the runtime
+creates the corresponding Run for the durable user event rather than leaving
+an orphaned history entry if the deadline expires during the I/O. If the Run
+fails before its first loop checkpoint, a replacement Session can still
+recover the admitted candidate history.
 
 Each durable Session identity also has a separate open-file lease. The descriptor
 stays open for the lifetime of the Session and is unlocked on drain; a crashed
