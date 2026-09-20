@@ -5,12 +5,6 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-#if os(macOS)
-import Darwin
-#elseif os(Linux)
-import Glibc
-#endif
-
 struct AgentModelBindingTests {
     @Test func sameSessionCanSelectAnImmutableBindingForTheNextRun() async throws {
         let defaultProvider = ScriptedProvider { request, _ in textResponse(request, "default") }
@@ -1129,6 +1123,12 @@ private func deployment(_ value: String) throws -> AgentModelDeployment {
 }
 
 #if os(macOS) || os(Linux)
+@_silgen_name("flock")
+private func swiftAgentTestFlock(_ fileDescriptor: Int32, _ operation: Int32) -> Int32
+
+private let testLockExclusiveNonBlocking: Int32 = 2 | 4
+private let testLockUnlock: Int32 = 8
+
 private final class HeldFileLock: @unchecked Sendable {
     private let handle: FileHandle
     private var isHeld = true
@@ -1144,7 +1144,7 @@ private final class HeldFileLock: @unchecked Sendable {
             }
         }
         handle = try FileHandle(forUpdating: url)
-        guard flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) == 0 else {
+        guard swiftAgentTestFlock(handle.fileDescriptor, testLockExclusiveNonBlocking) == 0 else {
             try? handle.close()
             throw CocoaError(.fileLocking)
         }
@@ -1153,7 +1153,7 @@ private final class HeldFileLock: @unchecked Sendable {
     func release() {
         guard isHeld else { return }
         isHeld = false
-        _ = flock(handle.fileDescriptor, LOCK_UN)
+        _ = swiftAgentTestFlock(handle.fileDescriptor, testLockUnlock)
         try? handle.close()
     }
 
