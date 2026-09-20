@@ -31,8 +31,15 @@ a non-conversational Decision example.
 
 The header displays the latest Run and current in-memory Session accounting
 window. Assistant turns show the current response, while provisional responses
-remain separate from finalized totals. This is public-event accounting, not a
-billing estimate or a persistent lifetime Session ledger; cost remains unknown.
+remain separate from finalized totals. While a Run is active they are marked in
+progress; after cancellation or failure they remain provisional data but are
+labelled as a partial report rather than an active response. This is public-event
+accounting, not a billing estimate or a persistent lifetime Session ledger; cost
+remains unknown.
+
+Assistant rows use display identities that remain unique across Runs in the same
+conversation. Provider turn numbers are Run-local and are not used as SwiftUI
+row identity or as the current-response marker.
 
 See [the examples guide](../../docs/guides/swift-agent-examples-and-live.md),
 [Apple UI ownership](../../docs/guides/swift-agent-apple-ui.md) and

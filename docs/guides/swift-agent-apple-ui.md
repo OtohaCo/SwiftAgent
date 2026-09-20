@@ -151,7 +151,16 @@ event consumer, then publishes response, latest-Run, and in-memory Session-windo
 summaries in its complete display snapshot. View refresh, navigation, multiple
 windows, and display-history trimming must not re-record or reduce the totals.
 Provisional responses stay separate from finalized totals, and cost remains
-unestimated. See [Usage accounting](swift-agent-usage.md).
+unestimated. During an active Run the UI may label provisional usage as in
+progress; after cancellation or failure it must retain the observation but label
+it as a partial report, not as an active response. See
+[Usage accounting](swift-agent-usage.md).
+
+Display identity is a Host concern. AppleChatApp assigns a conversation-scoped
+monotonic identity to each assistant display turn because `turnStarted` numbers
+restart for every Run. Reusing the Run-local number as a SwiftUI row identity
+would collide across Runs and could also misclassify an older provisional
+response as the current response.
 
 ## System backgrounding and restart
 

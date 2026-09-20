@@ -29,7 +29,9 @@ second `AgentRun.events` iterator and never changes execution outcomes.
 
 - `UsageRecordIdentity` binds source, Session, Run, invocation, provider/model,
   and optional provider response ID. The response ID alone is never a global
-  deduplication key.
+  deduplication key. The model is also identity-bearing and remains stable for
+  one invocation; event integrations use the started response's
+  `ResponseInfo.model` for every later observation.
 - Sources are explicitly classified as model responses or decisions. Unknown
   decoded source values are rejected until a Host wires their accounting path.
 - `UsageObservation` is one cumulative snapshot or final confirmation for one

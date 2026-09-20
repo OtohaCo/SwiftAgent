@@ -40,6 +40,11 @@ Its `UsageRecordIdentity` binds source, Session, Run, invocation, provider/model
 and an optional provider response ID. A provider response ID alone is not a
 global deduplication key.
 
+`model` is part of that identity and must stay stable for every observation of
+one invocation. Event consumers should use `ResponseInfo.model` from the
+started response rather than switching between a requested alias and a resolved
+model name mid-response.
+
 The first release accepts two explicit sources: `.modelResponse` and
 `.decision`. Decoding an unknown source preserves its raw value for inspection,
 but recording it returns `invalidIdentity` until the Host wires and classifies
