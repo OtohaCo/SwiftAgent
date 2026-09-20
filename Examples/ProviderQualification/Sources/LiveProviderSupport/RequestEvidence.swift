@@ -230,9 +230,14 @@ private struct ResponseMetadata {
     var sequenceCount = 0
 }
 
+private struct CompletedEncryptedItem {
+    let value: String?
+}
+
 private func parseResponseMetadata(_ data: Data) -> ResponseMetadata {
     guard let source = String(data: data, encoding: .utf8) else { return .init() }
     var result = ResponseMetadata()
+    var encryptedByCompletedItemID: [String: CompletedEncryptedItem] = [:]
     let normalized = source.replacingOccurrences(of: "\r\n", with: "\n")
     for frame in normalized.components(separatedBy: "\n\n") {
         let lines = frame.components(separatedBy: .newlines)
@@ -247,7 +252,10 @@ private func parseResponseMetadata(_ data: Data) -> ResponseMetadata {
         result.eventCount += 1
         if object["sequence_number"] is NSNumber { result.sequenceCount += 1 }
         else { appendUnique(type, to: &result.missingSequenceEventTypes) }
-        appendUnique(eventShape(type: type, object: object), to: &result.eventShapes)
+        appendUnique(
+            eventShape(type: type, object: object, encryptedByCompletedItemID: &encryptedByCompletedItemID),
+            to: &result.eventShapes
+        )
         if let response = object["response"] as? [String: Any] {
             appendString(response["model"], to: &result.models)
             appendString(response["status"], to: &result.responseStatuses)
@@ -262,7 +270,11 @@ private func parseResponseMetadata(_ data: Data) -> ResponseMetadata {
     return result
 }
 
-private func eventShape(type: String, object: [String: Any]) -> String {
+private func eventShape(
+    type: String,
+    object: [String: Any],
+    encryptedByCompletedItemID: inout [String: CompletedEncryptedItem]
+) -> String {
     var fields: [String] = []
     if object["sequence_number"] is NSNumber { fields.append("sequence") }
     if let value = object["output_index"] as? NSNumber { fields.append("index=\(value.intValue)") }
@@ -270,12 +282,70 @@ private func eventShape(type: String, object: [String: Any]) -> String {
     if let item = object["item"] as? [String: Any] {
         if let value = item["type"] as? String { fields.append("item=\(value)") }
         if let value = item["status"] as? String { fields.append("item_status=\(value)") }
+        fields.append(contentsOf: itemShapeFields(item, prefix: "item_"))
+        if type == "response.output_item.done",
+           item["type"] as? String == "reasoning",
+           let id = item["id"] as? String {
+            encryptedByCompletedItemID[id] = .init(value: item["encrypted_content"] as? String)
+        }
+    }
+    if let part = object["part"] as? [String: Any] {
+        fields.append(contentsOf: itemShapeFields(part, prefix: "part_"))
     }
     if let response = object["response"] as? [String: Any],
        let output = response["output"] as? [Any] {
         fields.append("output_count=\(output.count)")
+        let schemas = output.prefix(8).compactMap { value -> String? in
+            guard let item = value as? [String: Any] else { return nil }
+            return itemSchema(item)
+        }
+        if !schemas.isEmpty { fields.append("output_schema=\(schemas.joined(separator: "+"))") }
+        let comparisons = output.compactMap { value -> Bool? in
+            guard let item = value as? [String: Any],
+                  let id = item["id"] as? String,
+                  let expected = encryptedByCompletedItemID[id] else { return nil }
+            return expected.value == item["encrypted_content"] as? String
+        }
+        if !comparisons.isEmpty { fields.append("encrypted_matches_done=\(comparisons.allSatisfy { $0 })") }
     }
     return fields.isEmpty ? type : "\(type)[\(fields.joined(separator: ","))]"
+}
+
+private func itemShapeFields(_ item: [String: Any], prefix: String) -> [String] {
+    var fields: [String] = []
+    let keys = item.keys.filter(isSafeMetadataToken).sorted().prefix(20)
+    if !keys.isEmpty { fields.append("\(prefix)keys=\(keys.joined(separator: "|"))") }
+    if let phase = item["phase"] as? String, isSafeMetadataToken(phase) {
+        fields.append("\(prefix)phase=\(phase)")
+    }
+    appendCollectionShape(item["summary"], name: "\(prefix)summary", to: &fields)
+    appendCollectionShape(item["content"], name: "\(prefix)content", to: &fields)
+    if item.keys.contains("encrypted_content") {
+        fields.append("\(prefix)encrypted=\(item["encrypted_content"] is NSNull ? "null" : "present")")
+    }
+    return fields
+}
+
+private func itemSchema(_ item: [String: Any]) -> String {
+    let type = (item["type"] as? String).flatMap { isSafeMetadataToken($0) ? $0 : nil } ?? "unknown"
+    var fields = itemShapeFields(item, prefix: "")
+    if let status = item["status"] as? String, isSafeMetadataToken(status) {
+        fields.insert("status=\(status)", at: min(1, fields.count))
+    }
+    return "\(type){\(fields.joined(separator: ";"))}"
+}
+
+private func appendCollectionShape(_ value: Any?, name: String, to fields: inout [String]) {
+    guard let value else { return }
+    if value is NSNull { fields.append("\(name)=null") }
+    else if let values = value as? [Any] { fields.append("\(name)=\(values.count)") }
+    else { fields.append("\(name)=other") }
+}
+
+private func isSafeMetadataToken(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.count <= 64 && value.unicodeScalars.allSatisfy { scalar in
+        CharacterSet.alphanumerics.contains(scalar) || scalar == "." || scalar == "_" || scalar == "-"
+    }
 }
 
 private func appendItemMetadata(_ item: [String: Any], to metadata: inout ResponseMetadata) {

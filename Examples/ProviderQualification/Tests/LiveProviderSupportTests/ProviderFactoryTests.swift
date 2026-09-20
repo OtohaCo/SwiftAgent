@@ -135,19 +135,48 @@ struct ProviderFactoryTests {
         let responses = await evidence.responses
         let response = try #require(responses.first)
         #expect(response.httpStatus == 200)
-        #expect(response.eventTypes == ["response.created", "response.output_item.added"])
+        #expect(response.eventTypes == [
+            "response.created", "response.output_item.added", "response.output_item.done", "response.completed",
+        ])
         #expect(response.models == ["deepseek-test"])
-        #expect(response.responseStatuses == ["in_progress"])
-        #expect(response.itemTypes == ["message"])
-        #expect(response.itemStatuses == ["in_progress"])
+        #expect(response.responseStatuses == ["in_progress", "completed"])
+        #expect(response.itemTypes == ["message", "reasoning"])
+        #expect(response.itemStatuses == ["in_progress", "completed"])
         #expect(response.hasSequenceNumberForEveryEvent)
         #expect(response.eventShapes == [
-            "response.created[sequence]",
-            "response.output_item.added[sequence,index=0,item=message,item_status=in_progress]",
+            "response.created[sequence,output_count=0]",
+            "response.output_item.added[sequence,index=0,item=message,item_status=in_progress,"
+                + "item_keys=content|id|role|status|type,item_content=1]",
+            "response.output_item.done[sequence,index=1,item=reasoning,item_status=completed,"
+                + "item_keys=encrypted_content|id|status|summary|type,item_summary=0,item_encrypted=present]",
+            "response.completed[sequence,output_count=2,"
+                + "output_schema=message{keys=content|id|role|status|type;status=in_progress;content=1}"
+                + "+reasoning{keys=encrypted_content|id|status|summary|type;status=completed;summary=0;encrypted=present},"
+                + "encrypted_matches_done=false]",
         ])
         #expect(response.missingSequenceEventTypes.isEmpty)
         #expect(!response.description.contains("private-response-text"))
         #expect(!response.description.contains("private-signature"))
+        #expect(!response.description.contains("private-encrypted-content"))
+        #expect(!response.description.contains("terminal-private-encrypted-content"))
+    }
+
+    @Test func responseEvidenceMarksMissingTerminalEncryptionAsAMismatch() async throws {
+        let evidence = RequestEvidenceLedger()
+        let budget = try LiveRequestBudget(fileURL: nil, perProviderLimit: 1, totalLimit: 1)
+        let transport = BudgetedProviderHTTPTransport(
+            provider: .openAI,
+            budget: budget,
+            evidence: evidence,
+            base: MissingTerminalEncryptedResponseTransport()
+        )
+        let request = URLRequest(url: URL(string: "https://api.openai.example/v1/responses")!)
+
+        for try await _ in transport.stream(request) {}
+
+        let response = try #require((await evidence.responses).first)
+        #expect(response.eventShapes.last?.contains("encrypted_matches_done=false") == true)
+        #expect(!response.description.contains("private-encrypted-content"))
     }
 }
 
@@ -172,10 +201,33 @@ private struct MetadataResponseTransport: ProviderHTTPTransport {
             continuation.yield(.response(status: 200, headers: [:]))
             continuation.yield(.data(Data("""
             event: response.created
-            data: {"type":"response.created","sequence_number":0,"response":{"id":"r","model":"deepseek-test","status":"in_progress","signature":"private-signature"}}
+            data: {"type":"response.created","sequence_number":0,"response":{"id":"r","model":"deepseek-test","status":"in_progress","output":[],"signature":"private-signature"}}
 
             event: response.output_item.added
             data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"m","type":"message","role":"assistant","status":"in_progress","content":[{"type":"output_text","text":"private-response-text"}]}}
+
+            event: response.output_item.done
+            data: {"type":"response.output_item.done","sequence_number":2,"output_index":1,"item":{"id":"r","type":"reasoning","status":"completed","summary":[],"encrypted_content":"private-encrypted-content"}}
+
+            event: response.completed
+            data: {"type":"response.completed","sequence_number":3,"response":{"id":"r","model":"deepseek-test","status":"completed","output":[{"id":"m","type":"message","role":"assistant","status":"in_progress","content":[{"type":"output_text","text":"private-response-text"}]},{"id":"r","type":"reasoning","status":"completed","summary":[],"encrypted_content":"terminal-private-encrypted-content"}]}}
+
+            """.utf8)))
+            continuation.finish()
+        }
+    }
+}
+
+private struct MissingTerminalEncryptedResponseTransport: ProviderHTTPTransport {
+    func stream(_ request: URLRequest) -> AsyncThrowingStream<ProviderHTTPEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.response(status: 200, headers: [:]))
+            continuation.yield(.data(Data("""
+            event: response.output_item.done
+            data: {"type":"response.output_item.done","sequence_number":0,"output_index":0,"item":{"id":"r","type":"reasoning","status":"completed","summary":[],"encrypted_content":"private-encrypted-content"}}
+
+            event: response.completed
+            data: {"type":"response.completed","sequence_number":1,"response":{"id":"response","model":"openai-test","status":"completed","output":[{"id":"r","type":"reasoning","status":"completed","summary":[]}]}}
 
             """.utf8)))
             continuation.finish()
