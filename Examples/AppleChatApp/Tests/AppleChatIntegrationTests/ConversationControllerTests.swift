@@ -125,6 +125,35 @@ struct ConversationControllerTests {
         let idle = await nextSnapshot(&snapshots, phase: .idle)
         #expect(idle.terminal == .failed(failure))
     }
+
+    @Test func cancelledResponseUsageBecomesPartialRatherThanRemainingInProgress() async throws {
+        let session = ControlledSession()
+        let run = ControlledRun()
+        let controller = ConversationController(session: session)
+        var snapshots = controller.snapshots.makeAsyncIterator()
+        _ = await snapshots.next()
+
+        _ = try await controller.send("Cancel after usage")
+        _ = await session.nextStartedText()
+        await session.resolveNext(with: run.handle)
+        _ = await nextSnapshot(&snapshots, phase: .running)
+        await run.emitProvisionalUsage(sessionID: controller.conversationID)
+        let active = await nextSnapshot(&snapshots) {
+            $0.currentResponseUsage.provisionalResponseCount == 1
+        }
+        #expect(usageDisplayState(active.currentResponseUsage, phase: active.phase) == .inProgress)
+
+        await run.finishCancelled()
+        _ = await nextSnapshot(&snapshots, phase: .draining)
+        await run.releaseDrain()
+        let idle = await nextSnapshot(&snapshots, phase: .idle)
+
+        #expect(idle.terminal == .cancelled)
+        #expect(idle.currentResponseUsage.finalizedResponseCount == 0)
+        #expect(idle.currentResponseUsage.provisionalResponseCount == 1)
+        #expect(idle.currentResponseUsage.totalTokens == 10)
+        #expect(usageDisplayState(idle.currentResponseUsage, phase: idle.phase) == .partial)
+    }
 }
 
 private actor EventDeliveryGate {
@@ -192,6 +221,9 @@ private final class ControlledRun: Sendable {
     func waitForCancellationRequest() async { await state.waitForCancellationRequest() }
     func releaseDrain() async { await state.releaseDrain() }
     func emitText(_ text: String) async { await state.emitText(text) }
+    func emitProvisionalUsage(sessionID: UUID) async {
+        await state.emitProvisionalUsage(sessionID: sessionID, runID: handle.id)
+    }
 
     func finishCancelled() async {
         await state.finish(.failure(CancellationError()), termination: .cancelled, closeEvents: true)
@@ -257,6 +289,15 @@ private final class ControlledRun: Sendable {
             events.yield(.model(.textDelta(text)))
         }
 
+        func emitProvisionalUsage(sessionID: UUID, runID: UUID) {
+            let model = ModelID(provider: "fixture", name: "usage")
+            let info = ResponseInfo(id: "provisional-response", model: model)
+            events.yield(.runStarted(.init(sessionID: sessionID, runID: runID, model: model)))
+            events.yield(.turnStarted(1))
+            events.yield(.model(.responseStarted(info)))
+            events.yield(.model(.usage(.init(inputTokens: 7, outputTokens: 3))))
+        }
+
         func finish(
             _ result: Result<ConversationRunResult, Error>,
             termination: AgentRunTermination?,
@@ -280,6 +321,17 @@ private func nextSnapshot(
         if snapshot.phase == phase { return snapshot }
     }
     Issue.record("Snapshot stream ended before phase \(phase)")
+    return .init(conversationID: UUID())
+}
+
+private func nextSnapshot(
+    _ iterator: inout AsyncStream<ConversationSnapshot>.Iterator,
+    matching predicate: (ConversationSnapshot) -> Bool
+) async -> ConversationSnapshot {
+    while let snapshot = await iterator.next() {
+        if predicate(snapshot) { return snapshot }
+    }
+    Issue.record("Snapshot stream ended before matching state")
     return .init(conversationID: UUID())
 }
 

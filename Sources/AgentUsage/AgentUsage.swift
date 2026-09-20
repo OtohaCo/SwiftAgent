@@ -69,7 +69,7 @@ public struct UsageFieldSummary: Hashable, Sendable, Codable {
     public let missingCount: Int
 
     public var complete: Bool {
-        reportedCount > 0 && missingCount == 0
+        reportedSubtotal != nil && reportedCount > 0 && missingCount == 0
     }
 
     init(reportedSubtotal: Int?, reportedCount: Int, missingCount: Int) {
@@ -400,13 +400,20 @@ public struct UsageAccumulator: Sendable {
     private static func summarize(_ values: [Int?]) -> UsageFieldSummary {
         var subtotal: Int?
         var reportedCount = 0
+        var overflowed = false
 
         for value in values {
             guard let value else { continue }
             reportedCount += 1
+            guard !overflowed else { continue }
             if let existing = subtotal {
                 let (sum, overflow) = existing.addingReportingOverflow(value)
-                subtotal = overflow ? nil : sum
+                if overflow {
+                    subtotal = nil
+                    overflowed = true
+                } else {
+                    subtotal = sum
+                }
             } else {
                 subtotal = value
             }

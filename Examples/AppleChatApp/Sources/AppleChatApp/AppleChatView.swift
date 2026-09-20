@@ -172,8 +172,14 @@ private struct ConversationHeader: View {
                 PhaseLabel(phase: conversation.snapshot.phase)
             }
             HStack(spacing: 16) {
-                Text("Run: \(usageSummaryText(conversation.snapshot.latestRunUsage))")
-                Text("Session window: \(usageSummaryText(conversation.snapshot.sessionUsage))")
+                Text("Run: " + usageSummaryText(
+                    conversation.snapshot.latestRunUsage,
+                    phase: conversation.snapshot.phase
+                ))
+                Text("Session window: " + usageSummaryText(
+                    conversation.snapshot.sessionUsage,
+                    phase: conversation.snapshot.phase
+                ))
                 Text("Cost not estimated")
             }
             .font(.caption2.monospacedDigit())
@@ -196,7 +202,7 @@ private struct TranscriptView: View {
                         EmptyConversationView()
                     }
                     ForEach(snapshot.items) { item in
-                        TranscriptItemView(item: item)
+                        TranscriptItemView(item: item, phase: snapshot.phase)
                             .id(item.id)
                     }
                     if let terminal = snapshot.terminal {
@@ -236,6 +242,7 @@ private struct EmptyConversationView: View {
 
 private struct TranscriptItemView: View {
     let item: ConversationItem
+    let phase: ConversationPhase
 
     var body: some View {
         switch item {
@@ -249,7 +256,7 @@ private struct TranscriptItemView: View {
                     .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
             }
         case .assistant(let turn):
-            AssistantTurnView(turn: turn)
+            AssistantTurnView(turn: turn, phase: phase)
         case .tool(let call):
             ToolCallView(call: call)
         }
@@ -258,6 +265,7 @@ private struct TranscriptItemView: View {
 
 private struct AssistantTurnView: View {
     let turn: DisplayAssistantTurn
+    let phase: ConversationPhase
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -277,7 +285,7 @@ private struct AssistantTurnView: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if turn.usageSummary.observedResponseCount > 0 {
-                Text(responseUsageText(turn.usageSummary))
+                Text(responseUsageText(turn.usageSummary, phase: phase))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
             } else if turn.usage.inputTokens != nil || turn.usage.outputTokens != nil {
@@ -304,26 +312,27 @@ private struct AssistantTurnView: View {
     }
 }
 
-private func responseUsageText(_ summary: UsageSummary) -> String {
-    let state: String
-    if summary.provisionalResponseCount > 0 {
-        state = "In progress"
-    } else if summary.inputTokens.complete && summary.outputTokens.complete {
-        state = "Final"
-    } else {
-        state = "Partial report"
+private func responseUsageText(_ summary: UsageSummary, phase: ConversationPhase) -> String {
+    let state = switch usageDisplayState(summary, phase: phase) {
+    case .noSamples: "Not reported"
+    case .inProgress: "In progress"
+    case .finalized: "Final"
+    case .partial: "Partial report"
     }
     return "Input \(fieldText(summary.inputTokens)) · Output \(fieldText(summary.outputTokens)) · \(state)"
 }
 
-private func usageSummaryText(_ summary: UsageSummary) -> String {
+private func usageSummaryText(_ summary: UsageSummary, phase: ConversationPhase) -> String {
     guard summary.observedResponseCount > 0 else { return "No usage reported" }
     let finalized = summary.finalizedUsage.totalTokens.map(String.init) ?? "partial"
     guard summary.provisionalResponseCount > 0 else {
         return "\(finalized) tokens · \(summary.finalizedResponseCount) final"
     }
     let provisional = summary.provisionalUsage.totalTokens.map(String.init) ?? "partial"
-    return "\(finalized) final + \(provisional) in progress"
+    let provisionalState = usageDisplayState(summary, phase: phase) == .inProgress
+        ? "in progress"
+        : "partial report"
+    return "\(finalized) final + \(provisional) \(provisionalState)"
 }
 
 private func fieldText(_ field: UsageFieldSummary) -> String {

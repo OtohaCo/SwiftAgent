@@ -148,6 +148,45 @@ struct QualificationRunnerTests {
         #expect(result.usageSummary.totalTokens == 14)
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func cancellationFailureWaitsForDrainAndObserverBeforeRethrowing() async throws {
+        let gate = QualificationEventGate()
+        let lifecycle = QualificationLifecycleProbe()
+        let observer = Task {
+            await gate.pause()
+            await lifecycle.markObserverFinished()
+        }
+        let task = Task {
+            do {
+                _ = try await awaitCancellationOutcome(
+                    wait: {
+                        throw ModelProviderError(kind: .invalidResponse, message: "sanitized")
+                    },
+                    waitForDrain: {
+                        await lifecycle.markDrained()
+                    },
+                    observer: observer
+                )
+                Issue.record("Expected the logical failure to be rethrown")
+            } catch let error as ModelProviderError {
+                #expect(error.kind == .invalidResponse)
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+            await lifecycle.markReturned()
+        }
+
+        await gate.waitUntilPaused()
+        await lifecycle.waitUntilDrained()
+        #expect(await lifecycle.drained)
+        #expect(!(await lifecycle.observerFinished))
+        #expect(!(await lifecycle.returned))
+        await gate.resume()
+        _ = await task.result
+        #expect(await lifecycle.observerFinished)
+        #expect(await lifecycle.returned)
+    }
+
     @Test func failedSecondResponseKeepsPriorFinalUsageAndCurrentProvisionalUsage() async throws {
         let ledger = UsageLedger()
         let diagnostics = UsageDiagnosticsStore()
@@ -371,4 +410,26 @@ private actor QualificationEventGate {
 private actor QualificationCompletionProbe {
     private(set) var finished = false
     func markFinished() { finished = true }
+}
+
+private actor QualificationLifecycleProbe {
+    private(set) var drained = false
+    private(set) var observerFinished = false
+    private(set) var returned = false
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func markDrained() {
+        drained = true
+        let waiters = drainWaiters
+        drainWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilDrained() async {
+        if drained { return }
+        await withCheckedContinuation { drainWaiters.append($0) }
+    }
+
+    func markObserverFinished() { observerFinished = true }
+    func markReturned() { returned = true }
 }

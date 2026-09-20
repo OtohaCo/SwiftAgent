@@ -181,6 +181,15 @@ struct UsageLedgerTests {
         #expect(reportedZero.totalTokens == 0)
     }
 
+    @Test func decodedFieldWithoutASubtotalCannotClaimCompleteness() throws {
+        let field = try JSONDecoder().decode(
+            UsageFieldSummary.self,
+            from: Data(#"{"reportedSubtotal":null,"reportedCount":3,"missingCount":0}"#.utf8)
+        )
+
+        #expect(!field.complete)
+    }
+
     @Test func duplicatesAreNoOpsConflictsAreDiagnosedAndFinalizedRecordsDoNotRegress() async throws {
         let identity = makeIdentity(invocationID: "turn-1")
         let observation = UsageObservation(

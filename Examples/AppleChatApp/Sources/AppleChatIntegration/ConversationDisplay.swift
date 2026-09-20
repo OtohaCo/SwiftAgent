@@ -11,6 +11,29 @@ public enum ConversationPhase: String, Equatable, Sendable {
     case draining
 }
 
+package enum UsageDisplayState: Equatable, Sendable {
+    case noSamples
+    case inProgress
+    case finalized
+    case partial
+}
+
+package func usageDisplayState(
+    _ summary: UsageSummary,
+    phase: ConversationPhase
+) -> UsageDisplayState {
+    guard summary.observedResponseCount > 0 else { return .noSamples }
+    if summary.provisionalResponseCount > 0 {
+        switch phase {
+        case .starting, .running, .stopRequested:
+            return .inProgress
+        case .draining, .idle:
+            return .partial
+        }
+    }
+    return summary.inputTokens.complete && summary.outputTokens.complete ? .finalized : .partial
+}
+
 public enum ConversationTerminal: Equatable, Sendable {
     case completed
     case refused

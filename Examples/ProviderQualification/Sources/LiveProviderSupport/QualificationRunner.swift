@@ -483,15 +483,11 @@ public struct QualificationRunner: Sendable {
                 }
             }
         }
-        let completedNormally: Bool
-        do {
-            _ = try await run.wait()
-            completedNormally = true
-        } catch is CancellationError {
-            completedNormally = false
-        }
-        try await run.waitForDrain()
-        _ = await observer.result
+        let completedNormally = try await awaitCancellationOutcome(
+            wait: { _ = try await run.wait() },
+            waitForDrain: { try await run.waitForDrain() },
+            observer: observer
+        )
         let started = await cancellation.requestStarted
         return .init(
             scenario: .cancel,
@@ -601,6 +597,32 @@ public struct QualificationRunner: Sendable {
             _ = await observer.result
             throw error
         }
+    }
+}
+
+func awaitCancellationOutcome(
+    wait: () async throws -> Void,
+    waitForDrain: () async throws -> Void,
+    observer: Task<Void, Never>
+) async throws -> Bool {
+    let logicalResult: Result<Void, any Error>
+    do {
+        try await wait()
+        logicalResult = .success(())
+    } catch {
+        logicalResult = .failure(error)
+    }
+
+    _ = try? await waitForDrain()
+    _ = await observer.result
+
+    switch logicalResult {
+    case .success:
+        return true
+    case .failure(let error) where error is CancellationError:
+        return false
+    case .failure(let error):
+        throw error
     }
 }
 
