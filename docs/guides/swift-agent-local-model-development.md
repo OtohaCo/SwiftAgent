@@ -38,6 +38,7 @@ A text-only local configuration needs no optional capability declarations:
 import AgentCore
 import AgentModels
 import AgentProviders
+import Foundation
 
 let provider = try LocalResponsesProvider(configuration: .init(
     baseURL: URL(string: "http://127.0.0.1:1234/v1")!,
