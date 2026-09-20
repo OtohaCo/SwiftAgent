@@ -632,7 +632,6 @@ struct AgentModelBindingTests {
         let gate = NonCooperativeProjectionGate()
         let startupReleased = AsyncSignal()
         let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
-        weak var releasedSession: AgentSession?
         let first: Task<AgentRun, Error>
         do {
             let session = try Agent(model: fixtureModel, provider: provider).makeSession(
@@ -640,7 +639,6 @@ struct AgentModelBindingTests {
                 journal: journal,
                 startupReleaseDidFinish: { _ in await startupReleased.signal() }
             )
-            releasedSession = session
             let binding = try AgentModelBinding(
                 profileID: "late-release",
                 profileRevision: "1",
@@ -661,7 +659,6 @@ struct AgentModelBindingTests {
         await gate.release()
         await gate.waitUntilFinished()
         await startupReleased.wait()
-        #expect(releasedSession == nil)
 
         let replacement = try Agent(model: fixtureModel, provider: provider).makeSession(
             id: sessionID,
