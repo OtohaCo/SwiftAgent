@@ -418,6 +418,45 @@ struct UsageLedgerTests {
         #expect(try JSONDecoder().decode(UsageSummary.self, from: encodedSummary) == summary)
     }
 
+    @Test func bindingDeploymentAndContextDimensionsParticipateInInvocationIdentity() async throws {
+        let sessionID = UUID()
+        let runID = UUID()
+        let first = UsageRecordIdentity(
+            source: .modelResponse,
+            sessionID: sessionID,
+            runID: runID,
+            invocationID: "turn-1",
+            providerResponseID: "same-provider-id",
+            model: .init(provider: "fixture", name: "same-model"),
+            bindingProfileID: "balanced",
+            bindingProfileRevision: "7",
+            deploymentScope: "https://west.example.test/v1",
+            contextEpoch: 3,
+            routeSource: "manual"
+        )
+        let second = UsageRecordIdentity(
+            source: .modelResponse,
+            sessionID: sessionID,
+            runID: runID,
+            invocationID: "turn-1",
+            providerResponseID: "same-provider-id",
+            model: .init(provider: "fixture", name: "same-model"),
+            bindingProfileID: "economy",
+            bindingProfileRevision: "8",
+            deploymentScope: "https://east.example.test/v1",
+            contextEpoch: 4,
+            routeSource: "jev-suggestion"
+        )
+        let ledger = UsageLedger()
+
+        _ = await ledger.record(.init(identity: first, usage: .init(inputTokens: 3), status: .finalized))
+        _ = await ledger.record(.init(identity: second, usage: .init(inputTokens: 5), status: .finalized))
+
+        #expect((await ledger.summary()).observedResponseCount == 2)
+        #expect((await ledger.summary()).inputTokens.reportedSubtotal == 8)
+        #expect(try JSONDecoder().decode(UsageRecordIdentity.self, from: JSONEncoder().encode(first)) == first)
+    }
+
     @Test func removeAllStartsANewExplicitAccountingWindow() async throws {
         let ledger = UsageLedger()
         _ = await ledger.record(.init(

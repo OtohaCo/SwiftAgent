@@ -10,16 +10,37 @@ public enum AnthropicThinking: Equatable, Sendable {
     case enabled(budgetTokens: Int)
 }
 
+/// Anthropic output-config effort wire value. Static values are conveniences,
+/// not a closed list of values supported by every model deployment.
+public struct AnthropicEffort: RawRepresentable, Hashable, Sendable, Codable {
+    public let rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+
+    public static let low = Self(rawValue: "low")
+    public static let medium = Self(rawValue: "medium")
+    public static let high = Self(rawValue: "high")
+
+    public init(from decoder: any Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
 public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public var descriptor: ModelProviderDescriptor {
         var capabilities: ModelCapabilities = [.streaming, .multiTurn, .tools, .structuredOutput]
-        if thinking != .disabled { capabilities.insert(.reasoning) }
+        if thinking != .disabled || effort != nil { capabilities.insert(.reasoning) }
         return .init(id: "anthropic", capabilities: capabilities)
     }
     private let apiKey: String
     private let endpoint: URL
     private let maximumOutputTokens: Int
     private let thinking: AnthropicThinking
+    private let effort: AnthropicEffort?
     private let resolvedModelIDsByAlias: [String: String]
     private let transport: any ProviderHTTPTransport
     public var description: String { "AnthropicProvider" }
@@ -34,6 +55,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
             endpoint: endpoint,
             maximumOutputTokens: maximumOutputTokens,
             thinking: thinking,
+            effort: nil,
             resolvedModelIDsByAlias: [:],
             transport: transport
         )
@@ -41,6 +63,22 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
 
     public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
                 thinking: AnthropicThinking = .disabled,
+                effort: AnthropicEffort?,
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+        try self.init(
+            apiKey: apiKey,
+            endpoint: endpoint,
+            maximumOutputTokens: maximumOutputTokens,
+            thinking: thinking,
+            effort: effort,
+            resolvedModelIDsByAlias: [:],
+            transport: transport
+        )
+    }
+
+    public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
+                thinking: AnthropicThinking = .disabled,
+                effort: AnthropicEffort?,
                 resolvedModelIDsByAlias: [String: String],
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -51,6 +89,12 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
         let host = endpoint.host?.lowercased() ?? ""
         if case .enabled(let budget) = thinking, budget < 1_024 || budget >= maximumOutputTokens {
             throw ModelProviderError(kind: .invalidRequest, message: "The thinking budget must be at least 1024 and below the output limit.")
+        }
+        guard effort.map({ value in
+            value.rawValue == value.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                && !value.rawValue.isEmpty
+        }) ?? true else {
+            throw ModelProviderError(kind: .invalidRequest, message: "Invalid Anthropic effort configuration.")
         }
         guard resolvedModelIDsByAlias.allSatisfy({ alias, resolved in
             !alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -67,15 +111,36 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
         self.endpoint = endpoint
         self.maximumOutputTokens = maximumOutputTokens
         self.thinking = thinking
+        self.effort = effort
         self.resolvedModelIDsByAlias = resolvedModelIDsByAlias
         self.transport = transport
+    }
+
+    public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
+                thinking: AnthropicThinking = .disabled,
+                resolvedModelIDsByAlias: [String: String],
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+        try self.init(
+            apiKey: apiKey,
+            endpoint: endpoint,
+            maximumOutputTokens: maximumOutputTokens,
+            thinking: thinking,
+            effort: nil,
+            resolvedModelIDsByAlias: resolvedModelIDsByAlias,
+            transport: transport
+        )
     }
 
     public func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         ModelEventStream.make { emit in
             let body: Data
             do {
-                body = try JSONEncoder().encode(AnthropicRequestEncoder.encode(request, maximumOutputTokens: maximumOutputTokens, thinking: thinking))
+                body = try JSONEncoder().encode(AnthropicRequestEncoder.encode(
+                    request,
+                    maximumOutputTokens: maximumOutputTokens,
+                    thinking: thinking,
+                    effort: effort
+                ))
             } catch let error as ModelProviderError { throw error }
             catch { throw ModelProviderError(kind: .invalidRequest, message: "The provider request cannot be encoded.") }
             var http = URLRequest(url: endpoint)
@@ -112,5 +177,16 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
             try decoder.finish()
             do { _ = try validation.finish() } catch { throw ProviderJSON.invalid() }
         }
+    }
+}
+
+extension AnthropicProvider: ModelProviderRequestValidator {
+    public func validate(request: ModelRequest) throws {
+        _ = try AnthropicRequestEncoder.encode(
+            request,
+            maximumOutputTokens: maximumOutputTokens,
+            thinking: thinking,
+            effort: effort
+        )
     }
 }

@@ -219,6 +219,21 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
     }
 }
 
+extension LocalResponsesProvider: ModelProviderRequestValidator {
+    public func validate(request: ModelRequest) throws {
+        guard request.model == model else {
+            throw ModelProviderError(kind: .invalidRequest, message: "The local Responses request model does not match the configured model.")
+        }
+        if !request.tools.isEmpty, !descriptor.capabilities.contains(.tools) {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "The configured local model has not declared tool support.")
+        }
+        if request.structuredOutput != nil, !descriptor.capabilities.contains(.structuredOutput) {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "The configured local model has not declared structured-output support.")
+        }
+        _ = try LocalResponsesRequestEncoder.encode(request, maximumOutputTokens: maximumOutputTokens)
+    }
+}
+
 enum LocalResponsesRequestEncoder {
     static func encode(_ request: ModelRequest, maximumOutputTokens: Int) throws -> JSONValue {
         guard request.model.provider == "local-responses",

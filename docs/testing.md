@@ -12,6 +12,8 @@ bash Scripts/ci-linux.sh
 bash Scripts/ci-concurrency-seal.sh
 swift test --package-path Examples/ProviderQualification --disable-sandbox --no-parallel
 swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
+swift test --package-path Examples/DynamicModelRouting --disable-sandbox --no-parallel
+swift run --package-path Examples/DynamicModelRouting DynamicModelRouting
 swift test --filter UsageLedgerTests
 ```
 
@@ -66,6 +68,12 @@ swift test --filter ProviderFallbackTests
 The Pi comparison and coverage tables live in
 [the conformance matrix](reviews/2026-09-18-swift-agent-conformance-matrix.md).
 Named production bugs live in [testing-regressions.md](testing-regressions.md).
+
+Dynamic model selection tests use fixture catalogs and providers. They verify
+tri-state discovery metadata, bounded refreshes, immutable Run bindings,
+continuation origin checks, request-only projections, context budgets, and the
+Host Jev routing example. They do not call a real model service. The fixture
+example must remain offline and must not be treated as live routing evidence.
 
 New tests go in the domain file (`AgentRunTests`, `AgentContextPolicyTests`,
 provider encoder tests). Do not grow a single `AgentConformanceTests.swift`.

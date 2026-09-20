@@ -13,7 +13,9 @@ public actor AgentSession {
     public nonisolated let id: UUID
     public private(set) var history: [ModelMessage]
     public private(set) var activeRunID: UUID?
-    private let loop: AgentLoop
+    private let defaultBinding: AgentModelBinding
+    private let tools: ToolRegistry
+    private let scheduler: ToolScheduler
     private let evidenceLedger = EvidenceLedger()
     private let structuredOutput: StructuredOutputSchema?
     private let maxModelTurns: Int
@@ -31,15 +33,21 @@ public actor AgentSession {
     private var pendingDrainTask: Task<Void, Never>?
     private var drainingRunID: UUID?
     private var drainHandles: [UUID: AgentRunDrain] = [:]
+    private var loopsByRunID: [UUID: AgentLoop] = [:]
+    private var startingRun = false
+    private var conversationRevision: UInt64 = 0
 
-    init(id: UUID = UUID(), loop: AgentLoop, instructions: String, structuredOutput: StructuredOutputSchema?, maxModelTurns: Int,
+    init(id: UUID = UUID(), defaultBinding: AgentModelBinding, tools: ToolRegistry, scheduler: ToolScheduler,
+         instructions: String, structuredOutput: StructuredOutputSchema?, maxModelTurns: Int,
          maxToolCalls: Int, runTimeout: Duration, contextPolicy: AgentContextPolicy, journal: AgentJournal? = nil,
          checkpointDidExit: (@Sendable (UUID) -> Void)? = nil,
          drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil,
          drainReleaseDidBegin: (@Sendable (UUID) async -> Void)? = nil,
-         mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)? = nil) {
+        mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)? = nil) {
         self.id = id
-        self.loop = loop
+        self.defaultBinding = defaultBinding
+        self.tools = tools
+        self.scheduler = scheduler
         self.structuredOutput = structuredOutput
         self.instructions = instructions
         self.contextPolicy = contextPolicy
@@ -62,36 +70,73 @@ public actor AgentSession {
         budget: AgentBudget? = nil,
         operationID: String? = nil
     ) async throws -> AgentRun {
+        try await run(
+            text,
+            using: defaultBinding,
+            expectedConversationRevision: nil,
+            budget: budget,
+            operationID: operationID
+        )
+    }
+
+    /// Starts a Run with an immutable execution target. Selection affects this
+    /// Run only; the Session's canonical conversation and trusted state remain.
+    public func run(
+        _ text: String,
+        using binding: AgentModelBinding,
+        expectedConversationRevision: UInt64? = nil,
+        budget: AgentBudget? = nil,
+        operationID: String? = nil
+    ) async throws -> AgentRun {
         try Task.checkCancellation()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentSessionError.emptyInput }
         try contextPolicy.checkInput(text)
-        guard activeRunID == nil else { throw AgentSessionError.runInProgress }
-        if let pendingDrainTask {
-            if let drainingRunID { drainWaitDidBegin?(drainingRunID) }
-            await pendingDrainTask.value
-            try Task.checkCancellation()
-        }
-        try await AgentSessionIdentityRegistry.shared.acquire(id)
+        guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
+        startingRun = true
         do {
+            if let pendingDrainTask {
+                if let drainingRunID { drainWaitDidBegin?(drainingRunID) }
+                await pendingDrainTask.value
+                try Task.checkCancellation()
+            }
+            try await AgentSessionIdentityRegistry.shared.acquire(id)
             do {
-                if let journal {
-                    do {
-                        try await journal.acquireSessionLease(sessionID: id)
-                    } catch AgentJournalError.sessionLeaseUnavailable {
-                        throw AgentSessionError.runInProgress
-                    }
-                }
                 do {
-                    return try await startRun(text, budget: budget, operationID: operationID)
+                    if let journal {
+                        do {
+                            try await journal.acquireSessionLease(sessionID: id)
+                        } catch AgentJournalError.sessionLeaseUnavailable {
+                            throw AgentSessionError.runInProgress
+                        }
+                    }
+                    do {
+                        let run = try await startRun(
+                            text,
+                            binding: binding,
+                            expectedConversationRevision: expectedConversationRevision,
+                            budget: budget,
+                            operationID: operationID
+                        )
+                        startingRun = false
+                        return run
+                    } catch {
+                        await journal?.releaseSessionLease(sessionID: id)
+                        throw error
+                    }
                 } catch {
-                    await journal?.releaseSessionLease(sessionID: id)
+                    await AgentSessionIdentityRegistry.shared.release(id)
                     throw error
                 }
-            } catch {
-                await AgentSessionIdentityRegistry.shared.release(id)
-                throw error
             }
+        } catch {
+            startingRun = false
+            throw error
         }
+    }
+
+    public func conversationSnapshot() async -> AgentConversationSnapshot {
+        await restoreJournalStateIfNeeded()
+        return .init(revision: conversationRevision, messages: history)
     }
 
     /// Waits until provider/tool work for `runID` has exited and this Session
@@ -101,19 +146,47 @@ public actor AgentSession {
             _ = try? await Task { try await drain.wait() }.value
             return
         }
-        await loop.waitForRunToDrain(sessionID: id, runID: runID)
+        if let loop = loopsByRunID[runID] {
+            await loop.waitForRunToDrain(sessionID: id, runID: runID)
+        }
         await finishDraining(runID: runID)
     }
 
-    private func startRun(_ text: String, budget: AgentBudget?, operationID: String?) async throws -> AgentRun {
+    private func startRun(
+        _ text: String,
+        binding: AgentModelBinding,
+        expectedConversationRevision: UInt64?,
+        budget: AgentBudget?,
+        operationID: String?
+    ) async throws -> AgentRun {
         let budget = try budget ?? AgentBudget(maxModelTurns: maxModelTurns, maxToolCalls: maxToolCalls,
                                                deadline: .now.advanced(by: runTimeout))
         try budget.checkActive()
         await restoreJournalStateIfNeeded()
+        if let expectedConversationRevision, expectedConversationRevision != conversationRevision {
+            throw AgentModelBindingError.staleConversationRevision
+        }
         try await compactHistoryIfNeeded(runID: nil, budget: budget)
+        if let expectedConversationRevision, expectedConversationRevision != conversationRevision {
+            throw AgentModelBindingError.staleConversationRevision
+        }
+        guard let candidateRevision = nextConversationRevision else {
+            throw AgentModelBindingError.staleConversationRevision
+        }
         let runID = UUID()
+        let loop = AgentLoop(binding: binding, tools: tools, scheduler: scheduler)
+        let candidateMessages = history + [.user([.text(text)])]
+        let preparedRequest = try await loop.preflight(
+            messages: candidateMessages,
+            sessionID: id,
+            runID: runID,
+            conversationRevision: candidateRevision,
+            structuredOutput: structuredOutput
+        )
+        try Task.checkCancellation()
         if let journal {
             _ = try await journal.recoverPendingMutations(sessionID: id)
+            try Task.checkCancellation()
             let hasSessionRecord = await journal.snapshot().contains { record in
                 guard record.sessionID == id else { return false }
                 if case .sessionCreated = record.event { return true }
@@ -121,6 +194,7 @@ public actor AgentSession {
             }
             var lifecycleEvents: [AgentJournalEvent] = hasSessionRecord ? [] : [.sessionCreated]
             lifecycleEvents.append(.userMessage(text))
+            try Task.checkCancellation()
             try await journal.appendCheckpoint(
                 lifecycleEvents,
                 sessionID: id,
@@ -132,15 +206,19 @@ public actor AgentSession {
         let channel = AsyncStream<AgentEvent>.makeStream()
         let emitter = AgentEventEmitter(channel.continuation, requiresConsumer: false)
         history.append(.user([.text(text)]))
+        conversationRevision = candidateRevision
         activeRunID = runID
         appliedSteeringIDs.removeAll()
         let drain = AgentRunDrain()
         drainHandles[runID] = drain
+        loopsByRunID[runID] = loop
         let messages = history
         Task {
             await control.start {
                 await self.perform(
                     messages,
+                    loop: loop,
+                    initialRequest: preparedRequest,
                     runID: runID,
                     operationID: operationID,
                     budget: budget,
@@ -149,9 +227,17 @@ public actor AgentSession {
                 )
             }
         }
-        return AgentRun(id: runID, sessionID: id, events: channel.stream, control: control, drain: drain)
+        return AgentRun(
+            id: runID,
+            sessionID: id,
+            binding: binding.info,
+            events: channel.stream,
+            control: control,
+            drain: drain
+        )
     }
-    private func perform(_ messages: [ModelMessage], runID: UUID, operationID: String?, budget: AgentBudget,
+    private func perform(_ messages: [ModelMessage], loop: AgentLoop, initialRequest: AgentPreparedModelRequest,
+                         runID: UUID, operationID: String?, budget: AgentBudget,
                          emitter: AgentEventEmitter, control: AgentRunControl) async -> Result<AgentLoopResult, Error> {
         let journal = self.journal
         let lifecycle = AgentLoopLifecycle(
@@ -202,7 +288,8 @@ public actor AgentSession {
         do {
             let result = try await loop.execute(messages: messages, sessionID: id, runID: runID, budget: budget,
                                                 structuredOutput: structuredOutput, operationID: operationID,
-                                                emitter: emitter, lifecycle: lifecycle)
+                                                emitter: emitter, lifecycle: lifecycle,
+                                                initialRequest: initialRequest)
             return .success(result)
         } catch {
             return .failure(error)
@@ -232,6 +319,7 @@ public actor AgentSession {
             }
             try budget.checkActive()
             guard activeRunID == runID else { throw CancellationError() }
+            if history != prepared.history { advanceConversationRevision() }
             history = prepared.history
             appliedSteeringIDs.formUnion(steering.map(\.id))
             checkpointDidExit?(runID)
@@ -244,6 +332,7 @@ public actor AgentSession {
 
     private func applyCommittedHistory(_ messages: [ModelMessage], steering: [AgentSteeringInput], runID: UUID) {
         guard activeRunID == runID else { return }
+        if history != messages { advanceConversationRevision() }
         history = messages
         appliedSteeringIDs.formUnion(steering.map(\.id))
     }
@@ -252,17 +341,18 @@ public actor AgentSession {
         guard activeRunID == runID else { return }
         for input in pending where !appliedSteeringIDs.contains(input.id) {
             history.append(.user([.text(input.text)]))
+            advanceConversationRevision()
         }
         activeRunID = nil
         appliedSteeringIDs.removeAll()
         drainingRunID = runID
         let sessionID = id
-        let loop = self.loop
+        let loop = loopsByRunID[runID]
         let journal = self.journal
         let drain = drainHandles[runID]
         pendingDrainTask = Task { [weak self] in
             async let logicalCompletion: Void = control.waitUntilCompleted()
-            async let physicalCompletion: Void = loop.waitForRunToDrain(sessionID: sessionID, runID: runID)
+            async let physicalCompletion: Void = loop?.waitForRunToDrain(sessionID: sessionID, runID: runID) ?? ()
             await logicalCompletion
             await physicalCompletion
             if let self {
@@ -284,6 +374,7 @@ public actor AgentSession {
             await drain.complete()
         }
         drainHandles.removeValue(forKey: runID)
+        loopsByRunID.removeValue(forKey: runID)
         drainingRunID = nil
         pendingDrainTask = nil
     }
@@ -295,7 +386,9 @@ public actor AgentSession {
               let checkpoint = await journal.latestCheckpoint(sessionID: id) else { return }
         // Checkpoint system/developer messages are a historical record of the
         // runtime configuration that was sent, not the active configuration.
-        history = AgentContextWindow.applyingCurrentInstructions(checkpoint.history, instructions: instructions)
+        let restored = AgentContextWindow.applyingCurrentInstructions(checkpoint.history, instructions: instructions)
+        if restored != history { advanceConversationRevision() }
+        history = restored
     }
 
     private func compactHistoryIfNeeded(runID: UUID?, budget: AgentBudget) async throws {
@@ -314,7 +407,16 @@ public actor AgentSession {
             )
             _ = try? await journal.compactIfNeeded()
         }
+        if history != prepared.history { advanceConversationRevision() }
         history = prepared.history
+    }
+
+    private var nextConversationRevision: UInt64? {
+        conversationRevision == .max ? nil : conversationRevision + 1
+    }
+
+    private func advanceConversationRevision() {
+        if conversationRevision < .max { conversationRevision += 1 }
     }
 
     private func prepareCheckpoint(_ messages: [ModelMessage]) async throws -> (history: [ModelMessage], summary: AgentCompactionSummary?) {

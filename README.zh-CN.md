@@ -26,6 +26,7 @@ SwiftAgent 是一个不绑定模型厂商的 Swift Agent 运行时，提供类�
 | 不在 UI 中解析 SSE，直接显示文字和工具进度 | [UI 流式显示](docs/guides/swift-agent-ui-streaming.md) |
 | 添加只读工具、mutation、重启恢复或结构化回答 | [接入步骤与常用模式](docs/ai/consumer-recipes.md) |
 | 选择对话 Provider 并确认能力边界 | [Provider 矩阵](docs/providers.md) |
+| 发现模型、为 Run 选择配置或使用 Jev 路由 | [动态模型选择](docs/guides/swift-agent-dynamic-model-selection.md) |
 | 通过 TypeSafe Jev 获取 Noul、Choice、Score 建议 | [Decision Providers](docs/guides/swift-agent-decisions.md) |
 | 运行示例、配置 key、区分 fixture 与真实调用 | [示例与真实服务验收](docs/guides/swift-agent-examples-and-live.md) |
 | 规划 App 自己的语音、图像、视频或音乐服务 | [Host 服务工具](docs/guides/swift-agent-host-service-tools.md)——仅文档，不是媒体 SDK |
@@ -84,7 +85,7 @@ dependencies: [
 | Core products | macOS 13+、iOS 16+、Linux |
 | AgentDecisions / AgentJevProvider | macOS 13+、iOS 16+、Linux |
 | 可选 Apple Foundation Models adapter | macOS/iOS 26+；PCC 等具体 API 另有可用性要求 |
-| 其他可移植 products | AgentModels、AgentTools、AgentProviders、AgentUsage、WorkspaceAgent 支持 Linux |
+| 其他可移植 products | AgentModels、AgentTools、AgentProviders、AgentCatalog、AgentUsage、WorkspaceAgent 支持 Linux |
 
 准确的可用性要求见 [Package.swift](Package.swift) 和 Apple Provider 指南。`swift-tools-version: 6.0` 是 manifest 语言的最低版本，不是验证所用的编译器版本。Core 不依赖 SwiftUI 或 Apple 模型 SDK。
 
@@ -150,7 +151,8 @@ Mutation 工具要求在创建 Session 时提供持久化 `AgentJournal`，在 e
 | AgentModels | 无 | 模型值与 Provider 契约 |
 | AgentTools | AgentModels | 类型化工具、验证与执行策略 |
 | AgentCore | AgentModels, AgentTools | 唯一的 Agent loop、Session 与 Run |
-| AgentProviders | AgentModels | Anthropic、OpenAI Responses、DeepSeek Responses、Local Responses 与验证后路由 |
+| AgentCatalog | AgentModels | 开放模型/部署元数据、三态能力、发现协议与有界缓存 |
+| AgentProviders | AgentModels, AgentCatalog | Anthropic、OpenAI Responses、DeepSeek Responses、Local Responses 与 Provider 契约 |
 | AgentAppleProvider | AgentModels | Apple 端侧/PCC 规划与平台 SDK 隔离 |
 | AgentDecisions | AgentModels | 类型化、厂商无关的 Decision 请求与响应 |
 | AgentJevProvider | AgentModels, AgentDecisions | TypeSafe Jev adapter；没有执行权 |
@@ -168,6 +170,7 @@ WorkspaceAgent 还通过 [swift-crypto](https://github.com/apple/swift-crypto) �
 | Usage 统计 | [Response、Run 与 Session 统计窗口用量](docs/guides/swift-agent-usage.md) |
 | 工具与副作用 | [类型化工具](docs/guides/swift-agent-tools.md)、[Evidence](docs/guides/swift-agent-evidence.md)、[Receipts](docs/guides/swift-agent-receipts.md)、[调度](docs/guides/swift-agent-scheduler.md) |
 | 持久化与生命周期 | [Journal](docs/guides/swift-agent-journal.md)、[mutation 恢复](docs/guides/swift-agent-mutation-recovery.md)、[上下文策略](docs/guides/swift-agent-context.md)、[并发](docs/guides/swift-agent-concurrency.md) |
+| 动态模型选择 | [目录、Run 绑定、历史兼容和 Host 路由](docs/guides/swift-agent-dynamic-model-selection.md) |
 | 错误与兼容性 | [类型化错误](docs/guides/swift-agent-errors.md)、[版本策略](docs/guides/swift-agent-versioning.md) |
 | 另一个使用 public API 的 App | [Workspace File Agent](docs/guides/swift-agent-workspace-host.md) |
 | 验证记录 | [测试命令](docs/testing.md)、[命名回归](docs/testing-regressions.md)、[审查记录](docs/reviews)、[发布记录](docs/releases) |

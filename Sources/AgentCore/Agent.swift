@@ -41,7 +41,9 @@ public struct AgentConfiguration: Sendable {
 /// mutation, every Session must receive a journal whose `storage` is
 /// `.durable`. Read-only Agents may omit a journal or use memory storage.
 public struct Agent: Sendable {
-    private let loop: AgentLoop
+    private let defaultBinding: AgentModelBinding
+    private let tools: ToolRegistry
+    private let scheduler: ToolScheduler
     private let configuration: AgentConfiguration
     private let requiresDurableJournal: Bool
 
@@ -57,12 +59,9 @@ public struct Agent: Sendable {
             maxToolCalls: configuration.maxToolCalls,
             deadline: .now
         )
-        loop = AgentLoop(
-            model: model,
-            provider: provider,
-            tools: try ToolRegistry(tools: tools.map { try AnyAgentTool($0) }),
-            scheduler: configuration.scheduler
-        )
+        defaultBinding = .legacy(model: model, provider: provider)
+        self.tools = try ToolRegistry(tools: tools.map { try AnyAgentTool($0) })
+        scheduler = configuration.scheduler
         self.configuration = configuration
         requiresDurableJournal = tools.contains { $0.policy.effect == .mutation }
     }
@@ -108,7 +107,8 @@ public struct Agent: Sendable {
             throw AgentSessionError.durableJournalRequired
         }
         return AgentSession(
-            id: id, loop: loop, instructions: configuration.instructions,
+            id: id, defaultBinding: defaultBinding, tools: tools, scheduler: scheduler,
+            instructions: configuration.instructions,
             structuredOutput: configuration.structuredOutput, maxModelTurns: configuration.maxModelTurns,
             maxToolCalls: configuration.maxToolCalls, runTimeout: configuration.runTimeout,
             contextPolicy: configuration.contextPolicy, journal: journal,

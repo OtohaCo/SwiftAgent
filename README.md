@@ -34,6 +34,7 @@ whether generated code looks plausible.
 | Stream text and tool progress without parsing SSE in the UI | [UI streaming](docs/guides/swift-agent-ui-streaming.md) |
 | Add a read tool, a mutation, restart recovery or a structured answer | [Consumer recipes](docs/ai/consumer-recipes.md) |
 | Choose a conversational provider and check capability boundaries | [Provider matrix](docs/providers.md) |
+| Discover models, select a Run configuration, or route with Jev | [Dynamic model selection](docs/guides/swift-agent-dynamic-model-selection.md) |
 | Use Noul, Choice and Score advice through TypeSafe Jev | [Decision Providers](docs/guides/swift-agent-decisions.md) |
 | Run examples, configure keys and distinguish fixtures from real calls | [Examples and live qualification](docs/guides/swift-agent-examples-and-live.md) |
 | Plan an app-owned speech, image, video or music service | [Host service tools](docs/guides/swift-agent-host-service-tools.md) — documentation only, not a media SDK |
@@ -103,7 +104,7 @@ gitlink. Do not silently follow a remote branch or upgrade to make guessed APIs 
 | Core products | macOS 13+, iOS 16+, Linux |
 | AgentDecisions / AgentJevProvider | macOS 13+, iOS 16+, Linux |
 | Optional Apple Foundation Models adapter | macOS/iOS 26+; individual APIs, including PCC, have additional availability requirements |
-| Other portable products | AgentModels, AgentTools, AgentProviders, AgentUsage and WorkspaceAgent support Linux |
+| Other portable products | AgentModels, AgentTools, AgentProviders, AgentCatalog, AgentUsage and WorkspaceAgent support Linux |
 
 Check [Package.swift](Package.swift) and the Apple provider guide for exact
 availability. `swift-tools-version: 6.0` is the manifest language floor, not the
@@ -221,7 +222,8 @@ create a trusted Receipt or settle the Journal.
 | AgentModels | None | Model values and provider contracts |
 | AgentTools | AgentModels | Typed tools, validation and execution policy |
 | AgentCore | AgentModels, AgentTools | The single agent loop, sessions and runs |
-| AgentProviders | AgentModels | Anthropic, OpenAI Responses, DeepSeek Responses, Local Responses and validated routing |
+| AgentCatalog | AgentModels | Open model/deployment metadata, tri-state capabilities, discovery protocols and bounded cache |
+| AgentProviders | AgentModels, AgentCatalog | Anthropic, OpenAI Responses, DeepSeek Responses, Local Responses and provider contracts |
 | AgentAppleProvider | AgentModels | Apple on-device/PCC planning and platform SDK isolation |
 | AgentDecisions | AgentModels | Typed, vendor-neutral decision requests and responses |
 | AgentJevProvider | AgentModels, AgentDecisions | TypeSafe Jev adapter; no execution authority |
@@ -242,6 +244,7 @@ in AgentCore. The multimedia guide does not add a service implementation.
 | Usage accounting | [Response, Run, and Session-window usage](docs/guides/swift-agent-usage.md) |
 | Tools and effects | [Typed tools](docs/guides/swift-agent-tools.md), [Evidence](docs/guides/swift-agent-evidence.md), [Receipts](docs/guides/swift-agent-receipts.md), [scheduling](docs/guides/swift-agent-scheduler.md) |
 | Persistence and lifetime | [Journal](docs/guides/swift-agent-journal.md), [mutation recovery](docs/guides/swift-agent-mutation-recovery.md), [context policy](docs/guides/swift-agent-context.md), [concurrency](docs/guides/swift-agent-concurrency.md) |
+| Dynamic model selection | [Catalog, Run binding, history compatibility and Host routing](docs/guides/swift-agent-dynamic-model-selection.md) |
 | Errors and compatibility | [Typed errors](docs/guides/swift-agent-errors.md), [versioning](docs/guides/swift-agent-versioning.md) |
 | Another app using the public API | [Workspace File Agent](docs/guides/swift-agent-workspace-host.md) |
 | Verification records | [Testing commands](docs/testing.md), [named regressions](docs/testing-regressions.md), [review records](docs/reviews), [release records](docs/releases) |

@@ -1,9 +1,30 @@
 # SwiftAgent Security Model
 
-last-verified: 2026-09-18
+last-verified: 2026-09-20
 
 This document states what the SDK guarantees and what remains the host's job.
 It is part of the 1.0 freeze.
+
+## Model catalog and routing are not trust boundaries
+
+`AgentCatalog` describes a provider deployment and records whether a capability
+is supported, unsupported, or unknown. A discovered model is not automatically
+an executable model, and a stale or partial catalog does not prove that an
+upstream request will be authorized. The Host must bind a concrete provider,
+deployment, model, and parameter profile before starting a Run.
+
+`AgentModelBinding` is immutable for one Run. Changing a Host selection affects
+a later Run; it cannot mutate an active loop or change the provider used while
+an earlier Run is draining. `DecisionProvider` and Jev may select only from a
+finite Host-approved candidate set. They cannot create an endpoint, credential,
+provider option, Evidence record, authorization result, Receipt, or Journal
+settlement.
+
+Context projection is request input, not execution truth. A projector may
+remove provider-private continuation or summarize an explicitly resolved
+read-only interaction, but canonical Session history, tool-call/result
+pairing, Evidence, mutation state, and Journal checkpoints remain separate.
+Projection output cannot mint Evidence or upgrade the authority of a message.
 
 ## LLM output is untrusted
 

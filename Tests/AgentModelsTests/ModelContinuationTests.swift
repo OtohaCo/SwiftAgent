@@ -75,4 +75,14 @@ struct ModelContinuationTests {
         #expect(try accumulator.finish() == expected)
         #expect(try JSONDecoder().decode(ModelResponse.self, from: JSONEncoder().encode(expected)) == expected)
     }
+
+    @Test func legacyContinuationPayloadWithoutOriginStillDecodes() throws {
+        let data = Data(#"{"model":{"provider":"fixture","name":"test"},"format":"fixture.v1","payload":"AP8B"}"#.utf8)
+        let value = try JSONDecoder().decode(ModelProviderContinuation.self, from: data)
+
+        #expect(value.model == ModelID(provider: "fixture", name: "test"))
+        #expect(value.format == "fixture.v1")
+        #expect(value.payload == Data([0, 255, 1]))
+        #expect(value.origin == nil)
+    }
 }

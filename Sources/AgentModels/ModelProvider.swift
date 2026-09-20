@@ -15,6 +15,12 @@ public protocol ModelProvider: Sendable {
     func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error>
 }
 
+/// Optional local request validation used before a Session commits a new user
+/// turn. It must not perform network I/O or mutate provider state.
+public protocol ModelProviderRequestValidator: Sendable {
+    func validate(request: ModelRequest) throws
+}
+
 /// Optional host hook for providers whose cancelled transport can outlive the
 /// model event consumer. Hosts that must replace a run before starting another
 /// one can await this hook without changing the responsive `AgentRun.cancel()`

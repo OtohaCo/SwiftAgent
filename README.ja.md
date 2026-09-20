@@ -26,6 +26,7 @@ SwiftAgent は、特定のモデルベンダーに依存しない Swift 向け A
 | UI で SSE を解析せず、テキストとツールの進捗を表示する | [UI ストリーミング](docs/guides/swift-agent-ui-streaming.md) |
 | 読み取り専用ツール、mutation、再起動後の復旧、構造化回答を追加する | [統合レシピ](docs/ai/consumer-recipes.md) |
 | 会話 Provider を選び、対応範囲を確認する | [Provider マトリクス](docs/providers.md) |
+| モデルを発見し、Run 設定を選び、Jev でルーティングする | [動的モデル選択](docs/guides/swift-agent-dynamic-model-selection.md) |
 | TypeSafe Jev の Noul、Choice、Score による助言を利用する | [Decision Providers](docs/guides/swift-agent-decisions.md) |
 | サンプルを実行し、キーを設定し、fixture と実サービス呼び出しを区別する | [サンプルと実サービス検証](docs/guides/swift-agent-examples-and-live.md) |
 | App が所有する音声・画像・動画・音楽サービスを設計する | [Host サービスツール](docs/guides/swift-agent-host-service-tools.md) — ドキュメントのみであり、メディア SDK ではありません |
@@ -84,7 +85,7 @@ Git submodule でローカル package を提供する場合、SDK commit は親�
 | Core products | macOS 13+、iOS 16+、Linux |
 | AgentDecisions / AgentJevProvider | macOS 13+、iOS 16+、Linux |
 | オプションの Apple Foundation Models adapter | macOS/iOS 26+。PCC を含む個別 API には追加の可用性条件があります |
-| その他の移植可能な products | AgentModels、AgentTools、AgentProviders、AgentUsage、WorkspaceAgent は Linux に対応 |
+| その他の移植可能な products | AgentModels、AgentTools、AgentProviders、AgentCatalog、AgentUsage、WorkspaceAgent は Linux に対応 |
 
 正確な可用性は [Package.swift](Package.swift) と Apple Provider ガイドで確認してください。`swift-tools-version: 6.0` は manifest 言語の下限であり、検証に使うコンパイラーのバージョンではありません。Core は SwiftUI や Apple のモデル SDK に依存しません。
 
@@ -150,7 +151,8 @@ Mutation ツールには、Session 作成時の永続 `AgentJournal`、実行前
 | AgentModels | なし | モデルの値と Provider 契約 |
 | AgentTools | AgentModels | 型付きツール、検証、実行ポリシー |
 | AgentCore | AgentModels, AgentTools | 唯一の Agent loop、Session、Run |
-| AgentProviders | AgentModels | Anthropic、OpenAI Responses、DeepSeek Responses、Local Responses、検証後のルーティング |
+| AgentCatalog | AgentModels | オープンなモデル/デプロイメント情報、三状態の能力、発見プロトコル、境界付きキャッシュ |
+| AgentProviders | AgentModels, AgentCatalog | Anthropic、OpenAI Responses、DeepSeek Responses、Local Responses の契約 |
 | AgentAppleProvider | AgentModels | Apple オンデバイス/PCC のプランニングとプラットフォーム SDK の分離 |
 | AgentDecisions | AgentModels | 型付きでベンダーに依存しない Decision リクエストとレスポンス |
 | AgentJevProvider | AgentModels, AgentDecisions | TypeSafe Jev adapter。実行権限なし |
@@ -168,6 +170,7 @@ WorkspaceAgent は SHA-256 に [swift-crypto](https://github.com/apple/swift-cry
 | Usage 集計 | [Response、Run、Session 集計ウィンドウの Usage](docs/guides/swift-agent-usage.md) |
 | ツールと副作用 | [型付きツール](docs/guides/swift-agent-tools.md)、[Evidence](docs/guides/swift-agent-evidence.md)、[Receipts](docs/guides/swift-agent-receipts.md)、[スケジューリング](docs/guides/swift-agent-scheduler.md) |
 | 永続化とライフサイクル | [Journal](docs/guides/swift-agent-journal.md)、[mutation 復旧](docs/guides/swift-agent-mutation-recovery.md)、[コンテキストポリシー](docs/guides/swift-agent-context.md)、[並行処理](docs/guides/swift-agent-concurrency.md) |
+| 動的モデル選択 | [カタログ、Run バインディング、履歴互換性、Host ルーティング](docs/guides/swift-agent-dynamic-model-selection.md) |
 | エラーと互換性 | [型付きエラー](docs/guides/swift-agent-errors.md)、[バージョン方針](docs/guides/swift-agent-versioning.md) |
 | public API を使う別の App | [Workspace File Agent](docs/guides/swift-agent-workspace-host.md) |
 | 検証記録 | [テストコマンド](docs/testing.md)、[名前付き回帰テスト](docs/testing-regressions.md)、[レビュー記録](docs/reviews)、[リリース記録](docs/releases) |

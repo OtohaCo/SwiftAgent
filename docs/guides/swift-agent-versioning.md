@@ -59,12 +59,18 @@ Post-`1.0.0-rc.1`, OpenAI and DeepSeek reasoning configuration use extensible
 new enum case. Provider construction still validates values that cannot form a
 legal request.
 
-The current SAI-071 RC.2 working graph contains 1,316 precise public identifiers
-and 138 top-level public types. It adds 360 identifiers and removes none relative
-to `1.0.0-rc.1`. The latest 21 identifiers add the optional
-`LocalResponsesProvider` surface in `AgentProviders`; the prior 139 add the
-optional `AgentUsage` product. These additions are source-compatible for clients
-that do not adopt the new providers, decision products, or usage accounting.
+The dynamic-model-selection RC.2 working graph at the current development
+candidate contains 1,759 precise public identifiers and 188 top-level public
+types. Relative to the adopted pre-feature RC.2 baseline of 1,316 identifiers
+and 138 top-level types, the additions are the optional `AgentCatalog` product,
+catalog adapters, immutable Run bindings, projection contracts, provider
+continuation origin metadata, usage dimensions, and the existing Host example
+surface. The additions are source-compatible for clients that continue using
+the original `Agent` and `AgentSession.run(_:)` APIs. This is a development
+inventory, not a release claim; regenerate it before an RC.2 freeze.
+
+The current public API addition inventory is recorded in
+`docs/reviews/2026-09-20-sai-072-public-api-additions.md`.
 
 ## Enums
 

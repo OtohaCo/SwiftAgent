@@ -14,3 +14,4 @@ swift test --package-path Examples/ProviderQualification --disable-sandbox --no-
 swift build --package-path Examples/AppleChatApp
 swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
 swift build --package-path Examples/AppleChatApp --target AppleChatApp --triple arm64-apple-ios16.0
+swift test --package-path Examples/DynamicModelRouting --disable-sandbox --no-parallel

@@ -171,3 +171,14 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         }
     }
 }
+
+extension OpenAIResponsesProvider: ModelProviderRequestValidator {
+    public func validate(request: ModelRequest) throws {
+        _ = try OpenAIResponsesRequestEncoder.encode(
+            request,
+            maximumOutputTokens: maximumOutputTokens,
+            reasoningEffort: reasoningEffort,
+            reasoningSummary: reasoningSummary
+        )
+    }
+}

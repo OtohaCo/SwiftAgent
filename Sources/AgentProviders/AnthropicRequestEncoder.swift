@@ -7,7 +7,12 @@ enum AnthropicRequestEncoder {
         var content: [JSONValue]
         var json: JSONValue { .object(["role": .string(role), "content": .array(content)]) }
     }
-    static func encode(_ request: ModelRequest, maximumOutputTokens: Int, thinking: AnthropicThinking) throws -> JSONValue {
+    static func encode(
+        _ request: ModelRequest,
+        maximumOutputTokens: Int,
+        thinking: AnthropicThinking,
+        effort: AnthropicEffort? = nil
+    ) throws -> JSONValue {
         guard request.model.provider == "anthropic", !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid Anthropic model identifier.")
         }
@@ -60,9 +65,12 @@ enum AnthropicRequestEncoder {
         case .adaptive: body["thinking"] = .object(["type": .string("adaptive")])
         case .enabled(let budget): body["thinking"] = .object(["type": .string("enabled"), "budget_tokens": .number(Decimal(budget))])
         }
+        var outputConfiguration: [String: JSONValue] = [:]
+        if let effort { outputConfiguration["effort"] = .string(effort.rawValue) }
         if let schema = request.structuredOutput {
-            body["output_config"] = .object(["format": .object(["type": .string("json_schema"), "schema": schema.schema])])
+            outputConfiguration["format"] = .object(["type": .string("json_schema"), "schema": schema.schema])
         }
+        if !outputConfiguration.isEmpty { body["output_config"] = .object(outputConfiguration) }
         if !request.tools.isEmpty {
             body["tools"] = .array(request.tools.map {
                 .object(["name": .string($0.name), "description": .string($0.description), "input_schema": $0.inputSchema])

@@ -1,4 +1,5 @@
 import AgentCore
+import AgentCatalog
 import AgentDecisions
 import AgentJevProvider
 import AgentModels
@@ -150,6 +151,46 @@ struct ExternalClientTests {
         #expect(provider.descriptor.capabilities.contains([.streaming, .multiTurn, .tools, .structuredOutput]))
         #expect(String(describing: authentication) == "bearer")
         #expect(!String(reflecting: authentication).contains("fixture-only"))
+    }
+
+    @Test func catalogAndDynamicRunBindingAreConsumableThroughPublicAPI() async throws {
+        let scope = try ModelServiceScope(
+            provider: "external-client",
+            serviceInstanceID: "fixture",
+            endpointScope: "https://models.example.test/v1",
+            apiDialect: "fixture"
+        )
+        let model = ModelID(provider: "external-client", name: "future-model")
+        let catalog = StaticModelCatalogProvider(manifest: try .init(
+            scope: scope,
+            revision: "manifest-1",
+            models: [.init(
+                model: model,
+                deploymentID: "future-model",
+                serviceScope: scope,
+                capabilities: .init(multiTurn: .supported),
+                sources: [.init(kind: .hostOverride)]
+            )]
+        ))
+        let snapshot = try await ModelCatalogCache().refresh(using: catalog)
+        let provider = EchoProvider()
+        let binding = try AgentModelBinding(
+            profileID: "future-model-defaults",
+            profileRevision: snapshot.revision,
+            model: model,
+            provider: provider,
+            deployment: .init(
+                serviceInstanceID: scope.serviceInstanceID,
+                endpointScope: scope.endpointScope,
+                apiDialect: scope.apiDialect
+            )
+        )
+        let session = try Agent(model: model, provider: provider).makeSession()
+        let revision = await session.conversationSnapshot().revision
+        let run = try await session.run("hello", using: binding, expectedConversationRevision: revision)
+
+        #expect(run.binding.profileID == "future-model-defaults")
+        #expect(try await run.wait().outcome == .completed)
     }
 }
 

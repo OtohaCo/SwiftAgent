@@ -29,6 +29,40 @@ struct AgentSteeringTests {
         await #expect(throws: AgentRunError.finished) { try await run.steer("too late") }
     }
 
+    @Test func steeringAdvancesTheProjectionCoordinatesBeforeTheNextRequest() async throws {
+        let gate = ManualGate()
+        let entered = XCTestExpectation(description: "Model entered")
+        let projections = ProjectionLog()
+        let provider = ScriptedProvider { request, turn in
+            if turn == 1 {
+                entered.fulfill()
+                await gate.wait()
+            }
+            return textResponse(request, turn == 1 ? "stale" : "fresh")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let binding = try AgentModelBinding(
+            profileID: "projection-steering",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: try .init(
+                serviceInstanceID: "projection-steering",
+                endpointScope: "fixture://projection-steering",
+                apiDialect: "fixture"
+            ),
+            projector: RecordingProjector(log: projections)
+        )
+
+        let run = try await session.run("original", using: binding)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        _ = try await run.steer("correction")
+        await gate.open()
+        _ = try await run.wait()
+
+        #expect(await projections.coordinates.map { "\($0.0):\($0.1)" } == ["1:1", "2:2"])
+    }
+
     @Test func steeringDuringToolBatchWaitsForBothResults() async throws {
         let gate = ManualGate()
         let entered = XCTestExpectation(description: "Tool entered")
@@ -142,5 +176,22 @@ struct AgentSteeringTests {
             let followUp = await provider.log.requests.first { $0.messages.last == .user([.text("next")]) }
             #expect(followUp?.messages == expected + [.user([.text("next")])])
         }
+    }
+}
+
+private actor ProjectionLog {
+    private(set) var coordinates: [(UInt64, UInt64)] = []
+
+    func append(_ input: AgentContextProjectionInput) {
+        coordinates.append((input.conversationRevision, input.contextEpoch))
+    }
+}
+
+private struct RecordingProjector: AgentContextProjector {
+    let log: ProjectionLog
+
+    func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
+        await log.append(input)
+        return try await AgentIdentityContextProjector().project(input)
     }
 }
