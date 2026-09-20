@@ -47,7 +47,11 @@ swift run --package-path Examples/ProviderQualification ProviderQualification \
 
 The default limits are 12 HTTP send attempts per Provider and 48 total. A live
 request requires a persistent ledger through `--budget-file` or
-`SWIFT_AGENT_LIVE_BUDGET_FILE`; restarting a command cannot reset the limit.
+`SWIFT_AGENT_LIVE_BUDGET_FILE`; restarting a command cannot reset the recorded
+attempts. Operators can explicitly raise the positive integer limits with
+`SWIFT_AGENT_LIVE_PER_PROVIDER_LIMIT` and `SWIFT_AGENT_LIVE_TOTAL_LIMIT`. The
+total must be at least the per-Provider limit. The budget file variable remains
+a file path, not a numeric limit.
 Runs are sequential, use at most three model turns and two local read-only tool
 calls, and have a 120-second deadline. Output contains only status, counts,
 usage fields and sanitized request-shape evidence. Usage covers every response

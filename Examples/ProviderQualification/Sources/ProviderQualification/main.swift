@@ -14,7 +14,13 @@ enum ProviderQualificationMain {
             let process = ProcessInfo.processInfo.environment
             let environmentFile = resolvedEnvironmentFile(options: options, process: process)
             let environment = try LiveEnvironment.load(process: process, fileURL: environmentFile)
-            let preflight = try QualificationConfiguration.preflight(options: options, environment: environment)
+            let budgetLimits = try resolvedBudgetLimits(environment: environment)
+            let preflight = try QualificationConfiguration.preflight(
+                options: options,
+                environment: environment,
+                perProviderLimit: budgetLimits.perProviderLimit,
+                totalLimit: budgetLimits.totalLimit
+            )
             write(preflight.rendered)
             write(renderedEnvironmentFileStatus(environmentFile))
 
@@ -24,7 +30,11 @@ enum ProviderQualificationMain {
                 environment: environment,
                 required: options.mode == .live
             )
-            let budget = try LiveRequestBudget(fileURL: budgetFile)
+            let budget = try LiveRequestBudget(
+                fileURL: budgetFile,
+                perProviderLimit: budgetLimits.perProviderLimit,
+                totalLimit: budgetLimits.totalLimit
+            )
             let configuration = try QualificationConfiguration.resolve(options: options, environment: environment)
             let evidence = RequestEvidenceLedger()
             let runner = try QualificationRunner(
@@ -70,6 +80,7 @@ private func safeConfigurationMessage(_ error: LiveConfigurationError) -> String
     case .missingBudgetFile: "MISSING_PERSISTENT_BUDGET_FILE"
     case .missingCredential(let variable): "MISSING_\(variable)"
     case .missingModel(let variable): "MISSING_\(variable)"
+    case .invalidBudgetLimit(let variable): "INVALID_\(variable)"
     case .unsupportedCombination(let provider, let scenario):
         "UNSUPPORTED_\(provider.rawValue.uppercased())_\(scenario.rawValue.uppercased())"
     }

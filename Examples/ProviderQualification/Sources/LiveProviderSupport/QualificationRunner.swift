@@ -838,6 +838,7 @@ private func configurationNote(_ error: LiveConfigurationError) -> String {
     switch error {
     case .missingCredential(let variable): "missing_\(variable)"
     case .missingModel(let variable): "missing_\(variable)"
+    case .invalidBudgetLimit(let variable): "invalid_\(variable)"
     case .unsupportedCombination(let provider, let scenario): "unsupported_\(provider.rawValue)_\(scenario.rawValue)"
     case .invalidArgument: "invalid_argument"
     case .invalidEndpoint: "invalid_endpoint"

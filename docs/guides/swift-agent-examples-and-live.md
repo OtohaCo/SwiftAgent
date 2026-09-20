@@ -117,8 +117,12 @@ swift run --package-path Examples/ProviderQualification ProviderQualification \
 
 The default budget is 12 HTTP sends per provider and 48 total. A persistent
 ledger supplied by `--budget-file` or `SWIFT_AGENT_LIVE_BUDGET_FILE` is required
-for every live request; restarting a command cannot reset it. Reservations use a
-separate advisory lock and re-read the latest ledger before an atomic update.
+for every live request; restarting a command cannot reset its recorded attempts.
+`SWIFT_AGENT_LIVE_PER_PROVIDER_LIMIT` and `SWIFT_AGENT_LIVE_TOTAL_LIMIT` may
+explicitly raise or lower the positive integer limits. The total must be at
+least the per-provider limit. `SWIFT_AGENT_LIVE_BUDGET_FILE` is always a path,
+not a request count. Reservations use a separate advisory lock and re-read the
+latest ledger before an atomic update.
 Operator concurrency remains one, each Agent Run is limited to three model turns
 and two local read-only tool calls, and the default Run/request timeout is 120 seconds.
 

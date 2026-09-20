@@ -42,7 +42,46 @@ public enum LiveConfigurationError: Error, Equatable, Sendable {
     case missingBudgetFile
     case missingCredential(String)
     case missingModel(String)
+    case invalidBudgetLimit(String)
     case unsupportedCombination(provider: QualificationProvider, scenario: QualificationScenario)
+}
+
+public struct LiveBudgetLimits: Equatable, Sendable {
+    public let perProviderLimit: Int
+    public let totalLimit: Int
+
+    public init(perProviderLimit: Int, totalLimit: Int) throws {
+        guard perProviderLimit > 0 else {
+            throw LiveConfigurationError.invalidBudgetLimit("SWIFT_AGENT_LIVE_PER_PROVIDER_LIMIT")
+        }
+        guard totalLimit >= perProviderLimit else {
+            throw LiveConfigurationError.invalidBudgetLimit("SWIFT_AGENT_LIVE_TOTAL_LIMIT")
+        }
+        self.perProviderLimit = perProviderLimit
+        self.totalLimit = totalLimit
+    }
+}
+
+public func resolvedBudgetLimits(environment: LiveEnvironment) throws -> LiveBudgetLimits {
+    let perProvider = try positiveBudgetLimit(
+        environment.value(for: "SWIFT_AGENT_LIVE_PER_PROVIDER_LIMIT"),
+        variable: "SWIFT_AGENT_LIVE_PER_PROVIDER_LIMIT",
+        fallback: 12
+    )
+    let total = try positiveBudgetLimit(
+        environment.value(for: "SWIFT_AGENT_LIVE_TOTAL_LIMIT"),
+        variable: "SWIFT_AGENT_LIVE_TOTAL_LIMIT",
+        fallback: 48
+    )
+    return try .init(perProviderLimit: perProvider, totalLimit: total)
+}
+
+private func positiveBudgetLimit(_ raw: String?, variable: String, fallback: Int) throws -> Int {
+    guard let raw else { return fallback }
+    guard let value = Int(raw), value > 0 else {
+        throw LiveConfigurationError.invalidBudgetLimit(variable)
+    }
+    return value
 }
 
 public func resolvedBudgetFile(

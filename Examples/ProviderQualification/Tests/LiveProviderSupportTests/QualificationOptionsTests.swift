@@ -96,6 +96,34 @@ struct QualificationOptionsTests {
         #expect(try resolvedBudgetFile(options: fixture, environment: environment, required: true) == nil)
     }
 
+    @Test func budgetLimitsDefaultSafelyAndAllowExplicitEnvironmentOverrides() throws {
+        let defaults = try resolvedBudgetLimits(environment: LiveEnvironment(process: [:]))
+        #expect(defaults.perProviderLimit == 12)
+        #expect(defaults.totalLimit == 48)
+
+        let configured = try resolvedBudgetLimits(environment: LiveEnvironment(process: [
+            "SWIFT_AGENT_LIVE_PER_PROVIDER_LIMIT": "100",
+            "SWIFT_AGENT_LIVE_TOTAL_LIMIT": "500",
+        ]))
+        #expect(configured.perProviderLimit == 100)
+        #expect(configured.totalLimit == 500)
+    }
+
+    @Test(arguments: [
+        ["SWIFT_AGENT_LIVE_PER_PROVIDER_LIMIT": "0"],
+        ["SWIFT_AGENT_LIVE_PER_PROVIDER_LIMIT": "many"],
+        ["SWIFT_AGENT_LIVE_TOTAL_LIMIT": "-1"],
+        [
+            "SWIFT_AGENT_LIVE_PER_PROVIDER_LIMIT": "100",
+            "SWIFT_AGENT_LIVE_TOTAL_LIMIT": "99",
+        ],
+    ])
+    func invalidBudgetLimitOverridesFailClosed(_ process: [String: String]) {
+        #expect(throws: LiveConfigurationError.self) {
+            try resolvedBudgetLimits(environment: LiveEnvironment(process: process))
+        }
+    }
+
     @Test func environmentFileResolutionIsExplicitAndDoesNotProbeTheWorkingDirectory() throws {
         let defaults = try QualificationOptions.parse([])
         #expect(resolvedEnvironmentFile(options: defaults, process: [:]) == nil)

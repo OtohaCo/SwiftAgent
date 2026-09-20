@@ -86,6 +86,38 @@ struct LiveEnvironmentTests {
         #expect(!rendered.contains(secret))
     }
 
+    @Test func preflightRendersExplicitBudgetLimitsWithoutChangingCredentialRedaction() throws {
+        let secret = "super-secret-value"
+        let environment = try LiveEnvironment.load(process: [
+            "OPENAI_API_KEY": secret,
+            "OPENAI_MODEL": "configured-model",
+            "SWIFT_AGENT_LIVE_PER_PROVIDER_LIMIT": "100",
+            "SWIFT_AGENT_LIVE_TOTAL_LIMIT": "500",
+        ])
+        let limits = try resolvedBudgetLimits(environment: environment)
+        let options = QualificationOptions(
+            provider: .openAI,
+            mode: .live,
+            scenario: .preflight,
+            modelOverride: nil,
+            endpointOverride: nil,
+            environmentFile: nil,
+            budgetFile: nil,
+            service: .official
+        )
+
+        let rendered = try QualificationConfiguration.preflight(
+            options: options,
+            environment: environment,
+            perProviderLimit: limits.perProviderLimit,
+            totalLimit: limits.totalLimit
+        ).rendered
+
+        #expect(rendered.contains("provider_request_limit=100"))
+        #expect(rendered.contains("total_request_limit=500"))
+        #expect(!rendered.contains(secret))
+    }
+
     @Test func gatewayUsesThePublicSUB2APIConfigurationNamespace() throws {
         let secret = "gateway-secret"
         let environment = try LiveEnvironment.load(process: [
