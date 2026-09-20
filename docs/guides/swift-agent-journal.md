@@ -1,6 +1,6 @@
 # SwiftAgent Journal
 
-last-verified: 2026-09-18
+last-verified: 2026-09-20
 
 `AgentJournal` is the Core-owned typed lifecycle log. It records provider-neutral
 messages, model attempts, tool proposals/results, checkpoints, compaction summaries
@@ -59,7 +59,15 @@ file is reusable after a crash, so an old file cannot become a permanent busy
 marker. The writer verifies that the on-disk prefix still matches the instance
 snapshot, synchronizes the file before publishing memory, and fails closed on
 write or concurrency errors. A failed durable write does not publish its records
-in memory.
+in memory. The intentional exception is an uncertain first directory sync: if
+the frame bytes and file sync completed but the directory sync result is
+unknown, the journal adopts the written records and reports the persistence
+error so recovery cannot duplicate or discard a committed prefix.
+
+Session startup checks cancellation and deadline before appending its durable
+startup frame. Once that atomic append begins, it is the admission boundary:
+the runtime creates the corresponding Run for the durable user event rather
+than leaving an orphaned history entry if the deadline expires during the I/O.
 
 Each durable Session identity also has a separate open-file lease. The descriptor
 stays open for the lifetime of the Session and is unlocked on drain; a crashed

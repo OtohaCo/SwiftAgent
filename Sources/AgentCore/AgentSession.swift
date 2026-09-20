@@ -115,7 +115,10 @@ public actor AgentSession {
         do {
             if let pendingDrainTask {
                 if let drainingRunID { drainWaitDidBegin?(drainingRunID) }
-                await pendingDrainTask.value
+                try await withAgentDeadline(
+                    runBudget.deadline,
+                    operation: { await pendingDrainTask.value }
+                )
                 try runBudget.checkActive()
             }
             try await AgentSessionIdentityRegistry.shared.acquire(id)
@@ -218,7 +221,18 @@ public actor AgentSession {
         startupID: UUID
     ) async throws -> AgentRun {
         try budget.checkActive()
-        await restoreJournalStateIfNeeded()
+        let restoredCheckpoint: (history: [ModelMessage], steeringIDs: [UUID])?
+        if restoredJournalState {
+            restoredCheckpoint = nil
+        } else {
+            let journal = self.journal
+            let sessionID = id
+            restoredCheckpoint = try await withStartupDeadline(budget.deadline, startupID: startupID) {
+                await journal?.latestCheckpoint(sessionID: sessionID)
+            }
+            try budget.checkActive()
+            applyRestoredJournalState(restoredCheckpoint)
+        }
         if let expectedConversationRevision, expectedConversationRevision != conversationRevision {
             throw AgentModelBindingError.staleConversationRevision
         }
@@ -261,7 +275,10 @@ public actor AgentSession {
         try Task.checkCancellation()
         try budget.checkActive()
         if let journal {
-            _ = try await journal.recoverPendingMutations(sessionID: id)
+            let sessionID = id
+            _ = try await withStartupDeadline(budget.deadline, startupID: startupID) {
+                try await journal.recoverPendingMutations(sessionID: sessionID)
+            }
             try Task.checkCancellation()
             try budget.checkActive()
             let hasSessionRecord = await journal.snapshot().contains { record in
@@ -468,9 +485,16 @@ public actor AgentSession {
 
     private func restoreJournalStateIfNeeded() async {
         guard !restoredJournalState else { return }
+        let checkpoint = await journal?.latestCheckpoint(sessionID: id)
+        applyRestoredJournalState(checkpoint)
+    }
+
+    private func applyRestoredJournalState(
+        _ checkpoint: (history: [ModelMessage], steeringIDs: [UUID])?
+    ) {
+        guard !restoredJournalState else { return }
         restoredJournalState = true
-        guard let journal,
-              let checkpoint = await journal.latestCheckpoint(sessionID: id) else { return }
+        guard let checkpoint else { return }
         // Checkpoint system/developer messages are a historical record of the
         // runtime configuration that was sent, not the active configuration.
         let restored = AgentContextWindow.applyingCurrentInstructions(checkpoint.history, instructions: instructions)

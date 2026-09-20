@@ -750,6 +750,30 @@ struct AgentModelBindingTests {
         _ = try await second.wait()
         #expect(await secondProvider.log.requests.count == 1)
     }
+
+    @Test func pendingDrainIsBoundedByTheNextRunDeadline() async throws {
+        let drain = ProviderDrainGate()
+        let provider = DrainingScriptedProvider(gate: drain)
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+
+        let first = try await session.run("first")
+        #expect(try await first.wait().outcome == .completed)
+        await drain.waitUntilDrainBegins()
+
+        let budget = try AgentBudget(
+            maxModelTurns: 1,
+            maxToolCalls: 0,
+            deadline: .now.advanced(by: .milliseconds(100))
+        )
+        await #expect(throws: AgentLoopError.deadlineExceeded) {
+            _ = try await session.run("deadline", budget: budget)
+        }
+
+        await drain.release()
+        try await first.waitForDrain()
+        let next = try await session.run("after drain")
+        #expect(try await next.wait().outcome == .completed)
+    }
 }
 
 private struct FixedProjector: AgentContextProjector {
