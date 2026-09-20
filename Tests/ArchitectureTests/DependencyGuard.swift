@@ -5,11 +5,12 @@ enum DependencyGuard {
         "AgentModels": [],
         "AgentTools": ["AgentModels"],
         "AgentCore": ["AgentModels", "AgentTools"],
-        "AgentProviders": ["AgentModels"],
         "AgentAppleProvider": ["AgentModels"],
         "AgentDecisions": ["AgentModels"],
         "AgentJevProvider": ["AgentModels", "AgentDecisions"],
         "AgentUsage": ["AgentModels"],
+        "AgentCatalog": ["AgentModels"],
+        "AgentProviders": ["AgentModels", "AgentCatalog"],
         "WorkspaceAgent": ["AgentModels", "AgentTools", "AgentCore", "AgentProviders"],
     ]
 

@@ -12,6 +12,7 @@ let package = Package(
             name: "ExternalClientTests",
             dependencies: [
                 .product(name: "AgentCore", package: "SwiftAgent"),
+                .product(name: "AgentCatalog", package: "SwiftAgent"),
                 .product(name: "AgentDecisions", package: "SwiftAgent"),
                 .product(name: "AgentJevProvider", package: "SwiftAgent"),
                 .product(name: "AgentModels", package: "SwiftAgent"),

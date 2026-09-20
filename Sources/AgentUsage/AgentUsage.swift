@@ -21,7 +21,13 @@ public struct UsageRecordIdentity: Hashable, Sendable, Codable {
     public let invocationID: String
     public let providerResponseID: String?
     public let model: ModelID
+    public let bindingProfileID: String?
+    public let bindingProfileRevision: String?
+    public let deploymentScope: String?
+    public let contextEpoch: UInt64?
+    public let routeSource: String?
 
+    /// Compatibility initializer for the pre-binding-dimensions API.
     public init(
         source: UsageSource,
         sessionID: UUID? = nil,
@@ -30,12 +36,41 @@ public struct UsageRecordIdentity: Hashable, Sendable, Codable {
         providerResponseID: String? = nil,
         model: ModelID
     ) {
+        self.init(
+            source: source,
+            sessionID: sessionID,
+            runID: runID,
+            invocationID: invocationID,
+            providerResponseID: providerResponseID,
+            model: model,
+            bindingProfileID: nil
+        )
+    }
+
+    public init(
+        source: UsageSource,
+        sessionID: UUID? = nil,
+        runID: UUID? = nil,
+        invocationID: String,
+        providerResponseID: String? = nil,
+        model: ModelID,
+        bindingProfileID: String?,
+        bindingProfileRevision: String? = nil,
+        deploymentScope: String? = nil,
+        contextEpoch: UInt64? = nil,
+        routeSource: String? = nil
+    ) {
         self.source = source
         self.sessionID = sessionID
         self.runID = runID
         self.invocationID = invocationID
         self.providerResponseID = providerResponseID
         self.model = model
+        self.bindingProfileID = bindingProfileID
+        self.bindingProfileRevision = bindingProfileRevision
+        self.deploymentScope = deploymentScope
+        self.contextEpoch = contextEpoch
+        self.routeSource = routeSource
     }
 }
 
@@ -400,9 +435,18 @@ public struct UsageAccumulator: Sendable {
     private static func validateIdentityAndStatus(_ observation: UsageObservation) -> UsageDiagnostic? {
         let identity = observation.identity
         let required = [identity.source.rawValue, identity.invocationID, identity.model.provider, identity.model.name]
+        let optional = [
+            identity.providerResponseID,
+            identity.bindingProfileID,
+            identity.bindingProfileRevision,
+            identity.deploymentScope,
+            identity.routeSource,
+        ]
         guard identity.source == .modelResponse || identity.source == .decision,
               required.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-              identity.providerResponseID.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? true
+              optional.allSatisfy({ value in
+                  value.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? true
+              })
         else {
             return .init(kind: .invalidIdentity, identity: identity)
         }

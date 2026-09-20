@@ -1,0 +1,674 @@
+import AgentCore
+import AgentModels
+import Foundation
+import Testing
+@testable import AgentCore
+
+struct AgentModelBindingTests {
+    @Test func sameSessionCanSelectAnImmutableBindingForTheNextRun() async throws {
+        let defaultProvider = ScriptedProvider { request, _ in textResponse(request, "default") }
+        let alternateProvider = ScriptedProvider { request, _ in textResponse(request, "alternate") }
+        let session = try Agent(model: fixtureModel, provider: defaultProvider).makeSession()
+
+        let first = try await session.run("first")
+        _ = try await first.wait()
+
+        let alternateModel = ModelID(provider: "fixture", name: "alternate")
+        let binding = try AgentModelBinding(
+            profileID: "alternate",
+            profileRevision: "1",
+            model: alternateModel,
+            provider: alternateProvider,
+            deployment: deployment("alternate")
+        )
+        let second = try await session.run("second", using: binding)
+        let result = try await second.wait()
+
+        #expect(second.binding.profileID == "alternate")
+        #expect(result.response.info.model == alternateModel)
+        let requests = await alternateProvider.log.requests
+        #expect(requests.count == 1)
+        #expect(requests[0].model == alternateModel)
+        #expect(requests[0].messages == [
+            .user([.text("first")]),
+            .assistant(content: [.text("default")], toolCalls: []),
+            .user([.text("second")]),
+        ])
+    }
+
+    @Test func localPreflightFailureDoesNotAppendInputOrJournalState() async throws {
+        let provider = ScriptedProvider(
+            descriptor: .init(id: "fixture", capabilities: [.streaming]),
+            respond: { request, _ in textResponse(request, "unused") }
+        )
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let binding = try AgentModelBinding(
+            profileID: "no-multiturn",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("limited")
+        )
+
+        let first = try await session.run("first")
+        _ = try await first.wait()
+        let before = await session.conversationSnapshot()
+        await #expect(throws: AgentLoopError.unsupportedCapabilities(.multiTurn)) {
+            try await session.run("must not append", using: binding, expectedConversationRevision: before.revision)
+        }
+        #expect(await session.history == before.messages)
+        #expect(await session.activeRunID == nil)
+    }
+
+    @Test func projectionChangesTheRequestWithoutReplacingCanonicalHistory() async throws {
+        let defaultProvider = ScriptedProvider { request, _ in textResponse(request, "done") }
+        let provider = ScriptedProvider { request, _ in
+            #expect(request.messages == [.developer("Projected context"), .user([.text("second")])])
+            return textResponse(request, "done")
+        }
+        let session = try Agent(model: fixtureModel, provider: defaultProvider).makeSession()
+        let first = try await session.run("first")
+        _ = try await first.wait()
+        let binding = try AgentModelBinding(
+            profileID: "projection",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("projection"),
+            projector: FixedProjector(messages: [.developer("Projected context"), .user([.text("second")])])
+        )
+
+        let second = try await session.run("second", using: binding)
+        _ = try await second.wait()
+
+        #expect(await session.history == [
+            .user([.text("first")]),
+            .assistant(content: [.text("done")], toolCalls: []),
+            .user([.text("second")]),
+            .assistant(content: [.text("done")], toolCalls: []),
+        ])
+    }
+
+    @Test func staleConversationRevisionIsRejectedBeforeHistoryChanges() async throws {
+        let provider = ScriptedProvider { request, _ in textResponse(request, "done") }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let snapshot = await session.conversationSnapshot()
+        let first = try await session.run("first")
+        _ = try await first.wait()
+        let binding = try AgentModelBinding(
+            profileID: "default",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("default")
+        )
+
+        await #expect(throws: AgentModelBindingError.staleConversationRevision) {
+            try await session.run("stale", using: binding, expectedConversationRevision: snapshot.revision)
+        }
+        #expect(await session.history.last == .assistant(content: [.text("done")], toolCalls: []))
+    }
+
+    @Test func opaqueContinuationCannotCrossDeploymentWithoutExplicitHandoff() async throws {
+        let continuation = ModelProviderContinuation(
+            model: fixtureModel,
+            format: "fixture.opaque.v1",
+            payload: Data([1, 2, 3])
+        )
+        let sourceProvider = ScriptedProvider { request, _ in
+            let info = ResponseInfo(id: "opaque", model: request.model)
+            return [
+                .responseStarted(info),
+                .textDelta("source"),
+                .providerContinuation(continuation),
+                .responseCompleted(.init(
+                    info: info,
+                    content: [.text("source"), .providerContinuation(continuation)],
+                    stopReason: .endTurn
+                )),
+            ]
+        }
+        let targetProvider = ScriptedProvider { request, _ in textResponse(request, "target") }
+        let session = try Agent(model: fixtureModel, provider: sourceProvider).makeSession()
+        let source = try AgentModelBinding(
+            profileID: "source",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: sourceProvider,
+            deployment: deployment("source")
+        )
+        let first = try await session.run("first", using: source)
+        _ = try await first.wait()
+        let target = try AgentModelBinding(
+            profileID: "target",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: targetProvider,
+            deployment: deployment("target")
+        )
+
+        await #expect(throws: AgentModelBindingError.incompatibleContinuation) {
+            try await session.run("strict", using: target)
+        }
+        let handoff = try AgentModelBinding(
+            profileID: "target-handoff",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: targetProvider,
+            deployment: deployment("target"),
+            projector: AgentSemanticHandoffProjector()
+        )
+        let second = try await session.run("handoff", using: handoff)
+        _ = try await second.wait()
+        let targetRequest = try #require(await targetProvider.log.requests.first)
+        #expect(targetRequest.messages.contains { message in
+            guard case .assistant(let content, _) = message else { return false }
+            return content.contains { if case .providerContinuation = $0 { true } else { false } }
+        } == false)
+    }
+
+    @Test func switchingBackToTheOriginalBindingRestoresOnlyItsScopedContinuation() async throws {
+        let continuation = ModelProviderContinuation(
+            model: fixtureModel,
+            format: "fixture.opaque.v1",
+            payload: Data([4, 2])
+        )
+        let providerA = ScriptedProvider { request, turn in
+            if turn == 1 {
+                let info = ResponseInfo(id: "a-1", model: request.model)
+                return [
+                    .responseStarted(info),
+                    .textDelta("A1"),
+                    .providerContinuation(continuation),
+                    .responseCompleted(.init(
+                        info: info,
+                        content: [.text("A1"), .providerContinuation(continuation)],
+                        stopReason: .endTurn
+                    )),
+                ]
+            }
+            return textResponse(request, "A2")
+        }
+        let providerB = ScriptedProvider { request, _ in
+            #expect(request.messages.contains { message in
+                guard case .assistant(let content, _) = message else { return false }
+                return content.contains { if case .providerContinuation = $0 { true } else { false } }
+            } == false)
+            return textResponse(request, "B1")
+        }
+        let session = try Agent(model: fixtureModel, provider: providerA).makeSession()
+        let a = try AgentModelBinding(
+            profileID: "a",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: providerA,
+            deployment: deployment("a")
+        )
+        let b = try AgentModelBinding(
+            profileID: "b",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: providerB,
+            deployment: deployment("b"),
+            projector: AgentSemanticHandoffProjector()
+        )
+
+        _ = try await session.run("first", using: a).wait()
+        _ = try await session.run("second", using: b).wait()
+        _ = try await session.run("third", using: a).wait()
+
+        let finalRequest = try #require(await providerA.log.requests.last)
+        #expect(finalRequest.messages.contains { message in
+            guard case .assistant(let content, _) = message else { return false }
+            return content.contains { part in
+                guard case .providerContinuation(let state) = part else { return false }
+                return state.origin?.serviceInstanceID == "a"
+            }
+        })
+    }
+
+    @Test func scopedContinuationSurvivesDurableRestartForTheSameBinding() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-binding-restart-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let sessionID = UUID()
+        let continuation = ModelProviderContinuation(
+            model: fixtureModel,
+            format: "fixture.opaque.v1",
+            payload: Data([7, 2])
+        )
+        let provider = ScriptedProvider { request, turn in
+            if turn == 1 {
+                let info = ResponseInfo(id: "restart-1", model: request.model)
+                return [
+                    .responseStarted(info),
+                    .textDelta("first"),
+                    .providerContinuation(continuation),
+                    .responseCompleted(.init(
+                        info: info,
+                        content: [.text("first"), .providerContinuation(continuation)],
+                        stopReason: .endTurn
+                    )),
+                ]
+            }
+            let restored = request.messages.compactMap { message -> ModelProviderContinuation? in
+                guard case .assistant(let content, _) = message else { return nil }
+                return content.compactMap { part in
+                    guard case .providerContinuation(let value) = part else { return nil }
+                    return value
+                }.first
+            }.first
+            #expect(restored?.origin?.serviceInstanceID == "durable")
+            #expect(restored?.origin?.configurationRevision == "7")
+            return textResponse(request, "second")
+        }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let binding = try AgentModelBinding(
+            profileID: "durable",
+            profileRevision: "7",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("durable")
+        )
+
+        let firstSession = try agent.makeSession(
+            id: sessionID,
+            journal: AgentJournal(persistenceURL: url)
+        )
+        let first = try await firstSession.run("first", using: binding)
+        _ = try await first.wait()
+        try await first.waitForDrain()
+
+        let restoredSession = try agent.makeSession(
+            id: sessionID,
+            journal: AgentJournal.load(from: url)
+        )
+        let second = try await restoredSession.run("second", using: binding)
+        #expect(try await second.wait().outcome == .completed)
+        try await second.waitForDrain()
+    }
+
+    @Test func compactionThatChangesTheSnapshotRejectsAStaleRoutedRunBeforeAppendingInput() async throws {
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unused") }
+        let journal = AgentJournal()
+        let sessionID = UUID()
+        _ = try await journal.appendCheckpoint(
+            [.checkpoint(history: [
+                .user([.text(String(repeating: "old ", count: 200))]),
+                .assistant(content: [.text(String(repeating: "answer ", count: 100))], toolCalls: []),
+            ], steeringIDs: [])],
+            sessionID: sessionID
+        )
+        let policy = AgentContextPolicy(
+            maxInputUTF8Bytes: 4_096,
+            maxActiveHistoryUTF8Bytes: 300,
+            retainedRecentTurnCount: 0,
+            compactor: FixedCompactor()
+        )
+        let session = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            configuration: .init(contextPolicy: policy)
+        ).makeSession(id: sessionID, journal: journal)
+        let snapshot = await session.conversationSnapshot()
+        let binding = try AgentModelBinding(
+            profileID: "routed",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("routed")
+        )
+
+        await #expect(throws: AgentModelBindingError.staleConversationRevision) {
+            try await session.run("must not append", using: binding, expectedConversationRevision: snapshot.revision)
+        }
+        #expect(await session.history.contains(.user([.text("must not append")])) == false)
+        #expect(await provider.log.requests.isEmpty)
+    }
+
+    @Test func resolvedReadOnlyFailureProjectionReplacesOnlyACompleteClosedGroup() async throws {
+        let failed = ToolCall(
+            id: .init(rawValue: "failed"),
+            name: "lookup",
+            argumentsJSON: #"{"query":"too broad"}"#,
+            completeness: .complete
+        )
+        let resolved = ToolCall(
+            id: .init(rawValue: "resolved"),
+            name: "lookup",
+            argumentsJSON: #"{"query":"specific"}"#,
+            completeness: .complete
+        )
+        let canonical: [ModelMessage] = [
+            .user([.text("Find it")]),
+            .assistant(content: [], toolCalls: [failed]),
+            .tool(.init(callID: failed.id, content: [.text(String(repeating: "broad ", count: 50))], isError: true)),
+            .assistant(content: [], toolCalls: [resolved]),
+            .tool(.init(callID: resolved.id, content: [.json(.object(["value": .string("found")]))], isError: false)),
+            .assistant(content: [.text("Found it")], toolCalls: []),
+        ]
+        let projector = AgentResolvedReadOnlyToolProjector(spans: [
+            .init(failedCallID: failed.id, resolvedByCallID: resolved.id, summary: "The broad query failed; use the specific query."),
+        ])
+        let projection = try await projector.project(.init(
+            canonicalMessages: canonical,
+            model: fixtureModel,
+            sessionID: UUID(),
+            runID: UUID(),
+            conversationRevision: 7,
+            contextEpoch: 3,
+            modelTurn: 1
+        ))
+
+        #expect(projection.messages == [
+            .user([.text("Find it")]),
+            .user([.text("Host context summary for a resolved read-only tool: The broad query failed; use the specific query.")]),
+            .assistant(content: [], toolCalls: [resolved]),
+            .tool(.init(callID: resolved.id, content: [.json(.object(["value": .string("found")]))], isError: false)),
+            .assistant(content: [.text("Found it")], toolCalls: []),
+        ])
+        #expect(canonical[1] == .assistant(content: [], toolCalls: [failed]))
+    }
+
+    @Test func tokenBudgetRejectsOverflowBeforeARequestCanStart() {
+        #expect(throws: AgentModelBindingError.invalidTokenBudget) {
+            try AgentContextTokenBudget(
+                maximumContextTokens: Int.max,
+                reservedOutputTokens: Int.max,
+                reservedReasoningTokens: 1,
+                estimator: FixedTokenEstimator(inputTokens: 0)
+            )
+        }
+    }
+
+    @Test func tokenBudgetIncludesMessagesToolsAndStructuredOutputAndRejectsNegativeEstimates() async throws {
+        let estimator = RecordingTokenEstimator(inputTokens: -1)
+        let budget = try AgentContextTokenBudget(
+            maximumContextTokens: 100,
+            reservedOutputTokens: 10,
+            reservedReasoningTokens: 5,
+            reservedProtocolTokens: 2,
+            estimator: estimator
+        )
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unused") }
+        let tool = try AddTool(log: EffectLog())
+        let configuration = AgentConfiguration(structuredOutput: .init(
+            name: "answer",
+            description: "A structured answer",
+            schema: .object(["type": .string("string")]),
+            strict: true
+        ))
+        let session = try Agent(
+            model: fixtureModel,
+            provider: provider,
+            tools: [tool],
+            configuration: configuration
+        ).makeSession()
+        let binding = try AgentModelBinding(
+            profileID: "budget",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("budget"),
+            tokenBudget: budget
+        )
+
+        await #expect(throws: AgentModelBindingError.invalidTokenEstimate) {
+            try await session.run("measure me", using: binding)
+        }
+        let input = try #require(await estimator.inputs.first)
+        #expect(input.messages.last == .user([.text("measure me")]))
+        #expect(input.tools.map(\.name) == ["add"])
+        #expect(input.structuredOutput?.name == "answer")
+        #expect(await session.history.contains(.user([.text("measure me")])) == false)
+    }
+
+    @Test func tokenBudgetRejectsAnOversizedProjectedRequestBeforeHistoryChanges() async throws {
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unused") }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let budget = try AgentContextTokenBudget(
+            maximumContextTokens: 100,
+            reservedOutputTokens: 20,
+            reservedReasoningTokens: 10,
+            reservedProtocolTokens: 5,
+            estimator: FixedTokenEstimator(inputTokens: 66)
+        )
+        let binding = try AgentModelBinding(
+            profileID: "budget",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("budget"),
+            tokenBudget: budget
+        )
+
+        await #expect(throws: AgentModelBindingError.contextBudgetExceeded(
+            estimatedInputTokens: 66,
+            availableInputTokens: 65
+        )) {
+            try await session.run("must not append", using: binding)
+        }
+        #expect(await session.history.contains(.user([.text("must not append")])) == false)
+        #expect(await provider.log.requests.isEmpty)
+    }
+
+    @Test func preflightReservationRejectsOverlapAndCancellationReleasesIdentity() async throws {
+        let gate = CancellableProjectionGate()
+        let provider = ScriptedProvider { request, _ in textResponse(request, "done") }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let blocked = try AgentModelBinding(
+            profileID: "blocked",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: provider,
+            deployment: deployment("blocked"),
+            projector: BlockingProjector(gate: gate)
+        )
+
+        let first = Task { try await session.run("first", using: blocked) }
+        await gate.waitUntilBlocked()
+        await #expect(throws: AgentSessionError.runInProgress) {
+            try await session.run("overlap")
+        }
+        first.cancel()
+        await #expect(throws: CancellationError.self) { try await first.value }
+
+        #expect(await session.activeRunID == nil)
+        #expect(await session.history.contains(.user([.text("first")])) == false)
+        let next = try await session.run("next")
+        _ = try await next.wait()
+    }
+
+    @Test func replacementRunWaitsForTheCapturedProviderToPhysicallyDrain() async throws {
+        let drain = ProviderDrainGate()
+        let replacementWait = AsyncSignal()
+        let firstProvider = DrainingScriptedProvider(gate: drain)
+        let secondProvider = ScriptedProvider { request, _ in textResponse(request, "second") }
+        let session = try Agent(model: fixtureModel, provider: firstProvider).makeSession(
+            drainWaitDidBegin: { _ in Task { await replacementWait.signal() } }
+        )
+        let firstBinding = try AgentModelBinding(
+            profileID: "first",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: firstProvider,
+            deployment: deployment("first")
+        )
+        let secondBinding = try AgentModelBinding(
+            profileID: "second",
+            profileRevision: "1",
+            model: fixtureModel,
+            provider: secondProvider,
+            deployment: deployment("second")
+        )
+
+        let first = try await session.run("first", using: firstBinding)
+        _ = try await first.wait()
+        await drain.waitUntilDrainBegins()
+        let replacement = Task { try await session.run("second", using: secondBinding) }
+        await replacementWait.wait()
+        #expect(await secondProvider.log.requests.isEmpty)
+
+        await drain.release()
+        let second = try await replacement.value
+        _ = try await second.wait()
+        #expect(await secondProvider.log.requests.count == 1)
+    }
+}
+
+private struct FixedProjector: AgentContextProjector {
+    let messages: [ModelMessage]
+
+    func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
+        .init(
+            messages: messages,
+            plan: .init(
+                projectionID: "fixed",
+                version: "1",
+                sourceRevision: input.conversationRevision,
+                sourceDigest: try AgentContextProjectionSource.digest(messages: input.canonicalMessages),
+                contextEpoch: input.contextEpoch,
+                lossy: true,
+                reason: "fixture"
+            )
+        )
+    }
+}
+
+private struct FixedTokenEstimator: AgentContextTokenEstimator {
+    let inputTokens: Int
+
+    func estimate(_ input: AgentContextTokenEstimationInput) async throws -> AgentContextTokenEstimate {
+        .init(inputTokens: inputTokens, accuracy: .exact)
+    }
+}
+
+private struct FixedCompactor: AgentContextCompactor {
+    func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
+        .init(goal: "Continue from the compacted conversation.")
+    }
+}
+
+private actor RecordingTokenEstimator: AgentContextTokenEstimator {
+    let inputTokens: Int
+    private(set) var inputs: [AgentContextTokenEstimationInput] = []
+
+    init(inputTokens: Int) {
+        self.inputTokens = inputTokens
+    }
+
+    func estimate(_ input: AgentContextTokenEstimationInput) async throws -> AgentContextTokenEstimate {
+        inputs.append(input)
+        return .init(inputTokens: inputTokens, accuracy: .estimated)
+    }
+}
+
+private struct BlockingProjector: AgentContextProjector {
+    let gate: CancellableProjectionGate
+
+    func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
+        try await gate.wait()
+        return try await AgentIdentityContextProjector().project(input)
+    }
+}
+
+private actor CancellableProjectionGate {
+    private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
+    private var blockedObservers: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    waiters[id] = continuation
+                    let observers = blockedObservers
+                    blockedObservers.removeAll()
+                    observers.forEach { $0.resume() }
+                }
+            }
+        }, onCancel: {
+            Task { await self.cancel(id) }
+        })
+    }
+
+    func waitUntilBlocked() async {
+        if !waiters.isEmpty { return }
+        await withCheckedContinuation { blockedObservers.append($0) }
+    }
+
+    private func cancel(_ id: UUID) {
+        waiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+    }
+}
+
+private struct DrainingScriptedProvider: ModelProvider, ModelProviderRunDrain {
+    let descriptor = ModelProviderDescriptor(id: "fixture", capabilities: [.streaming, .multiTurn])
+    let gate: ProviderDrainGate
+
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            for event in textResponse(request, "first") { try emit(event) }
+        }
+    }
+
+    func waitForRunToDrain(sessionID: UUID, runID: UUID) async {
+        await gate.wait()
+    }
+}
+
+private actor ProviderDrainGate {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var observers: [CheckedContinuation<Void, Never>] = []
+    private var draining = false
+
+    func wait() async {
+        draining = true
+        let current = observers
+        observers.removeAll()
+        current.forEach { $0.resume() }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func waitUntilDrainBegins() async {
+        if draining { return }
+        await withCheckedContinuation { observers.append($0) }
+    }
+
+    func release() {
+        let current = waiters
+        waiters.removeAll()
+        current.forEach { $0.resume() }
+    }
+}
+
+private actor AsyncSignal {
+    private var signaled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func signal() {
+        signaled = true
+        let current = waiters
+        waiters.removeAll()
+        current.forEach { $0.resume() }
+    }
+
+    func wait() async {
+        if signaled { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
+private func deployment(_ value: String) throws -> AgentModelDeployment {
+    try .init(
+        serviceInstanceID: value,
+        endpointScope: "https://fixture.invalid/v1",
+        apiDialect: "fixture",
+        apiVersion: "1"
+    )
+}

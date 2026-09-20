@@ -6,6 +6,30 @@ import Testing
 @testable import AgentProviders
 
 struct AnthropicProviderTests {
+    @Test func effortAndStructuredOutputShareOneOutputConfiguration() async throws {
+        let probe = ProviderRequestProbe()
+        let provider = try AnthropicProvider(
+            apiKey: "fixture-key",
+            effort: AnthropicEffort(rawValue: "future_effort"),
+            transport: FixtureHTTPTransport(probe: probe, bodies: [anthropicTextFixture])
+        )
+        let schema = ToolSchema.object(properties: ["answer": .string], required: ["answer"]).json
+        for try await _ in provider.stream(request: .init(
+            model: .init(provider: "anthropic", name: "fixture"),
+            messages: [.user([.text("Hi")])],
+            structuredOutput: .init(name: "answer", schema: schema)
+        )) {}
+
+        guard case .object(let body) = try JSONDecoder().decode(
+            JSONValue.self,
+            from: #require(await probe.requests.first?.httpBody)
+        ) else { Issue.record("Missing request"); return }
+        #expect(body["output_config"] == .object([
+            "effort": .string("future_effort"),
+            "format": .object(["type": .string("json_schema"), "schema": schema]),
+        ]))
+    }
+
     @Test func recoverableToolResultEncodesIsErrorTrue() throws {
         let call = ToolCall(id: .init(rawValue: "toolu-error"), name: "search_resource",
                             argumentsJSON: #"{"query":"missing"}"#, completeness: .complete)

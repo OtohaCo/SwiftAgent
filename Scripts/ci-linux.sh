@@ -8,7 +8,7 @@ cd "$root"
 
 swift package clean
 
-for target in AgentModels AgentTools AgentCore AgentProviders AgentDecisions AgentJevProvider AgentUsage; do
+for target in AgentModels AgentTools AgentCore AgentCatalog AgentProviders AgentDecisions AgentJevProvider AgentUsage; do
   echo "swift build --target $target"
   swift build --target "$target"
 done
@@ -36,3 +36,6 @@ swift test --package-path Examples/ProviderQualification --disable-sandbox --no-
 
 echo "Apple chat integration example"
 swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
+
+echo "dynamic model routing example"
+swift test --package-path Examples/DynamicModelRouting --disable-sandbox --no-parallel

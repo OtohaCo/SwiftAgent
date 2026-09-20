@@ -142,6 +142,16 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
     }
 }
 
+extension DeepSeekResponsesProvider: ModelProviderRequestValidator {
+    public func validate(request: ModelRequest) throws {
+        _ = try DeepSeekResponsesRequestEncoder.encode(
+            request,
+            maximumOutputTokens: maximumOutputTokens,
+            reasoningEffort: reasoningEffort
+        )
+    }
+}
+
 private func deepSeekEventDiagnostic(
     _ error: ModelProviderError,
     frame: ProviderSSEEvent

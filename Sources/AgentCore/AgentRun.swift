@@ -16,13 +16,22 @@ import Foundation
 public struct AgentRun: Sendable {
     public let id: UUID
     public let sessionID: UUID
+    public let binding: AgentModelBindingInfo
     public let events: AsyncStream<AgentEvent>
     private let control: AgentRunControl
     private let drain: AgentRunDrain
 
-    init(id: UUID, sessionID: UUID, events: AsyncStream<AgentEvent>, control: AgentRunControl, drain: AgentRunDrain) {
+    init(
+        id: UUID,
+        sessionID: UUID,
+        binding: AgentModelBindingInfo,
+        events: AsyncStream<AgentEvent>,
+        control: AgentRunControl,
+        drain: AgentRunDrain
+    ) {
         self.id = id
         self.sessionID = sessionID
+        self.binding = binding
         self.events = events
         self.control = control
         self.drain = drain

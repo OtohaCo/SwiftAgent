@@ -2,19 +2,48 @@ import AgentModels
 import AgentTools
 import Foundation
 
+package struct AgentPreparedModelRequest: Sendable {
+    package let request: ModelRequest
+    package let projection: AgentContextProjection
+    package let canonicalMessages: [ModelMessage]
+}
+
 /// Package orchestration for one model → tool → model loop. SDK users go through
 /// `Agent`, `AgentSession` and `AgentRun`.
 package struct AgentLoop: Sendable {
-    private let model: ModelID
-    private let provider: any ModelProvider
+    private let binding: AgentModelBinding
     private let tools: ToolRegistry
     private let scheduler: ToolScheduler
 
-    package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
-        self.model = model
-        self.provider = provider
+    private var model: ModelID { binding.model }
+    private var provider: any ModelProvider { binding.provider }
+
+    package init(binding: AgentModelBinding, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
+        self.binding = binding
         self.tools = tools
         self.scheduler = scheduler
+    }
+
+    package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
+        self.init(binding: .legacy(model: model, provider: provider), tools: tools, scheduler: scheduler)
+    }
+
+    package func preflight(
+        messages: [ModelMessage],
+        sessionID: UUID,
+        runID: UUID,
+        conversationRevision: UInt64,
+        structuredOutput: StructuredOutputSchema?
+    ) async throws -> AgentPreparedModelRequest {
+        try await prepareRequest(
+            messages: messages,
+            sessionID: sessionID,
+            runID: runID,
+            conversationRevision: conversationRevision,
+            contextEpoch: conversationRevision,
+            modelTurn: 1,
+            structuredOutput: structuredOutput
+        )
     }
 
     package func run(
@@ -59,7 +88,8 @@ package struct AgentLoop: Sendable {
         messages: [ModelMessage], sessionID: UUID, runID: UUID, budget: AgentBudget,
         structuredOutput: StructuredOutputSchema?, operationID: String? = nil,
         emitter: AgentEventEmitter?, cancelledAtCreation: Bool = false,
-        lifecycle: AgentLoopLifecycle? = nil
+        lifecycle: AgentLoopLifecycle? = nil,
+        initialRequest: AgentPreparedModelRequest? = nil
     ) async throws -> AgentLoopResult {
         await emitter?.start(.init(sessionID: sessionID, runID: runID, model: model))
         let evidenceLedger = lifecycle?.evidenceLedger ?? EvidenceLedger()
@@ -68,7 +98,8 @@ package struct AgentLoop: Sendable {
             let result = try await withAgentDeadline(budget.deadline) {
                 try await runBody(messages: messages, sessionID: sessionID, runID: runID,
                                   budget: budget, structuredOutput: structuredOutput, operationID: operationID,
-                                  emitter: emitter, lifecycle: lifecycle, evidenceLedger: evidenceLedger)
+                                  emitter: emitter, lifecycle: lifecycle, evidenceLedger: evidenceLedger,
+                                  initialRequest: initialRequest)
             }
             await lifecycle?.beforeFinish()
             await clearMutationBoundary(sessionID: sessionID, runID: runID)
@@ -85,16 +116,10 @@ package struct AgentLoop: Sendable {
     private func runBody(
         messages: [ModelMessage], sessionID: UUID, runID: UUID, budget: AgentBudget,
         structuredOutput: StructuredOutputSchema?, operationID: String?, emitter: AgentEventEmitter?,
-        lifecycle: AgentLoopLifecycle?, evidenceLedger: EvidenceLedger
+        lifecycle: AgentLoopLifecycle?, evidenceLedger: EvidenceLedger,
+        initialRequest: AgentPreparedModelRequest?
     ) async throws -> AgentLoopResult {
         try budget.checkActive()
-        guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else { throw AgentLoopError.providerMismatch }
-        var required: ModelCapabilities = []
-        if !tools.definitions.isEmpty { required.formUnion([.tools, .multiTurn]) }
-        if messages.contains(where: { $0.role == .assistant || $0.role == .tool }) { required.insert(.multiTurn) }
-        if structuredOutput != nil { required.insert(.structuredOutput) }
-        let missing = required.subtracting(provider.descriptor.capabilities)
-        guard missing.isEmpty else { throw AgentLoopError.unsupportedCapabilities(missing) }
         var history = messages
         var modelTurns = 0
         var toolCalls = 0
@@ -120,11 +145,28 @@ package struct AgentLoop: Sendable {
             modelTurns += 1
             try await emitter?.send(.turnStarted(modelTurns))
             try budget.checkActive()
-            let request = ModelRequest(model: model, messages: history, tools: tools.definitions,
-                                       structuredOutput: structuredOutput, sessionID: sessionID, runID: runID)
+            let preparedRequest: AgentPreparedModelRequest
+            if modelTurns == 1,
+               let initialRequest,
+               initialRequest.canonicalMessages == history {
+                preparedRequest = initialRequest
+            } else {
+                preparedRequest = try await prepareRequest(
+                    messages: history,
+                    sessionID: sessionID,
+                    runID: runID,
+                    conversationRevision: initialRequest?.projection.plan.sourceRevision ?? 0,
+                    contextEpoch: initialRequest?.projection.plan.contextEpoch ?? 0,
+                    modelTurn: modelTurns,
+                    structuredOutput: structuredOutput,
+                    allowUnresolvedToolTail: initialRequest == nil && modelTurns == 1
+                )
+            }
+            let request = preparedRequest.request
             var accumulator = ModelEventAccumulator()
-            for try await event in provider.stream(request: request) {
+            for try await rawEvent in provider.stream(request: request) {
                 try budget.checkActive()
+                let event = try scopeContinuation(rawEvent)
                 try accumulator.append(event)
                 if case .responseStarted(let info) = event { try requireConfiguredModel(info.model) }
                 if case .responseCompleted = event { continue }
@@ -160,7 +202,7 @@ package struct AgentLoop: Sendable {
             }
             guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
             guard response.toolCalls.count <= budget.maxToolCalls - toolCalls else { throw AgentLoopError.toolCallLimitReached }
-            let prepared = try response.toolCalls.map { call in
+            let preparedCalls = try response.toolCalls.map { call in
                 guard usedCallIDs.insert(call.id).inserted else { throw AgentLoopError.reusedToolCallID(call.id) }
                 return try tools.prepare(call, context: ToolContext(sessionID: sessionID, runID: runID,
                     callID: call.id, deadline: budget.deadline,
@@ -171,7 +213,7 @@ package struct AgentLoop: Sendable {
             let progress = AgentToolBatchProgress(prefix: history, response: response, budget: budget,
                                                   lifecycle: lifecycle, emitter: emitter)
             do {
-                try await scheduler.execute(prepared, deadline: budget.deadline, onStarted: { call in
+                try await scheduler.execute(preparedCalls, deadline: budget.deadline, onStarted: { call in
                     try budget.checkActive()
                     try await emitter?.send(.toolStarted(call.call))
                 }, onCompleted: { index, call, result in
@@ -223,6 +265,137 @@ package struct AgentLoop: Sendable {
     private func requireConfiguredModel(_ responseModel: ModelID) throws {
         guard responseModel.provider.utf8.elementsEqual(model.provider.utf8),
               responseModel.name.utf8.elementsEqual(model.name.utf8) else { throw AgentLoopError.modelMismatch }
+    }
+
+    private func prepareRequest(
+        messages: [ModelMessage],
+        sessionID: UUID,
+        runID: UUID,
+        conversationRevision: UInt64,
+        contextEpoch: UInt64,
+        modelTurn: Int,
+        structuredOutput: StructuredOutputSchema?,
+        allowUnresolvedToolTail: Bool = false
+    ) async throws -> AgentPreparedModelRequest {
+        guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else {
+            throw AgentLoopError.providerMismatch
+        }
+        var required: ModelCapabilities = []
+        if !tools.definitions.isEmpty { required.formUnion([.tools, .multiTurn]) }
+        if messages.contains(where: { $0.role == .assistant || $0.role == .tool }) { required.insert(.multiTurn) }
+        if structuredOutput != nil { required.insert(.structuredOutput) }
+        let missing = required.subtracting(provider.descriptor.capabilities)
+        guard missing.isEmpty else { throw AgentLoopError.unsupportedCapabilities(missing) }
+
+        let projection = try await binding.projector.project(.init(
+            canonicalMessages: messages,
+            model: model,
+            sessionID: sessionID,
+            runID: runID,
+            conversationRevision: conversationRevision,
+            contextEpoch: contextEpoch,
+            modelTurn: modelTurn
+        ))
+        let sourceDigest = try AgentContextProjectionSource.digest(messages: messages)
+        guard projection.plan.sourceRevision == conversationRevision,
+              projection.plan.sourceDigest == sourceDigest,
+              projection.plan.contextEpoch == contextEpoch,
+              validToolPairs(projection.messages, allowUnresolvedToolTail: allowUnresolvedToolTail) else {
+            throw AgentModelBindingError.invalidProjection
+        }
+        try validateContinuations(projection.messages)
+        if let budget = binding.tokenBudget {
+            let estimate = try await budget.estimator.estimate(.init(
+                model: model,
+                messages: projection.messages,
+                tools: tools.definitions,
+                structuredOutput: structuredOutput
+            ))
+            guard estimate.inputTokens >= 0 else { throw AgentModelBindingError.invalidTokenEstimate }
+            guard estimate.inputTokens <= budget.availableInputTokens else {
+                throw AgentModelBindingError.contextBudgetExceeded(
+                    estimatedInputTokens: estimate.inputTokens,
+                    availableInputTokens: budget.availableInputTokens
+                )
+            }
+        }
+        let request = ModelRequest(
+            model: model,
+            messages: projection.messages,
+            tools: tools.definitions,
+            structuredOutput: structuredOutput,
+            sessionID: sessionID,
+            runID: runID
+        )
+        try (provider as? any ModelProviderRequestValidator)?.validate(request: request)
+        return .init(request: request, projection: projection, canonicalMessages: messages)
+    }
+
+    private func validateContinuations(_ messages: [ModelMessage]) throws {
+        for message in messages {
+            guard case .assistant(let content, _) = message else { continue }
+            for part in content {
+                guard case .providerContinuation(let state) = part else { continue }
+                guard state.model == model else { throw AgentModelBindingError.incompatibleContinuation }
+                if let origin = state.origin {
+                    guard origin == binding.continuationOrigin else {
+                        throw AgentModelBindingError.incompatibleContinuation
+                    }
+                } else if binding.legacyContinuationPolicy != .allowMatchingModel {
+                    throw AgentModelBindingError.incompatibleContinuation
+                }
+            }
+        }
+    }
+
+    private func scopeContinuation(_ event: ModelEvent) throws -> ModelEvent {
+        guard binding.legacyContinuationPolicy != .allowMatchingModel else { return event }
+        switch event {
+        case .providerContinuation(let state):
+            return .providerContinuation(try scoped(state))
+        case .responseCompleted(let response):
+            return .responseCompleted(.init(
+                info: response.info,
+                content: try response.content.map(scoped),
+                toolCalls: response.toolCalls,
+                usage: response.usage,
+                stopReason: response.stopReason
+            ))
+        default:
+            return event
+        }
+    }
+
+    private func scoped(_ content: ModelContent) throws -> ModelContent {
+        guard case .providerContinuation(let state) = content else { return content }
+        return .providerContinuation(try scoped(state))
+    }
+
+    private func scoped(_ state: ModelProviderContinuation) throws -> ModelProviderContinuation {
+        guard state.model == model,
+              state.origin == nil || state.origin == binding.continuationOrigin else {
+            throw AgentModelBindingError.incompatibleContinuation
+        }
+        return .init(model: state.model, format: state.format, payload: state.payload, origin: binding.continuationOrigin)
+    }
+
+    private func validToolPairs(_ messages: [ModelMessage], allowUnresolvedToolTail: Bool) -> Bool {
+        var pending = Set<ToolCallID>()
+        for (index, message) in messages.enumerated() {
+            switch message {
+            case .assistant(_, let calls):
+                guard pending.isEmpty else { return false }
+                pending.formUnion(calls.map(\.id))
+            case .tool(let result):
+                guard pending.remove(result.callID) != nil else { return false }
+            case .user, .system, .developer:
+                guard pending.isEmpty else { return false }
+            }
+            if allowUnresolvedToolTail, index == messages.index(before: messages.endIndex) {
+                return true
+            }
+        }
+        return pending.isEmpty
     }
 
     private static func toolError(_ error: any Error) -> any Error {

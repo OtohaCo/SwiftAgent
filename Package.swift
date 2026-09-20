@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "AgentDecisions", targets: ["AgentDecisions"]),
         .library(name: "AgentJevProvider", targets: ["AgentJevProvider"]),
         .library(name: "AgentUsage", targets: ["AgentUsage"]),
+        .library(name: "AgentCatalog", targets: ["AgentCatalog"]),
         .library(name: "WorkspaceAgent", targets: ["WorkspaceAgent"]),
     ],
     dependencies: [
@@ -22,11 +23,12 @@ let package = Package(
         .target(name: "AgentModels"),
         .target(name: "AgentTools", dependencies: ["AgentModels"]),
         .target(name: "AgentCore", dependencies: ["AgentModels", "AgentTools"]),
-        .target(name: "AgentProviders", dependencies: ["AgentModels"]),
+        .target(name: "AgentProviders", dependencies: ["AgentModels", "AgentCatalog"]),
         .target(name: "AgentAppleProvider", dependencies: ["AgentModels"]),
         .target(name: "AgentDecisions", dependencies: ["AgentModels"]),
         .target(name: "AgentJevProvider", dependencies: ["AgentModels", "AgentDecisions"]),
         .target(name: "AgentUsage", dependencies: ["AgentModels"]),
+        .target(name: "AgentCatalog", dependencies: ["AgentModels"]),
         .target(
             name: "WorkspaceAgent",
             dependencies: [
@@ -42,13 +44,14 @@ let package = Package(
         .testTarget(name: "AgentToolsTests", dependencies: ["AgentTools", "AgentModels"]),
         .testTarget(name: "AgentCoreTests", dependencies: ["AgentCore", "AgentTools", "AgentModels"]),
         .testTarget(name: "AgentAppleProviderTests", dependencies: ["AgentAppleProvider", "AgentModels", "AgentTools", "AgentCore"]),
-        .testTarget(name: "AgentProvidersTests", dependencies: ["AgentProviders", "AgentModels", "AgentTools", "AgentCore"]),
+        .testTarget(name: "AgentProvidersTests", dependencies: ["AgentProviders", "AgentCatalog", "AgentModels", "AgentTools", "AgentCore"]),
         .testTarget(
             name: "AgentDecisionsTests",
             dependencies: ["AgentDecisions", "AgentModels", "AgentTools", "AgentCore"]
         ),
         .testTarget(name: "AgentJevProviderTests", dependencies: ["AgentJevProvider", "AgentDecisions", "AgentModels"]),
         .testTarget(name: "AgentUsageTests", dependencies: ["AgentUsage", "AgentModels"]),
+        .testTarget(name: "AgentCatalogTests", dependencies: ["AgentCatalog", "AgentModels"]),
         .testTarget(
             name: "WorkspaceAgentTests",
             dependencies: ["WorkspaceAgent", "AgentCore", "AgentTools", "AgentModels", "AgentProviders"]
