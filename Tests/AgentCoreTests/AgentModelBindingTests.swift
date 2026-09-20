@@ -774,6 +774,30 @@ struct AgentModelBindingTests {
         let next = try await session.run("after drain")
         #expect(try await next.wait().outcome == .completed)
     }
+
+    @Test func uncertainStartupJournalAppendStillAdmitsTheRun() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-uncertain-startup-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let journal = try AgentJournal(persistenceURL: url, persistenceFault: .directorySync)
+        let provider = ScriptedProvider { request, _ in textResponse(request, "admitted") }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(journal: journal)
+
+        let run = try await session.run("uncertain startup")
+        #expect(try await run.wait().outcome == .completed)
+        try await run.waitForDrain()
+        #expect(await session.history == [
+            .user([.text("uncertain startup")]),
+            .assistant(content: [.text("admitted")], toolCalls: []),
+        ])
+        #expect(await journal.snapshot().contains { record in
+            if case .userMessage("uncertain startup") = record.event { return true }
+            return false
+        })
+    }
 }
 
 private struct FixedProjector: AgentContextProjector {

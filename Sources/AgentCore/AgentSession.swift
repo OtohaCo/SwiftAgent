@@ -294,12 +294,23 @@ public actor AgentSession {
             lifecycleEvents.append(.userMessage(text))
             try Task.checkCancellation()
             try budget.checkActive()
-            try await journal.appendCheckpoint(
-                lifecycleEvents,
-                sessionID: id,
-                runID: runID,
-                durability: journal.storage == .durable ? .durable : .memory
-            )
+            do {
+                try await journal.appendCheckpoint(
+                    lifecycleEvents,
+                    sessionID: id,
+                    runID: runID,
+                    durability: journal.storage == .durable ? .durable : .memory
+                )
+            } catch {
+                // A durable append can report an uncertain directory sync
+                // after adopting the complete frame in memory. The new run
+                // ID makes that outcome distinguishable from a write that
+                // never reached the journal, so do not orphan its user event.
+                let wasAdmitted = await journal.snapshot().contains { record in
+                    record.sessionID == id && record.runID == runID
+                }
+                guard wasAdmitted else { throw error }
+            }
             // The durable startup frame is the admission boundary. Once the
             // append begins, cancellation/deadline cannot roll back an
             // atomic journal commit; continue creating the corresponding Run
