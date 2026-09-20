@@ -474,6 +474,7 @@ public actor AgentSession {
         let loop = loopsByRunID[runID]
         let journal = self.journal
         let drain = drainHandles[runID]
+        let drainReleaseDidBegin = self.drainReleaseDidBegin
         pendingDrainTask = Task { [weak self] in
             async let logicalCompletion: Void = control.waitUntilCompleted()
             async let physicalCompletion: Void = loop?.waitForRunToDrain(sessionID: sessionID, runID: runID) ?? ()
@@ -482,9 +483,10 @@ public actor AgentSession {
             if let self {
                 await self.finishDraining(runID: runID)
             } else {
-                await drain?.complete()
+                await drainReleaseDidBegin?(runID)
                 await journal?.releaseSessionLease(sessionID: sessionID)
                 await AgentSessionIdentityRegistry.shared.release(sessionID)
+                await drain?.complete()
             }
         }
     }
