@@ -1,6 +1,6 @@
 # Apple Foundation Models Provider
 
-last-verified: 2026-09-19
+last-verified: 2026-09-21
 
 `AgentAppleProvider` supplies `AppleFoundationProvider` for Apple's on-device
 `SystemLanguageModel` and, on macOS or iOS 27, Private Cloud Compute. The
@@ -69,6 +69,22 @@ remain Core responsibilities. The adapter does not open the mutation gate.
   between them, and neither backend owns a host application's domain tool catalog.
 
 ## Verification
+
+### RC2 scope
+
+Apple on-device live cases are qualified only at the bounded opt-in scope
+recorded for RC2. Private Cloud Compute is experimental and is **not
+live-qualified for the full SwiftAgent Core tool loop in RC2**. The adapter,
+fixtures, and compile coverage are included; a signed downstream Host has
+proved PCC service access, but that is not equivalent to a SwiftAgent Core
+`Agent`/`Session`/`Run` tool-loop qualification. PCC durable restart is not
+qualified.
+
+The direct SwiftPM live test requires a signed test host carrying
+`com.apple.developer.private-cloud-compute`. Without that entitlement the
+typed result is unavailable/blocked; SwiftAgent does not silently fall back to
+the on-device model. Downstream app entitlement and Apple account/platform
+qualification remain Host responsibilities.
 
 Ordinary package tests use controlled generation fixtures. Real local inference
 requires explicit opt-in:

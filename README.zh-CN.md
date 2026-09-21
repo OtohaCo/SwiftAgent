@@ -40,9 +40,24 @@ SwiftAgent 是一个不绑定模型厂商的 Swift Agent 运行时，提供类�
 
 ## 版本范围与安装
 
-last-verified: 2026-09-20
+last-verified: 2026-09-21
 
-本 README 及其翻译所核对的可执行示例基线是 RC.2 开发线上的 `833e5f691fa8e832cbdb94afc6a6ff54a3498cc0`。这些文档不是发布公告。应始终阅读与 App 实际安装的依赖版本一致的文档。
+RC2 源码候选为 `99dd1171d8ef1f3091a350575f30e7e13791b1b5`；发布文档和 package tag 由 RC2 release gate 最终确定。应始终阅读与 App 实际安装的依赖版本一致的文档。
+
+### 已发布的 rc.2
+
+预发布版本发布后，使用明确版本固定依赖：
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
+        exact: "1.0.0-rc.2"
+    )
+]
+```
+
+参见[RC2 发布范围](docs/releases/1.0.0-rc.2.md)。Apple PCC 在 RC2 中仍是实验性能力，尚未完成 SwiftAgent Core 完整工具循环的 live qualification。
 
 ### 已发布的 rc.1
 
@@ -57,10 +72,9 @@ dependencies: [
 ]
 ```
 
-rc.1 的固定提交为 `d2347f11c6a78f421708e897dae42a51a98d37ea`。
-**不要安装 rc.1，却直接使用 RC.2 文档介绍的全部 API。** OpenAI/DeepSeek Responses、Decision/Jev 等下一 RC 新增能力，需要对应的未发布 revision。请查看该 revision 的 Package 和指南。
+rc.1 的固定提交为 `d2347f11c6a78f421708e897dae42a51a98d37ea`。RC2 是独立的预发布版本，新增 API 和范围以 RC2 发布说明为准。
 
-### 明确选择下一 RC 进行评估
+### 复现 RC2 源码候选
 
 要复现本文核对过的源码基线，而不是跟随不断变化的分支：
 
@@ -68,12 +82,12 @@ rc.1 的固定提交为 `d2347f11c6a78f421708e897dae42a51a98d37ea`。
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        revision: "833e5f691fa8e832cbdb94afc6a6ff54a3498cc0"
+        revision: "99dd1171d8ef1f3091a350575f30e7e13791b1b5"
     )
 ]
 ```
 
-这是明确的开发版本固定方式，不表示推荐发布未经审计的版本，也不表示它是最新 commit。只添加目标实际需要的 products。RC.2 开发分支是 `plan/swift-agent-rc2`；不要假设 `main` 已包含这些修改。参见[版本策略](docs/guides/swift-agent-versioning.md)。
+这是明确的源码候选固定方式，不表示推荐发布未经审计的 revision，也不表示它就是 release tag。只添加目标实际需要的 products。参见[版本策略](docs/guides/swift-agent-versioning.md)。
 
 通过 Git submodule 提供本地 package 时，SDK commit 由父仓库 gitlink 固定；App 的 `Package.resolved` 不负责固定这个本地 package。先提交并推送 SDK 修改，再验证使用它的 App，最后更新 gitlink。不要静默跟随远端分支，也不要为了让猜测出来的 API 编译通过而升级依赖。
 

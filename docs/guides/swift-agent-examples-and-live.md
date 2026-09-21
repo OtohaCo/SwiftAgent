@@ -1,8 +1,8 @@
 # Examples, credentials and live qualification
 
-last-verified: 2026-09-20
+last-verified: 2026-09-21
 
-Executable-example baseline: `833e5f691fa8e832cbdb94afc6a6ff54a3498cc0`.
+Executable-example baseline: `99dd1171d8ef1f3091a350575f30e7e13791b1b5`.
 Run these commands from the SwiftAgent repository root. In a parent repository
 where SwiftAgent is a submodule, prefix package paths with `SwiftAgent/`.
 
@@ -191,3 +191,11 @@ Candidate-specific operator evidence and remaining gaps are recorded in the
 parent project's SAI-068 qualification task. Normal CI remains credential-free;
 fixture, hosted SDK CI, Host integration and live service qualification remain
 separate claims.
+
+For the RC2 release scope, OpenAI official and DeepSeek official evidence is
+limited to the recorded qualification matrices. Anthropic is qualified only at
+the configured gateway/service scope, Jev is qualified as a typed Decision
+provider, and Apple on-device evidence is limited to its recorded opt-in cases.
+Apple PCC is experimental and not live-qualified for the complete SwiftAgent
+Core tool loop or durable restart. A signed downstream Host proving PCC service
+access does not change that scope.

@@ -1,6 +1,6 @@
 # SwiftAgent Semantic Versioning
 
-last-verified: 2026-09-20
+last-verified: 2026-09-21
 
 SwiftAgent follows Swift Package Manager rules, not a promise of ABI stability.
 A major version is required when a change can fail a client that compiled
@@ -69,9 +69,10 @@ surface. They are source-compatible for clients that continue using the
 original `Agent` and `AgentSession.run(_:)` APIs. The reproducible command and
 module breakdown are in [the public API inventory](swift-agent-public-api.md).
 
-The release checklist records the final candidate SHA. The public API policy in
-this guide is normative; one-time audit evidence stays in the parent project's
-Kanban records.
+The release checklist records the final candidate SHA. RC2's release scope and
+limitations are recorded in [the RC2 release note](../releases/1.0.0-rc.2.md).
+The public API policy in this guide is normative; one-time audit evidence stays
+in the parent project's Kanban records.
 
 ## Enums
 

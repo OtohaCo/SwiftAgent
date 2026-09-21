@@ -48,12 +48,29 @@ Provider-specific contracts:
 
 ## Version scope and installation
 
-last-verified: 2026-09-20
+last-verified: 2026-09-21
 
-The executable-example baseline for this README and its translations is
-`833e5f691fa8e832cbdb94afc6a6ff54a3498cc0` on the RC.2 development line.
-This documentation is not a release announcement. Always
-read documentation from the same revision as the dependency installed in your app.
+The RC2 source candidate is
+`99dd1171d8ef1f3091a350575f30e7e13791b1b5`; the release documentation and
+package tag are finalized by the RC2 release gate. Always read documentation
+from the same revision as the dependency installed in your app.
+
+### Published rc.2
+
+After the prerelease is published, pin it explicitly:
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
+        exact: "1.0.0-rc.2"
+    )
+]
+```
+
+See the [RC2 release scope](docs/releases/1.0.0-rc.2.md). Apple PCC is
+experimental and is not live-qualified for the full SwiftAgent Core tool loop
+in RC2.
 
 ### Published rc.1
 
@@ -68,12 +85,10 @@ dependencies: [
 ]
 ```
 
-The rc.1 anchor is `d2347f11c6a78f421708e897dae42a51a98d37ea`.
-**Do not combine this rc.1 dependency with all the APIs described on the RC.2
-line.** OpenAI/DeepSeek Responses, Decision/Jev and other next-RC additions need
-the corresponding unreleased revision. Consult that revision's package and guides.
+The rc.1 anchor is `d2347f11c6a78f421708e897dae42a51a98d37ea`. RC2 is the
+separate prerelease line and adds the APIs documented in the RC2 release note.
 
-### Intentional next-RC evaluation
+### Reproducing the RC2 source candidate
 
 To reproduce the checked source baseline rather than follow a moving branch:
 
@@ -81,15 +96,14 @@ To reproduce the checked source baseline rather than follow a moving branch:
 dependencies: [
     .package(
         url: "https://github.com/OtohaPlayer/SwiftAgent.git",
-        revision: "833e5f691fa8e832cbdb94afc6a6ff54a3498cc0"
+        revision: "99dd1171d8ef1f3091a350575f30e7e13791b1b5"
     )
 ]
 ```
 
-This is an explicit development pin, not a recommendation to ship an unaudited
-revision or a claim that it is the latest commit. Add only the products your
-target uses. The RC.2 development branch is `plan/swift-agent-rc2`; do not assume
-that `main` contains those changes. See [versioning](docs/guides/swift-agent-versioning.md).
+This is an explicit source-candidate pin, not a recommendation to ship an
+unaudited revision or a claim that it is the release tag. Add only the products
+your target uses. See [versioning](docs/guides/swift-agent-versioning.md).
 
 For a local package supplied by a Git submodule, the parent's gitlink pins the
 SDK commit; the app's `Package.resolved` does not pin that local package.

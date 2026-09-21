@@ -4,8 +4,13 @@ All notable changes to SwiftAgent are recorded here.
 
 ## [Unreleased]
 
-Development after `1.0.0-rc.1` targets the next release candidate. Public API
-additions and behavior changes will be recorded here before that release is cut.
+Development after `1.0.0-rc.2` is not part of the RC2 release scope.
+
+## [1.0.0-rc.2] - 2026-09-21
+
+The RC2 release candidate adds the reliability, provider, catalog, decision,
+usage, and example work described below. Qualification remains scoped to the
+recorded provider matrices; it is not a claim for every model or deployment.
 
 ### Reliability
 
@@ -88,6 +93,17 @@ additions and behavior changes will be recorded here before that release is cut.
 - Correct ProviderQualification to count every visible response in multi-turn,
   tool, restart, failure, and cancellation paths; AppleChatApp now displays
   response, Run, and Session-window usage with cost explicitly unestimated.
+
+### Release scope
+
+- OpenAI official and DeepSeek official live evidence is limited to the recorded
+  qualification matrices; Anthropic is limited to the configured gateway/service
+  matrix and Jev to typed Decision qualification.
+- Apple on-device live evidence is limited to the recorded opt-in cases.
+- Apple Private Cloud Compute is experimental and not live-qualified for the
+  full SwiftAgent Core tool loop or durable restart in RC2.
+- Downstream Tingting/Otoha app CI, media closed-loop assertions, and live UI
+  qualification are outside the SwiftAgent RC2 release gate.
 
 ## [1.0.0-rc.1] - 2026-09-19
 

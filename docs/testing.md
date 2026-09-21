@@ -1,6 +1,6 @@
 # SwiftAgent Testing
 
-last-verified: 2026-09-20
+last-verified: 2026-09-21
 
 Primary compiler: Swift 6.4. From the package directory:
 
@@ -21,10 +21,15 @@ Do not treat skipped live tests as passes. Anthropic, OpenAI, Local Responses, a
 tests are env-gated. OpenAI live coverage requires
 `SWIFT_AGENT_OPENAI_LIVE=1`, `OPENAI_API_KEY`, and `OPENAI_MODEL`; alias users
 also provide `OPENAI_RESOLVED_MODEL` when the API reports a dated snapshot.
-DeepSeek has fixture/schema coverage and bounded operator evidence for one
-completed reasoning/usage response. Multi-turn, tool, restart, structured and
-incomplete live shapes remain unqualified, so a green package run or that one
-operator case is not broad DeepSeek cloud qualification.
+DeepSeek has fixture/schema coverage and a recorded official qualification
+matrix covering text, tools, durable restart, structured output, reasoning
+metadata replay, and incomplete terminal status. This is still scoped to the
+tested model/service configuration; it is not a claim about every DeepSeek
+deployment.
+
+Apple PCC remains experimental and is not live-qualified for the full
+SwiftAgent Core tool loop in RC2. Fixture and compile coverage, or a signed
+downstream Host's service-access test, do not establish that qualification.
 
 Use `Examples/ProviderQualification` for credential-free fixtures, no-network
 preflight and explicitly bounded live cases. Its persistent ledger defaults to
