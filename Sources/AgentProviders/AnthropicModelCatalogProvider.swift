@@ -159,9 +159,9 @@ public struct AnthropicModelCatalogProvider: ModelCatalogDetailProvider {
 
     private func support(_ value: Bool?) -> ModelCatalogSupport {
         switch value {
-        case true: .supported
-        case false: .unsupported
-        case nil: .unknown
+        case .some(true): .supported
+        case .some(false): .unsupported
+        case .none: .unknown
         }
     }
 }
