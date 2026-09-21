@@ -1,13 +1,13 @@
 # SwiftAgent Repository Provenance
 
 last-verified: 2026-09-19
-status: Extracted to `OtohaPlayer/SwiftAgent`
+status: Extracted to `OtohaCo/SwiftAgent`
 
 ## Canonical Repository
 
-- GitHub: `https://github.com/OtohaPlayer/SwiftAgent`
-- SwiftPM: `https://github.com/OtohaPlayer/SwiftAgent.git`
-- SSH: `git@github.com:OtohaPlayer/SwiftAgent.git`
+- GitHub: `https://github.com/OtohaCo/SwiftAgent`
+- SwiftPM: `https://github.com/OtohaCo/SwiftAgent.git`
+- SSH: `git@github.com:OtohaCo/SwiftAgent.git`
 - Default branch: `main`
 - Repository visibility at extraction: private
 - Current repository visibility: public

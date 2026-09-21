@@ -51,7 +51,7 @@ RC2 源码候选为 `99dd1171d8ef1f3091a350575f30e7e13791b1b5`；发布文档和
 ```swift
 dependencies: [
     .package(
-        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
+        url: "https://github.com/OtohaCo/SwiftAgent.git",
         exact: "1.0.0-rc.2"
     )
 ]
@@ -66,7 +66,7 @@ dependencies: [
 ```swift
 dependencies: [
     .package(
-        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
+        url: "https://github.com/OtohaCo/SwiftAgent.git",
         exact: "1.0.0-rc.1"
     )
 ]
@@ -81,7 +81,7 @@ rc.1 的固定提交为 `d2347f11c6a78f421708e897dae42a51a98d37ea`。RC2 是独�
 ```swift
 dependencies: [
     .package(
-        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
+        url: "https://github.com/OtohaCo/SwiftAgent.git",
         revision: "99dd1171d8ef1f3091a350575f30e7e13791b1b5"
     )
 ]

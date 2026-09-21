@@ -62,7 +62,7 @@ After the prerelease is published, pin it explicitly:
 ```swift
 dependencies: [
     .package(
-        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
+        url: "https://github.com/OtohaCo/SwiftAgent.git",
         exact: "1.0.0-rc.2"
     )
 ]
@@ -79,7 +79,7 @@ Pin the published release candidate when using its API:
 ```swift
 dependencies: [
     .package(
-        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
+        url: "https://github.com/OtohaCo/SwiftAgent.git",
         exact: "1.0.0-rc.1"
     )
 ]
@@ -95,7 +95,7 @@ To reproduce the checked source baseline rather than follow a moving branch:
 ```swift
 dependencies: [
     .package(
-        url: "https://github.com/OtohaPlayer/SwiftAgent.git",
+        url: "https://github.com/OtohaCo/SwiftAgent.git",
         revision: "99dd1171d8ef1f3091a350575f30e7e13791b1b5"
     )
 ]

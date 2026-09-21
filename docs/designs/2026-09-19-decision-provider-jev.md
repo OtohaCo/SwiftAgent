@@ -2,7 +2,7 @@
 
 status: Approved
 last-verified: 2026-09-19
-issue: OtohaPlayer/SwiftAgent#5 (SAI-055)
+issue: OtohaCo/SwiftAgent#5 (SAI-055)
 
 ## Scope
 
