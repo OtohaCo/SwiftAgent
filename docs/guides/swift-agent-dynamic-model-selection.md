@@ -15,12 +15,14 @@ without proving that the current SwiftAgent adapter can encode every advertised
 parameter.
 
 `OpenAIModelCatalogProvider`, `AnthropicModelCatalogProvider`, and
-`DeepSeekModelCatalogProvider` use their documented model-list shapes. OpenAI
-and Anthropic cursor pagination is passed through the bounded cache; DeepSeek's
-current model-list shape is treated as a single page. They preserve incomplete
-metadata and never make discovery a prerequisite for an explicitly configured
-Run. `ModelCatalogCache` is host-refreshed, bounded, and keeps a stale
-last-known-good snapshot separate from a failed refresh.
+`DeepSeekModelCatalogProvider` use their documented model-list shapes. Anthropic's
+current Models API reports `effort` levels and `thinking.types` as objects; the
+decoder also accepts the older string-array fixtures and still leaves unreported
+capabilities `unknown`. OpenAI and Anthropic cursor pagination is passed through
+the bounded cache; DeepSeek's current model-list shape is treated as a single
+page. They preserve incomplete metadata and never make discovery a prerequisite
+for an explicitly configured Run. `ModelCatalogCache` is host-refreshed, bounded,
+and keeps a stale last-known-good snapshot separate from a failed refresh.
 
 ```swift
 let catalog = try await ModelCatalogCache().refresh(

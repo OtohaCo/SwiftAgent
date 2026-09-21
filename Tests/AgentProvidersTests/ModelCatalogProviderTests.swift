@@ -185,6 +185,26 @@ struct ModelCatalogProviderTests {
         #expect(control.executability == .adapterUpgradeRequired)
     }
 
+    @Test func anthropicLiveCapabilityObjectsDoNotFailThePage() async throws {
+        let body = #"{"data":[{"id":"claude-opus-4-6","display_name":"Claude Opus 4.6","created_at":"2026-02-04T00:00:00Z","type":"model","capabilities":{"batch":{"supported":true},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"max":{"supported":true},"xhigh":{"supported":true}},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"adaptive":{"supported":true},"enabled":{"supported":true}}}},"max_input_tokens":200000,"max_tokens":64000}],"has_more":false,"first_id":"claude-opus-4-6","last_id":"claude-opus-4-6"}"#
+        let provider = try AnthropicModelCatalogProvider(
+            apiKey: "fixture-secret",
+            endpoint: URL(string: "https://api.example.test/v1/models")!,
+            serviceInstanceID: "anthropic-workspace",
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(), bodies: [Data(body.utf8)], headers: ["Content-Type": "application/json"]
+            )
+        )
+
+        let model = try #require(try await provider.listModels(.init()).models.first)
+        #expect(model.model.name == "claude-opus-4-6")
+        #expect(model.capabilities.configurableReasoning == .supported)
+        #expect(model.reasoningControls.first { $0.kind == .effort }?.allowedValues == ["low", "medium", "high", "max", "xhigh"])
+        #expect(model.reasoningControls.first { $0.kind == .thinkingMode }?.allowedValues == ["adaptive", "enabled"])
+        #expect(model.reasoningControls.contains { $0.kind == .tokenBudget })
+        #expect(model.capabilities.tools == .unknown)
+    }
+
     @Test func anthropicThinkingBudgetWithoutAUsableRangeIsNotAutomaticallyExecutable() async throws {
         let body = #"{"data":[{"id":"claude-small-output","capabilities":{"thinking":{"supported":true,"types":["enabled"]}},"max_tokens":1024}],"has_more":false,"last_id":"claude-small-output"}"#
         let provider = try AnthropicModelCatalogProvider(

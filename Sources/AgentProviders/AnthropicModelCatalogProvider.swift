@@ -204,10 +204,67 @@ private struct AnthropicCatalogCapabilities: Decodable {
     }
 }
 
+/// Accepts both the RC.2 fixture shape (`values`/`types` as string arrays)
+/// and the current Models API objects (`types: {adaptive:{supported:true}}`
+/// and effort levels as sibling keys). Unknown nested keys stay out of the
+/// page instead of failing the whole list as `invalid_response`.
 private struct AnthropicReasoningCapability: Decodable {
     let supported: Bool?
     let values: [String]?
     let types: [String]?
+
+    private struct Flag: Decodable {
+        let supported: Bool?
+    }
+
+    private struct DynamicKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+        init?(stringValue: String) { self.stringValue = stringValue; intValue = nil }
+        init?(intValue: Int) { stringValue = String(intValue); self.intValue = intValue }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DynamicKey.self)
+        supported = try container.decodeIfPresent(Bool.self, forKey: DynamicKey(stringValue: "supported")!)
+        values = Self.decodeValues(container)
+        types = Self.decodeTypes(container)
+    }
+
+    private static func decodeValues(_ container: KeyedDecodingContainer<DynamicKey>) -> [String]? {
+        if let names = try? container.decode([String].self, forKey: DynamicKey(stringValue: "values")!) {
+            return names
+        }
+        var names: [String] = []
+        for key in container.allKeys where !["supported", "values", "types"].contains(key.stringValue) {
+            if let flag = try? container.decode(Flag.self, forKey: key), flag.supported != false {
+                names.append(key.stringValue)
+            }
+        }
+        return names.isEmpty ? nil : orderedCatalogNames(names, preferred: ["low", "medium", "high", "max", "xhigh"])
+    }
+
+    private static func decodeTypes(_ container: KeyedDecodingContainer<DynamicKey>) -> [String]? {
+        if let names = try? container.decode([String].self, forKey: DynamicKey(stringValue: "types")!) {
+            return names
+        }
+        guard let map = try? container.decode([String: Flag].self, forKey: DynamicKey(stringValue: "types")!) else {
+            return nil
+        }
+        let names = map.compactMap { $0.value.supported == false ? nil : $0.key }
+        return names.isEmpty ? nil : orderedCatalogNames(names, preferred: ["adaptive", "enabled"])
+    }
 }
 
 private struct AnthropicBooleanCapability: Decodable { let supported: Bool? }
+
+private func orderedCatalogNames(_ names: [String], preferred: [String]) -> [String] {
+    names.sorted { lhs, rhs in
+        switch (preferred.firstIndex(of: lhs), preferred.firstIndex(of: rhs)) {
+        case let (left?, right?): left < right
+        case (_?, nil): true
+        case (nil, _?): false
+        default: lhs < rhs
+        }
+    }
+}
