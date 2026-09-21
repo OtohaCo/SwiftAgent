@@ -51,60 +51,22 @@ Provider-specific contracts:
 
 last-verified: 2026-09-21
 
-The RC2 source candidate is
-`99dd1171d8ef1f3091a350575f30e7e13791b1b5`; the release documentation and
-package tag are finalized by the RC2 release gate. Always read documentation
-from the same revision as the dependency installed in your app.
-
-### Published rc.2
-
-After the prerelease is published, pin it explicitly:
+The current published prerelease is `1.0.0-rc.3`. Pin it explicitly:
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/OtohaCo/SwiftAgent.git",
-        exact: "1.0.0-rc.2"
+        exact: "1.0.0-rc.3"
     )
 ]
 ```
 
-See the [RC2 release scope](docs/releases/1.0.0-rc.2.md). Apple PCC is
-experimental and is not live-qualified for the full SwiftAgent Core tool loop
-in RC2.
-
-### Published rc.1
-
-Pin the published release candidate when using its API:
-
-```swift
-dependencies: [
-    .package(
-        url: "https://github.com/OtohaCo/SwiftAgent.git",
-        exact: "1.0.0-rc.1"
-    )
-]
-```
-
-The rc.1 anchor is `d2347f11c6a78f421708e897dae42a51a98d37ea`. RC2 is the
-separate prerelease line and adds the APIs documented in the RC2 release note.
-
-### Reproducing the RC2 source candidate
-
-To reproduce the checked source baseline rather than follow a moving branch:
-
-```swift
-dependencies: [
-    .package(
-        url: "https://github.com/OtohaCo/SwiftAgent.git",
-        revision: "99dd1171d8ef1f3091a350575f30e7e13791b1b5"
-    )
-]
-```
-
-This is an explicit source-candidate pin, not a recommendation to ship an
-unaudited revision or a claim that it is the release tag. Add only the products
-your target uses. See [versioning](docs/guides/swift-agent-versioning.md).
+See the [RC3 release notes](docs/releases/1.0.0-rc.3.md). RC3 is a focused
+compatibility and execution-reporting hotfix prerelease, not a stable
+`1.0.0` release. Always read documentation from the same revision as the
+dependency installed in your app. Add only the products your target uses.
+See [versioning](docs/guides/swift-agent-versioning.md).
 
 For a local package supplied by a Git submodule, the parent's gitlink pins the
 SDK commit; the app's `Package.resolved` does not pin that local package.

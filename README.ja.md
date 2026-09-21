@@ -42,52 +42,18 @@ Provider ごとの契約：
 
 last-verified: 2026-09-21
 
-RC2 のソース候補は `99dd1171d8ef1f3091a350575f30e7e13791b1b5` です。リリース文書と package tag は RC2 release gate で確定します。App に導入した依存関係と同じ revision のドキュメントを参照してください。
-
-### 公開済みの rc.2
-
-プレリリース公開後は、明示的なバージョンを固定します。
+現在公開されているプレリリースは `1.0.0-rc.3` です。明示的なバージョンを固定します。
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/OtohaCo/SwiftAgent.git",
-        exact: "1.0.0-rc.2"
+        exact: "1.0.0-rc.3"
     )
 ]
 ```
 
-[RC2 のリリース範囲](docs/releases/1.0.0-rc.2.md)を参照してください。Apple PCC は RC2 では実験的で、SwiftAgent Core の完全なツールループの live qualification は未完了です。
-
-### 公開済みの rc.1
-
-公開済みリリース候補の API を使う場合は、そのバージョンを固定します。
-
-```swift
-dependencies: [
-    .package(
-        url: "https://github.com/OtohaCo/SwiftAgent.git",
-        exact: "1.0.0-rc.1"
-    )
-]
-```
-
-rc.1 の固定先は `d2347f11c6a78f421708e897dae42a51a98d37ea` です。RC2 は独立したプレリリースであり、追加 API と範囲は RC2 のリリースノートに記載しています。
-
-### RC2 ソース候補を再現する
-
-更新され続けるブランチを追うのではなく、確認済みソースの基準を再現する場合：
-
-```swift
-dependencies: [
-    .package(
-        url: "https://github.com/OtohaCo/SwiftAgent.git",
-        revision: "99dd1171d8ef1f3091a350575f30e7e13791b1b5"
-    )
-]
-```
-
-これはソース候補の明示的な固定です。未監査の revision を製品として出荷することを勧めるものでも、release tag であることを示すものでもありません。ターゲットが実際に使う products だけを追加してください。[バージョン方針](docs/guides/swift-agent-versioning.md)も参照してください。
+[RC3 のリリースノート](docs/releases/1.0.0-rc.3.md)を参照してください。RC3 は互換性と実行レポートを強化する限定的なプレリリース hotfix であり、安定版 `1.0.0` ではありません。App に導入した依存関係と同じ revision のドキュメントを参照してください。ターゲットが実際に使う products だけを追加してください。[バージョン方針](docs/guides/swift-agent-versioning.md)も参照してください。
 
 Git submodule でローカル package を提供する場合、SDK commit は親リポジトリの gitlink で固定します。App の `Package.resolved` はそのローカル package の固定には使われません。SDK の変更を先に commit・push し、利用側 App を検証してから gitlink を更新します。暗黙にリモートブランチを追従したり、推測した API をコンパイルするために依存関係を更新したりしないでください。
 
