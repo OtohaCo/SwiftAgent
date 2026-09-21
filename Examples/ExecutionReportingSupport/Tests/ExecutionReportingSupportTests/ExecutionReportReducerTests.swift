@@ -172,9 +172,44 @@ struct ExecutionReportReducerTests {
         var reducer = ExecutionReportReducer(sessionID: ids.sessionID, runID: ids.runID)
         let wrong = AgentRunInfo(sessionID: UUID(), runID: UUID(), model: ids.info.model)
         reducer.consume(.runStarted(wrong))
+        reducer.consume(.model(.textDelta("wrong source")))
+        reducer.consume(.toolCompleted(.init(
+            callID: ids.call.id,
+            content: [.text("wrong source")],
+            isError: false
+        )))
 
         #expect(reducer.report.coverage.runStarted == false)
         #expect(reducer.report.diagnostics.contains(.mismatchedRun))
+        #expect(reducer.report.diagnostics.contains(.eventBeforeRunBinding))
+        #expect(reducer.report.modelText.isEmpty)
+        #expect(reducer.report.toolObservations.isEmpty)
+    }
+
+    @Test func matchingRunCanBindAfterAnUnrelatedHeaderWasRejected() throws {
+        let ids = IdentityFixture()
+        let receipt = try ids.receipt()
+        var reducer = ExecutionReportReducer(sessionID: ids.sessionID, runID: ids.runID)
+        reducer.consume(.runStarted(.init(sessionID: UUID(), runID: UUID(), model: ids.model)))
+        reducer.consume(.runStarted(ids.info))
+        reducer.consume(.toolReceiptValidated(receipt))
+
+        #expect(reducer.report.coverage.runStarted)
+        #expect(reducer.report.receipts == [receipt])
+    }
+
+    @Test func completedToolDoesNotClaimExecutorEntry() {
+        let ids = IdentityFixture()
+        var reducer = ExecutionReportReducer(sessionID: ids.sessionID, runID: ids.runID)
+        reducer.consume(.runStarted(ids.info))
+        reducer.consume(.toolCompleted(.init(
+            callID: ids.call.id,
+            content: [.text("settled replay")],
+            isError: false
+        )))
+
+        #expect(reducer.report.toolObservations.first?.status == .completed(isError: false))
+        #expect(reducer.report.toolObservations.first?.executorEntered == nil)
     }
 
     @Test func lateEventsCannotOverwriteANewerConversation() {

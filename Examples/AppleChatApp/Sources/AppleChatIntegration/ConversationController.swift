@@ -18,6 +18,7 @@ public enum ConversationRunResult: Equatable, Sendable {
 
 public struct ConversationRunHandle: Sendable {
     public let id: UUID
+    public let sessionID: UUID
     public let events: AsyncStream<AgentEvent>
     private let cancelOperation: @Sendable () async -> Void
     private let waitOperation: @Sendable () async throws -> ConversationRunResult
@@ -25,12 +26,14 @@ public struct ConversationRunHandle: Sendable {
 
     init(
         id: UUID,
+        sessionID: UUID,
         events: AsyncStream<AgentEvent>,
         cancel: @escaping @Sendable () async -> Void,
         wait: @escaping @Sendable () async throws -> ConversationRunResult,
         waitForDrain: @escaping @Sendable () async throws -> Void
     ) {
         self.id = id
+        self.sessionID = sessionID
         self.events = events
         cancelOperation = cancel
         waitOperation = wait
@@ -40,6 +43,7 @@ public struct ConversationRunHandle: Sendable {
     public init(_ run: AgentRun) {
         self.init(
             id: run.id,
+            sessionID: run.sessionID,
             events: run.events,
             cancel: { await run.cancel() },
             wait: {
@@ -175,7 +179,7 @@ public actor ConversationController {
 
         startupTask = nil
         activeRun = run
-        executionReportReducer = .init(sessionID: conversationID, runID: run.id)
+        executionReportReducer = .init(sessionID: run.sessionID, runID: run.id)
         let stopWasRequested = projection.snapshot.phase == .stopRequested
         projection.setPhase(stopWasRequested ? .stopRequested : .running)
         publish()

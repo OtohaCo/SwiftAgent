@@ -55,6 +55,7 @@ public func makeFixtureConversationConfiguration(
 
 public func makeFixtureConversationController(
     conversationID: UUID = UUID(),
+    sessionID: UUID? = nil,
     route: FixtureConversationRoute = .direct,
     pacing: FixtureConversationPacing = .visible,
     maxDisplayItems: Int = 100
@@ -71,7 +72,7 @@ public func makeFixtureConversationController(
             runTimeout: .seconds(15)
         )
     )
-    let session = try agent.makeSession(id: conversationID)
+    let session = try agent.makeSession(id: sessionID ?? conversationID)
     return ConversationController(
         conversationID: conversationID,
         session: AgentConversationSessionHandle(session: session),

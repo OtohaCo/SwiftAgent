@@ -73,7 +73,9 @@ public struct ToolExecutionObservation: Equatable, Sendable {
 
     mutating func complete(_ result: ToolResultMessage, preview: String?) {
         status = .completed(isError: result.isError)
-        executorEntered = true
+        // A completion event can describe a settled replay. The public event
+        // contract does not expose executor entry, so keep this unknown.
+        executorEntered = nil
         resultPreview = preview
     }
 
@@ -98,6 +100,7 @@ public enum PresentationObservation: Equatable, Sendable {
 
 public enum ExecutionReportDiagnostic: Equatable, Sendable {
     case mismatchedRun
+    case eventBeforeRunBinding
     case eventAfterObservationEnded
     case duplicateReceipt(callID: ToolCallID)
     case conflictingReceipt(callID: ToolCallID)
@@ -259,14 +262,35 @@ public struct ExecutionReportReducer: Sendable {
             return false
         }
 
-        switch event {
-        case .runStarted(let info):
-            guard info.sessionID == sessionID, info.runID == runID else {
-                addDiagnostic(.mismatchedRun)
-                return false
+        if case .runStarted = event {
+            switch event {
+            case .runStarted(let info):
+                guard info.sessionID == sessionID, info.runID == runID else {
+                    addDiagnostic(.mismatchedRun)
+                    return false
+                }
+                guard !runStarted else {
+                    addDiagnostic(.terminalConflict)
+                    return false
+                }
+                runStarted = true
+            default:
+                break
             }
-            if runStarted { addDiagnostic(.terminalConflict) }
-            runStarted = true
+            return true
+        }
+
+        guard runStarted else {
+            // AgentEvent cases after runStarted do not carry an independent
+            // source identity. Reject them until the expected header binds the
+            // stream so a wrong header cannot be followed by accepted body.
+            addDiagnostic(.eventBeforeRunBinding)
+            return false
+        }
+
+        switch event {
+        case .runStarted:
+            break
         case .turnStarted:
             break
         case .model(let event):
@@ -338,6 +362,10 @@ public struct ExecutionReportReducer: Sendable {
     }
 
     public mutating func recordPresentation(_ observation: PresentationObservation) {
+        guard runStarted else {
+            addDiagnostic(.eventBeforeRunBinding)
+            return
+        }
         guard !isFinal else {
             addDiagnostic(.eventAfterObservationEnded)
             return

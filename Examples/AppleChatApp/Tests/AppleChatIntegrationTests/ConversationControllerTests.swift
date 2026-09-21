@@ -137,7 +137,7 @@ struct ConversationControllerTests {
         _ = await session.nextStartedText()
         await session.resolveNext(with: run.handle)
         _ = await nextSnapshot(&snapshots, phase: .running)
-        await run.emitProvisionalUsage(sessionID: controller.conversationID)
+        await run.emitProvisionalUsage(sessionID: run.handle.sessionID)
         let active = await nextSnapshot(&snapshots) {
             $0.currentResponseUsage.provisionalResponseCount == 1
         }
@@ -158,6 +158,25 @@ struct ConversationControllerTests {
             phase: .running,
             isCurrentResponse: false
         ) == .partial)
+    }
+
+    @Test func executionReportUsesRunSessionIdentityInsteadOfConversationIdentity() async throws {
+        let conversationID = UUID()
+        let sessionID = UUID()
+        let controller = try makeFixtureConversationController(
+            conversationID: conversationID,
+            sessionID: sessionID,
+            pacing: .immediate
+        )
+        var snapshots = controller.snapshots.makeAsyncIterator()
+        _ = await snapshots.next()
+
+        _ = try await controller.send("Use the actual Run identity")
+        let idle = await nextSnapshot(&snapshots, phase: .idle)
+
+        #expect(idle.executionReport?.sessionID == sessionID)
+        #expect(idle.executionReport?.sessionID != conversationID)
+        #expect(idle.executionReport?.coverage.isComplete == true)
     }
 }
 
@@ -210,12 +229,13 @@ private final class ControlledRun: Sendable {
     private let state: State
     let handle: ConversationRunHandle
 
-    init(id: UUID = UUID()) {
+    init(id: UUID = UUID(), sessionID: UUID = UUID()) {
         let events = AsyncStream<AgentEvent>.makeStream()
         let state = State(events: events.continuation)
         self.state = state
         handle = ConversationRunHandle(
             id: id,
+            sessionID: sessionID,
             events: events.stream,
             cancel: { await state.cancel() },
             wait: { try await state.wait() },
@@ -242,10 +262,10 @@ private final class ControlledRun: Sendable {
         )
     }
 
-    func finishCompleted(text: String, closeEvents: Bool) async {
-        await state.emitText(text)
-        await state.finish(.success(.completed), termination: nil, closeEvents: closeEvents)
-    }
+        func finishCompleted(text: String, closeEvents: Bool) async {
+            await state.emitText(text)
+            await state.finish(.success(.completed), termination: nil, closeEvents: closeEvents)
+        }
 
     private actor State {
         let events: AsyncStream<AgentEvent>.Continuation

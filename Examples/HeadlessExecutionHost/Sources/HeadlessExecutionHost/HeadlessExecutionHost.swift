@@ -15,26 +15,44 @@ public struct HeadlessExecutionResult: Sendable {
     public let root: URL
     public let report: RunExecutionReport
     public let fileContent: String?
+    public let fileRevision: String?
     public let executorEntryCount: Int
+    public let executorEntryCountAfterFirstRun: Int
+    public let successfulWriteCount: Int
+    public let successfulWriteCountAfterFirstRun: Int
     public let journalRecordCount: Int
     public let replayExecutorEntryCount: Int?
+    public let replayReceivedToolResult: Bool?
+    public let replayReport: RunExecutionReport?
 
     public init(
         scenario: HeadlessScenario,
         root: URL,
         report: RunExecutionReport,
         fileContent: String?,
+        fileRevision: String?,
         executorEntryCount: Int,
+        executorEntryCountAfterFirstRun: Int,
+        successfulWriteCount: Int,
+        successfulWriteCountAfterFirstRun: Int,
         journalRecordCount: Int,
-        replayExecutorEntryCount: Int?
+        replayExecutorEntryCount: Int?,
+        replayReceivedToolResult: Bool?,
+        replayReport: RunExecutionReport?
     ) {
         self.scenario = scenario
         self.root = root
         self.report = report
         self.fileContent = fileContent
+        self.fileRevision = fileRevision
         self.executorEntryCount = executorEntryCount
+        self.executorEntryCountAfterFirstRun = executorEntryCountAfterFirstRun
+        self.successfulWriteCount = successfulWriteCount
+        self.successfulWriteCountAfterFirstRun = successfulWriteCountAfterFirstRun
         self.journalRecordCount = journalRecordCount
         self.replayExecutorEntryCount = replayExecutorEntryCount
+        self.replayReceivedToolResult = replayReceivedToolResult
+        self.replayReport = replayReport
     }
 }
 
@@ -53,8 +71,8 @@ public struct HeadlessExecutionHost: Sendable {
         let root = try makeRoot(root)
         let store = try NoteStore(root: root)
         let journalURL = root.appendingPathComponent("journal.bin")
-        let journal = AgentJournal()
-        try await journal.persist(to: journalURL)
+        let bootstrapJournal = AgentJournal()
+        try await bootstrapJournal.persist(to: journalURL)
         let model = ModelID(provider: "deterministic-fixture", name: "note-host")
         let tool = try CreateNoteTool(store: store, allowMutation: scenario == .failureAfterWrite)
         let provider = DeterministicNoteProvider(scenario: scenario)
@@ -70,66 +88,99 @@ public struct HeadlessExecutionHost: Sendable {
             )
         )
         let sessionID = UUID()
-        let session = try agent.makeSession(id: sessionID, journal: journal)
-        let run = try await session.run(
-            "Create note.txt with the text 'execution fact'.",
-            operationID: "headless-note-operation"
-        )
-        let observationTask = Task { () -> ExecutionReportReducer in
-            var reducer = ExecutionReportReducer(sessionID: run.sessionID, runID: run.id)
-            for await event in run.events {
-                reducer.consume(event)
-            }
-            reducer.markStreamEnded()
-            return reducer
-        }
-        var reducer: ExecutionReportReducer
-
+        let firstReport: RunExecutionReport
+        let journalRecordCount: Int
+        let executorEntryCountAfterFirstRun: Int
+        let successfulWriteCountAfterFirstRun: Int
         do {
-            let result = try await run.wait()
-            reducer = await observationTask.value
-            reducer.recordWait(.success(result))
-        } catch {
-            reducer = await observationTask.value
-            reducer.recordWait(.failure(ExecutionReportReducer.classify(error)))
+            let journal = try AgentJournal.load(from: journalURL)
+            let session = try agent.makeSession(id: sessionID, journal: journal)
+            let run = try await session.run(
+                "Create note.txt with the text 'execution fact'.",
+                operationID: "headless-note-operation"
+            )
+            let observationTask = Task { () -> ExecutionReportReducer in
+                var reducer = ExecutionReportReducer(sessionID: run.sessionID, runID: run.id)
+                for await event in run.events {
+                    reducer.consume(event)
+                }
+                reducer.markStreamEnded()
+                return reducer
+            }
+            var reducer: ExecutionReportReducer
+
+            do {
+                let result = try await run.wait()
+                reducer = await observationTask.value
+                reducer.recordWait(.success(result))
+            } catch {
+                reducer = await observationTask.value
+                reducer.recordWait(.failure(ExecutionReportReducer.classify(error)))
+            }
+            switch scenario {
+            case .failureAfterWrite:
+                reducer.recordPresentation(.malformed(reason: "fixture provider ended before a valid final response"))
+            case .readOnlyRejectsWrite:
+                reducer.recordPresentation(.parsed(text: "The Host rejected the write before execution."))
+            }
+            try await run.waitForDrain()
+            reducer.markDrainCompleted()
+            firstReport = reducer.report
+            journalRecordCount = await journal.snapshot().count
+            executorEntryCountAfterFirstRun = await store.executorEntryCount
+            successfulWriteCountAfterFirstRun = await store.successfulWriteCount
         }
-        switch scenario {
-        case .failureAfterWrite:
-            reducer.recordPresentation(.malformed(reason: "fixture provider ended before a valid final response"))
-        case .readOnlyRejectsWrite:
-            reducer.recordPresentation(.parsed(text: "The Host rejected the write before execution."))
-        }
-        try await run.waitForDrain()
-        reducer.markDrainCompleted()
 
         let fileContent = try? await store.read(name: "note.txt")
-        let records = await journal.snapshot()
         let replayCount: Int?
+        let replayReceivedToolResult: Bool?
+        let replayReport: RunExecutionReport?
         if scenario == .failureAfterWrite {
-            let replaySession = try agent.makeSession(id: sessionID, journal: journal)
+            let reloadedJournal = try AgentJournal.load(from: journalURL)
+            let replaySession = try agent.makeSession(id: sessionID, journal: reloadedJournal)
             let replay = try await replaySession.run(
                 "Create note.txt with the text 'execution fact'.",
                 operationID: "headless-note-operation"
             )
-            let replayObservation = Task {
-                for await _ in replay.events {}
+            let replayObservation = Task { () -> ExecutionReportReducer in
+                var reducer = ExecutionReportReducer(sessionID: replay.sessionID, runID: replay.id)
+                for await event in replay.events {
+                    reducer.consume(event)
+                }
+                reducer.markStreamEnded()
+                return reducer
             }
-            _ = try? await replay.wait()
+            let replayResult = try await replay.wait()
+            var reducer = await replayObservation.value
+            reducer.recordWait(.success(replayResult))
+            reducer.recordPresentation(.parsed(text: "The note was already committed."))
             try await replay.waitForDrain()
-            _ = await replayObservation.value
+            reducer.markDrainCompleted()
+            replayReport = reducer.report
             replayCount = await store.executorEntryCount
+            replayReceivedToolResult = await provider.state.receivedToolResult(for: replay.id)
         } else {
             replayCount = nil
+            replayReceivedToolResult = nil
+            replayReport = nil
         }
+
+        let fileRevision = try? await store.revision(name: "note.txt")
 
         return HeadlessExecutionResult(
             scenario: scenario,
             root: root,
-            report: reducer.report,
+            report: firstReport,
             fileContent: fileContent,
+            fileRevision: fileRevision,
             executorEntryCount: await store.executorEntryCount,
-            journalRecordCount: records.count,
-            replayExecutorEntryCount: replayCount
+            executorEntryCountAfterFirstRun: executorEntryCountAfterFirstRun,
+            successfulWriteCount: await store.successfulWriteCount,
+            successfulWriteCountAfterFirstRun: successfulWriteCountAfterFirstRun,
+            journalRecordCount: journalRecordCount,
+            replayExecutorEntryCount: replayCount,
+            replayReceivedToolResult: replayReceivedToolResult,
+            replayReport: replayReport
         )
     }
 
@@ -148,6 +199,7 @@ public struct HeadlessExecutionHost: Sendable {
 private actor NoteStore {
     let root: URL
     private(set) var executorEntryCount = 0
+    private(set) var successfulWriteCount = 0
 
     init(root: URL) throws {
         self.root = root
@@ -156,12 +208,13 @@ private actor NoteStore {
 
     func write(name: String, content: String) throws -> String {
         guard name == "note.txt" else { throw HeadlessExecutionHostError.missingFixtureFile }
+        executorEntryCount += 1
         let url = root.appendingPathComponent(name)
         guard !FileManager.default.fileExists(atPath: url.path) else {
             throw CocoaError(.fileWriteFileExists)
         }
         try Data(content.utf8).write(to: url, options: .atomic)
-        executorEntryCount += 1
+        successfulWriteCount += 1
         return revision(for: content)
     }
 
@@ -171,6 +224,10 @@ private actor NoteStore {
             throw HeadlessExecutionHostError.missingFixtureFile
         }
         return content
+    }
+
+    func revision(name: String) throws -> String {
+        revision(for: try read(name: name))
     }
 
     nonisolated func revision(for content: String) -> String {
@@ -231,8 +288,30 @@ private struct CreateNoteTool: AgentTool {
     }
 }
 
+private actor DeterministicNoteProviderState {
+    private var firstMutationRunID: UUID?
+    private var toolResultRuns = Set<UUID>()
+
+    func shouldFailFinalResponse(for runID: UUID) -> Bool {
+        if let firstMutationRunID {
+            return firstMutationRunID == runID
+        }
+        firstMutationRunID = runID
+        return true
+    }
+
+    func recordToolResult(for runID: UUID) {
+        toolResultRuns.insert(runID)
+    }
+
+    func receivedToolResult(for runID: UUID) -> Bool {
+        toolResultRuns.contains(runID)
+    }
+}
+
 private struct DeterministicNoteProvider: ModelProvider {
     let scenario: HeadlessScenario
+    let state = DeterministicNoteProviderState()
     let descriptor = ModelProviderDescriptor(
         id: "deterministic-fixture",
         capabilities: [.streaming, .multiTurn, .tools]
@@ -243,10 +322,24 @@ private struct DeterministicNoteProvider: ModelProvider {
             let info = ResponseInfo(id: "fixture-\(request.runID?.uuidString ?? "none")-\(request.messages.count)", model: request.model)
             try emit(.responseStarted(info))
             if case .tool = request.messages.last {
-                if scenario == .failureAfterWrite {
-                    try emit(.textDelta("The note was written, but the final reply failed."))
-                    throw ModelProviderError(kind: .invalidResponse, message: "deterministic final response failure")
+                if let runID = request.runID {
+                    await state.recordToolResult(for: runID)
                 }
+                if scenario == .failureAfterWrite {
+                    let shouldFail = await state.shouldFailFinalResponse(for: request.runID ?? UUID())
+                    if shouldFail {
+                        try emit(.textDelta("The note was written, but the final reply failed."))
+                        throw ModelProviderError(kind: .invalidResponse, message: "deterministic final response failure")
+                    }
+                    try emit(.textDelta("The note was already committed."))
+                    try emit(.responseCompleted(.init(
+                        info: info,
+                        content: [.text("The note was already committed.")],
+                        stopReason: .endTurn
+                    )))
+                    return
+                }
+                try emit(.textDelta("The Host rejected the write before execution."))
                 try emit(.responseCompleted(.init(
                     info: info,
                     content: [.text("The Host rejected the write before execution.")],
@@ -255,7 +348,7 @@ private struct DeterministicNoteProvider: ModelProvider {
                 return
             }
             let call = ToolCall(
-                id: .init(rawValue: "note-call"),
+                id: .init(rawValue: "note-call-\(request.runID?.uuidString ?? "unknown")"),
                 name: CreateNoteTool.name,
                 argumentsJSON: #"{"name":"note.txt","content":"execution fact"}"#,
                 completeness: .complete

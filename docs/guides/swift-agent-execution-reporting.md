@@ -16,8 +16,11 @@ An integration should retain four independently computed layers:
 
 1. **Runtime termination**: the SDK Run completed, was refused, became
    incomplete, failed, or was cancelled.
-2. **Execution facts**: tool proposals, admission, executor entry, tool
-   results, validated Receipts, and unknown or conflicting observations.
+2. **Execution facts**: tool proposals, admission, tool results, validated
+   Receipts, and unknown or conflicting observations. A Host may add a
+   separately instrumented executor-entry observation; the public
+   `toolCompleted` event does not prove that entry and can also describe a
+   settled replay.
 3. **Domain fulfillment**: whether the Host's already accepted goal is now
    satisfied. This requires Host-owned target and permission state, execution
    facts, and any required current resource state.

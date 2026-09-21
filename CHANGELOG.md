@@ -6,14 +6,7 @@ All notable changes to SwiftAgent are recorded here.
 
 Development after `1.0.0-rc.3` is not part of the RC3 release scope.
 
-### Host integration
-
-- Add a reusable example-side execution report reducer that keeps Runtime
-  termination, observed tool facts, Host-owned fulfillment, and presentation
-  separate across failure, cancellation, malformed replies, and physical drain.
-- Add runnable AppleChatApp and headless Host examples covering committed
-  mutation recovery, pre-execution read-only rejection, bounded diagnostics,
-  and zero-request deterministic fixtures.
+No post-RC3 changes are included in this release.
 
 ## [1.0.0-rc.3] - 2026-09-21
 
@@ -37,6 +30,20 @@ This is a focused compatibility hotfix from the immutable RC2 anchor.
   continuation boundary, Provider, routing architecture, or public API removal
   changes are included.
 - The immutable `1.0.0-rc.1` and `1.0.0-rc.2` tags remain unchanged.
+
+### Host integration
+
+- Add a reusable example-side execution report reducer that keeps Runtime
+  termination, observed tool facts, Host-owned fulfillment, and presentation
+  separate across failure, cancellation, malformed replies, and physical drain.
+- Preserve durable mutation facts through a failed final model response and a
+  Journal-backed replay with a new tool call ID, without re-entering the
+  executor or counting a replay completion as executor entry.
+- Bind reports to the actual Run session identity, reject unbound event bodies,
+  and isolate mismatched lifecycle headers before they can contaminate a report.
+- Add runnable AppleChatApp and headless Host examples covering committed
+  mutation recovery, pre-execution read-only rejection, bounded diagnostics,
+  and zero-request deterministic fixtures.
 
 ## [1.0.0-rc.2] - 2026-09-21
 
