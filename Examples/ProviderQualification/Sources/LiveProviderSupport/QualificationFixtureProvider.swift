@@ -36,6 +36,18 @@ struct QualificationFixtureProvider: ModelProvider {
             }
 
             let prompt = lastUserText(request)
+            if prompt.contains("QUALIFICATION-INCOMPLETE") {
+                let usage = ModelUsage(inputTokens: 10, outputTokens: 1)
+                try emit(.textDelta("Partial"))
+                try emit(.usage(usage))
+                try emit(.responseCompleted(.init(
+                    info: info,
+                    content: [.text("Partial")],
+                    usage: usage,
+                    stopReason: .maxOutputTokens
+                )))
+                return
+            }
             if !request.tools.isEmpty,
                prompt.contains("Use add_numbers") || prompt.contains("lookup_account") {
                 let toolName = request.tools.contains(where: { $0.name == "lookup_account" })

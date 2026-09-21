@@ -19,6 +19,7 @@ public enum QualificationScenario: String, CaseIterable, Codable, Sendable {
     case tool
     case restart
     case structured
+    case incomplete
     case usage
     case cancel
     case noul
@@ -117,6 +118,7 @@ public struct QualificationOptions: Equatable, Sendable {
     public let budgetFile: URL?
     public let service: QualificationService
     public let reasoning: String?
+    public let maximumOutputTokens: Int?
 
     public init(
         provider: QualificationProvider,
@@ -127,7 +129,8 @@ public struct QualificationOptions: Equatable, Sendable {
         environmentFile: URL?,
         budgetFile: URL?,
         service: QualificationService,
-        reasoning: String? = nil
+        reasoning: String? = nil,
+        maximumOutputTokens: Int? = nil
     ) {
         self.provider = provider
         self.mode = mode
@@ -138,6 +141,7 @@ public struct QualificationOptions: Equatable, Sendable {
         self.budgetFile = budgetFile
         self.service = service
         self.reasoning = normalized(reasoning)
+        self.maximumOutputTokens = maximumOutputTokens
     }
 
     public static func parse(_ arguments: [String]) throws -> Self {
@@ -150,6 +154,7 @@ public struct QualificationOptions: Equatable, Sendable {
         var budgetFile: URL?
         var service = QualificationService.official
         var reasoning: String?
+        var maximumOutputTokens: Int?
         var index = 0
 
         func value(after flag: String) throws -> String {
@@ -209,6 +214,13 @@ public struct QualificationOptions: Equatable, Sendable {
             case "--reasoning":
                 reasoning = try value(after: argument)
                 index += 2
+            case "--max-output-tokens":
+                let raw = try value(after: argument)
+                guard let parsed = Int(raw), parsed > 0 else {
+                    throw LiveConfigurationError.invalidArgument("Max output tokens must be positive.")
+                }
+                maximumOutputTokens = parsed
+                index += 2
             default:
                 throw LiveConfigurationError.invalidArgument("Unknown argument: \(argument)")
             }
@@ -226,7 +238,8 @@ public struct QualificationOptions: Equatable, Sendable {
             environmentFile: environmentFile,
             budgetFile: budgetFile,
             service: service,
-            reasoning: normalized(reasoning)
+            reasoning: normalized(reasoning),
+            maximumOutputTokens: maximumOutputTokens
         )
     }
 }

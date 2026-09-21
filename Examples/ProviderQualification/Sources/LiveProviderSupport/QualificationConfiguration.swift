@@ -39,6 +39,7 @@ public struct QualificationConfiguration: Sendable {
     public let model: String
     public let endpoint: URL
     public let reasoning: String?
+    public let maximumOutputTokens: Int?
     public let resolvedModel: String?
     let credential: String
 
@@ -90,6 +91,7 @@ public struct QualificationConfiguration: Sendable {
                 model: options.modelOverride ?? "fixture",
                 endpoint: endpoint,
                 reasoning: options.reasoning,
+                maximumOutputTokens: options.maximumOutputTokens,
                 resolvedModel: nil,
                 credential: "fixture"
             )
@@ -106,6 +108,7 @@ public struct QualificationConfiguration: Sendable {
             model: model,
             endpoint: values.endpoint,
             reasoning: options.reasoning,
+            maximumOutputTokens: options.maximumOutputTokens,
             resolvedModel: values.resolvedModel,
             credential: values.credential ?? ""
         )

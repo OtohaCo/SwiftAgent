@@ -261,6 +261,8 @@ public struct QualificationRunner: Sendable {
             return try await runRestart(modelSelection, usageLedger: usageLedger, diagnostics: diagnostics)
         case .structured:
             return try await runStructured(modelSelection, usageLedger: usageLedger, diagnostics: diagnostics)
+        case .incomplete:
+            return try await runIncomplete(modelSelection, usageLedger: usageLedger, diagnostics: diagnostics)
         case .usage:
             return try await runUsage(modelSelection, usageLedger: usageLedger, diagnostics: diagnostics)
         case .cancel:
@@ -431,6 +433,43 @@ public struct QualificationRunner: Sendable {
             usageSummary: await usageLedger.summary(),
             usageDiagnostics: await diagnostics.values,
             note: valid ? "complete_terminal_json_validated" : "structured_output_invalid"
+        )
+    }
+
+    private func runIncomplete(
+        _ selection: ConfiguredModelProvider,
+        usageLedger: UsageLedger,
+        diagnostics: UsageDiagnosticsStore
+    ) async throws -> QualificationCaseResult {
+        guard configuration.maximumOutputTokens != nil else {
+            return .init(
+                scenario: .incomplete,
+                status: .notExercised,
+                requestAttempts: 0,
+                modelTurns: 0,
+                toolCalls: 0,
+                toolExecutions: 0,
+                note: "requires_explicit_max_output_tokens"
+            )
+        }
+        let result = try await execute(
+            session: try makeAgent(selection: selection, maxModelTurns: 1).makeSession(),
+            prompt: "QUALIFICATION-INCOMPLETE: produce a long synthetic answer so the configured output limit is reached.",
+            usageLedger: usageLedger,
+            diagnostics: diagnostics
+        )
+        let observed = result.outcome == .incomplete(.maxOutputTokens)
+            && result.response.stopReason == .maxOutputTokens
+        return .init(
+            scenario: .incomplete,
+            status: observed ? .pass : .notExercised,
+            requestAttempts: 0,
+            modelTurns: result.modelTurns,
+            toolCalls: result.response.toolCalls.count,
+            toolExecutions: 0,
+            usageSummary: await usageLedger.summary(),
+            usageDiagnostics: await diagnostics.values,
+            note: observed ? "incomplete_max_output_tokens_observed" : "incomplete_status_not_observed"
         )
     }
 

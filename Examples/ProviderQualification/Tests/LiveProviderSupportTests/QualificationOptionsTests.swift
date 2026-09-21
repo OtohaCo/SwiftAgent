@@ -57,6 +57,22 @@ struct QualificationOptionsTests {
         #expect(throws: LiveConfigurationError.self) {
             try QualificationOptions.parse(["--endpoint", "http://example.com"])
         }
+        #expect(throws: LiveConfigurationError.self) {
+            try QualificationOptions.parse(["--max-output-tokens", "0"])
+        }
+    }
+
+    @Test func parsesExplicitMaximumOutputTokensForControlledIncompleteProbe() throws {
+        let options = try QualificationOptions.parse([
+            "--provider", "deepseek",
+            "--mode", "live",
+            "--case", "incomplete",
+            "--max-output-tokens", "1",
+            "--reasoning", "none",
+        ])
+        #expect(options.scenario == .incomplete)
+        #expect(options.maximumOutputTokens == 1)
+        #expect(options.reasoning == "none")
     }
 
     @Test func liveRequestsRequireAPersistentBudgetLedger() throws {

@@ -10,6 +10,7 @@ struct QualificationRunnerTests {
         .tool,
         .restart,
         .structured,
+        .incomplete,
         .usage,
         .cancel,
     ])
@@ -22,7 +23,8 @@ struct QualificationRunnerTests {
             endpointOverride: nil,
             environmentFile: nil,
             budgetFile: nil,
-            service: .official
+            service: .official,
+            maximumOutputTokens: scenario == .incomplete ? 1 : nil
         )
         let environment = LiveEnvironment(process: [:])
         let configuration = try QualificationConfiguration.resolve(options: options, environment: environment)
@@ -63,6 +65,11 @@ struct QualificationRunnerTests {
             #expect(results[0].usageSummary.finalizedResponseCount == 0)
             #expect(results[0].usageSummary.provisionalResponseCount == 1)
             #expect(results[0].usageSummary.inputTokens.missingCount == 1)
+        }
+        if scenario == .incomplete {
+            #expect(results[0].note == "incomplete_max_output_tokens_observed")
+            #expect(results[0].usageSummary.finalizedResponseCount == 1)
+            #expect(results[0].usageSummary.outputTokens.reportedSubtotal == 1)
         }
     }
 

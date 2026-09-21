@@ -19,6 +19,7 @@ public enum LiveProviderFactory {
         let options = configuration.options
         let providerID = options.provider == .local ? "local-responses" : options.provider.rawValue
         let model = ModelID(provider: providerID, name: configuration.model)
+        let maximumOutputTokens = configuration.maximumOutputTokens
         if options.mode == .fixture {
             return .init(
                 model: model,
@@ -42,7 +43,7 @@ public enum LiveProviderFactory {
             provider = try OpenAIResponsesProvider(
                 apiKey: configuration.credential,
                 endpoint: configuration.endpoint,
-                maximumOutputTokens: 512,
+                maximumOutputTokens: maximumOutputTokens ?? 512,
                 reasoningEffort: effort,
                 reasoningSummary: effort == nil ? nil : .concise,
                 resolvedModelIDsByAlias: aliases,
@@ -52,7 +53,7 @@ public enum LiveProviderFactory {
             provider = try DeepSeekResponsesProvider(
                 apiKey: configuration.credential,
                 endpoint: configuration.endpoint,
-                maximumOutputTokens: 512,
+                maximumOutputTokens: maximumOutputTokens ?? 512,
                 reasoningEffort: .init(rawValue: configuration.reasoning ?? "high"),
                 resolvedModelIDsByAlias: aliases,
                 transport: budgeted
@@ -61,7 +62,7 @@ public enum LiveProviderFactory {
             provider = try AnthropicProvider(
                 apiKey: configuration.credential,
                 endpoint: configuration.endpoint,
-                maximumOutputTokens: 2_048,
+                maximumOutputTokens: maximumOutputTokens ?? 2_048,
                 thinking: try anthropicThinking(configuration.reasoning),
                 resolvedModelIDsByAlias: aliases,
                 transport: budgeted
@@ -74,7 +75,7 @@ public enum LiveProviderFactory {
                     authentication: configuration.credential.isEmpty
                         ? .none
                         : .bearer(configuration.credential),
-                    maximumOutputTokens: 512,
+                    maximumOutputTokens: maximumOutputTokens ?? 512,
                     capabilities: [.tools, .structuredOutput]
                 ),
                 transport: budgeted
