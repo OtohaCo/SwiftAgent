@@ -2,6 +2,7 @@ import AgentCore
 import AgentModels
 import AgentTools
 import AgentUsage
+import ExecutionReportingSupport
 import Foundation
 
 public enum ConversationControllerError: Error, Equatable, Sendable {
@@ -92,6 +93,7 @@ public actor ConversationController {
     private var usageTurn = 0
     private var usageResponseInfo: ResponseInfo?
     private var usageDiagnosticCount = 0
+    private var executionReportReducer: ExecutionReportReducer?
 
     public init(
         conversationID: UUID = UUID(),
@@ -173,6 +175,7 @@ public actor ConversationController {
 
         startupTask = nil
         activeRun = run
+        executionReportReducer = .init(sessionID: conversationID, runID: run.id)
         let stopWasRequested = projection.snapshot.phase == .stopRequested
         projection.setPhase(stopWasRequested ? .stopRequested : .running)
         publish()
@@ -184,6 +187,7 @@ public actor ConversationController {
                 await eventDeliveryHook(event)
                 await self?.receive(event, generation: generation, runID: run.id)
             }
+            await self?.observationEnded(generation: generation, runID: run.id)
         }
         self.observationTask = observationTask
         cleanupTask = Task { [weak self] in
@@ -222,8 +226,22 @@ public actor ConversationController {
 
     private func receive(_ event: AgentEvent, generation: UInt64, runID: UUID) {
         guard generation == self.generation, activeRun?.id == runID else { return }
+        executionReportReducer?.consume(event)
+        if case .runFinished(.failed) = event, let report = executionReportReducer?.report,
+           report.finalModelText?.isEmpty != false
+        {
+            executionReportReducer?.recordPresentation(.malformed(reason: "final response unavailable"))
+        }
         projection.apply(event)
+        projection.updateExecutionReport(executionReportReducer?.report)
         recordUsage(event)
+        publish()
+    }
+
+    private func observationEnded(generation: UInt64, runID: UUID) {
+        guard generation == self.generation, activeRun?.id == runID else { return }
+        executionReportReducer?.markStreamEnded()
+        projection.updateExecutionReport(executionReportReducer?.report)
         publish()
     }
 
@@ -282,24 +300,44 @@ public actor ConversationController {
         guard generation == self.generation, activeRun?.id == runID else { return }
         switch result {
         case .success(let result):
+            executionReportReducer?.recordWait(outcome: .success(Self.outcome(from: result)))
             switch result {
             case .completed: projection.setTerminal(.completed)
             case .refused: projection.setTerminal(.refused)
-            case .incomplete(let reason): projection.setTerminal(.incomplete(reason))
+            case .incomplete(let reason):
+                if let report = executionReportReducer?.report,
+                   case .failed = report.runtimeTermination,
+                   report.finalModelText?.isEmpty != false
+                {
+                    executionReportReducer?.recordPresentation(
+                        .malformed(reason: "final response unavailable")
+                    )
+                }
+                projection.setTerminal(.incomplete(reason))
             }
         case .failure(let error):
+            let failure = Self.agentFailure(error)
+            executionReportReducer?.recordWait(outcome: .failure(failure))
+            if executionReportReducer?.report.finalModelText?.isEmpty != false {
+                executionReportReducer?.recordPresentation(
+                    .malformed(reason: "final response unavailable")
+                )
+            }
             if error is CancellationError {
                 projection.setTerminal(.cancelled)
             } else {
-                projection.setTerminal(.failed(Self.agentFailure(error)))
+                projection.setTerminal(.failed(failure))
             }
         }
+        projection.updateExecutionReport(executionReportReducer?.report)
         projection.setPhase(.draining)
         publish()
     }
 
     private func drainCompleted(generation: UInt64, runID: UUID) {
         guard generation == self.generation, activeRun?.id == runID else { return }
+        executionReportReducer?.markDrainCompleted()
+        projection.updateExecutionReport(executionReportReducer?.report)
         observationTask?.cancel()
         observationTask = nil
         cleanupTask = nil
@@ -348,6 +386,14 @@ public actor ConversationController {
         case let value as AgentMutationPersistenceError: .mutationPersistence(value)
         case let value as AgentContextError: .context(value)
         default: .unclassified
+        }
+    }
+
+    private static func outcome(from result: ConversationRunResult) -> AgentLoopOutcome {
+        switch result {
+        case .completed: .completed
+        case .refused: .refused
+        case .incomplete(let reason): .incomplete(reason)
         }
     }
 }

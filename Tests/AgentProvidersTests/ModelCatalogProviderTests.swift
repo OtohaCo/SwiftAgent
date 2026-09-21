@@ -201,8 +201,86 @@ struct ModelCatalogProviderTests {
         #expect(model.capabilities.configurableReasoning == .supported)
         #expect(model.reasoningControls.first { $0.kind == .effort }?.allowedValues == ["low", "medium", "high", "max", "xhigh"])
         #expect(model.reasoningControls.first { $0.kind == .thinkingMode }?.allowedValues == ["adaptive", "enabled"])
+        #expect(model.reasoningControls.first { $0.kind == .effort }?.executability == .executable)
+        #expect(model.reasoningControls.first { $0.kind == .thinkingMode }?.executability == .executable)
         #expect(model.reasoningControls.contains { $0.kind == .tokenBudget })
         #expect(model.capabilities.tools == .unknown)
+    }
+
+    @Test func anthropicObjectEffortRetainsSupportedFutureValuesInStableOrder() async throws {
+        let body = #"{"data":[{"id":"claude-future-effort","capabilities":{"effort":{"supported":true,"zeta":{"supported":true},"low":{"supported":true},"ultra":{"supported":true}}}}],"has_more":false,"last_id":"claude-future-effort"}"#
+        let provider = try AnthropicModelCatalogProvider(
+            apiKey: "fixture-secret",
+            endpoint: URL(string: "https://api.example.test/v1/models")!,
+            serviceInstanceID: "anthropic-workspace",
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(), bodies: [Data(body.utf8)], headers: ["Content-Type": "application/json"]
+            )
+        )
+
+        let model = try #require(try await provider.listModels(.init()).models.first)
+        let effort = try #require(model.reasoningControls.first(where: { $0.kind == .effort }))
+
+        #expect(effort.allowedValues == ["low", "ultra", "zeta"])
+        #expect(effort.executability == .executable)
+    }
+
+    @Test func anthropicObjectCapabilitiesRequireExplicitSupport() async throws {
+        let body = #"{"data":[{"id":"claude-unsupported","capabilities":{"effort":{"supported":false,"experimental":{"supported":true}},"thinking":{"supported":false,"types":{"enabled":{"supported":true}}}}},{"id":"claude-unknown","capabilities":{"effort":{"future":{}},"thinking":{"types":{"future":{"availability":"preview"}}}}},{"id":"claude-partial","capabilities":{"effort":{"supported":true,"low":{"supported":true},"future":{},"preview":{"availability":"preview"}},"thinking":{"supported":true,"future_capability":{"supported":true},"types":{"adaptive":{"supported":true},"enabled":{"supported":false},"future":{"availability":"preview"}}}}}],"has_more":false,"last_id":"claude-partial"}"#
+        let provider = try AnthropicModelCatalogProvider(
+            apiKey: "fixture-secret",
+            endpoint: URL(string: "https://api.example.test/v1/models")!,
+            serviceInstanceID: "anthropic-workspace",
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(), bodies: [Data(body.utf8)], headers: ["Content-Type": "application/json"]
+            )
+        )
+
+        let models = try await provider.listModels(.init()).models
+        let unsupportedEffort = try #require(models[0].reasoningControls.first(where: { $0.kind == .effort }))
+        let unsupportedThinking = try #require(models[0].reasoningControls.first(where: { $0.kind == .thinkingMode }))
+        #expect(unsupportedEffort.support == .unsupported)
+        #expect(unsupportedEffort.allowedValues == nil)
+        #expect(unsupportedEffort.executability == .unknown)
+        #expect(unsupportedThinking.support == .unsupported)
+        #expect(unsupportedThinking.allowedValues == nil)
+        #expect(unsupportedThinking.executability == .unknown)
+        #expect(models[0].capabilities.configurableReasoning == .unsupported)
+        #expect(models[0].reasoningControls.contains { $0.kind == .tokenBudget } == false)
+
+        let unknownEffort = try #require(models[1].reasoningControls.first(where: { $0.kind == .effort }))
+        let unknownThinking = try #require(models[1].reasoningControls.first(where: { $0.kind == .thinkingMode }))
+        #expect(unknownEffort.support == .unknown)
+        #expect(unknownEffort.allowedValues == nil)
+        #expect(unknownEffort.executability == .unknown)
+        #expect(unknownThinking.support == .unknown)
+        #expect(unknownThinking.allowedValues == nil)
+        #expect(unknownThinking.executability == .unknown)
+        #expect(models[1].capabilities.configurableReasoning == .unknown)
+        #expect(models[1].reasoningControls.contains { $0.kind == .tokenBudget } == false)
+
+        let partialEffort = try #require(models[2].reasoningControls.first(where: { $0.kind == .effort }))
+        let partialThinking = try #require(models[2].reasoningControls.first(where: { $0.kind == .thinkingMode }))
+        #expect(partialEffort.allowedValues == ["low"])
+        #expect(partialThinking.allowedValues == ["adaptive"])
+        #expect(partialEffort.executability == .executable)
+        #expect(partialThinking.executability == .executable)
+    }
+
+    @Test func anthropicMissingCapabilitiesRemainUnknown() async throws {
+        let body = #"{"data":[{"id":"claude-null","capabilities":null},{"id":"claude-missing"}],"has_more":false,"last_id":"claude-missing"}"#
+        let provider = try AnthropicModelCatalogProvider(
+            apiKey: "fixture-secret",
+            endpoint: URL(string: "https://api.example.test/v1/models")!,
+            serviceInstanceID: "anthropic-workspace",
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(), bodies: [Data(body.utf8)], headers: ["Content-Type": "application/json"]
+            )
+        )
+
+        let models = try await provider.listModels(.init()).models
+        #expect(models.count == 2)
+        #expect(models.allSatisfy { $0.capabilities == .unknown && $0.reasoningControls.isEmpty })
     }
 
     @Test func anthropicThinkingBudgetWithoutAUsableRangeIsNotAutomaticallyExecutable() async throws {

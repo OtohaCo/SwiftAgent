@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v13), .iOS(.v16)],
     dependencies: [
         .package(name: "SwiftAgent", path: "../.."),
+        .package(name: "SwiftAgentExecutionReportingSupport", path: "../ExecutionReportingSupport"),
         .package(name: "SwiftAgentProviderQualification", path: "../ProviderQualification"),
     ],
     targets: [
@@ -17,6 +18,7 @@ let package = Package(
                 .product(name: "AgentProviders", package: "SwiftAgent"),
                 .product(name: "AgentTools", package: "SwiftAgent"),
                 .product(name: "AgentUsage", package: "SwiftAgent"),
+                .product(name: "ExecutionReportingSupport", package: "SwiftAgentExecutionReportingSupport"),
                 .product(name: "LiveProviderSupport", package: "SwiftAgentProviderQualification"),
             ]
         ),
@@ -34,6 +36,7 @@ let package = Package(
                 .product(name: "AgentCore", package: "SwiftAgent"),
                 .product(name: "AgentModels", package: "SwiftAgent"),
                 .product(name: "AgentUsage", package: "SwiftAgent"),
+                .product(name: "ExecutionReportingSupport", package: "SwiftAgentExecutionReportingSupport"),
                 .product(name: "LiveProviderSupport", package: "SwiftAgentProviderQualification"),
             ]
         ),

@@ -14,7 +14,11 @@ swift test --package-path Examples/ProviderQualification --disable-sandbox --no-
 swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
 swift test --package-path Examples/DynamicModelRouting --disable-sandbox --no-parallel
 swift run --package-path Examples/DynamicModelRouting DynamicModelRouting
+swift test --package-path Examples/ExecutionReportingSupport --disable-sandbox --no-parallel
+swift test --package-path Examples/HeadlessExecutionHost --disable-sandbox --no-parallel
+swift run --package-path Examples/HeadlessExecutionHost HeadlessExecutionHostCLI failure-after-write
 swift test --filter UsageLedgerTests
+bash Scripts/ci-execution-reporting.sh
 ```
 
 Do not treat skipped live tests as passes. Anthropic, OpenAI, Local Responses, and Apple live
@@ -37,6 +41,8 @@ preflight and explicitly bounded live cases. Its persistent ledger defaults to
 fixture. See the [qualification guide](guides/swift-agent-examples-and-live.md).
 Usage aggregation semantics and event ownership are documented in the
 [usage accounting guide](guides/swift-agent-usage.md).
+Execution facts, report finality, Host authorization and failure/cancellation
+handling are documented in the [execution reporting guide](guides/swift-agent-execution-reporting.md).
 
 Local Responses fixture coverage includes canonical text/tool replay, stream
 validation, cancellation, usage, and durable text/tool restart. Run the

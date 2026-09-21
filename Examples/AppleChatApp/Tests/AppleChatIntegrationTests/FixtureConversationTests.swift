@@ -32,6 +32,45 @@ struct FixtureConversationTests {
         #expect(finished.usageDiagnosticCount == 0)
     }
 
+    @Test func executionReportRetainsToolFactsAndPhysicalDrainCoverage() async throws {
+        let controller = try makeFixtureConversationController(pacing: .immediate)
+        var snapshots = controller.snapshots.makeAsyncIterator()
+        _ = await snapshots.next()
+
+        _ = try await controller.send("Look up account A-100 and summarize it")
+        let finished = await terminalSnapshot(&snapshots)
+        let report = try #require(finished.executionReport)
+
+        #expect(report.sessionID == finished.conversationID)
+        #expect(report.runtimeTermination == .completed(.completed))
+        #expect(report.toolObservations.contains {
+            $0.name == "lookup_account" && $0.status == .completed(isError: false)
+        })
+        #expect(report.receipts.isEmpty)
+        #expect(report.coverage.isComplete)
+    }
+
+    @Test func executionReportKeepsToolCompletionWhenLaterProviderFails() async throws {
+        let controller = try makeFixtureConversationController(pacing: .immediate)
+        var snapshots = controller.snapshots.makeAsyncIterator()
+        _ = await snapshots.next()
+
+        _ = try await controller.send("Look up account A-100, then fail-after-tool")
+        let finished = await terminalSnapshot(&snapshots)
+        let report = try #require(finished.executionReport)
+
+        #expect(finished.terminal == .failed(.provider(.init(
+            kind: .invalidResponse,
+            message: "Fixture protocol failure after tool."
+        ))))
+        #expect(report.toolObservations.contains {
+            $0.name == "lookup_account" && $0.status == .completed(isError: false)
+        })
+        #expect(report.receipts.isEmpty)
+        #expect(report.presentation == .malformed(reason: "final response unavailable"))
+        #expect(report.coverage.isComplete)
+    }
+
     @Test func recoverableFixtureErrorIsVisibleAndRunStillCompletes() async throws {
         let controller = try makeFixtureConversationController(pacing: .immediate)
         var snapshots = controller.snapshots.makeAsyncIterator()

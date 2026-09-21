@@ -39,3 +39,6 @@ swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
 
 echo "dynamic model routing example"
 swift test --package-path Examples/DynamicModelRouting --disable-sandbox --no-parallel
+
+echo "execution reporting support and consumers"
+bash Scripts/ci-execution-reporting.sh

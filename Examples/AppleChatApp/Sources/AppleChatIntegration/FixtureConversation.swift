@@ -95,6 +95,16 @@ private struct StreamingFixtureProvider: ModelProvider {
             try emit(.responseStarted(info))
 
             if case .tool(let result)? = request.messages.last {
+                if request.messages.contains(where: { message in
+                    guard case .user(let content) = message else { return false }
+                    return content.contains { content in
+                        guard case .text(let text) = content else { return false }
+                        return text.localizedCaseInsensitiveContains("fail-after-tool")
+                    }
+                }) {
+                    try emit(.textDelta("The tool completed, but the final reply failed."))
+                    throw ModelProviderError(kind: .invalidResponse, message: "Fixture protocol failure after tool.")
+                }
                 let text: String
                 if result.isError {
                     text = "I could not find that account. Try another account ID."

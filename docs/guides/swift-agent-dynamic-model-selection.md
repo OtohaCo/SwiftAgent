@@ -1,6 +1,6 @@
 # Dynamic model selection
 
-> last-verified: 2026-09-20
+> last-verified: 2026-09-21
 
 This guide describes the RC.2 model-selection slice. It is intentionally a
 Host capability: `AgentCore` captures an immutable execution binding for each
@@ -17,12 +17,21 @@ parameter.
 `OpenAIModelCatalogProvider`, `AnthropicModelCatalogProvider`, and
 `DeepSeekModelCatalogProvider` use their documented model-list shapes. Anthropic's
 current Models API reports `effort` levels and `thinking.types` as objects; the
-decoder also accepts the older string-array fixtures and still leaves unreported
-capabilities `unknown`. OpenAI and Anthropic cursor pagination is passed through
-the bounded cache; DeepSeek's current model-list shape is treated as a single
-page. They preserve incomplete metadata and never make discovery a prerequisite
-for an explicitly configured Run. `ModelCatalogCache` is host-refreshed, bounded,
-and keeps a stale last-known-good snapshot separate from a failed refresh.
+decoder also accepts the older string-array fixtures. Object-map entries are
+published only when their nested metadata explicitly says `supported: true`;
+false, missing, null, or incomplete metadata remains fail-closed and does not
+become a supported value. OpenAI and Anthropic cursor pagination is passed
+through the bounded cache; DeepSeek's current model-list shape is treated as a
+single page. They preserve incomplete metadata and never make discovery a
+prerequisite for an explicitly configured Run. `ModelCatalogCache` is
+host-refreshed, bounded, and keeps a stale last-known-good snapshot separate
+from a failed refresh.
+
+Catalog discovery and adapter execution remain separate. Anthropic effort values
+are executable when they use the existing `output_config.effort` parameter,
+including new raw values accepted by `AnthropicEffort`. A newly discovered
+thinking mode is retained in the catalog but is marked
+`adapterUpgradeRequired` until the current encoder can emit it.
 
 ```swift
 let catalog = try await ModelCatalogCache().refresh(

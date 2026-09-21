@@ -131,14 +131,14 @@ public struct AnthropicModelCatalogProvider: ModelCatalogDetailProvider {
         )
     }
 
-    private func reasoningControl(
-        _ capability: AnthropicReasoningCapability?,
+    private func reasoningControl<Capability: AnthropicCapabilityMetadata>(
+        _ capability: Capability?,
         parameter: String,
         kind: ModelReasoningControlKind,
         knownValues: Set<String>?
     ) -> ModelReasoningControlDescriptor? {
         guard let capability else { return nil }
-        let values = capability.values ?? capability.types
+        let values = capability.supported == true ? capability.values ?? capability.types : nil
         let executability: ModelCatalogExecutability
         if capability.supported != true {
             executability = .unknown
@@ -194,8 +194,8 @@ private struct AnthropicModelRecord: Decodable {
 }
 
 private struct AnthropicCatalogCapabilities: Decodable {
-    let effort: AnthropicReasoningCapability?
-    let thinking: AnthropicReasoningCapability?
+    let effort: AnthropicEffortCapability?
+    let thinking: AnthropicThinkingCapability?
     let structuredOutputs: AnthropicBooleanCapability?
 
     private enum CodingKeys: String, CodingKey {
@@ -204,55 +204,101 @@ private struct AnthropicCatalogCapabilities: Decodable {
     }
 }
 
-/// Accepts both the RC.2 fixture shape (`values`/`types` as string arrays)
-/// and the current Models API objects (`types: {adaptive:{supported:true}}`
-/// and effort levels as sibling keys). Unknown nested keys stay out of the
+private protocol AnthropicCapabilityMetadata {
+    var supported: Bool? { get }
+    var values: [String]? { get }
+    var types: [String]? { get }
+}
+
+private struct AnthropicCatalogDynamicKey: CodingKey {
+    var stringValue: String
+    var intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
+    }
+
+    init?(intValue: Int) {
+        stringValue = String(intValue)
+        self.intValue = intValue
+    }
+}
+
+private struct AnthropicCatalogFlag: Decodable {
+    let supported: Bool?
+}
+
+private func anthropicCatalogKey(_ string: String) -> AnthropicCatalogDynamicKey {
+    AnthropicCatalogDynamicKey(stringValue: string)!
+}
+
+private func anthropicCatalogSupported(
+    _ container: KeyedDecodingContainer<AnthropicCatalogDynamicKey>
+) -> Bool? {
+    try? container.decodeIfPresent(Bool.self, forKey: anthropicCatalogKey("supported"))
+}
+
+/// Accepts both the RC.2 fixture shape (`values` as a string array) and the
+/// current Models API effort object map. Unknown nested keys stay out of the
 /// page instead of failing the whole list as `invalid_response`.
-private struct AnthropicReasoningCapability: Decodable {
+private struct AnthropicEffortCapability: Decodable, AnthropicCapabilityMetadata {
     let supported: Bool?
     let values: [String]?
-    let types: [String]?
-
-    private struct Flag: Decodable {
-        let supported: Bool?
-    }
-
-    private struct DynamicKey: CodingKey {
-        var stringValue: String
-        var intValue: Int?
-        init?(stringValue: String) { self.stringValue = stringValue; intValue = nil }
-        init?(intValue: Int) { stringValue = String(intValue); self.intValue = intValue }
-    }
+    let types: [String]? = nil
 
     init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: DynamicKey.self)
-        supported = try container.decodeIfPresent(Bool.self, forKey: DynamicKey(stringValue: "supported")!)
-        values = Self.decodeValues(container)
-        types = Self.decodeTypes(container)
-    }
-
-    private static func decodeValues(_ container: KeyedDecodingContainer<DynamicKey>) -> [String]? {
-        if let names = try? container.decode([String].self, forKey: DynamicKey(stringValue: "values")!) {
-            return names
+        let container = try decoder.container(keyedBy: AnthropicCatalogDynamicKey.self)
+        supported = anthropicCatalogSupported(container)
+        if let names = try? container.decode([String].self, forKey: anthropicCatalogKey("values")) {
+            values = names
+            return
         }
+
         var names: [String] = []
-        for key in container.allKeys where !["supported", "values", "types"].contains(key.stringValue) {
-            if let flag = try? container.decode(Flag.self, forKey: key), flag.supported != false {
+        for key in container.allKeys where !["supported", "values"].contains(key.stringValue) {
+            if let flag = try? container.decode(AnthropicCatalogFlag.self, forKey: key), flag.supported == true {
                 names.append(key.stringValue)
             }
         }
-        return names.isEmpty ? nil : orderedCatalogNames(names, preferred: ["low", "medium", "high", "max", "xhigh"])
+        values = names.isEmpty ? nil : orderedCatalogNames(
+            names,
+            preferred: ["low", "medium", "high", "max", "xhigh"]
+        )
     }
+}
 
-    private static func decodeTypes(_ container: KeyedDecodingContainer<DynamicKey>) -> [String]? {
-        if let names = try? container.decode([String].self, forKey: DynamicKey(stringValue: "types")!) {
-            return names
+/// Accepts both the RC.2 fixture shape (`types` as a string array) and the
+/// current Models API `thinking.types` object map. Unknown nested keys stay
+/// out of the page instead of failing the whole list as `invalid_response`.
+private struct AnthropicThinkingCapability: Decodable, AnthropicCapabilityMetadata {
+    let supported: Bool?
+    let values: [String]? = nil
+    let types: [String]?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: AnthropicCatalogDynamicKey.self)
+        supported = anthropicCatalogSupported(container)
+        if let names = try? container.decode([String].self, forKey: anthropicCatalogKey("types")) {
+            types = names
+            return
         }
-        guard let map = try? container.decode([String: Flag].self, forKey: DynamicKey(stringValue: "types")!) else {
-            return nil
+
+        guard let typeMap = try? container.nestedContainer(
+            keyedBy: AnthropicCatalogDynamicKey.self,
+            forKey: anthropicCatalogKey("types")
+        ) else {
+            types = nil
+            return
         }
-        let names = map.compactMap { $0.value.supported == false ? nil : $0.key }
-        return names.isEmpty ? nil : orderedCatalogNames(names, preferred: ["adaptive", "enabled"])
+
+        let names = typeMap.allKeys.compactMap { key -> String? in
+            guard let flag = try? typeMap.decode(AnthropicCatalogFlag.self, forKey: key), flag.supported == true else {
+                return nil
+            }
+            return key.stringValue
+        }
+        types = names.isEmpty ? nil : orderedCatalogNames(names, preferred: ["adaptive", "enabled"])
     }
 }
 

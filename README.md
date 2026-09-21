@@ -32,6 +32,7 @@ whether generated code looks plausible.
 | Run a Linux HTTP service: tenant isolation, Run ownership, SSE and deployment | [Server integration](docs/guides/swift-agent-server.md) |
 | Build an Android client or evaluate native Swift/JNI embedding | [Android integration](docs/guides/swift-agent-android.md) |
 | Stream text and tool progress without parsing SSE in the UI | [UI streaming](docs/guides/swift-agent-ui-streaming.md) |
+| Preserve execution facts across failure, cancellation and presentation errors | [Execution reporting and Host integration](docs/guides/swift-agent-execution-reporting.md) |
 | Add a read tool, a mutation, restart recovery or a structured answer | [Consumer recipes](docs/ai/consumer-recipes.md) |
 | Choose a conversational provider and check capability boundaries | [Provider matrix](docs/providers.md) |
 | Discover models, select a Run configuration, or route with Jev | [Dynamic model selection](docs/guides/swift-agent-dynamic-model-selection.md) |
@@ -151,6 +152,9 @@ swift run --package-path Examples/ProviderQualification ProviderQualification \
   --provider local --service local --mode fixture --case all
 swift test --package-path Examples/AppleChatApp
 bash Examples/AppleChatApp/run-macos.sh
+swift test --package-path Examples/ExecutionReportingSupport --disable-sandbox --no-parallel
+swift test --package-path Examples/HeadlessExecutionHost --disable-sandbox --no-parallel
+swift run --package-path Examples/HeadlessExecutionHost HeadlessExecutionHostCLI failure-after-write
 ```
 
 [ExternalClient](Examples/ExternalClient) tests consumption through public API.
@@ -161,6 +165,11 @@ bounded CLI for OpenAI, DeepSeek, Anthropic, Local Responses and Jev preflight o
 checks. [AppleChatApp](Examples/AppleChatApp) uses the same safe configuration
 layer for fixture or explicit live chat-provider runs while retaining its
 app-owned SwiftUI lifecycle, tool progress and cancellation/drain ownership.
+[ExecutionReportingSupport](Examples/ExecutionReportingSupport) is the bounded,
+reusable Host-side reducer for one Run's events. [HeadlessExecutionHost](Examples/HeadlessExecutionHost)
+demonstrates a real temporary-file mutation, failure-after-write reporting,
+Journal-backed no-replay recovery, and pre-execution read-only rejection without
+using a model API key. See the [execution reporting guide](docs/guides/swift-agent-execution-reporting.md).
 
 Live configuration comes from process environment values or a literal assignment
 file passed with `--env-file`. The loader does not execute shell syntax, and the

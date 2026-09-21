@@ -3,6 +3,7 @@ import AppleChatIntegration
 import AgentCore
 import AgentModels
 import AgentUsage
+import ExecutionReportingSupport
 import SwiftUI
 
 struct AppleChatRootView: View {
@@ -213,6 +214,10 @@ private struct TranscriptView: View {
                         TerminalBanner(terminal: terminal)
                             .id("terminal-\(snapshot.generation)")
                     }
+                    if let message = executionReportMessage(snapshot.executionReport) {
+                        ExecutionReportBanner(message: message)
+                            .id("execution-report-\(snapshot.generation)")
+                    }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(20)
@@ -226,6 +231,53 @@ private struct TranscriptView: View {
             }
         }
     }
+}
+
+private struct ExecutionReportBanner: View {
+    let message: String
+
+    var body: some View {
+        Label(message, systemImage: "checkmark.seal")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 8)
+    }
+}
+
+private func executionReportMessage(_ report: RunExecutionReport?) -> String? {
+    guard let report else { return nil }
+    let committed = report.receipts.contains { $0.receipt.status == .succeeded }
+    let completedTool = report.toolObservations.contains {
+        if case .completed(let isError) = $0.status { return !isError }
+        return false
+    }
+    let uncertainTool = report.toolObservations.contains {
+        switch $0.status {
+        case .failed, .unknown, .admitted: return true
+        case .proposed, .completed: return false
+        }
+    }
+    switch report.presentation {
+    case .malformed, .contradictory:
+        if committed { return "A tool action completed, but the final reply was unavailable." }
+        if completedTool { return "A tool completed, but the final reply was unavailable." }
+    case .notObserved, .parsed:
+        break
+    }
+    if completedTool, case .failed = report.runtimeTermination {
+        return "A tool completed before the request failed."
+    }
+    if completedTool, case .cancelled? = report.runtimeTermination {
+        return "A tool completed before the request was cancelled."
+    }
+    if committed, case .failed = report.runtimeTermination {
+        return "An action was saved before the request failed."
+    }
+    if committed, case .cancelled? = report.runtimeTermination {
+        return "An action was saved before the request was cancelled."
+    }
+    if uncertainTool { return "The requested action did not complete; its external effect is unknown." }
+    return nil
 }
 
 private struct EmptyConversationView: View {
