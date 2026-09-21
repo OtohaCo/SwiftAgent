@@ -1,6 +1,7 @@
 import AgentCore
 import AgentModels
 import AgentUsage
+import ExecutionReportingSupport
 import Foundation
 
 public enum ConversationPhase: String, Equatable, Sendable {
@@ -138,6 +139,7 @@ public struct ConversationSnapshot: Equatable, Sendable {
     public var latestRunUsage: UsageSummary
     public var sessionUsage: UsageSummary
     public var usageDiagnosticCount: Int
+    public var executionReport: RunExecutionReport?
 
     public init(
         conversationID: UUID,
@@ -151,7 +153,8 @@ public struct ConversationSnapshot: Equatable, Sendable {
         currentResponseUsage: UsageSummary = .empty,
         latestRunUsage: UsageSummary = .empty,
         sessionUsage: UsageSummary = .empty,
-        usageDiagnosticCount: Int = 0
+        usageDiagnosticCount: Int = 0,
+        executionReport: RunExecutionReport? = nil
     ) {
         self.conversationID = conversationID
         self.generation = generation
@@ -165,6 +168,7 @@ public struct ConversationSnapshot: Equatable, Sendable {
         self.latestRunUsage = latestRunUsage
         self.sessionUsage = sessionUsage
         self.usageDiagnosticCount = usageDiagnosticCount
+        self.executionReport = executionReport
     }
 }
 
@@ -187,6 +191,7 @@ public struct ConversationProjection: Sendable {
         snapshot.currentAssistantTurnID = nil
         snapshot.currentResponseUsage = .empty
         snapshot.latestRunUsage = .empty
+        snapshot.executionReport = nil
         append(.user(.init(text: text)))
     }
 
@@ -197,6 +202,10 @@ public struct ConversationProjection: Sendable {
     public mutating func clearRunAfterDrain() {
         snapshot.runID = nil
         snapshot.phase = .idle
+    }
+
+    public mutating func updateExecutionReport(_ report: RunExecutionReport?) {
+        snapshot.executionReport = report
     }
 
     public mutating func setTerminal(_ terminal: ConversationTerminal) {

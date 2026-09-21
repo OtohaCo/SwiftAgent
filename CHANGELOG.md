@@ -4,7 +4,46 @@ All notable changes to SwiftAgent are recorded here.
 
 ## [Unreleased]
 
-Development after `1.0.0-rc.2` is not part of the RC2 release scope.
+Development after `1.0.0-rc.3` is not part of the RC3 release scope.
+
+No post-RC3 changes are included in this release.
+
+## [1.0.0-rc.3] - 2026-09-21
+
+This is a focused compatibility hotfix from the immutable RC2 anchor.
+
+### Providers
+
+- Fix Anthropic Models API capability-object decoding for effort levels and
+  `thinking.types`, while preserving the existing string-array fixtures.
+- Keep model catalog metadata fail-closed: only nested values with an explicit
+  `supported: true` are published, and missing or incomplete metadata remains
+  `unknown`.
+- Preserve the distinction between discovery and adapter executability. New
+  Anthropic effort raw values remain executable through the existing
+  `output_config.effort` parameter; unknown thinking modes require an adapter
+  upgrade.
+
+### Compatibility
+
+- No AgentCore execution contract, Journal schema, mutation safety, provider
+  continuation boundary, Provider, routing architecture, or public API removal
+  changes are included.
+- The immutable `1.0.0-rc.1` and `1.0.0-rc.2` tags remain unchanged.
+
+### Host integration
+
+- Add a reusable example-side execution report reducer that keeps Runtime
+  termination, observed tool facts, Host-owned fulfillment, and presentation
+  separate across failure, cancellation, malformed replies, and physical drain.
+- Preserve durable mutation facts through a failed final model response and a
+  Journal-backed replay with a new tool call ID, without re-entering the
+  executor or counting a replay completion as executor entry.
+- Bind reports to the actual Run session identity, reject unbound event bodies,
+  and isolate mismatched lifecycle headers before they can contaminate a report.
+- Add runnable AppleChatApp and headless Host examples covering committed
+  mutation recovery, pre-execution read-only rejection, bounded diagnostics,
+  and zero-request deterministic fixtures.
 
 ## [1.0.0-rc.2] - 2026-09-21
 
