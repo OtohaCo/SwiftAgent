@@ -458,8 +458,11 @@ struct AgentModelBindingTests {
 
     @Test func preflightReservationRejectsOverlapAndCancellationReleasesIdentity() async throws {
         let gate = CancellableProjectionGate()
+        let startupReleased = AsyncSignal()
         let provider = ScriptedProvider { request, _ in textResponse(request, "done") }
-        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(
+            startupReleaseDidFinish: { _ in await startupReleased.signal() }
+        )
         let blocked = try AgentModelBinding(
             profileID: "blocked",
             profileRevision: "1",
@@ -476,6 +479,7 @@ struct AgentModelBindingTests {
         }
         first.cancel()
         await #expect(throws: CancellationError.self) { try await first.value }
+        await startupReleased.wait()
 
         #expect(await session.activeRunID == nil)
         #expect(await session.history.contains(.user([.text("first")])) == false)
