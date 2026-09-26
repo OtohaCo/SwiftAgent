@@ -14,14 +14,17 @@ package struct AgentLoop: Sendable {
     private let binding: AgentModelBinding
     private let tools: ToolRegistry
     private let scheduler: ToolScheduler
+    private let modelContextByteLimit: Int?
 
     private var model: ModelID { binding.model }
     private var provider: any ModelProvider { binding.provider }
 
-    package init(binding: AgentModelBinding, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
+    package init(binding: AgentModelBinding, tools: ToolRegistry,
+                 scheduler: ToolScheduler = .init(), modelContextByteLimit: Int? = nil) {
         self.binding = binding
         self.tools = tools
         self.scheduler = scheduler
+        self.modelContextByteLimit = modelContextByteLimit
     }
 
     package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
@@ -327,6 +330,12 @@ package struct AgentLoop: Sendable {
             throw AgentModelBindingError.invalidProjection
         }
         try validateContinuations(projection.messages)
+        if let modelContextByteLimit {
+            let bytes = try AgentContextWindow.encodedByteCount(projection.messages)
+            guard bytes <= modelContextByteLimit else {
+                throw AgentContextError.historyTooLarge(bytes: bytes, limit: modelContextByteLimit)
+            }
+        }
         if let budget = binding.tokenBudget {
             let estimate = try await budget.estimator.estimate(.init(
                 model: model,

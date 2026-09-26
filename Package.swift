@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "AgentModels", targets: ["AgentModels"]),
         .library(name: "AgentTools", targets: ["AgentTools"]),
         .library(name: "AgentCore", targets: ["AgentCore"]),
+        .library(name: "AgentJournalFileStore", targets: ["AgentJournalFileStore"]),
         .library(name: "AgentProviders", targets: ["AgentProviders"]),
         .library(name: "AgentAppleProvider", targets: ["AgentAppleProvider"]),
         .library(name: "AgentDecisions", targets: ["AgentDecisions"]),
@@ -23,6 +24,11 @@ let package = Package(
         .target(name: "AgentModels"),
         .target(name: "AgentTools", dependencies: ["AgentModels"]),
         .target(name: "AgentCore", dependencies: ["AgentModels", "AgentTools"]),
+        .target(name: "AgentJournalFileStore", dependencies: [
+            "AgentCore", "AgentModels", "AgentTools", .product(name: "Crypto", package: "swift-crypto"),
+        ]),
+        .executableTarget(name: "JournalTestProcess", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentModels"]),
+        .executableTarget(name: "JournalBenchmark", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentModels", "AgentTools"]),
         .target(name: "AgentProviders", dependencies: ["AgentModels", "AgentCatalog"]),
         .target(name: "AgentAppleProvider", dependencies: ["AgentModels"]),
         .target(name: "AgentDecisions", dependencies: ["AgentModels"]),
@@ -42,19 +48,20 @@ let package = Package(
         .testTarget(name: "ArchitectureTests"),
         .testTarget(name: "AgentModelsTests", dependencies: ["AgentModels"]),
         .testTarget(name: "AgentToolsTests", dependencies: ["AgentTools", "AgentModels"]),
-        .testTarget(name: "AgentCoreTests", dependencies: ["AgentCore", "AgentTools", "AgentModels"]),
+        .testTarget(name: "AgentCoreTests", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentTools", "AgentModels"]),
+        .testTarget(name: "AgentJournalFileStoreTests", dependencies: ["AgentJournalFileStore", "AgentCore", "AgentTools", "AgentModels", "JournalTestProcess"]),
         .testTarget(name: "AgentAppleProviderTests", dependencies: ["AgentAppleProvider", "AgentModels", "AgentTools", "AgentCore"]),
-        .testTarget(name: "AgentProvidersTests", dependencies: ["AgentProviders", "AgentCatalog", "AgentModels", "AgentTools", "AgentCore"]),
+        .testTarget(name: "AgentProvidersTests", dependencies: ["AgentProviders", "AgentCatalog", "AgentModels", "AgentTools", "AgentCore", "AgentJournalFileStore"]),
         .testTarget(
             name: "AgentDecisionsTests",
-            dependencies: ["AgentDecisions", "AgentModels", "AgentTools", "AgentCore"]
+            dependencies: ["AgentDecisions", "AgentModels", "AgentTools", "AgentCore", "AgentJournalFileStore"]
         ),
         .testTarget(name: "AgentJevProviderTests", dependencies: ["AgentJevProvider", "AgentDecisions", "AgentModels"]),
         .testTarget(name: "AgentUsageTests", dependencies: ["AgentUsage", "AgentModels"]),
         .testTarget(name: "AgentCatalogTests", dependencies: ["AgentCatalog", "AgentModels"]),
         .testTarget(
             name: "WorkspaceAgentTests",
-            dependencies: ["WorkspaceAgent", "AgentCore", "AgentTools", "AgentModels", "AgentProviders"]
+            dependencies: ["WorkspaceAgent", "AgentCore", "AgentJournalFileStore", "AgentTools", "AgentModels", "AgentProviders"]
         ),
     ],
     swiftLanguageModes: [.v6]

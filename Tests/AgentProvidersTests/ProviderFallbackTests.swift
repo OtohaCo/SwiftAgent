@@ -142,7 +142,7 @@ struct ProviderFallbackTests {
                                            policy: .init(maxAttempts: 2))
         let url = temporaryJournalURL()
         defer { cleanupJournal(url) }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let agent = try Agent(
             model: .init(provider: "fixture", name: "test"),
             provider: route,
@@ -160,7 +160,7 @@ struct ProviderFallbackTests {
         }
         #expect(await firstProbe.requests.count == 2)
         #expect(await secondProbe.requests.isEmpty)
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
     }
 
     @Test func mutationBoundaryIsScopedToTheSessionAndRunIdentity() async throws {
@@ -261,7 +261,7 @@ struct ProviderFallbackTests {
         )
         let url = temporaryJournalURL()
         defer { cleanupJournal(url) }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let agent = try Agent(
             model: .init(provider: "fixture", name: "test"),
             provider: route,
@@ -281,7 +281,7 @@ struct ProviderFallbackTests {
         #expect(retryResult.receipts.first?.receipt == firstResult.receipts.first?.receipt)
         #expect(await firstProbe.requests.count == 4)
         #expect(await secondProbe.requests.count == 2)
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
     }
 
     @Test func validatedFallbackCandidateStaysPinnedAfterMutationBoundary() async throws {
@@ -319,7 +319,7 @@ struct ProviderFallbackTests {
         )
         let journalURL = temporaryJournalURL()
         defer { cleanupJournal(journalURL) }
-        let journal = try AgentJournal(persistenceURL: journalURL)
+        let journal = try makeTestJournal(at: journalURL)
         let agent = try Agent(
             model: .init(provider: "fixture", name: "test"),
             provider: route,
@@ -336,7 +336,7 @@ struct ProviderFallbackTests {
         #expect(await executorProbe.count == 1)
         #expect(await primaryProbe.requests.count == 1)
         #expect(await fallbackProbe.requests.count == 2)
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
     }
 
     @Test func clearingMutationBoundaryReleasesPinnedCandidate() async throws {

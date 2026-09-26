@@ -65,6 +65,7 @@ final class DependencyGuardTests: XCTestCase {
                 let testSource = source.replacingOccurrences(of: "import XCTest", with: "")
                     .replacingOccurrences(of: "import Testing", with: "")
                     .replacingOccurrences(of: "import AgentCore", with: "")
+                    .replacingOccurrences(of: "import AgentJournalFileStore", with: "")
                 XCTAssertEqual(DependencyGuard.violations(testSource, module: "AgentCore"), [], url.path)
             }
         }
@@ -107,7 +108,7 @@ final class DependencyGuardTests: XCTestCase {
                 }
             }
             XCTAssertEqual(moduleNames, DependencyGuard.dependencies[name], name)
-            if name == "WorkspaceAgent" {
+            if name == "WorkspaceAgent" || name == "AgentJournalFileStore" {
                 XCTAssertEqual(productNames, ["Crypto"], name)
             } else {
                 XCTAssertEqual(productNames, [], "\(name) must not link extra packages")

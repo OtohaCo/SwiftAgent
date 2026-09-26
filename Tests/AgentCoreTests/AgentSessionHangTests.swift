@@ -4,6 +4,18 @@ import AgentTools
 import Foundation
 import XCTest
 
+private func sabotageStoreRoot(at directory: URL) throws {
+    let root = directory.appendingPathComponent("CURRENT")
+    let saved = directory.appendingPathComponent("sabotaged-current")
+    try FileManager.default.moveItem(at: root, to: saved)
+}
+
+private func restoreStoreRoot(at directory: URL) throws {
+    let saved = directory.appendingPathComponent("sabotaged-current")
+    guard FileManager.default.fileExists(atPath: saved.path) else { return }
+    try FileManager.default.moveItem(at: saved, to: directory.appendingPathComponent("CURRENT"))
+}
+
 final class AgentSessionHangTests: XCTestCase {
     func testExecutorAndQuarantineFailureUseOneTypedTerminalWithoutReplay() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -12,9 +24,9 @@ final class AgentSessionHangTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let probe = FailingMutationProbe()
-        let tool = try ThrowingSabotagingMutationTool(journalURL: url, probe: probe)
+        let tool = try ThrowingSabotagingMutationTool(journalURL: url, journal: journal, probe: probe)
         let call = ToolCall(id: .init(rawValue: "call-fail"), name: ThrowingSabotagingMutationTool.name,
                             argumentsJSON: #"{"id":"listing-1"}"#, completeness: .complete)
         let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
@@ -49,12 +61,16 @@ final class AgentSessionHangTests: XCTestCase {
         guard case .failed(.mutationPersistence(let terminalError)) = terminals[0] else {
             return XCTFail("Expected typed mutation persistence terminal: \(terminals)")
         }
-        XCTAssertEqual(terminalError.quarantine, .journal(.concurrentWriter))
+        guard case .journal(.persistenceUnavailable) = terminalError.quarantine else {
+            return XCTFail("Expected typed quarantine persistence failure: \(terminalError.quarantine)")
+        }
         XCTAssertFalse(events.contains { if case .toolCompleted = $0 { true } else { false } })
         XCTAssertFalse(events.contains { if case .toolReceiptValidated = $0 { true } else { false } })
-        let mutationStates = await journal.pendingMutations().map(\.state)
+        try restoreStoreRoot(at: url)
+        let mutationStates = try await journal.pendingMutations().map(\.state)
         XCTAssertEqual(mutationStates, [.intent])
         try await run.waitForDrain()
+        try await journal.close()
         let finalExecutorCount = await probe.executorCount
         XCTAssertEqual(finalExecutorCount, 1)
     }
@@ -66,7 +82,7 @@ final class AgentSessionHangTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let tool = try SabotagingMutationTool(journalURL: url)
         let call = ToolCall(
             id: .init(rawValue: "call-1"),
@@ -109,16 +125,20 @@ final class AgentSessionHangTests: XCTestCase {
             return XCTFail("expected runFinished(.failed), got \(finished)")
         }
         if case .mutationPersistence(let persistence) = failure {
-            XCTAssertEqual(persistence.settlement, .journal(.concurrentWriter))
-            XCTAssertEqual(persistence.quarantine, .journal(.concurrentWriter))
+            guard case .journal(.persistenceUnavailable) = persistence.settlement,
+                  case .journal(.persistenceUnavailable) = persistence.quarantine else {
+                return XCTFail("Expected typed store persistence errors: \(persistence)")
+            }
         } else {
             XCTFail("expected mutationPersistence failure, got \(failure)")
         }
         XCTAssertFalse(events.contains { if case .toolCompleted = $0 { true } else { false } })
         XCTAssertFalse(events.contains { if case .toolReceiptValidated = $0 { true } else { false } })
-        let pending = await journal.pendingMutations()
+        try restoreStoreRoot(at: url)
+        let pending = try await journal.pendingMutations()
         XCTAssertEqual(pending.map(\.state), [.intent])
         try await run.waitForDrain()
+        try await journal.close()
     }
 }
 
@@ -127,14 +147,11 @@ private actor FailingMutationProbe {
     private(set) var sawDurableIntent = false
     private(set) var externalStateChanged = false
 
-    func record(journalURL: URL, callID: ToolCallID) async {
+    func record(journal: AgentJournal, callID: ToolCallID) async {
         executorCount += 1
-        if let loaded = try? AgentJournal.load(from: journalURL) {
-            sawDurableIntent = await loaded.snapshot().contains { record in
-                if case .pendingMutation(let intent) = record.event { return intent.call.id == callID }
-                return false
-            }
-        }
+        sawDurableIntent = (try? await journal.pendingMutations().contains {
+            $0.intent.call.id == callID && $0.state == .intent
+        }) == true
         externalStateChanged = true
     }
 }
@@ -147,11 +164,13 @@ private struct ThrowingSabotagingMutationTool: AgentTool {
     static let inputSchema = ToolSchema.object(properties: ["id": .string], required: ["id"])
     static let outputSchema = ToolSchema.object(properties: ["updated": .boolean], required: ["updated"])
     let journalURL: URL
+    let journal: AgentJournal
     let probe: FailingMutationProbe
     let policy: ToolPolicy
 
-    init(journalURL: URL, probe: FailingMutationProbe) throws {
+    init(journalURL: URL, journal: AgentJournal, probe: FailingMutationProbe) throws {
         self.journalURL = journalURL
+        self.journal = journal
         self.probe = probe
         policy = try ToolPolicy(effect: .mutation, execution: .exclusive, idempotency: .requiresReceipt,
                                 timeout: .seconds(2), authorization: .notRequired)
@@ -166,8 +185,8 @@ private struct ThrowingSabotagingMutationTool: AgentTool {
     }
 
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
-        await probe.record(journalURL: journalURL, callID: context.callID)
-        try? FileManager.default.removeItem(at: journalURL)
+        await probe.record(journal: journal, callID: context.callID)
+        try? sabotageStoreRoot(at: journalURL)
         throw FixtureError.invalidOperation
     }
 }
@@ -203,7 +222,7 @@ private struct SabotagingMutationTool: AgentTool {
     }
 
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
-        try? FileManager.default.removeItem(at: journalURL)
+        try? sabotageStoreRoot(at: journalURL)
         return ToolResult(
             output: .init(updated: true),
             receipt: ToolReceipt(

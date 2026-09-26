@@ -163,12 +163,14 @@ struct AgentRecoverableToolErrorTests {
         }
         let agent = try Agent(model: fixtureModel, provider: provider,
                               tools: [try RecoverableSearchTool(probe: RecoverableProbe())])
-        let firstSession = try agent.makeSession(id: sessionID, journal: AgentJournal(persistenceURL: url))
+        let journal = try makeTestJournal(at: url)
+        let firstSession = try agent.makeSession(id: sessionID, journal: journal)
         let firstRun = try await firstSession.run("Find X")
         _ = try await firstRun.wait()
         try await firstRun.waitForDrain()
+        try await journal.close()
 
-        let restarted = try agent.makeSession(id: sessionID, journal: AgentJournal.load(from: url))
+        let restarted = try agent.makeSession(id: sessionID, journal: openTestJournal(at: url))
         let result = try await restarted.run("Try another source").wait()
 
         #expect(result.outcome == .completed)

@@ -6,7 +6,25 @@ All notable changes to SwiftAgent are recorded here.
 
 Development after `1.0.0-rc.3` is not part of the RC3 release scope.
 
-No post-RC3 changes are included in this release.
+### Breaking: Journal storage
+
+- Replace the framed single-file durable Journal with the optional
+  `AgentJournalFileStore` segmented local store. Explicit `create`/`open` and
+  a store-lifetime OS writer lock separate Session identity from the shared
+  operation domain. Old files are rejected without overwrite or migration.
+- Commit only new formal messages and mutation changes. A trusted receipt,
+  replay output and conversation result publish atomically. Indexed recovery
+  reads one Session without replaying other Sessions' terminal lifecycles.
+  Automatic bounded maintenance packs sealed segments and safely reclaims
+  obsolete managed files, while preserving formal messages and terminal
+  identity facts.
+- Remove old file constructors, manual compaction, memory-to-file `persist`,
+  full-record snapshot diagnostics and the lossy canonical-history compactor.
+  Recovery queries and conversation snapshots now throw on storage errors;
+  paginated formal message and indexed mutation queries replace full snapshots.
+  Abort requires a trusted `AgentNoEffectConfirmation` and reconciliation
+  requires replay output. Context limits apply to the projected model request
+  without rewriting formal history.
 
 ## [1.0.0-rc.3] - 2026-09-21
 

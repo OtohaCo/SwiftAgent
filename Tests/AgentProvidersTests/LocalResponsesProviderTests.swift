@@ -276,11 +276,12 @@ struct LocalResponsesProviderTests {
             .run("First")
         _ = try await firstRun.wait()
         try await firstRun.waitForDrain()
+        try await state.journal.close()
 
         let secondProbe = ProviderRequestProbe()
         let secondProvider = try localProvider(body: openAITextFixture, probe: secondProbe)
         let restored = try Agent(model: secondProvider.model, provider: secondProvider)
-            .makeSession(id: state.sessionID, journal: try AgentJournal.load(from: state.url))
+            .makeSession(id: state.sessionID, journal: try openTestJournal(at: state.url))
         _ = try await restored.run("Second").wait()
 
         let input = try requestInput(await secondProbe.requests.first)
@@ -311,6 +312,7 @@ struct LocalResponsesProviderTests {
         _ = try await firstRun.wait()
         try await firstRun.waitForDrain()
         #expect(await execution.count == 1)
+        try await state.journal.close()
 
         let secondProbe = ProviderRequestProbe()
         let secondProvider = try localProvider(body: openAITextFixture, probe: secondProbe, capabilities: [.tools])
@@ -318,7 +320,7 @@ struct LocalResponsesProviderTests {
             model: secondProvider.model,
             provider: secondProvider,
             tools: [ProviderCalculator(probe: execution)]
-        ).makeSession(id: state.sessionID, journal: try AgentJournal.load(from: state.url))
+        ).makeSession(id: state.sessionID, journal: try openTestJournal(at: state.url))
         _ = try await restored.run("Continue").wait()
         #expect(await execution.count == 1)
 
@@ -400,7 +402,7 @@ private struct DurableLocalFixture {
     init() throws {
         url = FileManager.default.temporaryDirectory
             .appendingPathComponent("swift-agent-local-responses-\(UUID().uuidString).log")
-        journal = try AgentJournal(persistenceURL: url)
+        journal = try makeTestJournal(at: url)
     }
 
     func cleanup() {

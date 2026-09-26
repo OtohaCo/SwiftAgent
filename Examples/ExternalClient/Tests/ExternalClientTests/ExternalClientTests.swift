@@ -1,4 +1,5 @@
 import AgentCore
+import AgentJournalFileStore
 import AgentCatalog
 import AgentDecisions
 import AgentJevProvider
@@ -26,8 +27,7 @@ struct ExternalClientTests {
         }
         #expect(probe.modelStarts == 0)
         #expect(probe.toolExecutions == 0)
-        #expect(await journal.snapshot().isEmpty)
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
     }
 
     @Test func mutationAgentRecoversThroughThePublicJournalAPI() async throws {
@@ -35,21 +35,21 @@ struct ExternalClientTests {
             .appendingPathComponent("swift-agent-external-client-\(UUID().uuidString).log")
         defer {
             try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try AgentIncrementalJournal.create(at: url, operationDomain: "external-client")
         #expect(journal.storage == .durable)
         let sessionID = UUID()
         let run = try await makeMutationAgent().makeSession(id: sessionID, journal: journal).run("Update the listing")
         let result = try await run.wait()
         try await run.waitForDrain()
         #expect(result.receipts.count == 1)
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
 
-        let restarted = try AgentJournal.load(from: url)
-        #expect(await restarted.pendingMutations().isEmpty)
-        #expect(await restarted.recovery == .clean)
+        try await journal.close()
+        let restarted = try AgentIncrementalJournal.open(at: url)
+        #expect(try await restarted.pendingMutations().isEmpty)
         _ = try makeMutationAgent().makeSession(id: sessionID, journal: restarted)
+        try await restarted.close()
     }
 
     @Test func stableOperationIDReplaysASettledReceiptWithoutExecutingAgain() async throws {
@@ -57,19 +57,59 @@ struct ExternalClientTests {
             .appendingPathComponent("swift-agent-external-idempotency-\(UUID().uuidString).log")
         defer {
             try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
         let probe = SideEffectProbe()
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try AgentIncrementalJournal.create(at: url, operationDomain: "external-idempotency")
         let session = try makeMutationAgent(probe: probe).makeSession(journal: journal)
 
         let firstRun = try await session.run("Update the listing", operationID: "logical-update-1")
         let first = try await firstRun.wait()
         try await firstRun.waitForDrain()
-        let retry = try await session.run("Retry the update", operationID: "logical-update-1").wait()
+        let retryRun = try await session.run("Retry the update", operationID: "logical-update-1")
+        let retry = try await retryRun.wait()
+        try await retryRun.waitForDrain()
 
         #expect(probe.toolExecutions == 1)
         #expect(retry.receipts.first?.receipt == first.receipts.first?.receipt)
+        try await journal.close()
+    }
+
+    @Test func fileMutationReplaysAcrossProcessesAndSessionsWithoutASecondWrite() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("external-file-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = directory.appendingPathComponent("store")
+        let sideEffect = directory.appendingPathComponent("effect.txt")
+        try Data().write(to: sideEffect)
+        let journal = try AgentIncrementalJournal.create(at: store, operationDomain: "external-file-domain")
+        let first = try await makeMutationAgent(file: sideEffect)
+            .makeSession(id: UUID(), journal: journal)
+            .run("Update", operationID: "external-file-write")
+        #expect(try await first.wait().receipts.count == 1)
+        try await first.waitForDrain()
+        try await journal.close()
+        #expect(try String(contentsOf: sideEffect, encoding: .utf8) == "effect\n")
+
+        let project = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let possible = [project.appendingPathComponent(".build/out/Products/Debug/JournalReplayFixture"),
+                        project.appendingPathComponent(".build/debug/JournalReplayFixture")]
+        let executable = try #require(possible.first { FileManager.default.isExecutableFile(atPath: $0.path) })
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = [store.path, sideEffect.path]
+        let error = Pipe()
+        process.standardError = error
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            Issue.record("Child replay failed: \(String(decoding: error.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))")
+        }
+        #expect(process.terminationStatus == 0)
+        #expect(try String(contentsOf: sideEffect, encoding: .utf8) == "effect\n")
+        let reopened = try AgentIncrementalJournal.open(at: store)
+        #expect(try await reopened.mutationStatus(identity: #"external-file-write/update_listing/{"id":"listing-1"}"#)?.state == .settled)
+        try await reopened.close()
     }
 
     @Test func publicRecoverableToolErrorSurfaceCompilesForAReadOnlyTool() throws {
@@ -186,7 +226,7 @@ struct ExternalClientTests {
             )
         )
         let session = try Agent(model: model, provider: provider).makeSession()
-        let revision = await session.conversationSnapshot().revision
+        let revision = try await session.conversationSnapshot().revision
         let run = try await session.run("hello", using: binding, expectedConversationRevision: revision)
 
         #expect(run.binding.profileID == "future-model-defaults")
@@ -203,11 +243,11 @@ private func makeReadOnlyAgent() throws -> Agent {
     )
 }
 
-private func makeMutationAgent(probe: SideEffectProbe? = nil) throws -> Agent {
+private func makeMutationAgent(probe: SideEffectProbe? = nil, file: URL? = nil) throws -> Agent {
     try Agent(
         model: ModelID(provider: "external-client", name: "echo"),
         provider: MutationProvider(probe: probe),
-        tools: [try ListingUpdateTool(probe: probe)]
+        tools: [try ListingUpdateTool(probe: probe, file: file)]
     )
 }
 
@@ -361,9 +401,11 @@ private struct ListingUpdateTool: AgentTool {
     static let outputSchema = ToolSchema.object(properties: ["updated": .boolean], required: ["updated"])
     let policy: ToolPolicy
     let probe: SideEffectProbe?
+    let file: URL?
 
-    init(probe: SideEffectProbe? = nil) throws {
+    init(probe: SideEffectProbe? = nil, file: URL? = nil) throws {
         self.probe = probe
+        self.file = file
         policy = try .mutation(authorization: .notRequired, evidence: .none)
     }
 
@@ -377,6 +419,13 @@ private struct ListingUpdateTool: AgentTool {
 
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
         probe?.recordTool()
+        if let file {
+            let handle = try FileHandle(forWritingTo: file)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data("effect\n".utf8))
+            try handle.synchronize()
+        }
         let receipt = ToolReceipt(
             operationID: context.idempotencyKey ?? "missing",
             status: .succeeded,

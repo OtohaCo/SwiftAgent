@@ -1,4 +1,5 @@
 import AgentCore
+import AgentJournalFileStore
 import AgentModels
 import AgentTools
 import Crypto
@@ -70,9 +71,7 @@ public struct HeadlessExecutionHost: Sendable {
     ) async throws -> HeadlessExecutionResult {
         let root = try makeRoot(root)
         let store = try NoteStore(root: root)
-        let journalURL = root.appendingPathComponent("journal.bin")
-        let bootstrapJournal = AgentJournal()
-        try await bootstrapJournal.persist(to: journalURL)
+        let journalURL = root.appendingPathComponent("journal-store")
         let model = ModelID(provider: "deterministic-fixture", name: "note-host")
         let tool = try CreateNoteTool(store: store, allowMutation: scenario == .failureAfterWrite)
         let provider = DeterministicNoteProvider(scenario: scenario)
@@ -93,7 +92,7 @@ public struct HeadlessExecutionHost: Sendable {
         let executorEntryCountAfterFirstRun: Int
         let successfulWriteCountAfterFirstRun: Int
         do {
-            let journal = try AgentJournal.load(from: journalURL)
+            let journal = try AgentIncrementalJournal.create(at: journalURL, operationDomain: "headless-note")
             let session = try agent.makeSession(id: sessionID, journal: journal)
             let run = try await session.run(
                 "Create note.txt with the text 'execution fact'.",
@@ -126,9 +125,10 @@ public struct HeadlessExecutionHost: Sendable {
             try await run.waitForDrain()
             reducer.markDrainCompleted()
             firstReport = reducer.report
-            journalRecordCount = await journal.snapshot().count
+            journalRecordCount = try await journal.readMessages(sessionID: sessionID, limit: 1000).count
             executorEntryCountAfterFirstRun = await store.executorEntryCount
             successfulWriteCountAfterFirstRun = await store.successfulWriteCount
+            try await journal.close()
         }
 
         let fileContent = try? await store.read(name: "note.txt")
@@ -136,7 +136,7 @@ public struct HeadlessExecutionHost: Sendable {
         let replayReceivedToolResult: Bool?
         let replayReport: RunExecutionReport?
         if scenario == .failureAfterWrite {
-            let reloadedJournal = try AgentJournal.load(from: journalURL)
+            let reloadedJournal = try AgentIncrementalJournal.open(at: journalURL)
             let replaySession = try agent.makeSession(id: sessionID, journal: reloadedJournal)
             let replay = try await replaySession.run(
                 "Create note.txt with the text 'execution fact'.",
@@ -159,6 +159,7 @@ public struct HeadlessExecutionHost: Sendable {
             replayReport = reducer.report
             replayCount = await store.executorEntryCount
             replayReceivedToolResult = await provider.state.receivedToolResult(for: replay.id)
+            try await reloadedJournal.close()
         } else {
             replayCount = nil
             replayReceivedToolResult = nil
