@@ -41,6 +41,8 @@ package protocol JournalStore: Sendable {
 }
 
 public struct JournalStorageMetrics: Sendable, Equatable {
+    /// Payload, index and manifest bytes read by this handle; excludes OS
+    /// metadata operations and bytes served internally by the page cache.
     public let bytesRead: UInt64
     public let decodedBatches: UInt64
     public let bytesWritten: UInt64

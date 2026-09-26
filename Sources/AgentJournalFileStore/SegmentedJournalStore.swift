@@ -810,6 +810,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 guard let header = try file.read(upToCount: 4), header.count == 4 else {
                     throw AgentJournalError.invalidFrame
                 }
+                counters.add(read: header.count)
                 let size = header.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
                 guard size > 0, size < 32 * 1024 * 1024,
                       sourceOffset + UInt64(size) + 4 <= segment.end else {
@@ -830,6 +831,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                     guard let bytes = try file.read(upToCount: Int(size + 4)), bytes.count == size + 4 else {
                         throw AgentJournalError.invalidFrame
                     }
+                    counters.add(read: bytes.count)
                     positions.append((batch.sequence, UInt64(packed.count), size + 4))
                     packed.append(bytes)
                 } else { discarded.append(batch.sequence) }
@@ -928,6 +930,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             while offset < segment.end {
                 try file.seek(toOffset: offset)
                 guard let header = try file.read(upToCount: 4), header.count == 4 else { throw AgentJournalError.invalidFrame }
+                counters.add(read: header.count)
                 let length = header.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) } + 4
                 guard length > 4, offset + UInt64(length) <= segment.end else { throw AgentJournalError.invalidFrame }
                 let batch = try load(Location(kind: "segment", file: segment.id, offset: offset,

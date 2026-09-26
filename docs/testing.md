@@ -102,7 +102,9 @@ cases grow redundant commits with a fixed current Session, formal content in
 one Session, or unrelated Sessions plus terminal operations. JSON output
 includes new-process open/recovery, p50/p95 commit time, bytes read/written,
 decoded batch count, lock time, maintenance time, deleted segment bytes and
-peak process RSS. Each case uses a fresh temporary directory that the script
+peak process RSS. The byte counters include payload/index/root reads and
+writes, including maintenance segment copies, but exclude filesystem metadata
+and kernel cache traffic. Each case uses a fresh temporary directory that the script
 removes afterward. The child process is new, while the OS page cache is not
 controlled; do not label its open time a cold-disk measurement. Maintenance
 may run during foreground work, so compare `steadyWriteBytes` with
