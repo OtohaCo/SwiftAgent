@@ -455,6 +455,41 @@ public actor AgentJournal {
         try? handle.close()
     }
 
+    /// An idle Session may keep its actor alive while another process safely
+    /// compacts the same dedicated journal. Once this Session owns the lease
+    /// again, accept only a byte-level rewrite of its own canonical recovery
+    /// events; another writer's new events still fail closed.
+    package func refreshAfterExternalCompaction(
+        sessionID: UUID,
+        deadline: ContinuousClock.Instant
+    ) throws {
+        guard sessionLeases[sessionID] != nil else {
+            throw AgentJournalError.sessionLeaseUnavailable
+        }
+        guard let url = persistenceURL else { return }
+        let disk = try Self.withFileLock(
+            for: url, waitDeadline: deadline, checkCancellation: true
+        ) {
+            try Self.read(from: url)
+        }
+        if disk.records == records { return }
+        guard disk.recovery == .clean,
+              disk.records.count < records.count else {
+            throw AgentJournalError.concurrentWriter
+        }
+        let expected = Self.canonicalRecoveryRecords(from: records)
+        guard disk.records.count == expected.count,
+              zip(disk.records, expected).allSatisfy({ actual, canonical in
+                  actual.sessionID == canonical.sessionID
+                      && actual.runID == canonical.runID
+                      && actual.timestamp == canonical.timestamp
+                      && actual.event == canonical.event
+              }) else {
+            throw AgentJournalError.concurrentWriter
+        }
+        try adopt(disk.records)
+    }
+
     /// Returns the most recent canonical session history checkpoint. The
     /// checkpoint is host-neutral and is the only journal payload used to
     /// reconstruct a Session after a process restart.
