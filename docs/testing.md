@@ -1,6 +1,6 @@
 # SwiftAgent Testing
 
-last-verified: 2026-09-21
+last-verified: 2026-09-27
 
 Primary compiler: Swift 6.4. From the package directory:
 
@@ -75,6 +75,49 @@ swift test --filter ProviderFallbackTests
 - Events: `runStarted` / `runFinished` once and `wait()` matches the terminal.
 - Recovery: reload the durable journal; do not only inspect the in-memory actor.
 - Concurrency: gates and expectations, not `sleep`.
+
+## Segmented Journal qualification and benchmark
+
+```sh
+swift test --filter SegmentedJournalStoreTests --disable-sandbox --no-parallel
+swift test --filter AgentMutationRecoveryTests --disable-sandbox --no-parallel
+swift test --package-path Examples/ExternalClient --disable-sandbox --no-parallel
+swift test --package-path Examples/HeadlessExecutionHost --disable-sandbox --no-parallel
+bash Scripts/benchmark-journal.sh 240 20260927 default
+bash Scripts/benchmark-legacy-journal.sh 240 20260927
+```
+
+The external client creates a real temporary file, executes a mutation,
+drains, closes the store, then starts a separate fixture executable with a
+different Session and the same stable operation identity. It verifies that
+the settled receipt/output replay without a second file append. The fixture
+provider is deterministic and uses no production credentials. The root
+package also tests a competing process, SIGKILL lock release, unpublished
+tails, committed corruption, fault injection around manifest publication,
+automatic segment deletion, and maintenance interleaved with foreground
+commits. SIGKILL covers process termination, not OS crash or power loss.
+
+`JournalBenchmark` uses a Release build with a fixed fixture seed. Its three
+cases grow redundant commits with a fixed current Session, formal content in
+one Session, or unrelated Sessions plus terminal operations. JSON output
+includes new-process open/recovery, p50/p95 commit time, bytes read/written,
+decoded batch count, lock time, maintenance time, deleted segment bytes and
+peak process RSS. Each case uses a fresh temporary directory that the script
+removes afterward. The child process is new, while the OS page cache is not
+controlled; do not label its open time a cold-disk measurement. Maintenance
+may run during foreground work, so compare `steadyWriteBytes` with
+`totalWriteBytes` and include `maintenanceCoreMs` in the cost. The script
+prints the current SHA, Swift version, OS and hardware. A final benchmark
+result belongs in the PR for the exact tested SHA rather than a permanent
+claim of speedup in this guide.
+
+The legacy script creates and removes its own temporary worktree at the
+recorded `main` SHA, injecting only the synthetic benchmark target into that
+worktree. It leaves the current branch untouched. It reports old file bytes,
+new-process open/recovery and commit distributions; the old implementation
+does not expose equivalent decoded-byte, lock or maintenance counters. Compare
+matching scenario/seed/count rows, and report that instrumentation difference
+instead of inventing legacy values.
 
 The Pi comparison and coverage tables live in
 [the conformance matrix](guides/swift-agent-conformance-matrix.md).

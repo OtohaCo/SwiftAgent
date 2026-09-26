@@ -1,136 +1,112 @@
 # SwiftAgent Journal
 
-last-verified: 2026-09-20
+last-verified: 2026-09-27
 
-`AgentJournal` is the Core-owned typed lifecycle log. It records provider-neutral
-messages, model attempts, tool proposals/results, checkpoints, compaction summaries
-and run outcomes. Journal events are not a UI timeline and contain no host-domain
-other application-domain payloads.
-
-Read-only Agents may omit a journal. Any mutation tool requires a **durable**
-journal at `makeSession`. `AgentJournal()` is memory-only (`storage ==
-.memory`) and fails for mutation Agents with
-`AgentSessionError.durableJournalRequired`. Crash recovery and mutation
-Sessions use `AgentJournal(persistenceURL:)` (`storage == .durable`).
-`persist(to:)` upgrades a memory journal to durable storage after a successful
-snapshot bind. Do not infer this from a file URL; `AgentJournalStorage` is the
-capability.
-
-`.durable` is the configured persistence mode. It is not a promise that every
-later write will succeed. Mutation admission still has to write the durable
-intent, and `persistenceUnavailable` / `concurrentWriter` remain fail-closed
-errors. Hosts must handle those errors; they must not treat `makeSession`
-success as proof that the next append landed on disk.
-
-## Host API
-
-Hosts do not append lifecycle frames. The runtime writes them. Public operations
-are load, inspect, recover, reconcile and abort:
+`AgentJournal` owns trusted mutation transitions and Session restoration. The
+optional `AgentJournalFileStore` product supplies the local durable format.
+Read-only Agents can omit a Journal or use `AgentJournal()` in memory. An Agent
+with mutation tools requires a durable Journal at `makeSession`.
 
 ```swift
-let journal = try AgentJournal(persistenceURL: journalURL)
-let session = try agent.makeSession(id: sessionID, journal: journal)
-let run = try await session.run("Update the listing")
+import AgentCore
+import AgentJournalFileStore
+
+let journal = try AgentIncrementalJournal.create(
+    at: storeDirectory, operationDomain: "account:123"
+)
+let session = try agent.makeSession(id: stableSessionID, journal: journal)
+let run = try await session.run("Update the listing", operationID: stableOperationID)
 _ = try await run.wait()
 try await run.waitForDrain()
+try await journal.close()
 
-let restarted = try AgentJournal.load(from: journalURL)
-let pending = try await restarted.recoverPendingMutations(sessionID: sessionID)
-for item in pending where item.state == .needsReconciliation {
-    try await restarted.abortMutation(item)
-}
+let reopened = try AgentIncrementalJournal.open(at: storeDirectory)
+let pending = try await reopened.recoverPendingMutations(sessionID: stableSessionID)
 ```
 
-`snapshot()` is readable history for diagnostics. `latestCheckpoint(sessionID:)`
-is the only payload used to reconstruct Session history after a restart.
+Use `create` only for a new directory and `open` only for an existing new-format
+store. They never turn a missing, old, corrupt, or unknown store into an empty
+ledger. A framed `SWIFTAGENT-JOURNAL-1` file is rejected with
+`unsupportedLegacyFormat` and its bytes are unchanged. There is no migration
+or old-format reader. Stop the old workflow and resolve its outstanding
+operations outside this SDK before beginning a new operation domain. Do not
+point a new empty store at the old task and assume its effects were deduplicated.
 
-There is no public API to mark an intent `settled` with arbitrary JSON. Executor
-settlement stays inside the runtime after `ToolReceiptValidator` succeeds.
-`reconcileMutation` requires a quarantined intent and a receipt that matches the
-durable operation identity and targets.
+The store has a persisted random `storeID` and one `operationDomain`. All
+Sessions that must share deduplication must share **the same open Journal
+handle** and directory. Another directory with the same domain text has a
+separate ledger. `storeIdentity()` reports both values. The handle holds an
+OS exclusive writer lock until safe `close()`. A second process or an
+independent same-process open gets `storeInUse`. The owner can run multiple
+Sessions and provider/tool calls concurrently; only short commits are
+serialized. `close()` rejects an active Session lease, waits for accepted
+maintenance, then unlocks. Wait for `run.waitForDrain()` before closing.
 
-## Durable Checkpoints
+## Committed state and queries
 
-The runtime stores each checkpoint in one length-delimited, checksummed frame. A
-frame is visible only after its complete payload has been written and synced.
+Formal Session messages retain stable IDs and order. Read them with the
+throwing, paginated `readMessages(sessionID:after:limit:)`; its cursor is a
+zero-based ordinal. `latestCheckpoint(sessionID:)` restores the model-ready
+conversation for one Session and current instructions are supplied by the new
+Agent. `pendingMutations(sessionID:)` and `recoverPendingMutations(sessionID:)`
+are throwing scoped queries. `mutationStatus(identity:)` inspects the
+indexed state, trusted receipt, replay output and no-effect confirmation for
+one operation. There is no nonthrowing full-record snapshot API.
 
-Durable writes use a regular `.lock` file with an OS advisory `flock`; the lock
-file is reusable after a crash, so an old file cannot become a permanent busy
-marker. The writer verifies that the on-disk prefix still matches the instance
-snapshot, synchronizes the file before publishing memory, and fails closed on
-write or concurrency errors. A failed durable write does not publish its records
-in memory. The intentional exception is an uncertain first directory sync: if
-the frame bytes and file sync completed but the directory sync result is
-unknown, the journal adopts the written records and reports the persistence
-error so recovery cannot duplicate or discard a committed prefix.
+`AgentContextProjector` affects only the next model request. Request summaries
+or shortened views do not delete formal messages, restore Evidence, or grant
+permission. The old lossy history-compactor path has been removed. When the
+projected request exceeds `AgentContextPolicy.maxModelContextUTF8Bytes`, the
+request fails without rewriting the conversation. Per-input size is enforced
+separately. See [context policy](swift-agent-context.md).
 
-Session startup checks cancellation and deadline before appending its durable
-startup frame, and the journal lock wait remains cancellation/deadline aware.
-The startup frame includes the candidate history checkpoint and user event.
-Once that atomic append begins, it is the admission boundary: the runtime
-creates the corresponding Run for the durable user event rather than leaving
-an orphaned history entry if the deadline expires during the I/O. If the Run
-fails before its first loop checkpoint, a replacement Session can still
-recover the admitted candidate history.
+## Commits and maintenance
 
-Each durable Session identity also has a separate open-file lease. The descriptor
-stays open for the lifetime of the Session and is unlocked on drain; a crashed
-process releases it through the operating system instead of leaving a stale
-marker that blocks recovery.
+One versioned, checksummed batch appends only new messages and necessary
+state transitions to an active segment. A trusted mutation receipt, replay
+output, terminal state, and its formal assistant/tool result publish together.
+Large batches use a synced managed blob before the batch refers to it. A new
+root and its indexes are synced before an atomic `CURRENT` replacement and
+parent-directory sync. A complete unpublished tail is truncated on exclusive
+open; a damaged published batch or root fails explicitly. Checksums detect
+accidental damage, not malicious tampering.
 
-## Restart Behavior
+The SDK rotates segments and incrementally packs sealed ones. It retains
+formal messages, pending/reconciliation facts, terminal identities, receipts
+and replay outputs; it drops obsolete process records and deletes an old
+segment only after the replacement root is reliable. Physical maintenance
+never changes a logical operation identity or Session message ID. It does not
+promise fixed disk use while actual conversation and operations grow. The
+policy can be configured with `JournalMaintenancePolicy`, while
+`storeStatus()`, `maintenanceStatus()`, `storageMetrics()`, and
+`requestMaintenance()` support
+observation and explicit low-load work. Normal operation schedules maintenance
+without a Host pre-turn compaction call. If maintenance cannot keep up, new
+mutation admission can fail with `maintenanceRequired`; an in-flight
+settlement still has its ordinary persistence path.
 
-`AgentJournal.load(from:)` validates the header, frame checksum, schema version and
-strict sequence. Recovery is one of:
+Only one same-host writer is supported. Do not copy an open directory as a
+backup or run an external compactor against it. Close it, then copy the whole
+directory including format, roots, segments, indexes and managed blobs. The
+lock file is stable and is never garbage-collected. Network filesystems,
+online copying, cross-device replication and power-loss simulation are outside
+the tested contract. The commit protocol and tested crash cases are in
+[ADR 0004](../adr/0004-journal-storage.md).
 
-| State | Meaning | Prefix | Next durable write |
-| --- | --- | --- | --- |
-| `clean` | Every frame validated | Complete file | Append |
-| `truncatedTail` | Final length header or payload was not written completely | Valid prefix kept | Truncate the incomplete tail, then append |
-| `corruptTail` | The last complete frame has an invalid length, checksum, JSON, or sequence | Valid prefix kept; pending mutations stay inspectable | Throws `repairRequired` until `discardCorruptTail()` |
+## Uncertain effects
 
-A checksum, sequence, or JSON error in a **middle** frame still fails the load.
-Core does not skip a hole and keep reading. Crash-tail recovery never replays
-tools or infers external success from model text.
+Intent admission must finish durably before the executor starts. A commit
+reported as `commitUnknown` keeps the store unavailable to further writes
+until it is reopened and inspected. A startup commit with an unknown result
+returns an owned Run that fails with `commitUnknown` and drains without calling
+the model or tools. The Host must not treat a timeout, cancellation or unknown
+commit as proof that an effect did not occur.
 
-Schema v3 is the current write format. Readers accept v1 and v2. Canonical
-rollover preserves each retained record's legacy schema semantics rather than
-relabeling it as v3. A v2 journal may contain the same idempotency key in
-different Sessions because that schema predated journal-wide identity scope;
-the v3 reader keeps those records and chooses the most conservative unresolved
-state for new admission. It never re-executes a legacy collision.
-
-After a safe runtime checkpoint, a durable journal larger than the internal
-rollover threshold is rewritten to a canonical recovery snapshot. The snapshot
-keeps one Session creation marker and the latest checkpoint per Session, plus
-the lifecycle needed to reconstruct every mutation identity. Settled and
-aborted mutations remain as tombstones so the current idempotency-conflict
-contract survives restart; rollover does not redefine settled retry semantics.
-
-Rollover writes and synchronizes a same-directory temporary file, atomically
-renames it over the journal, then synchronizes the parent directory. The same
-OS lock and full-record stale-writer comparison used by append protect the
-rewrite. A truncated tail may be replaced from its validated prefix. A corrupt
-tail still throws `repairRequired` until `discardCorruptTail()` is called.
-Journal size is proportional to canonical recovery state rather than
-checkpoint/audit history; it is not a permanent event warehouse.
-Core also requires a meaningful reclaim window before rewriting, so a large
-canonical mutation tombstone set does not cause a full-file rewrite after every
-small checkpoint.
-
-## Mutation Recovery
-
-`AgentJournal` implements `ToolMutationAdmission` for durable sessions. Admission
-stores the exact complete tool call, resource identities, idempotency key and
-receipt expectation before an executor is reached:
-
-```swift
-let run = try await agent.makeSession(journal: journal).run("Update the listing")
-```
-
-`pendingMutations()` exposes only unsettled intents. `recoverPendingMutations()`
-changes an `intent` to `needsReconciliation` after restart without invoking the
-tool. `reconcileMutation` is the explicit trusted path for a quarantined intent.
-`abortMutation` closes that intent without executing the original tool. A pending
-mutation blocks another mutation in the same session until it is settled or
-aborted, while other sessions remain independent.
+After an executor may have acted, restart changes an unsettled intent to
+`needsReconciliation`; it never calls the tool again automatically. A trusted
+receipt and canonical output can be supplied through `reconcileMutation`.
+`abortMutation(_:confirmedNoEffect:)` requires a nonempty Host confirmation
+that **no external effect happened**. It cannot abort a mere in-flight intent
+or convert uncertainty into safety. The original identity, parameters and
+no-effect confirmation remain available after physical maintenance. The
+[recovery guide](swift-agent-mutation-recovery.md) describes the operator path.

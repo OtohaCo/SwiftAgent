@@ -1,6 +1,6 @@
 # SwiftAgent Security Model
 
-last-verified: 2026-09-20
+last-verified: 2026-09-27
 
 This document states what the SDK guarantees and what remains the host's job.
 It is part of the 1.0 freeze.
@@ -22,8 +22,8 @@ settlement.
 
 Context projection is request input, not execution truth. A projector may
 remove provider-private continuation or summarize an explicitly resolved
-read-only interaction, but canonical Session history, tool-call/result
-pairing, Evidence, mutation state, and Journal checkpoints remain separate.
+read-only interaction, but formal Session messages, tool-call/result
+pairing, Evidence, mutation state, and indexed Journal recovery remain separate.
 Projection output cannot mint Evidence or upgrade the authority of a message.
 
 ## LLM output is untrusted
@@ -91,12 +91,14 @@ claims an effect does not create a receipt.
 
 Restart recovery moves unsettled intents to `needsReconciliation`. The SDK
 does not replay the host executor and does not infer success from the crash
-tail. The host reconciles with a trusted receipt or aborts.
+tail. The host reconciles with a trusted receipt and output, or explicitly aborts
+only after confirming there was no external effect.
 
 ## Durable deduplication is journal-wide
 
-Mutation deduplication is scoped to one shared durable `AgentJournal`, not to a
-Session or Run. `operationID` names the logical operation and must stay stable
+Mutation deduplication is scoped to one open durable store and its persisted
+operation domain, not to a Session or Run. Another directory with the same
+domain label has a separate ledger. `operationID` names the logical operation and must stay stable
 across retry attempts. For a non-nil `operationID`, the durable identity combines:
 
 - The stable `operationID`
@@ -126,12 +128,9 @@ Admission fails closed according to the latest durable lifecycle:
   external side effect; cancellation or uncertainty alone is not an abort.
 
 Authorization and Evidence checks currently run before durable replay admission,
-so a settled receipt does not bypass current policy. Reconciliation should
-provide the original canonical JSON output when later replay is required; a
-legacy settlement without durable output fails closed with
-`AgentJournalError.mutationReplayUnavailable`. Terminal identities are retained
-indefinitely in the journal domain. The journal schema is version 3 and remains
-backward-readable for version 1 and version 2 records.
+so a settled receipt does not bypass current policy. Reconciliation requires a canonical replay output alongside the receipt.
+Terminal identities are retained without a TTL while the operation domain
+exists. The new segmented schema does not read older framed Journal versions.
 
 ## Provider fallback cannot replay an uncertain mutation
 
@@ -162,8 +161,9 @@ The SDK can:
 - Keep provider adapters from executing host tools
 
 `.durable` on a journal is configured persistence mode. The SDK still has to
-write the intent and can still fail that write. Hosts must handle persistence
-errors.
+write the intent and can still fail that write. Hosts must handle persistence errors, including `commitUnknown`: an
+uncertain intent never authorizes the executor and the Host must inspect the
+store before retrying.
 
 The SDK cannot:
 

@@ -1,6 +1,6 @@
 # SwiftAgent Sessions and Runs
 
-last-verified: 2026-09-20
+last-verified: 2026-09-27
 
 Agent holds Sendable configuration: provider, model, typed tools, instructions,
 structured-output schema, default run limits and a shared scheduler. Each
@@ -51,8 +51,9 @@ constructed with the same scheduler value.
 
 `session.run(_:budget:operationID:)` accepts a logical operation identity. Reuse
 the same non-nil `operationID` for attempts that mean "perform this same mutation
-once." Within a shared durable `AgentJournal`, mutation deduplication is shared
-across Sessions and Runs. Its key combines the stable operation ID, tool name,
+once." Within one open durable store, mutation deduplication is shared across
+Sessions and Runs. A matching domain label in another directory does not
+share that ledger. Its key combines the stable operation ID, tool name,
 and canonical semantic JSON arguments; it excludes tool call ID, Session ID, and
 Run ID. JSON objects with different key ordering, equivalent numeric spellings,
 and equivalent JSON string escapes are the same identity.
@@ -69,9 +70,9 @@ The journal lifecycle controls retry admission:
 | `settled` | Reuses the original receipt and does not invoke the executor |
 | `aborted` | Starts a new durable lifecycle for the same logical operation |
 
-`aborted` is not a synonym for cancelled or unknown. The trusted Host may call
-the abort path only after explicitly confirming that no external side effect
-occurred. Settled and aborted identities are retained indefinitely in the shared
+`aborted` is not a synonym for cancelled or unknown. The trusted Host calls `abortMutation(_:confirmedNoEffect:)` only after
+explicitly confirming that no external side effect occurred and providing a
+nonempty basis. Settled and aborted identities are retained indefinitely in the shared
 journal domain.
 
 Authorization and Evidence requirements are currently checked before replay
@@ -79,10 +80,8 @@ admission. A settled retry therefore still must satisfy current policy. On a
 settled replay, the runtime returns the original durable canonical JSON output,
 validates it against the current tool output schema, records the original
 receipt, and uses the current tool call ID in the transcript and run result.
-Hosts reconciling an uncertain mutation should provide that output through the
-reconciliation overload when future replay is required. Older settlements that
-do not contain output fail closed with
-`AgentJournalError.mutationReplayUnavailable`; they are never re-executed.
+Hosts reconciling an uncertain mutation provide a trusted receipt and the
+canonical replay output. Uncertain effects are never re-executed automatically.
 
 ## Ownership and History
 
@@ -90,8 +89,8 @@ A Session rejects overlapping requests with `AgentSessionError.runInProgress`.
 It neither queues them nor supersedes the existing run. Other Sessions continue
 independently. New runs get distinct IDs; their tool contexts retain the Session ID.
 
-History is readable and not assignable. Restoration uses a journal checkpoint,
-never a caller-supplied array. `activeRunID` is similarly readable only.
+History is readable and not assignable. Restoration reads the indexed Session
+messages from the open store, never a caller-supplied array. `activeRunID` is similarly readable only.
 
 Accepted user messages are saved immediately. The loop commits safe checkpoints
 to Session history. When a tool batch fails partway through, history retains only
@@ -109,8 +108,9 @@ A replacement Session with the same ID must wait until drain completes;
 `runInProgress` is the typed rejection if it tries to run earlier.
 
 Late work from an older cancelled run cannot overwrite history belonging to a
-newer run. History is in memory; durable journaling, restoration and compaction
-are separate concerns. See [Context Policy](swift-agent-context.md).
+newer run. The Session keeps its active conversation in memory; formal messages
+and the mutation ledger are persisted independently of request projection.
+Segment packing is physical maintenance, not conversational summary. See [Context Policy](swift-agent-context.md).
 
 ## Run Control
 

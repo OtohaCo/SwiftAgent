@@ -4,6 +4,10 @@ Status: Accepted for RC.2 development
 Date: 2026-09-20
 Scope: `AgentCatalog`, `AgentCore`, provider adapters, and Host examples
 
+The Journal storage and retention statements in this historical ADR are
+superseded by [ADR 0004](0004-journal-storage.md). Request-only projection
+and execution binding remain the decisions recorded here.
+
 ## Context
 
 SwiftAgent currently binds one immutable `ModelID` and `ModelProvider` to an
