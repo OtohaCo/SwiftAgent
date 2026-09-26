@@ -221,6 +221,13 @@ public actor AgentSession {
         startupID: UUID
     ) async throws -> AgentRun {
         try budget.checkActive()
+        if let journal {
+            try await withStartupDeadline(budget.deadline, startupID: startupID) {
+                try await journal.refreshAfterExternalCompaction(
+                    sessionID: self.id, deadline: budget.deadline
+                )
+            }
+        }
         let restoredCheckpoint: (history: [ModelMessage], steeringIDs: [UUID])?
         if restoredJournalState {
             restoredCheckpoint = nil

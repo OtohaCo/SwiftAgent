@@ -604,6 +604,100 @@ final class AgentJournalTests: XCTestCase {
         XCTAssertEqual(records.count, 1)
     }
 
+    func testPublicCompactionRefusesAnActiveSessionLease() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let owner = try AgentJournal(persistenceURL: url)
+        try await appendCompactionHistory(to: owner, sessionID: sessionID)
+        let contender = try AgentJournal(persistenceURL: url)
+        let before = try fileSize(url)
+
+        try await owner.acquireSessionLease(sessionID: sessionID)
+        do {
+            _ = try await contender.compactIfNeeded(maxJournalBytes: 1, sessionID: sessionID)
+            XCTFail("A second host must not rewrite an active Session's journal")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .sessionLeaseUnavailable)
+        }
+        XCTAssertEqual(try fileSize(url), before)
+        _ = try await owner.append(
+            .userMessage("Still active"), sessionID: sessionID, durability: .durable
+        )
+        await owner.releaseSessionLease(sessionID: sessionID)
+
+        let idle = try AgentJournal(persistenceURL: url)
+        let compacted = try await idle.compactIfNeeded(maxJournalBytes: 1, sessionID: sessionID)
+        XCTAssertTrue(compacted)
+        let restored = try AgentJournal.load(from: url)
+        let checkpoint = await restored.latestCheckpoint(sessionID: sessionID)
+        XCTAssertNotNil(checkpoint)
+    }
+
+    func testDeadlineAwareColdOpenLeavesLargeJournalForSafeLaterRepair() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        try await appendCompactionHistory(to: journal, sessionID: sessionID)
+        let before = try fileSize(url)
+
+        do {
+            _ = try AgentJournal(
+                persistenceURL: url,
+                deadline: .now.advanced(by: .milliseconds(-1))
+            )
+            XCTFail("expired cold open should stop before decoding old checkpoints")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .deadlineExceeded)
+        }
+        XCTAssertEqual(try fileSize(url), before)
+        let restored = try AgentJournal.load(from: url)
+        let checkpoint = await restored.latestCheckpoint(sessionID: sessionID)
+        XCTAssertNotNil(checkpoint)
+    }
+
+    func testPublicCompactionRefusesAReservedSessionBeforeItsFirstCheckpoint() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let owner = try AgentJournal(persistenceURL: url)
+        let contender = try AgentJournal(persistenceURL: url)
+
+        try await owner.acquireSessionLease(sessionID: sessionID)
+        do {
+            _ = try await contender.compactIfNeeded(maxJournalBytes: 1, sessionID: sessionID)
+            XCTFail("An empty journal must still honor the pending Session admission")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .sessionLeaseUnavailable)
+        }
+        _ = try await owner.append(
+            .sessionCreated, sessionID: sessionID, durability: .durable
+        )
+        await owner.releaseSessionLease(sessionID: sessionID)
+    }
+
+    func testPublicCompactionRejectsMixedSessionJournal() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let firstID = UUID()
+        let secondID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        try await appendCompactionHistory(to: journal, sessionID: firstID)
+        _ = try await journal.append(
+            .sessionCreated, sessionID: secondID, durability: .durable
+        )
+        let before = try fileSize(url)
+
+        do {
+            _ = try await journal.compactIfNeeded(maxJournalBytes: 1, sessionID: firstID)
+            XCTFail("A single-Session API must not compact a mixed journal")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .invalidRecord)
+        }
+        XCTAssertEqual(try fileSize(url), before)
+    }
+
     private func temporaryURL() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("swift-agent-journal-\(UUID().uuidString).log")
     }

@@ -52,6 +52,105 @@ struct ExternalClientTests {
         _ = try makeMutationAgent().makeSession(id: sessionID, journal: restarted)
     }
 
+    @Test func publicJournalCompactionPreservesMutationRecovery() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-external-compact-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let journal = try AgentJournal(persistenceURL: url)
+        let sessionID = UUID()
+        let run = try await makeMutationAgent().makeSession(id: sessionID, journal: journal)
+            .run("Update the listing")
+        let result = try await run.wait()
+        try await run.waitForDrain()
+        #expect(result.receipts.count == 1)
+
+        #expect(try await journal.compactIfNeeded(maxJournalBytes: 1, sessionID: sessionID))
+        let restored = try AgentJournal.load(from: url)
+        #expect(await restored.pendingMutations().isEmpty)
+        #expect(await restored.latestCheckpoint(sessionID: sessionID) != nil)
+        _ = try makeMutationAgent().makeSession(id: sessionID, journal: restored)
+    }
+
+    @Test func anIdleSessionCanRunAgainAfterAnotherInstanceCompactsItsJournal() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-idle-compaction-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let sessionID = UUID()
+        let original = try AgentJournal(persistenceURL: url)
+        let session = try makeReadOnlyAgent().makeSession(id: sessionID, journal: original)
+        for i in 0..<8 {
+            let run = try await session.run("earlier turn \(i) " + String(repeating: "x", count: 2_000))
+            _ = try await run.wait()
+            try await run.waitForDrain()
+        }
+        let competing = try AgentJournal.load(from: url)
+        #expect(try await competing.compactIfNeeded(maxJournalBytes: 1, sessionID: sessionID))
+
+        let next = try await session.run("continue the conversation")
+        #expect(try await next.wait().outcome == .completed)
+        try await next.waitForDrain()
+        let restarted = try AgentJournal.load(from: url)
+        #expect(await restarted.pendingMutations().isEmpty)
+        #expect(await restarted.latestCheckpoint(sessionID: sessionID) != nil)
+    }
+
+    @Test func anIdleSessionStillRejectsNewConversationWrittenByAnotherInstance() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-stale-writer-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let sessionID = UUID()
+        let original = try AgentJournal(persistenceURL: url)
+        let first = try makeReadOnlyAgent().makeSession(id: sessionID, journal: original)
+        let initialRun = try await first.run("initial")
+        _ = try await initialRun.wait()
+        try await initialRun.waitForDrain()
+
+        let competing = try AgentJournal.load(from: url)
+        let second = try makeReadOnlyAgent().makeSession(id: sessionID, journal: competing)
+        let competingRun = try await second.run("new conversation")
+        _ = try await competingRun.wait()
+        try await competingRun.waitForDrain()
+
+        await #expect(throws: AgentJournalError.concurrentWriter) {
+            _ = try await first.run("stale continuation")
+        }
+    }
+
+    @Test func settledMutationSessionContinuesAfterExternalCompaction() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-mutation-idle-compact-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let sessionID = UUID()
+        let probe = SideEffectProbe()
+        let original = try AgentJournal(persistenceURL: url)
+        let session = try makeMutationAgent(probe: probe).makeSession(id: sessionID, journal: original)
+        let first = try await session.run("Update the listing", operationID: "update-1")
+        #expect(try await first.wait().receipts.count == 1)
+        try await first.waitForDrain()
+
+        let competing = try AgentJournal.load(from: url)
+        #expect(try await competing.compactIfNeeded(maxJournalBytes: 1, sessionID: sessionID))
+        let second = try await session.run("Update the listing again", operationID: "update-2")
+        #expect(try await second.wait().receipts.count == 1)
+        try await second.waitForDrain()
+        #expect(probe.toolExecutions == 2)
+        #expect(await original.pendingMutations().isEmpty)
+        let restarted = try AgentJournal.load(from: url)
+        #expect(await restarted.pendingMutations().isEmpty)
+    }
+
     @Test func stableOperationIDReplaysASettledReceiptWithoutExecutingAgain() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("swift-agent-external-idempotency-\(UUID().uuidString).log")

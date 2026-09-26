@@ -211,6 +211,7 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     case mutationSettlementRequiresReconciliation
     case persistenceUnavailable(String)
     case sessionLeaseUnavailable
+    case deadlineExceeded
     case repairRequired
 
     public var errorDescription: String? {
@@ -231,6 +232,7 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
         case .mutationSettlementRequiresReconciliation: "Mutation settlement must use the reconciliation API."
         case .persistenceUnavailable(let message): "Agent journal persistence is unavailable: \(message)"
         case .sessionLeaseUnavailable: "The durable Agent session is already active in another process."
+        case .deadlineExceeded: "Opening the durable Agent journal exceeded the caller's deadline."
         case .repairRequired: "The journal has a corrupt tail that must be discarded before another durable write."
         }
     }
@@ -301,6 +303,10 @@ public actor AgentJournal {
     private var records: [AgentJournalRecord]
     private var nextSequence: UInt64
     private var persistenceURL: URL?
+    /// A size mismatch triggers a full verification under the Session lease.
+    /// Equal sizes may skip this startup read; durable appends still perform
+    /// their own complete concurrent-writer check before committing.
+    private var knownFileSize: Int?
     private var recoveryState: AgentJournalRecovery
     private var sessionLeases: [UUID: FileHandle]
     private var directorySyncPending: Bool
@@ -338,6 +344,7 @@ public actor AgentJournal {
         records = []
         nextSequence = 1
         persistenceURL = nil
+        knownFileSize = nil
         recoveryState = .clean
         sessionLeases = [:]
         directorySyncPending = false
@@ -357,6 +364,7 @@ public actor AgentJournal {
         records = loaded.records
         nextSequence = (loaded.records.last?.sequence ?? 0) + 1
         self.persistenceURL = persistenceURL
+        knownFileSize = loaded.recovery == .clean ? loaded.validLength : nil
         recoveryState = loaded.recovery
         sessionLeases = [:]
         directorySyncPending = false
@@ -364,6 +372,31 @@ public actor AgentJournal {
         uncertainPersistenceRecords = nil
         persistenceFault = nil
         let mutationState = try Self.buildMutationState(from: loaded.records)
+        mutationRecords = mutationState.records
+        mutationIdentityIndex = mutationState.identityIndex
+        mutationIdentityMembers = mutationState.identityMembers
+        unresolvedMutationBySession = mutationState.unresolvedBySession
+        storageBox = AgentJournalStorageBox(.durable)
+    }
+
+    /// Opens a durable Journal within a caller's admission budget. Decoding
+    /// checks the deadline and cancellation between validated frames; failure
+    /// leaves the on-disk file unchanged for a later maintenance attempt.
+    public init(persistenceURL: URL, deadline: ContinuousClock.Instant) throws {
+        let loaded = try Self.read(from: persistenceURL, deadline: deadline)
+        try Self.checkReadBudget(deadline)
+        records = loaded.records
+        nextSequence = (loaded.records.last?.sequence ?? 0) + 1
+        self.persistenceURL = persistenceURL
+        knownFileSize = loaded.recovery == .clean ? loaded.validLength : nil
+        recoveryState = loaded.recovery
+        sessionLeases = [:]
+        directorySyncPending = false
+        uncertainPersistenceURL = nil
+        uncertainPersistenceRecords = nil
+        persistenceFault = nil
+        let mutationState = try Self.buildMutationState(from: loaded.records)
+        try Self.checkReadBudget(deadline)
         mutationRecords = mutationState.records
         mutationIdentityIndex = mutationState.identityIndex
         mutationIdentityMembers = mutationState.identityMembers
@@ -379,6 +412,7 @@ public actor AgentJournal {
         records = loaded.records
         nextSequence = (loaded.records.last?.sequence ?? 0) + 1
         self.persistenceURL = persistenceURL
+        knownFileSize = loaded.recovery == .clean ? loaded.validLength : nil
         recoveryState = loaded.recovery
         sessionLeases = [:]
         directorySyncPending = false
@@ -453,6 +487,51 @@ public actor AgentJournal {
         _ = swiftAgentFlock(handle.fileDescriptor, SwiftAgentFileLockOperation.unlock)
         #endif
         try? handle.close()
+    }
+
+    /// An idle Session may keep its actor alive while another process safely
+    /// compacts the same dedicated journal. Once this Session owns the lease
+    /// again, accept only a byte-level rewrite of its own canonical recovery
+    /// events; another writer's new events still fail closed.
+    package func refreshAfterExternalCompaction(
+        sessionID: UUID,
+        deadline: ContinuousClock.Instant
+    ) throws {
+        guard let url = persistenceURL else { return }
+        guard sessionLeases[sessionID] != nil else {
+            throw AgentJournalError.sessionLeaseUnavailable
+        }
+        // A durable append always increases file length and compaction makes
+        // it shorter. Size is only a fast negative check: any later commit
+        // still compares the complete on-disk records before accepting writes.
+        if let knownFileSize, try Self.fileSize(at: url) == knownFileSize {
+            return
+        }
+        let disk = try Self.withFileLock(
+            for: url, waitDeadline: deadline, checkCancellation: true
+        ) {
+            try Self.read(from: url)
+        }
+        if disk.records == records {
+            knownFileSize = disk.recovery == .clean ? disk.validLength : nil
+            return
+        }
+        guard disk.recovery == .clean,
+              disk.records.count < records.count else {
+            throw AgentJournalError.concurrentWriter
+        }
+        let expected = Self.canonicalRecoveryRecords(from: records)
+        guard disk.records.count == expected.count,
+              zip(disk.records, expected).allSatisfy({ actual, canonical in
+                  actual.sessionID == canonical.sessionID
+                      && actual.runID == canonical.runID
+                      && actual.timestamp == canonical.timestamp
+                      && actual.event == canonical.event
+              }) else {
+            throw AgentJournalError.concurrentWriter
+        }
+        try adopt(disk.records)
+        knownFileSize = disk.validLength
     }
 
     /// Returns the most recent canonical session history checkpoint. The
@@ -1101,11 +1180,27 @@ public actor AgentJournal {
             }
         }
         persistenceURL = url
+        knownFileSize = data.count
         recoveryState = .clean
         directorySyncPending = false
         uncertainPersistenceURL = nil
         uncertainPersistenceRecords = nil
         storageBox.current = .durable
+    }
+
+    /// Rewrites a dedicated single-Session journal when it exceeds the host's
+    /// byte threshold. Callers must use one persistence file per Session ID;
+    /// mixed-Session files fail closed.
+    /// The latest Session checkpoint and mutation lifecycle records are retained;
+    /// this does not summarize or discard the Session's conversational history.
+    /// The rewrite is atomic and refuses to rewrite any active Session's history.
+    public func compactIfNeeded(maxJournalBytes: Int, sessionID: UUID) throws -> Bool {
+        guard records.allSatisfy({ $0.sessionID == sessionID }) else {
+            throw AgentJournalError.invalidRecord
+        }
+        try acquireSessionLease(sessionID: sessionID)
+        defer { releaseSessionLease(sessionID: sessionID) }
+        return try compactIfNeeded(maxJournalBytes: maxJournalBytes, fault: nil)
     }
 
     /// Rewrites durable history to the minimum state needed for Session restore
@@ -1152,6 +1247,7 @@ public actor AgentJournal {
                     throw AgentJournalError.persistenceUnavailable("cannot atomically replace compacted journal")
                 }
                 replaced = true
+                knownFileSize = data.count
                 if fault == .directorySync {
                     throw AgentJournalError.persistenceUnavailable("injected compact directory sync failure")
                 }
@@ -1171,6 +1267,7 @@ public actor AgentJournal {
             throw error is AgentJournalError ? error : AgentJournalError.persistenceUnavailable(error.localizedDescription)
         }
         records = compacted
+        knownFileSize = data.count
         nextSequence = UInt64(compacted.count) + 1
         recoveryState = .clean
         directorySyncPending = false
@@ -1216,6 +1313,7 @@ public actor AgentJournal {
             let appendOffset = current.exists ? current.validLength : Self.header.count
             try Self.createOrTruncateTail(at: url, to: appendOffset)
             try Self.appendAndSync(frame, to: url, offset: appendOffset)
+            knownFileSize = appendOffset + frame.count
             if !current.exists {
                 do {
                     if persistenceFault == .directorySync {
@@ -1311,7 +1409,11 @@ public actor AgentJournal {
         return frame
     }
 
-    private static func read(from url: URL) throws -> ReadResult {
+    private static func read(
+        from url: URL,
+        deadline: ContinuousClock.Instant? = nil
+    ) throws -> ReadResult {
+        try checkReadBudget(deadline)
         guard FileManager.default.fileExists(atPath: url.path) else {
             return ReadResult(records: [], recovery: .clean, validLength: 0, exists: false)
         }
@@ -1327,6 +1429,7 @@ public actor AgentJournal {
         var expectedSequence: UInt64 = 1
         var recovery: AgentJournalRecovery = .clean
         while offset < data.count {
+            try checkReadBudget(deadline)
             let remaining = data.count - offset
             guard remaining >= 8 else {
                 recovery = .truncatedTail
@@ -1406,7 +1509,16 @@ public actor AgentJournal {
             expectedSequence = next
             offset = end
         }
+        try checkReadBudget(deadline)
         return ReadResult(records: records, recovery: recovery, validLength: offset, exists: true)
+    }
+
+    private static func checkReadBudget(_ deadline: ContinuousClock.Instant?) throws {
+        guard let deadline else { return }
+        try Task.checkCancellation()
+        guard ContinuousClock.now < deadline else {
+            throw AgentJournalError.deadlineExceeded
+        }
     }
 
     private static func createOrTruncateTail(at url: URL, to offset: Int) throws {
