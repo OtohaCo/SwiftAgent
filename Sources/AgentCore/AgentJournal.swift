@@ -301,6 +301,10 @@ public actor AgentJournal {
     private var records: [AgentJournalRecord]
     private var nextSequence: UInt64
     private var persistenceURL: URL?
+    /// A size mismatch triggers a full verification under the Session lease.
+    /// Equal sizes may skip this startup read; durable appends still perform
+    /// their own complete concurrent-writer check before committing.
+    private var knownFileSize: Int?
     private var recoveryState: AgentJournalRecovery
     private var sessionLeases: [UUID: FileHandle]
     private var directorySyncPending: Bool
@@ -338,6 +342,7 @@ public actor AgentJournal {
         records = []
         nextSequence = 1
         persistenceURL = nil
+        knownFileSize = nil
         recoveryState = .clean
         sessionLeases = [:]
         directorySyncPending = false
@@ -357,6 +362,7 @@ public actor AgentJournal {
         records = loaded.records
         nextSequence = (loaded.records.last?.sequence ?? 0) + 1
         self.persistenceURL = persistenceURL
+        knownFileSize = loaded.recovery == .clean ? loaded.validLength : nil
         recoveryState = loaded.recovery
         sessionLeases = [:]
         directorySyncPending = false
@@ -379,6 +385,7 @@ public actor AgentJournal {
         records = loaded.records
         nextSequence = (loaded.records.last?.sequence ?? 0) + 1
         self.persistenceURL = persistenceURL
+        knownFileSize = loaded.recovery == .clean ? loaded.validLength : nil
         recoveryState = loaded.recovery
         sessionLeases = [:]
         directorySyncPending = false
@@ -463,16 +470,25 @@ public actor AgentJournal {
         sessionID: UUID,
         deadline: ContinuousClock.Instant
     ) throws {
+        guard let url = persistenceURL else { return }
         guard sessionLeases[sessionID] != nil else {
             throw AgentJournalError.sessionLeaseUnavailable
         }
-        guard let url = persistenceURL else { return }
+        // A durable append always increases file length and compaction makes
+        // it shorter. Size is only a fast negative check: any later commit
+        // still compares the complete on-disk records before accepting writes.
+        if let knownFileSize, try Self.fileSize(at: url) == knownFileSize {
+            return
+        }
         let disk = try Self.withFileLock(
             for: url, waitDeadline: deadline, checkCancellation: true
         ) {
             try Self.read(from: url)
         }
-        if disk.records == records { return }
+        if disk.records == records {
+            knownFileSize = disk.recovery == .clean ? disk.validLength : nil
+            return
+        }
         guard disk.recovery == .clean,
               disk.records.count < records.count else {
             throw AgentJournalError.concurrentWriter
@@ -488,6 +504,7 @@ public actor AgentJournal {
             throw AgentJournalError.concurrentWriter
         }
         try adopt(disk.records)
+        knownFileSize = disk.validLength
     }
 
     /// Returns the most recent canonical session history checkpoint. The
@@ -1136,6 +1153,7 @@ public actor AgentJournal {
             }
         }
         persistenceURL = url
+        knownFileSize = data.count
         recoveryState = .clean
         directorySyncPending = false
         uncertainPersistenceURL = nil
@@ -1202,6 +1220,7 @@ public actor AgentJournal {
                     throw AgentJournalError.persistenceUnavailable("cannot atomically replace compacted journal")
                 }
                 replaced = true
+                knownFileSize = data.count
                 if fault == .directorySync {
                     throw AgentJournalError.persistenceUnavailable("injected compact directory sync failure")
                 }
@@ -1221,6 +1240,7 @@ public actor AgentJournal {
             throw error is AgentJournalError ? error : AgentJournalError.persistenceUnavailable(error.localizedDescription)
         }
         records = compacted
+        knownFileSize = data.count
         nextSequence = UInt64(compacted.count) + 1
         recoveryState = .clean
         directorySyncPending = false
@@ -1266,6 +1286,7 @@ public actor AgentJournal {
             let appendOffset = current.exists ? current.validLength : Self.header.count
             try Self.createOrTruncateTail(at: url, to: appendOffset)
             try Self.appendAndSync(frame, to: url, offset: appendOffset)
+            knownFileSize = appendOffset + frame.count
             if !current.exists {
                 do {
                     if persistenceFault == .directorySync {
