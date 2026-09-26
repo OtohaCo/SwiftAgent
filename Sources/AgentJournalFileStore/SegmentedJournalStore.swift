@@ -210,7 +210,7 @@ private struct Root: Codable {
     let lastDigest: String?
 }
 
-private struct Current: Codable {
+private struct Current: Codable, Equatable {
     let root: UUID
     let digest: String
 }
@@ -276,6 +276,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private var descriptor: Int32
     private var closed = false
     private var poisoned = false
+    private var expectedCurrent: Current?
     private var reclaimed: UInt64 = 0
     private var lastMaintenanceError: String?
     private let counters = MetricsBox()
@@ -510,6 +511,11 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func currentRoot() throws -> (Root, UUID) {
         let current = try JSONDecoder().decode(Current.self,
             from: readData(directoryURL.appendingPathComponent("CURRENT")))
+        if let expectedCurrent {
+            guard current == expectedCurrent else { throw AgentJournalError.concurrentWriter }
+        } else {
+            expectedCurrent = current
+        }
         let bytes = try readData(rootURL(current.root))
         guard Self.digest(bytes) == current.digest else { throw AgentJournalError.checksumMismatch }
         let root = try JSONDecoder().decode(Root.self, from: bytes)
@@ -528,8 +534,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func publishRoot(_ root: Root, id: UUID) throws {
         let bytes = try JSONEncoder().encode(root)
         try writeNew(bytes, at: rootURL(id))
-        try atomicWrite(JSONEncoder().encode(Current(root: id, digest: Self.digest(bytes))),
+        let current = Current(root: id, digest: Self.digest(bytes))
+        try atomicWrite(JSONEncoder().encode(current),
                         at: directoryURL.appendingPathComponent("CURRENT"))
+        expectedCurrent = current
     }
 
     private static func ioError(_ operation: String) -> AgentJournalError {

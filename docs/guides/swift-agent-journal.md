@@ -37,7 +37,9 @@ Sessions that must share deduplication must share **the same open Journal
 handle** and directory. Another directory with the same domain text has a
 separate ledger. `storeIdentity()` reports both values. The handle holds an
 OS exclusive writer lock until safe `close()`. A second process or an
-independent same-process open gets `storeInUse`. The owner can run multiple
+independent same-process open gets `storeInUse`. An out-of-band change to the
+active `CURRENT` root is rejected as `concurrentWriter`; it cannot be accepted
+as equivalent maintenance. The owner can run multiple
 Sessions and provider/tool calls concurrently; only short commits are
 serialized. `close()` rejects an active Session lease, waits for accepted
 maintenance, then unlocks. Wait for `run.waitForDrain()` before closing.

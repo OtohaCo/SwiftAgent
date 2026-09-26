@@ -689,6 +689,33 @@ import Glibc
         #expect(try Data(contentsOf: layoutURL) == damaged)
     }
 
+    @Test func externallyChangedCurrentRootIsRejectedByTheActiveOwner() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-external-root-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "owned")
+        let session = UUID()
+        let first = ModelMessage.user([.text("first")])
+        _ = try await journal.appendCheckpoint([.checkpoint(history: [first], steeringIDs: [])],
+                                               sessionID: session, runID: UUID(), durability: .durable)
+        let current = directory.appendingPathComponent("CURRENT")
+        let saved = try Data(contentsOf: current)
+        var altered = saved
+        altered[altered.count - 3] ^= 0x01
+        try altered.write(to: current)
+        await #expect(throws: AgentJournalError.concurrentWriter) { _ = try await journal.storeStatus() }
+        await #expect(throws: AgentJournalError.concurrentWriter) {
+            _ = try await journal.appendCheckpoint([
+                .checkpoint(history: [first, .user([.text("must not overwrite")])], steeringIDs: [])
+            ], sessionID: session, runID: UUID(), durability: .durable)
+        }
+        #expect(try Data(contentsOf: current) == altered)
+        try saved.write(to: current)
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == [first])
+        try await reopened.close()
+    }
+
     @Test func largeSettledOutputSurvivesRotationPackingAndReplay() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-large-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
