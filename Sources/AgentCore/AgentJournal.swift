@@ -1108,6 +1108,14 @@ public actor AgentJournal {
         storageBox.current = .durable
     }
 
+    /// Rewrites a durable journal when it exceeds the host's byte threshold.
+    /// The latest Session checkpoint and mutation lifecycle records are retained;
+    /// this does not summarize or discard the Session's conversational history.
+    /// The rewrite is atomic and rejects a concurrent writer.
+    public func compactIfNeeded(maxJournalBytes: Int) throws -> Bool {
+        try compactIfNeeded(maxJournalBytes: maxJournalBytes, fault: nil)
+    }
+
     /// Rewrites durable history to the minimum state needed for Session restore
     /// and mutation safety. Terminal mutation identities remain as tombstones so
     /// current idempotency conflicts survive restart.

@@ -52,6 +52,28 @@ struct ExternalClientTests {
         _ = try makeMutationAgent().makeSession(id: sessionID, journal: restarted)
     }
 
+    @Test func publicJournalCompactionPreservesMutationRecovery() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-agent-external-compact-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + ".lock")
+        }
+        let journal = try AgentJournal(persistenceURL: url)
+        let sessionID = UUID()
+        let run = try await makeMutationAgent().makeSession(id: sessionID, journal: journal)
+            .run("Update the listing")
+        let result = try await run.wait()
+        try await run.waitForDrain()
+        #expect(result.receipts.count == 1)
+
+        #expect(try await journal.compactIfNeeded(maxJournalBytes: 1))
+        let restored = try AgentJournal.load(from: url)
+        #expect(await restored.pendingMutations().isEmpty)
+        #expect(await restored.latestCheckpoint(sessionID: sessionID) != nil)
+        _ = try makeMutationAgent().makeSession(id: sessionID, journal: restored)
+    }
+
     @Test func stableOperationIDReplaysASettledReceiptWithoutExecutingAgain() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("swift-agent-external-idempotency-\(UUID().uuidString).log")
