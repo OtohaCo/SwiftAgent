@@ -15,7 +15,7 @@ struct DynamicBindingProviderCompatibilityTests {
         ).makeSession()
         let first = try await session.run("calculate")
         _ = try await first.wait()
-        let before = await session.conversationSnapshot()
+        let before = try await session.conversationSnapshot()
         let network = ProviderRequestProbe()
         let provider = try DeepSeekResponsesProvider(
             apiKey: "fixture-secret",

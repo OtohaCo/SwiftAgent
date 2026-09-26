@@ -8,10 +8,17 @@ let package = Package(
         .package(name: "SwiftAgent", path: "../.."),
     ],
     targets: [
+        .executableTarget(name: "JournalReplayFixture", dependencies: [
+            .product(name: "AgentCore", package: "SwiftAgent"),
+            .product(name: "AgentJournalFileStore", package: "SwiftAgent"),
+            .product(name: "AgentModels", package: "SwiftAgent"),
+            .product(name: "AgentTools", package: "SwiftAgent"),
+        ]),
         .testTarget(
             name: "ExternalClientTests",
             dependencies: [
                 .product(name: "AgentCore", package: "SwiftAgent"),
+                .product(name: "AgentJournalFileStore", package: "SwiftAgent"),
                 .product(name: "AgentCatalog", package: "SwiftAgent"),
                 .product(name: "AgentDecisions", package: "SwiftAgent"),
                 .product(name: "AgentJevProvider", package: "SwiftAgent"),
@@ -19,6 +26,7 @@ let package = Package(
                 .product(name: "AgentProviders", package: "SwiftAgent"),
                 .product(name: "AgentTools", package: "SwiftAgent"),
                 .product(name: "AgentUsage", package: "SwiftAgent"),
+                "JournalReplayFixture",
             ]
         ),
     ],

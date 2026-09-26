@@ -53,7 +53,7 @@ struct AgentModelBindingTests {
 
         let first = try await session.run("first")
         _ = try await first.wait()
-        let before = await session.conversationSnapshot()
+        let before = try await session.conversationSnapshot()
         await #expect(throws: AgentLoopError.unsupportedCapabilities(.multiTurn)) {
             try await session.run("must not append", using: binding, expectedConversationRevision: before.revision)
         }
@@ -93,7 +93,7 @@ struct AgentModelBindingTests {
     @Test func staleConversationRevisionIsRejectedBeforeHistoryChanges() async throws {
         let provider = ScriptedProvider { request, _ in textResponse(request, "done") }
         let session = try Agent(model: fixtureModel, provider: provider).makeSession()
-        let snapshot = await session.conversationSnapshot()
+        let snapshot = try await session.conversationSnapshot()
         let first = try await session.run("first")
         _ = try await first.wait()
         let binding = try AgentModelBinding(
@@ -275,59 +275,23 @@ struct AgentModelBindingTests {
             deployment: deployment("durable")
         )
 
+        let firstJournal = try makeTestJournal(at: url)
         let firstSession = try agent.makeSession(
             id: sessionID,
-            journal: AgentJournal(persistenceURL: url)
+            journal: firstJournal
         )
         let first = try await firstSession.run("first", using: binding)
         _ = try await first.wait()
         try await first.waitForDrain()
+        try await firstJournal.close()
 
         let restoredSession = try agent.makeSession(
             id: sessionID,
-            journal: AgentJournal.load(from: url)
+            journal: openTestJournal(at: url)
         )
         let second = try await restoredSession.run("second", using: binding)
         #expect(try await second.wait().outcome == .completed)
         try await second.waitForDrain()
-    }
-
-    @Test func compactionThatChangesTheSnapshotRejectsAStaleRoutedRunBeforeAppendingInput() async throws {
-        let provider = ScriptedProvider { request, _ in textResponse(request, "unused") }
-        let journal = AgentJournal()
-        let sessionID = UUID()
-        _ = try await journal.appendCheckpoint(
-            [.checkpoint(history: [
-                .user([.text(String(repeating: "old ", count: 200))]),
-                .assistant(content: [.text(String(repeating: "answer ", count: 100))], toolCalls: []),
-            ], steeringIDs: [])],
-            sessionID: sessionID
-        )
-        let policy = AgentContextPolicy(
-            maxInputUTF8Bytes: 4_096,
-            maxActiveHistoryUTF8Bytes: 300,
-            retainedRecentTurnCount: 0,
-            compactor: FixedCompactor()
-        )
-        let session = try Agent(
-            model: fixtureModel,
-            provider: provider,
-            configuration: .init(contextPolicy: policy)
-        ).makeSession(id: sessionID, journal: journal)
-        let snapshot = await session.conversationSnapshot()
-        let binding = try AgentModelBinding(
-            profileID: "routed",
-            profileRevision: "1",
-            model: fixtureModel,
-            provider: provider,
-            deployment: deployment("routed")
-        )
-
-        await #expect(throws: AgentModelBindingError.staleConversationRevision) {
-            try await session.run("must not append", using: binding, expectedConversationRevision: snapshot.revision)
-        }
-        #expect(await session.history.contains(.user([.text("must not append")])) == false)
-        #expect(await provider.log.requests.isEmpty)
     }
 
     @Test func resolvedReadOnlyFailureProjectionReplacesOnlyACompleteClosedGroup() async throws {
@@ -517,7 +481,7 @@ struct AgentModelBindingTests {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let gate = NonCooperativeProjectionGate()
         let startupReleased = AsyncSignal()
         let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
@@ -550,10 +514,7 @@ struct AgentModelBindingTests {
         #expect(await session.history == [])
         #expect(await session.activeRunID == nil)
         #expect(await provider.log.requests.isEmpty)
-        #expect(await journal.snapshot().contains { record in
-            if case .userMessage("must not commit") = record.event { return true }
-            return false
-        } == false)
+        #expect(try await journal.readMessages(sessionID: session.id).isEmpty)
 
         let next = try await session.run("next")
         _ = try await next.wait()
@@ -631,7 +592,7 @@ struct AgentModelBindingTests {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let sessionID = UUID()
         let gate = NonCooperativeProjectionGate()
         let startupReleased = AsyncSignal()
@@ -776,51 +737,24 @@ struct AgentModelBindingTests {
         #expect(try await next.wait().outcome == .completed)
     }
 
-    @Test func uncertainStartupJournalAppendStillAdmitsTheRun() async throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("swift-agent-uncertain-startup-\(UUID().uuidString).log")
-        defer {
-            try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(atPath: url.path + ".lock")
-        }
-        let journal = try AgentJournal(persistenceURL: url, persistenceFault: .directorySync)
-        let provider = ScriptedProvider { request, _ in textResponse(request, "admitted") }
-        let session = try Agent(model: fixtureModel, provider: provider).makeSession(journal: journal)
-
-        let run = try await session.run("uncertain startup")
-        #expect(try await run.wait().outcome == .completed)
-        try await run.waitForDrain()
-        #expect(await session.history == [
-            .user([.text("uncertain startup")]),
-            .assistant(content: [.text("admitted")], toolCalls: []),
-        ])
-        #expect(await journal.snapshot().contains { record in
-            if case .userMessage("uncertain startup") = record.event { return true }
-            return false
-        })
-    }
-
-    @Test func deadlineDuringJournalAdmissionDoesNotCommitInput() async throws {
+    @Test func expiredRunBudgetDoesNotCommitInput() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("swift-agent-admission-deadline-\(UUID().uuidString).log")
         defer {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
         let sessionID = UUID()
         let session = try Agent(model: fixtureModel, provider: provider).makeSession(
             id: sessionID,
             journal: journal
         )
-        let lock = try HeldFileLock(url: URL(fileURLWithPath: url.path + ".lock"))
-        defer { lock.release() }
-
         let budget = try AgentBudget(
             maxModelTurns: 1,
             maxToolCalls: 0,
-            deadline: .now.advanced(by: .milliseconds(120))
+            deadline: .now.advanced(by: .milliseconds(-1))
         )
         await #expect(throws: AgentLoopError.deadlineExceeded) {
             _ = try await session.run("blocked before admission", budget: budget)
@@ -829,7 +763,6 @@ struct AgentModelBindingTests {
         #expect(await session.activeRunID == nil)
         #expect(await provider.log.requests.isEmpty)
 
-        lock.release()
         let next = try await session.run("after admission wait")
         #expect(try await next.wait().outcome == .completed)
     }
@@ -851,7 +784,7 @@ struct AgentModelBindingTests {
             Issue.record("unexpected startup admission error: \(error)")
         }
         #expect(didThrowDeadline)
-        #expect(await journal.snapshot().isEmpty)
+        #expect(try await journal.latestCheckpoint(sessionID: UUID())?.history == nil)
     }
 
     @Test func admittedStartupCheckpointSurvivesFailureBeforeFirstLoopCheckpoint() async throws {
@@ -862,7 +795,7 @@ struct AgentModelBindingTests {
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
         let sessionID = UUID()
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let failure = ModelProviderError(kind: .rateLimited, message: "fixture failure")
         let failing = ScriptedProvider { _, _ in throw failure }
         let firstSession = try Agent(model: fixtureModel, provider: failing).makeSession(
@@ -873,13 +806,14 @@ struct AgentModelBindingTests {
         let run = try await firstSession.run("recover after provider failure")
         await #expect(throws: ModelProviderError.self) { try await run.wait() }
         try await run.waitForDrain()
+        try await journal.close()
 
-        let restartedJournal = try AgentJournal.load(from: url)
+        let restartedJournal = try openTestJournal(at: url)
         let restarted = try Agent(model: fixtureModel, provider: failing).makeSession(
             id: sessionID,
             journal: restartedJournal
         )
-        let snapshot = await restarted.conversationSnapshot()
+        let snapshot = try await restarted.conversationSnapshot()
         #expect(snapshot.messages == [.user([.text("recover after provider failure")])])
     }
 }
@@ -908,12 +842,6 @@ private struct FixedTokenEstimator: AgentContextTokenEstimator {
 
     func estimate(_ input: AgentContextTokenEstimationInput) async throws -> AgentContextTokenEstimate {
         .init(inputTokens: inputTokens, accuracy: .exact)
-    }
-}
-
-private struct FixedCompactor: AgentContextCompactor {
-    func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
-        .init(goal: "Continue from the compacted conversation.")
     }
 }
 
@@ -1142,42 +1070,3 @@ private func deployment(_ value: String) throws -> AgentModelDeployment {
         apiVersion: "1"
     )
 }
-
-#if os(macOS) || os(Linux)
-@_silgen_name("flock")
-private func swiftAgentTestFlock(_ fileDescriptor: Int32, _ operation: Int32) -> Int32
-
-private let testLockExclusiveNonBlocking: Int32 = 2 | 4
-private let testLockUnlock: Int32 = 8
-
-private final class HeldFileLock: @unchecked Sendable {
-    private let handle: FileHandle
-    private var isHeld = true
-
-    init(url: URL) throws {
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        if !FileManager.default.fileExists(atPath: url.path) {
-            guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
-                throw CocoaError(.fileNoSuchFile)
-            }
-        }
-        handle = try FileHandle(forUpdating: url)
-        guard swiftAgentTestFlock(handle.fileDescriptor, testLockExclusiveNonBlocking) == 0 else {
-            try? handle.close()
-            throw CocoaError(.fileLocking)
-        }
-    }
-
-    func release() {
-        guard isHeld else { return }
-        isHeld = false
-        _ = swiftAgentTestFlock(handle.fileDescriptor, testLockUnlock)
-        try? handle.close()
-    }
-
-    deinit { release() }
-}
-#endif

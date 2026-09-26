@@ -25,7 +25,7 @@ struct AgentMutationIdempotencyTests {
                 return textResponse(request, "retry complete")
             }
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let session = try Agent(model: fixtureModel, provider: provider,
                                 tools: [try IdempotencyMutationTool(probe: probe)]).makeSession(journal: journal)
 
@@ -40,7 +40,7 @@ struct AgentMutationIdempotencyTests {
         #expect(replayed.callID == retryCall.id)
         #expect(replayed.receipt == originalReceipt)
         #expect(await probe.externalUpdates == ["listing-1"])
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
     }
 
     @Test func settledRetryAcrossSessionsUsesTheJournalDomainWithoutExecutingAgain() async throws {
@@ -57,7 +57,7 @@ struct AgentMutationIdempotencyTests {
             default: return textResponse(request, "retry complete")
             }
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let agent = try Agent(model: fixtureModel, provider: provider,
                               tools: [try IdempotencyMutationTool(probe: probe)])
         let first = try agent.makeSession(id: UUID(), journal: journal)
@@ -75,7 +75,7 @@ struct AgentMutationIdempotencyTests {
     @Test func intentRetryReturnsTypedPendingWithoutCreatingAnotherIntent() async throws {
         let url = temporaryJournalURL()
         defer { cleanupJournal(url) }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let first = try admissionRequest(key: "pending-operation", callID: "pending-first")
         let retry = try admissionRequest(key: "pending-operation", callID: "pending-retry")
         _ = try await journal.admit(first)
@@ -83,7 +83,7 @@ struct AgentMutationIdempotencyTests {
         await #expect(throws: AgentJournalError.mutationPending) {
             _ = try await journal.admit(retry)
         }
-        let pending = await journal.pendingMutations()
+        let pending = try await journal.pendingMutations()
         #expect(pending.count == 1)
         #expect(pending.first?.state == .intent)
         #expect(pending.first?.intent.call.id == first.callID)
@@ -92,7 +92,7 @@ struct AgentMutationIdempotencyTests {
     @Test func needsReconciliationRetryFailsClosed() async throws {
         let url = temporaryJournalURL()
         defer { cleanupJournal(url) }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let first = try admissionRequest(key: "uncertain-operation", callID: "uncertain-first")
         let retry = try admissionRequest(key: "uncertain-operation", callID: "uncertain-retry")
         _ = try await journal.admit(first)
@@ -101,7 +101,7 @@ struct AgentMutationIdempotencyTests {
         await #expect(throws: AgentJournalError.mutationRequiresReconciliation) {
             _ = try await journal.admit(retry)
         }
-        let pending = await journal.pendingMutations()
+        let pending = try await journal.pendingMutations()
         #expect(pending.count == 1)
         #expect(pending.first?.state == .needsReconciliation)
     }
@@ -109,12 +109,13 @@ struct AgentMutationIdempotencyTests {
     @Test func confirmedAbortedMutationCanCreateANewDurableIntent() async throws {
         let url = temporaryJournalURL()
         defer { cleanupJournal(url) }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let first = try admissionRequest(key: "aborted-operation", callID: "aborted-first")
         let retry = try admissionRequest(key: "aborted-operation", callID: "aborted-retry")
         _ = try await journal.admit(first)
         let recovered = try await journal.recoverPendingMutations()
-        try await journal.abortMutation(try #require(recovered.first))
+        try await journal.abortMutation(try #require(recovered.first),
+                                        confirmedNoEffect: AgentNoEffectConfirmation(basis: "fixture did not invoke executor"))
 
         let result = try await journal.admit(retry)
 
@@ -122,7 +123,7 @@ struct AgentMutationIdempotencyTests {
             Issue.record("A confirmed-not-executed abort must allow a new durable intent")
             return
         }
-        let pending = await journal.pendingMutations()
+        let pending = try await journal.pendingMutations()
         #expect(pending.count == 1)
         #expect(pending.first?.state == .intent)
         #expect(pending.first?.intent.call.id == retry.callID)
@@ -144,7 +145,7 @@ struct AgentMutationIdempotencyTests {
             default: return textResponse(request, "retry complete")
             }
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let session = try Agent(model: fixtureModel, provider: provider,
                                 tools: [try IdempotencyMutationTool(probe: probe)]).makeSession(journal: journal)
 
@@ -177,7 +178,7 @@ struct AgentMutationIdempotencyTests {
             default: return textResponse(request, "retry complete")
             }
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let session = try Agent(model: fixtureModel, provider: provider,
                                 tools: [try IdempotencyMutationTool(probe: probe)]).makeSession(journal: journal)
 
@@ -202,7 +203,7 @@ struct AgentMutationIdempotencyTests {
             default: return textResponse(request, "B complete")
             }
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let session = try Agent(model: fixtureModel, provider: provider,
                                 tools: [try IdempotencyMutationTool(probe: probe)]).makeSession(journal: journal)
 
@@ -227,7 +228,7 @@ struct AgentMutationIdempotencyTests {
             default: return textResponse(request, "second complete")
             }
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let session = try Agent(model: fixtureModel, provider: provider,
                                 tools: [try IdempotencyMutationTool(probe: probe)]).makeSession(journal: journal)
 
@@ -253,7 +254,7 @@ struct AgentMutationIdempotencyTests {
             default: return textResponse(request, "complete")
             }
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let session = try Agent(model: fixtureModel, provider: provider,
                                 tools: [try IdempotencyMutationTool(probe: probe)]).makeSession(journal: journal)
 
@@ -278,22 +279,25 @@ struct AgentMutationIdempotencyTests {
         }
         let agent = try Agent(model: fixtureModel, provider: provider,
                               tools: [try IdempotencyMutationTool(probe: probe)])
-        let firstJournal = try AgentJournal(persistenceURL: url)
+        let firstJournal = try makeTestJournal(at: url)
         let firstSession = try agent.makeSession(journal: firstJournal)
         let first = try await firstSession.run("Update", operationID: "restart-operation")
         let firstResult = try await first.wait()
         try await first.waitForDrain()
 
-        let reloaded = try AgentJournal.load(from: url)
+        try await firstJournal.close()
+        let reloaded = try openTestJournal(at: url)
         let restartedSession = try agent.makeSession(journal: reloaded)
-        let retryResult = try await restartedSession.run("Retry", operationID: "restart-operation").wait()
+        let retry = try await restartedSession.run("Retry", operationID: "restart-operation")
+        let retryResult = try await retry.wait()
+        try await retry.waitForDrain()
 
         #expect(await probe.executorCount == 1)
         #expect(retryResult.receipts.first?.receipt == firstResult.receipts.first?.receipt)
         #expect(retryResult.receipts.first?.callID.rawValue == "after-restart")
     }
 
-    @Test func journalCompactionPreservesSettledReplayIdentity() async throws {
+    @Test func maintenancePreservesSettledReplayIdentity() async throws {
         let url = temporaryJournalURL()
         defer { cleanupJournal(url) }
         let probe = IdempotencyMutationProbe()
@@ -307,16 +311,19 @@ struct AgentMutationIdempotencyTests {
         }
         let agent = try Agent(model: fixtureModel, provider: provider,
                               tools: [try IdempotencyMutationTool(probe: probe)])
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let session = try agent.makeSession(journal: journal)
         let first = try await session.run("Update", operationID: "compact-operation")
         let firstResult = try await first.wait()
         try await first.waitForDrain()
-        #expect(try await journal.compactIfNeeded(maxJournalBytes: 1))
+        _ = try await journal.requestMaintenance()
+        try await journal.close()
 
-        let reloaded = try AgentJournal.load(from: url)
+        let reloaded = try openTestJournal(at: url)
         let retrySession = try agent.makeSession(journal: reloaded)
-        let retryResult = try await retrySession.run("Retry", operationID: "compact-operation").wait()
+        let retry = try await retrySession.run("Retry", operationID: "compact-operation")
+        let retryResult = try await retry.wait()
+        try await retry.waitForDrain()
 
         #expect(await probe.executorCount == 1)
         #expect(retryResult.receipts.first?.receipt == firstResult.receipts.first?.receipt)
@@ -326,7 +333,7 @@ struct AgentMutationIdempotencyTests {
     @Test func reconciledSuccessBecomesSettledReplay() async throws {
         let url = temporaryJournalURL()
         defer { cleanupJournal(url) }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let first = try admissionRequest(key: "reconciled-operation", callID: "original-call")
         _ = try await journal.admit(first)
         let pending = try #require(try await journal.recoverPendingMutations().first)
@@ -352,30 +359,7 @@ struct AgentMutationIdempotencyTests {
         }
         #expect(replayedReceipt == receipt)
         #expect(replayedOutput == .object(["updated": .bool(true)]))
-        #expect(await journal.pendingMutations().isEmpty)
-    }
-
-    @Test func legacySettlementWithoutDurableOutputFailsClosed() async throws {
-        let url = temporaryJournalURL()
-        defer { cleanupJournal(url) }
-        let journal = try AgentJournal(persistenceURL: url)
-        let first = try admissionRequest(key: "legacy-settled-operation", callID: "legacy-call")
-        _ = try await journal.admit(first)
-        let pending = try #require(try await journal.recoverPendingMutations().first)
-        let receipt = ToolReceipt(
-            operationID: first.idempotencyKey,
-            status: .succeeded,
-            confirmedTargets: [.init(namespace: "property.listing", id: "listing-1")],
-            revision: "legacy-revision"
-        )
-        try await journal.reconcileMutation(pending, receipt: receipt)
-
-        await #expect(throws: AgentJournalError.mutationReplayUnavailable) {
-            _ = try await journal.admit(
-                admissionRequest(key: first.idempotencyKey, callID: "legacy-retry")
-            )
-        }
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
     }
 
     @Test func concurrentDuplicateAdmissionExecutesOnce() async throws {
@@ -392,7 +376,7 @@ struct AgentMutationIdempotencyTests {
         let duplicateProvider = ScriptedProvider { request, _ in
             toolResponse(request, [mutationCall(id: "duplicate-call", arguments: #"{"id":"listing-1"}"#)])
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let firstSession = try Agent(model: fixtureModel, provider: firstProvider,
                                      tools: [try BlockingIdempotencyTool(probe: probe)]).makeSession(journal: journal)
         let duplicateSession = try Agent(model: fixtureModel, provider: duplicateProvider,
@@ -409,7 +393,7 @@ struct AgentMutationIdempotencyTests {
 
         #expect(await probe.executorCount == 1)
         #expect(await probe.externalUpdates == ["listing-1"])
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
     }
 
     @Test func settledReplayStillRequiresCurrentAuthorization() async throws {
@@ -423,7 +407,7 @@ struct AgentMutationIdempotencyTests {
             default: return toolResponse(request, [authorizedMutationCall(id: "denied-retry")])
             }
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let session = try Agent(model: fixtureModel, provider: provider,
                                 tools: [try AuthorizedIdempotencyTool(probe: probe)]).makeSession(journal: journal)
 
@@ -436,7 +420,7 @@ struct AgentMutationIdempotencyTests {
 
         #expect(await probe.authorizationCount == 2)
         #expect(await probe.executorCount == 1)
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
     }
 }
 

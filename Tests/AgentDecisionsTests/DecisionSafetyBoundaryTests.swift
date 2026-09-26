@@ -1,4 +1,5 @@
 import AgentCore
+import AgentJournalFileStore
 import AgentDecisions
 import AgentModels
 import AgentTools
@@ -20,7 +21,7 @@ struct DecisionSafetyBoundaryTests {
             try? FileManager.default.removeItem(at: journalURL)
             try? FileManager.default.removeItem(atPath: journalURL.path + ".lock")
         }
-        let journal = try AgentJournal(persistenceURL: journalURL)
+        let journal = try AgentIncrementalJournal.create(at: journalURL, operationDomain: "decision-tests")
         let agent = try Agent(
             model: .init(provider: "fixture", name: "decision-boundary"),
             provider: DecisionMutationModelProvider(),
@@ -31,7 +32,7 @@ struct DecisionSafetyBoundaryTests {
             try await agent.makeSession(journal: journal).run("Apply the proposal").wait()
         }
         #expect(probe.executions == 0)
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
     }
 }
 

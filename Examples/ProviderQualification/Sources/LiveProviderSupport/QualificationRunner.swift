@@ -1,4 +1,5 @@
 import AgentCore
+import AgentJournalFileStore
 import AgentDecisions
 import AgentJevProvider
 import AgentModels
@@ -356,7 +357,7 @@ public struct QualificationRunner: Sendable {
         let sessionID = UUID()
         let probe = ToolExecutionProbe()
         let tool = try AddNumbersTool(probe: probe)
-        let firstJournal = try AgentJournal(persistenceURL: journalURL)
+        let firstJournal = try AgentIncrementalJournal.create(at: journalURL, operationDomain: "qualification")
         let firstAgent = try makeAgent(selection: selection, tools: [tool])
         let firstSession = try firstAgent.makeSession(id: sessionID, journal: firstJournal)
         let first = try await execute(
@@ -367,7 +368,8 @@ public struct QualificationRunner: Sendable {
         )
         let executionsAfterFirstRun = await probe.count
 
-        let restarted = try AgentJournal.load(from: journalURL)
+        try await firstJournal.close()
+        let restarted = try AgentIncrementalJournal.open(at: journalURL)
         let secondAgent = try makeAgent(selection: selection, tools: [tool])
         let secondSession = try secondAgent.makeSession(id: sessionID, journal: restarted)
         let second = try await execute(
@@ -377,6 +379,7 @@ public struct QualificationRunner: Sendable {
             diagnostics: diagnostics
         )
         let finalExecutions = await probe.count
+        try await restarted.close()
         let lastEvidence = await evidence.entries.last
         let requestHasDurableToolHistory = configuration.options.mode == .fixture
             || (lastEvidence?.hasAssistantHistory == true

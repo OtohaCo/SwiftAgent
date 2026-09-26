@@ -1,42 +1,7 @@
 import AgentModels
 import AgentTools
 import Foundation
-
-#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Linux)
-@_silgen_name("flock")
-private func swiftAgentFlock(_ fileDescriptor: Int32, _ operation: Int32) -> Int32
-
-@_silgen_name("rename")
-private func swiftAgentRename(_ oldPath: UnsafePointer<CChar>, _ newPath: UnsafePointer<CChar>) -> Int32
-
-@_silgen_name("open")
-private func swiftAgentOpen(_ path: UnsafePointer<CChar>, _ flags: Int32) -> Int32
-
-@_silgen_name("fsync")
-private func swiftAgentFSync(_ fileDescriptor: Int32) -> Int32
-
-@_silgen_name("close")
-private func swiftAgentClose(_ fileDescriptor: Int32) -> Int32
-
-private enum SwiftAgentFileLockOperation {
-    static let exclusiveNonBlocking: Int32 = 2 | 4
-    static let unlock: Int32 = 8
-}
-#endif
-
-public struct AgentCompactionSummary: Codable, Equatable, Sendable {
-    public let goal: String
-    public let constraints: [String]
-    public let decisions: [String]
-    public let openWork: [String]
-
-    public init(goal: String, constraints: [String] = [], decisions: [String] = [], openWork: [String] = []) {
-        self.goal = goal
-        self.constraints = constraints
-        self.decisions = decisions
-        self.openWork = openWork
-    }
-}
+import Dispatch
 
 public enum AgentJournalRunOutcome: Codable, Equatable, Sendable {
     case completed
@@ -54,6 +19,18 @@ public enum AgentMutationState: String, Codable, Equatable, Sendable {
 public enum AgentMutationSettlementSource: String, Codable, Equatable, Sendable {
     case executor
     case reconciliation
+}
+
+/// A trusted Host decision that the external operation did not take effect.
+/// An unknown outcome is never a valid basis for abort.
+public struct AgentNoEffectConfirmation: Codable, Equatable, Sendable {
+    public let basis: String
+    public init(basis: String) throws {
+        guard !basis.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AgentJournalError.invalidRecord
+        }
+        self.basis = basis
+    }
 }
 
 public struct PendingMutationRecovery: Equatable, Sendable {
@@ -83,13 +60,11 @@ public enum AgentJournalEvent: Codable, Equatable, Sendable {
     case toolCompleted(ToolResultMessage)
     case toolReceipt(AgentToolReceipt)
     case pendingMutation(PendingMutationIntent)
-    case mutationReceiptExpectation(callID: ToolCallID, expectation: ToolReceiptExpectation)
     case mutationNeedsReconciliation(callID: ToolCallID)
     case mutationOutput(callID: ToolCallID, output: JSONValue)
     case mutationSettled(callID: ToolCallID, receipt: ToolReceipt, source: AgentMutationSettlementSource)
-    case mutationAborted(callID: ToolCallID)
+    case mutationAborted(callID: ToolCallID, confirmation: AgentNoEffectConfirmation)
     case checkpoint(history: [ModelMessage], steeringIDs: [UUID])
-    case compaction(AgentCompactionSummary)
     case runCompleted(AgentJournalRunOutcome)
 }
 
@@ -119,75 +94,45 @@ public struct PendingMutationIntent: Codable, Equatable, Sendable {
         self.receiptExpectation = receiptExpectation
     }
 
-    func validate(allowMissingReceiptExpectation: Bool = false) throws {
+    func validate() throws {
         guard call.completeness == .complete,
               !call.id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !call.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !idempotencyKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentJournalError.invalidMutationIntent
         }
-        if !allowMissingReceiptExpectation, receiptExpectation == nil {
+        if receiptExpectation == nil {
             throw AgentJournalError.invalidMutationIntent
         }
         try ToolResource.validate(resources)
     }
 }
 
-public struct AgentJournalRecord: Codable, Equatable, Sendable {
-    public static let schemaVersion = 3
-
-    public let id: UUID
-    public let sequence: UInt64
-    public let timestamp: Date
-    public let schemaVersion: Int
-    public let sessionID: UUID
-    public let runID: UUID?
-    public let checkpointID: UUID
-    public let event: AgentJournalEvent
+package struct AgentJournalRecord: Equatable, Sendable {
+    package let sequence: UInt64
+    package let timestamp: Date
+    package let sessionID: UUID
+    package let runID: UUID?
+    package let event: AgentJournalEvent
 
     init(
-        id: UUID = UUID(),
         sequence: UInt64,
         timestamp: Date,
-        schemaVersion: Int = Self.schemaVersion,
         sessionID: UUID,
         runID: UUID?,
-        checkpointID: UUID,
         event: AgentJournalEvent
     ) {
-        self.id = id
         self.sequence = sequence
         self.timestamp = timestamp
-        self.schemaVersion = schemaVersion
         self.sessionID = sessionID
         self.runID = runID
-        self.checkpointID = checkpointID
         self.event = event
     }
-}
-
-public enum AgentJournalRecovery: Equatable, Sendable {
-    case clean
-    /// Incomplete final length header or payload. Prefix frames are valid.
-    case truncatedTail
-    /// The last complete frame failed validation. Prefix frames are valid.
-    case corruptTail
 }
 
 package enum AgentJournalDurability: Sendable {
     case memory
     case durable
-}
-
-package enum AgentJournalCompactionFault: Sendable {
-    case temporaryWrite
-    case temporarySync
-    case replace
-    case directorySync
-}
-
-package enum AgentJournalPersistenceFault: Sendable {
-    case directorySync
 }
 
 package enum AgentJournalStartupAdmissionError: Error, Sendable {
@@ -211,7 +156,13 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     case mutationSettlementRequiresReconciliation
     case persistenceUnavailable(String)
     case sessionLeaseUnavailable
-    case repairRequired
+    case storeInUse
+    case unsupportedLegacyFormat
+    case unsupportedFormat
+    case storeClosed
+    case commitUnknown
+    case maintenanceRequired
+    case deadlineExceeded
 
     public var errorDescription: String? {
         switch self {
@@ -231,7 +182,13 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
         case .mutationSettlementRequiresReconciliation: "Mutation settlement must use the reconciliation API."
         case .persistenceUnavailable(let message): "Agent journal persistence is unavailable: \(message)"
         case .sessionLeaseUnavailable: "The durable Agent session is already active in another process."
-        case .repairRequired: "The journal has a corrupt tail that must be discarded before another durable write."
+        case .storeInUse: "The Journal store has another active writer. Share its open handle within this process."
+        case .unsupportedLegacyFormat: "This Journal uses an unsupported legacy format; stop the old workflow."
+        case .unsupportedFormat: "This Journal format or schema is unsupported by this version."
+        case .storeClosed: "The Journal store is closed."
+        case .commitUnknown: "The Journal commit result is uncertain. Stop this execution and inspect the store before retrying."
+        case .maintenanceRequired: "Journal maintenance is behind the configured storage budget; retry admission after it progresses."
+        case .deadlineExceeded: "The Journal operation exceeded the caller's cooperative deadline."
         }
     }
 }
@@ -251,28 +208,6 @@ public enum AgentJournalStorage: Sendable, Equatable {
     case durable
 }
 
-private final class AgentJournalStorageBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: AgentJournalStorage
-
-    init(_ value: AgentJournalStorage) {
-        self.value = value
-    }
-
-    var current: AgentJournalStorage {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return value
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            value = newValue
-        }
-    }
-}
-
 /// Durable typed lifecycle log. Mutation success is settlement from a trusted
 /// receipt, never an executor that merely returned. Hosts inspect pending
 /// work, recover after a crash, reconcile or abort. They cannot append a
@@ -281,38 +216,19 @@ private final class AgentJournalStorageBox: @unchecked Sendable {
 /// Read-only Agents may omit a journal or use `.memory` storage. Mutation
 /// tools require `.durable` storage at Session creation.
 public actor AgentJournal {
-    private struct JournalFrame: Codable {
-        let schemaVersion: Int
-        let records: [AgentJournalRecord]
-    }
-
-    private struct ReadResult {
-        let records: [AgentJournalRecord]
-        let recovery: AgentJournalRecovery
-        let validLength: Int
-        let exists: Bool
-    }
-
-    public static let maximumFrameSize = 16 * 1024 * 1024
-    package static let defaultCompactionThreshold = 32 * 1024 * 1024
-    private static let header = Data("SWIFTAGENT-JOURNAL-1".utf8)
-    private static let supportedSchemaVersions: Set<Int> = [1, 2, AgentJournalRecord.schemaVersion]
+    private nonisolated let ioExecutor = JournalIOExecutor()
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { ioExecutor.asUnownedSerialExecutor() }
 
     private var records: [AgentJournalRecord]
     private var nextSequence: UInt64
-    private var persistenceURL: URL?
-    private var recoveryState: AgentJournalRecovery
-    private var sessionLeases: [UUID: FileHandle]
-    private var directorySyncPending: Bool
-    private var uncertainPersistenceURL: URL?
-    private var uncertainPersistenceRecords: [AgentJournalRecord]?
-    private let persistenceFault: AgentJournalPersistenceFault?
-    private nonisolated let storageBox: AgentJournalStorageBox
-
-    /// Configured persistence mode. `persist(to:)` upgrades `.memory` to
-    /// `.durable` after a successful snapshot bind. Later durable writes can
-    /// still fail.
-    public nonisolated var storage: AgentJournalStorage { storageBox.current }
+    private let store: (any JournalStore)?
+    private var maintenanceTask: Task<JournalMaintenanceStatus, Error>?
+    private var maintenanceID: UUID?
+    private var maintenanceTick: UInt64 = 0
+    private var closing = false
+    private var sessionLeases: Set<UUID>
+    /// Immutable configured capability. A durable commit can still fail.
+    public nonisolated let storage: AgentJournalStorage
 
     private struct MutationKey: Hashable {
         let sessionID: UUID
@@ -327,132 +243,37 @@ public actor AgentJournal {
         var state: AgentMutationState
         var receipt: ToolReceipt?
         var output: JSONValue?
+        var abortConfirmation: AgentNoEffectConfirmation?
     }
-
-    private var mutationRecords: [MutationKey: MutationRecord]
-    private var mutationIdentityIndex: [String: MutationKey]
-    private var mutationIdentityMembers: [String: Set<MutationKey>]
-    private var unresolvedMutationBySession: [UUID: MutationKey]
 
     public init() {
         records = []
         nextSequence = 1
-        persistenceURL = nil
-        recoveryState = .clean
-        sessionLeases = [:]
-        directorySyncPending = false
-        uncertainPersistenceURL = nil
-        uncertainPersistenceRecords = nil
-        persistenceFault = nil
-        mutationRecords = [:]
-        mutationIdentityIndex = [:]
-        mutationIdentityMembers = [:]
-        unresolvedMutationBySession = [:]
-        storageBox = AgentJournalStorageBox(.memory)
+        store = nil
+        maintenanceTask = nil
+        maintenanceID = nil
+        sessionLeases = []
+        storage = .memory
     }
 
-    /// Opens an existing journal or prepares a new journal at the supplied URL.
-    public init(persistenceURL: URL) throws {
-        let loaded = try Self.read(from: persistenceURL)
-        records = loaded.records
-        nextSequence = (loaded.records.last?.sequence ?? 0) + 1
-        self.persistenceURL = persistenceURL
-        recoveryState = loaded.recovery
-        sessionLeases = [:]
-        directorySyncPending = false
-        uncertainPersistenceURL = nil
-        uncertainPersistenceRecords = nil
-        persistenceFault = nil
-        let mutationState = try Self.buildMutationState(from: loaded.records)
-        mutationRecords = mutationState.records
-        mutationIdentityIndex = mutationState.identityIndex
-        mutationIdentityMembers = mutationState.identityMembers
-        unresolvedMutationBySession = mutationState.unresolvedBySession
-        storageBox = AgentJournalStorageBox(.durable)
+    package init(store: any JournalStore) {
+        records = []
+        nextSequence = 1
+        self.store = store
+        maintenanceTask = nil
+        maintenanceID = nil
+        sessionLeases = []
+        storage = .durable
     }
 
-    package init(
-        persistenceURL: URL,
-        persistenceFault: AgentJournalPersistenceFault
-    ) throws {
-        let loaded = try Self.read(from: persistenceURL)
-        records = loaded.records
-        nextSequence = (loaded.records.last?.sequence ?? 0) + 1
-        self.persistenceURL = persistenceURL
-        recoveryState = loaded.recovery
-        sessionLeases = [:]
-        directorySyncPending = false
-        uncertainPersistenceURL = nil
-        uncertainPersistenceRecords = nil
-        self.persistenceFault = persistenceFault
-        let mutationState = try Self.buildMutationState(from: loaded.records)
-        mutationRecords = mutationState.records
-        mutationIdentityIndex = mutationState.identityIndex
-        mutationIdentityMembers = mutationState.identityMembers
-        unresolvedMutationBySession = mutationState.unresolvedBySession
-        storageBox = AgentJournalStorageBox(.durable)
-    }
-
-    public static func load(from url: URL) throws -> AgentJournal {
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw AgentJournalError.persistenceUnavailable("journal file does not exist")
-        }
-        return try AgentJournal(persistenceURL: url)
-    }
-
-    public func snapshot() -> [AgentJournalRecord] { records }
-
-    /// Holds an OS-backed lease for one persistent Session identity. The file
-    /// descriptor remains open for the lifetime of the lease, so a crashed
-    /// process cannot strand the lease behind a stale marker file.
     package func acquireSessionLease(sessionID: UUID) throws {
-        guard let persistenceURL else { return }
-        guard sessionLeases[sessionID] == nil else {
+        guard !closing, sessionLeases.insert(sessionID).inserted else {
             throw AgentJournalError.sessionLeaseUnavailable
         }
-
-        let leaseURL = Self.sessionLeaseURL(for: persistenceURL, sessionID: sessionID)
-        do {
-            try FileManager.default.createDirectory(
-                at: leaseURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            if !FileManager.default.fileExists(atPath: leaseURL.path),
-               !FileManager.default.createFile(atPath: leaseURL.path, contents: nil) {
-                throw AgentJournalError.persistenceUnavailable("cannot create session lease file")
-            }
-        } catch let error as AgentJournalError {
-            throw error
-        } catch {
-            throw AgentJournalError.persistenceUnavailable(error.localizedDescription)
-        }
-
-        let handle: FileHandle
-        do {
-            handle = try FileHandle(forUpdating: leaseURL)
-        } catch {
-            throw AgentJournalError.persistenceUnavailable(error.localizedDescription)
-        }
-
-        #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Linux)
-        guard swiftAgentFlock(handle.fileDescriptor, SwiftAgentFileLockOperation.exclusiveNonBlocking) == 0 else {
-            try? handle.close()
-            throw AgentJournalError.sessionLeaseUnavailable
-        }
-        #else
-        try? handle.close()
-        throw AgentJournalError.persistenceUnavailable("session leases are unsupported on this platform")
-        #endif
-
-        sessionLeases[sessionID] = handle
     }
 
     package func releaseSessionLease(sessionID: UUID) {
-        guard let handle = sessionLeases.removeValue(forKey: sessionID) else { return }
-        #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Linux)
-        _ = swiftAgentFlock(handle.fileDescriptor, SwiftAgentFileLockOperation.unlock)
-        #endif
-        try? handle.close()
+        sessionLeases.remove(sessionID)
     }
 
     /// Returns the most recent canonical session history checkpoint. The
@@ -460,31 +281,17 @@ public actor AgentJournal {
     /// reconstruct a Session after a process restart.
     public func latestCheckpoint(
         sessionID: UUID
-    ) -> (history: [ModelMessage], steeringIDs: [UUID])? {
+    ) throws -> (history: [ModelMessage], steeringIDs: [UUID])? {
+        if let store {
+            let current = try store.read { try $0.session(sessionID) }
+            guard let current, current.header.historyHead != nil else { return nil }
+            return (current.history, current.header.steeringIDs)
+        }
         for record in records.reversed() where record.sessionID == sessionID {
             guard case .checkpoint(let history, let steeringIDs) = record.event else { continue }
             return (history: history, steeringIDs: steeringIDs)
         }
         return nil
-    }
-
-    public var recovery: AgentJournalRecovery { recoveryState }
-
-    /// Removes a validated-but-corrupt final frame after a successful prefix load.
-    /// Truncated tails are repaired by the next durable append and do not need this.
-    public func discardCorruptTail() throws {
-        guard recoveryState == .corruptTail else { return }
-        guard let url = persistenceURL else {
-            recoveryState = .clean
-            return
-        }
-        _ = try Self.withFileLock(for: url) {
-            let current = try Self.read(from: url)
-            guard current.recovery == .corruptTail else { return current.validLength }
-            try Self.createOrTruncateTail(at: url, to: current.validLength)
-            return current.validLength
-        }
-        recoveryState = .clean
     }
 
     @discardableResult
@@ -548,7 +355,10 @@ public actor AgentJournal {
         timestamp: Date = Date(),
         durability: AgentJournalDurability = .memory
     ) throws -> [AgentJournalRecord] {
-        guard records.last(where: { $0.sessionID == sessionID && $0.runID != nil })?.runID == runID else {
+        if let store {
+            let current = try store.read { try $0.header(sessionID)?.lastRunID }
+            guard current == runID else { throw CancellationError() }
+        } else if records.last(where: { $0.sessionID == sessionID && $0.runID != nil })?.runID != runID {
             throw CancellationError()
         }
         return try appendCheckpoint(
@@ -571,106 +381,70 @@ public actor AgentJournal {
         admissionDeadline: ContinuousClock.Instant? = nil,
         checkAdmissionCancellation: Bool = false
     ) throws -> [AgentJournalRecord] {
-        if durability == .durable, recoveryState == .corruptTail {
-            throw AgentJournalError.repairRequired
+        try checkStartupAdmission(deadline: admissionDeadline, checkCancellation: checkAdmissionCancellation)
+        if let store {
+            guard !closing else { throw AgentJournalError.storeClosed }
+            let result = try store.write { view in
+                try appendToStore(events, sessionID: sessionID, runID: runID,
+                                  timestamp: timestamp, view: view,
+                                  allowMutationSettlement: allowMutationSettlement)
+            }
+            scheduleMaintenanceIfNeeded()
+            return result
         }
-        try checkStartupAdmission(
-            deadline: admissionDeadline,
-            checkCancellation: checkAdmissionCancellation
-        )
+        guard durability == .memory else {
+            throw AgentJournalError.persistenceUnavailable("a durable store is required")
+        }
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
             throw AgentJournalError.mutationSettlementRequiresReconciliation
         }
-        if durability != .durable,
-           events.contains(where: Self.isMutationLifecycleEvent) {
+        if events.contains(where: Self.isMutationLifecycleEvent) {
             throw AgentJournalError.persistenceUnavailable("mutation lifecycle events require durable persistence")
         }
-        let updatedMutationState = try applying(events, sessionID: sessionID, runID: runID)
-        let checkpointID = UUID()
         let committed = events.enumerated().map { offset, event in
             AgentJournalRecord(
                 sequence: nextSequence + UInt64(offset),
                 timestamp: timestamp,
                 sessionID: sessionID,
                 runID: runID,
-                checkpointID: checkpointID,
                 event: event
             )
         }
-        try commit(
-            committed,
-            durability: durability,
-            admissionDeadline: admissionDeadline,
-            checkAdmissionCancellation: checkAdmissionCancellation
-        )
         records.append(contentsOf: committed)
         nextSequence += UInt64(committed.count)
-        recoveryState = .clean
-        mutationRecords = updatedMutationState.records
-        mutationIdentityIndex = updatedMutationState.identityIndex
-        mutationIdentityMembers = updatedMutationState.identityMembers
-        unresolvedMutationBySession = updatedMutationState.unresolvedBySession
         return committed
     }
 
-    public func pendingMutations(sessionID: UUID? = nil) -> [PendingMutationRecovery] {
-        mutationRecords.values
-            .filter { record in
-                guard record.state == .intent || record.state == .needsReconciliation else { return false }
-                return sessionID == nil || record.key.sessionID == sessionID
+    public func pendingMutations(sessionID: UUID? = nil) throws -> [PendingMutationRecovery] {
+        if let store {
+            return try store.read { view in
+                try view.pending(sessionID: sessionID).map {
+                    PendingMutationRecovery(sessionID: $0.sessionID, runID: $0.runID,
+                                            intent: $0.intent, state: $0.state)
+                }
             }
-            .sorted { $0.sequence < $1.sequence }
-            .map { record in
-                PendingMutationRecovery(sessionID: record.key.sessionID, runID: record.key.runID,
-                                        intent: record.intent, state: record.state)
-            }
+        }
+        return []
     }
 
     /// Converts an admitted but unsettled intent into a quarantine state. Recovery never invokes the tool.
     public func recoverPendingMutations(sessionID: UUID? = nil) throws -> [PendingMutationRecovery] {
-        let intents = pendingMutations(sessionID: sessionID).filter { $0.state == .intent }
+        let intents = try pendingMutations(sessionID: sessionID).filter { $0.state == .intent }
         for pending in intents {
             _ = try append(.mutationNeedsReconciliation(callID: pending.intent.call.id),
                             sessionID: pending.sessionID, runID: pending.runID, durability: .durable)
         }
-        return pendingMutations(sessionID: sessionID)
+        return try pendingMutations(sessionID: sessionID)
     }
 
     /// Records that a mutation executor was reached without a trusted successful receipt.
     package func markMutationNeedsReconciliation(sessionID: UUID, runID: UUID, callID: ToolCallID) throws {
         let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
-        guard let record = mutationRecords[key] else { return }
+        guard let record = try mutationRecord(for: key) else { return }
         guard record.state == .intent else { return }
         _ = try append(.mutationNeedsReconciliation(callID: callID), sessionID: sessionID,
                        runID: runID, durability: .durable)
-    }
-
-    /// Settles an executor-reported receipt only after it validates against the durable intent.
-    package func settleMutation(
-        sessionID: UUID,
-        runID: UUID,
-        callID: ToolCallID,
-        receipt: ToolReceipt,
-        output: JSONValue
-    ) throws {
-        let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
-        guard let record = mutationRecords[key] else { throw AgentJournalError.mutationNotFound }
-        guard record.state == .intent else { throw AgentJournalError.mutationRequiresReconciliation }
-        guard let expectation = record.intent.receiptExpectation else {
-            throw AgentJournalError.mutationMissingReceiptExpectation
-        }
-        do {
-            try ToolReceiptValidator.validate(receipt, operationID: record.intent.idempotencyKey, expectation: expectation)
-        } catch {
-            throw error
-        }
-        let accepted = AgentToolReceipt(callID: callID, effect: .mutation, receipt: receipt)
-        _ = try appendCheckpoint([.toolReceipt(accepted),
-                                  .mutationOutput(callID: callID, output: output),
-                                  .mutationSettled(callID: callID, receipt: receipt, source: .executor)],
-                                 sessionID: sessionID, runID: runID, timestamp: Date(), durability: .durable,
-                                 allowMutationSettlement: true)
     }
 
     /// Atomically settles an executor-reported mutation and publishes the
@@ -687,7 +461,7 @@ public actor AgentJournal {
         steeringIDs: [UUID]
     ) throws {
         let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
-        guard let record = mutationRecords[key] else { throw AgentJournalError.mutationNotFound }
+        guard let record = try mutationRecord(for: key) else { throw AgentJournalError.mutationNotFound }
         guard record.state == .intent else { throw AgentJournalError.mutationRequiresReconciliation }
         guard let expectation = record.intent.receiptExpectation else {
             throw AgentJournalError.mutationMissingReceiptExpectation
@@ -709,149 +483,63 @@ public actor AgentJournal {
         )
     }
 
-    /// Settles a quarantined intent from an explicit trusted reconciliation result; it never invokes the original tool.
-    public func reconcileMutation(_ pending: PendingMutationRecovery, receipt: ToolReceipt) throws {
-        try reconcileMutationState(pending, receipt: receipt, receiptExpectation: nil, output: nil)
-    }
-
-    /// Reconciles a mutation and preserves the original model-facing result for later idempotent replay.
-    public func reconcileMutation(
-        _ pending: PendingMutationRecovery,
-        receipt: ToolReceipt,
-        output: JSONValue
-    ) throws {
-        try reconcileMutationState(pending, receipt: receipt, receiptExpectation: nil, output: output)
-    }
-
-    /// Reconciles a legacy intent that predates persisted receipt expectations.
-    /// The supplied expectation is persisted together with the receipt before settlement.
-    public func reconcileMutation(_ pending: PendingMutationRecovery, receipt: ToolReceipt,
-                                  receiptExpectation: ToolReceiptExpectation?) throws {
-        try reconcileMutationState(pending, receipt: receipt, receiptExpectation: receiptExpectation, output: nil)
-    }
-
-    /// Reconciles a legacy intent and preserves the model-facing result for later idempotent replay.
-    public func reconcileMutation(
-        _ pending: PendingMutationRecovery,
-        receipt: ToolReceipt,
-        receiptExpectation: ToolReceiptExpectation?,
-        output: JSONValue
-    ) throws {
-        try reconcileMutationState(pending, receipt: receipt, receiptExpectation: receiptExpectation, output: output)
-    }
-
-    private func reconcileMutationState(
-        _ pending: PendingMutationRecovery,
-        receipt: ToolReceipt,
-        receiptExpectation: ToolReceiptExpectation?,
-        output: JSONValue?
-    ) throws {
+    /// Reconciles an uncertain external effect with a trusted receipt and an
+    /// explicit replay result. The conversation and ledger settle together.
+    public func reconcileMutation(_ pending: PendingMutationRecovery,
+                                  receipt: ToolReceipt, output: JSONValue) throws {
         let key = MutationKey(sessionID: pending.sessionID, runID: pending.runID, callID: pending.intent.call.id)
-        guard let record = mutationRecords[key], record.intent == pending.intent else {
+        guard let record = try mutationRecord(for: key), record.intent == pending.intent else {
             throw AgentJournalError.mutationIntentConflict
         }
         guard record.state == .needsReconciliation, pending.state == .needsReconciliation else {
             throw AgentJournalError.mutationRequiresReconciliation
         }
-        let expectation = record.intent.receiptExpectation ?? receiptExpectation
-        guard let expectation else {
+        guard let expectation = record.intent.receiptExpectation else {
             throw AgentJournalError.mutationMissingReceiptExpectation
         }
-        if record.intent.receiptExpectation == nil {
-            try Self.validateLegacyReceiptExpectation(expectation, for: record.intent)
-        }
         try ToolReceiptValidator.validate(receipt, operationID: record.intent.idempotencyKey, expectation: expectation)
+        let checkpoint = try latestCheckpoint(sessionID: pending.sessionID)
+        let result = ModelMessage.tool(.init(callID: pending.intent.call.id,
+                                             content: [.json(output)], isError: false))
+        var history = checkpoint?.history ?? []
+        let hasMatchingOpenCall: Bool
+        if case .assistant(_, let calls)? = history.last {
+            hasMatchingOpenCall = calls.contains { $0.id == pending.intent.call.id }
+        } else {
+            hasMatchingOpenCall = false
+        }
+        if !hasMatchingOpenCall {
+            history.append(.assistant(content: [], toolCalls: [pending.intent.call]))
+        }
+        history.append(result)
         let accepted = AgentToolReceipt(callID: pending.intent.call.id, effect: .mutation, receipt: receipt)
-        var events: [AgentJournalEvent] = []
-        if record.intent.receiptExpectation == nil {
-            events.append(.mutationReceiptExpectation(callID: pending.intent.call.id, expectation: expectation))
-        }
-        if let output {
-            events.append(.mutationOutput(callID: pending.intent.call.id, output: output))
-        }
-        events.append(contentsOf: [.toolReceipt(accepted),
-                                   .mutationSettled(callID: pending.intent.call.id, receipt: receipt,
-                                                    source: .reconciliation)])
-        _ = try appendCheckpoint(events,
-                                 sessionID: pending.sessionID, runID: pending.runID, timestamp: Date(),
-                                 durability: .durable, allowMutationSettlement: true)
+        _ = try appendCheckpoint([
+            .toolReceipt(accepted),
+            .mutationOutput(callID: pending.intent.call.id, output: output),
+            .mutationSettled(callID: pending.intent.call.id, receipt: receipt, source: .reconciliation),
+            .checkpoint(history: history, steeringIDs: checkpoint?.steeringIDs ?? []),
+        ], sessionID: pending.sessionID, runID: pending.runID,
+           timestamp: Date(), durability: .durable, allowMutationSettlement: true)
     }
 
     /// Confirms that a quarantined intent produced no external side effect.
     ///
     /// This trusted Host decision permits a later admission with the same
     /// logical idempotency identity to start a new durable lifecycle.
-    public func abortMutation(_ pending: PendingMutationRecovery) throws {
+    public func abortMutation(_ pending: PendingMutationRecovery,
+                              confirmedNoEffect: AgentNoEffectConfirmation) throws {
         let key = MutationKey(sessionID: pending.sessionID, runID: pending.runID, callID: pending.intent.call.id)
-        guard let record = mutationRecords[key], record.intent == pending.intent else {
+        guard let record = try mutationRecord(for: key), record.intent == pending.intent else {
             throw AgentJournalError.mutationIntentConflict
         }
         guard record.state == .needsReconciliation, pending.state == .needsReconciliation else {
             throw AgentJournalError.mutationRequiresReconciliation
         }
         _ = try append(
-            .mutationAborted(callID: pending.intent.call.id),
+            .mutationAborted(callID: pending.intent.call.id, confirmation: confirmedNoEffect),
             sessionID: pending.sessionID,
             runID: pending.runID,
             durability: .durable
-        )
-    }
-
-    private struct MutationState {
-        var records: [MutationKey: MutationRecord]
-        var identityIndex: [String: MutationKey]
-        var identityMembers: [String: Set<MutationKey>]
-        var unresolvedBySession: [UUID: MutationKey]
-    }
-
-    private func applying(
-        _ events: [AgentJournalEvent], sessionID: UUID, runID: UUID?
-    ) throws -> MutationState {
-        var updated = mutationRecords
-        var updatedIndex = mutationIdentityIndex
-        var updatedMembers = mutationIdentityMembers
-        var updatedUnresolved = unresolvedMutationBySession
-        for (offset, event) in events.enumerated() {
-            try Self.applyMutationEvent(event, sessionID: sessionID, runID: runID,
-                                        sequence: nextSequence + UInt64(offset),
-                                        schemaVersion: AgentJournalRecord.schemaVersion,
-                                        records: &updated,
-                                        identityIndex: &updatedIndex,
-                                        identityMembers: &updatedMembers,
-                                        unresolvedBySession: &updatedUnresolved)
-        }
-        return MutationState(
-            records: updated,
-            identityIndex: updatedIndex,
-            identityMembers: updatedMembers,
-            unresolvedBySession: updatedUnresolved
-        )
-    }
-
-    private static func buildMutationState(from records: [AgentJournalRecord]) throws -> MutationState {
-        var mutationRecords: [MutationKey: MutationRecord] = [:]
-        var mutationIdentityIndex: [String: MutationKey] = [:]
-        var mutationIdentityMembers: [String: Set<MutationKey>] = [:]
-        var unresolvedMutationBySession: [UUID: MutationKey] = [:]
-        do {
-            for record in records {
-                try applyMutationEvent(record.event, sessionID: record.sessionID, runID: record.runID,
-                                       sequence: record.sequence, schemaVersion: record.schemaVersion,
-                                       allowLegacyMissingReceiptExpectation: record.schemaVersion == 1,
-                                       allowLegacyIdentityConflict: record.schemaVersion < AgentJournalRecord.schemaVersion,
-                                       records: &mutationRecords,
-                                       identityIndex: &mutationIdentityIndex,
-                                       identityMembers: &mutationIdentityMembers,
-                                       unresolvedBySession: &unresolvedMutationBySession)
-            }
-        } catch {
-            throw AgentJournalError.invalidRecord
-        }
-        return MutationState(
-            records: mutationRecords,
-            identityIndex: mutationIdentityIndex,
-            identityMembers: mutationIdentityMembers,
-            unresolvedBySession: unresolvedMutationBySession
         )
     }
 
@@ -860,9 +548,6 @@ public actor AgentJournal {
         sessionID: UUID,
         runID: UUID?,
         sequence: UInt64,
-        schemaVersion: Int,
-        allowLegacyMissingReceiptExpectation: Bool = false,
-        allowLegacyIdentityConflict: Bool = false,
         records: inout [MutationKey: MutationRecord],
         identityIndex: inout [String: MutationKey],
         identityMembers: inout [String: Set<MutationKey>],
@@ -871,7 +556,7 @@ public actor AgentJournal {
         switch event {
         case .pendingMutation(let intent):
             guard let runID else { throw AgentJournalError.invalidRecord }
-            try intent.validate(allowMissingReceiptExpectation: allowLegacyMissingReceiptExpectation)
+            try intent.validate()
             let key = MutationKey(sessionID: sessionID, runID: runID, callID: intent.call.id)
             guard unresolvedBySession[sessionID] == nil else {
                 throw AgentJournalError.mutationRequiresReconciliation
@@ -880,8 +565,7 @@ public actor AgentJournal {
             guard records[key] == nil else {
                 throw AgentJournalError.mutationIntentConflict
             }
-            if !allowLegacyIdentityConflict,
-               latestMatchingIdentity != nil,
+            if latestMatchingIdentity != nil,
                latestMatchingIdentity?.state != .aborted {
                 throw AgentJournalError.mutationIntentConflict
             }
@@ -889,9 +573,10 @@ public actor AgentJournal {
                 key: key,
                 intent: intent,
                 sequence: sequence,
-                state: intent.receiptExpectation == nil ? .needsReconciliation : .intent,
+                state: .intent,
                 receipt: nil,
-                output: nil
+                output: nil,
+                abortConfirmation: nil
             )
             unresolvedBySession[sessionID] = key
             identityMembers[intent.idempotencyKey, default: []].insert(key)
@@ -901,21 +586,6 @@ public actor AgentJournal {
                 identityIndex: &identityIndex,
                 identityMembers: identityMembers
             )
-
-        case .mutationReceiptExpectation(let callID, let expectation):
-            guard let runID else { throw AgentJournalError.invalidRecord }
-            let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
-            guard let record = records[key], record.intent.receiptExpectation == nil,
-                  record.state == .needsReconciliation || record.state == .intent else {
-                throw AgentJournalError.mutationIntentConflict
-            }
-            try Self.validateLegacyReceiptExpectation(expectation, for: record.intent)
-            var updated = record
-            updated.intent = try PendingMutationIntent(call: record.intent.call,
-                                                       resources: record.intent.resources,
-                                                       idempotencyKey: record.intent.idempotencyKey,
-                                                       receiptExpectation: expectation)
-            records[key] = updated
 
         case .mutationNeedsReconciliation(let callID):
             guard let runID else { throw AgentJournalError.invalidRecord }
@@ -971,7 +641,7 @@ public actor AgentJournal {
                 throw AgentJournalError.mutationIntentConflict
             }
 
-        case .mutationAborted(let callID):
+        case .mutationAborted(let callID, let confirmation):
             guard let runID else { throw AgentJournalError.invalidRecord }
             let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
             guard let record = records[key], record.state == .intent || record.state == .needsReconciliation else {
@@ -979,6 +649,7 @@ public actor AgentJournal {
             }
             var updated = record
             updated.state = .aborted
+            updated.abortConfirmation = confirmation
             records[key] = updated
             if unresolvedBySession[sessionID] == key {
                 unresolvedBySession.removeValue(forKey: sessionID)
@@ -1024,7 +695,7 @@ public actor AgentJournal {
 
     private static func isMutationLifecycleEvent(_ event: AgentJournalEvent) -> Bool {
         switch event {
-        case .pendingMutation, .mutationReceiptExpectation, .mutationNeedsReconciliation, .mutationOutput,
+        case .pendingMutation, .mutationNeedsReconciliation, .mutationOutput,
              .mutationSettled, .mutationAborted:
             true
         default:
@@ -1035,200 +706,6 @@ public actor AgentJournal {
     private static func isMutationSettlementEvent(_ event: AgentJournalEvent) -> Bool {
         if case .mutationSettled = event { return true }
         return false
-    }
-
-    private static func sessionLeaseURL(for persistenceURL: URL, sessionID: UUID) -> URL {
-        URL(fileURLWithPath: persistenceURL.path + ".session-\(sessionID.uuidString).lease")
-    }
-
-    private static func validateLegacyReceiptExpectation(
-        _ expectation: ToolReceiptExpectation,
-        for intent: PendingMutationIntent
-    ) throws {
-        let resourceTargets = intent.resources.compactMap { resource -> EvidenceReference? in
-            if case .named(let reference) = resource { return reference }
-            return nil
-        }
-        guard !resourceTargets.isEmpty,
-              Set(resourceTargets) == Set(expectation.targets) else {
-            throw AgentJournalError.mutationReceiptInvalid
-        }
-    }
-
-    /// Writes a complete snapshot and binds this journal to the destination for later durable appends.
-    public func persist(to url: URL) throws {
-        try persist(to: url, fault: nil)
-    }
-
-    package func persist(to url: URL, fault: AgentJournalPersistenceFault?) throws {
-        let data = try Self.encodeFile(records: records)
-        try Self.withFileLock(for: url) {
-            let existing = try Self.read(from: url)
-            if existing.recovery == .corruptTail { throw AgentJournalError.repairRequired }
-            let matchesUncertainPublication = uncertainPersistenceURL?.standardizedFileURL == url.standardizedFileURL
-                && existing.records == uncertainPersistenceRecords
-            guard !existing.exists || existing.records == records || matchesUncertainPublication else {
-                throw AgentJournalError.concurrentWriter
-            }
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let temporary = url.deletingLastPathComponent()
-                .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
-            do {
-                try Self.writeAndSync(data, to: temporary)
-                if FileManager.default.fileExists(atPath: url.path) {
-                    _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
-                } else {
-                    try FileManager.default.moveItem(at: temporary, to: url)
-                }
-                if fault == .directorySync {
-                    uncertainPersistenceURL = url
-                    uncertainPersistenceRecords = records
-                    throw AgentJournalError.persistenceUnavailable("injected journal directory sync failure")
-                }
-                do {
-                    try Self.syncDirectory(url.deletingLastPathComponent())
-                } catch {
-                    uncertainPersistenceURL = url
-                    uncertainPersistenceRecords = records
-                    throw error
-                }
-            } catch {
-                try? FileManager.default.removeItem(at: temporary)
-                throw error is AgentJournalError ? error : AgentJournalError.persistenceUnavailable(error.localizedDescription)
-            }
-        }
-        persistenceURL = url
-        recoveryState = .clean
-        directorySyncPending = false
-        uncertainPersistenceURL = nil
-        uncertainPersistenceRecords = nil
-        storageBox.current = .durable
-    }
-
-    /// Rewrites durable history to the minimum state needed for Session restore
-    /// and mutation safety. Terminal mutation identities remain as tombstones so
-    /// current idempotency conflicts survive restart.
-    package func compactIfNeeded(
-        maxJournalBytes: Int = AgentJournal.defaultCompactionThreshold,
-        fault: AgentJournalCompactionFault? = nil
-    ) throws -> Bool {
-        guard let url = persistenceURL else { return false }
-        let size = try Self.fileSize(at: url)
-        guard size > maxJournalBytes else { return false }
-        guard recoveryState != .corruptTail else { throw AgentJournalError.repairRequired }
-
-        let expectedRecords = records
-        let compacted = Self.canonicalRecoveryRecords(from: records)
-        let data = try Self.encodeFile(records: compacted)
-        let compactedMutationState = try Self.buildMutationState(from: compacted)
-        let minimumReclaimBytes = max(1, min(4 * 1024 * 1024, maxJournalBytes / 4))
-        guard size - data.count >= minimumReclaimBytes else { return false }
-        var replaced = false
-        do {
-            try Self.withFileLock(for: url) {
-                let current = try Self.read(from: url)
-                if current.recovery == .corruptTail { throw AgentJournalError.repairRequired }
-                guard current.records == expectedRecords else { throw AgentJournalError.concurrentWriter }
-                let temporary = url.deletingLastPathComponent()
-                    .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).compact.tmp")
-                defer { try? FileManager.default.removeItem(at: temporary) }
-                if fault == .temporaryWrite {
-                    throw AgentJournalError.persistenceUnavailable("injected compact temporary write failure")
-                }
-                try Self.writeAndSync(data, to: temporary)
-                if fault == .temporarySync {
-                    throw AgentJournalError.persistenceUnavailable("injected compact temporary sync failure")
-                }
-                if fault == .replace {
-                    throw AgentJournalError.persistenceUnavailable("injected compact replace failure")
-                }
-                let renamed = temporary.path.withCString { oldPath in
-                    url.path.withCString { newPath in swiftAgentRename(oldPath, newPath) }
-                }
-                guard renamed == 0 else {
-                    throw AgentJournalError.persistenceUnavailable("cannot atomically replace compacted journal")
-                }
-                replaced = true
-                if fault == .directorySync {
-                    throw AgentJournalError.persistenceUnavailable("injected compact directory sync failure")
-                }
-                try Self.syncDirectory(url.deletingLastPathComponent())
-            }
-        } catch {
-            if replaced {
-                directorySyncPending = true
-                records = compacted
-                nextSequence = UInt64(compacted.count) + 1
-                recoveryState = .clean
-                mutationRecords = compactedMutationState.records
-                mutationIdentityIndex = compactedMutationState.identityIndex
-                mutationIdentityMembers = compactedMutationState.identityMembers
-                unresolvedMutationBySession = compactedMutationState.unresolvedBySession
-            }
-            throw error is AgentJournalError ? error : AgentJournalError.persistenceUnavailable(error.localizedDescription)
-        }
-        records = compacted
-        nextSequence = UInt64(compacted.count) + 1
-        recoveryState = .clean
-        directorySyncPending = false
-        mutationRecords = compactedMutationState.records
-        mutationIdentityIndex = compactedMutationState.identityIndex
-        mutationIdentityMembers = compactedMutationState.identityMembers
-        unresolvedMutationBySession = compactedMutationState.unresolvedBySession
-        return true
-    }
-
-    private func commit(
-        _ committed: [AgentJournalRecord],
-        durability: AgentJournalDurability,
-        admissionDeadline: ContinuousClock.Instant? = nil,
-        checkAdmissionCancellation: Bool = false
-    ) throws {
-        try checkStartupAdmission(
-            deadline: admissionDeadline,
-            checkCancellation: checkAdmissionCancellation
-        )
-        guard durability == .durable else { return }
-        guard let url = persistenceURL else {
-            throw AgentJournalError.persistenceUnavailable("no persistence URL configured")
-        }
-        let expectedRecords = records
-        let frame = try Self.encodeFrame(records: committed)
-        try Self.withFileLock(
-            for: url,
-            waitDeadline: admissionDeadline,
-            checkCancellation: checkAdmissionCancellation
-        ) {
-            let current = try Self.read(from: url)
-            if current.recovery == .corruptTail {
-                throw AgentJournalError.repairRequired
-            }
-            guard current.records == expectedRecords else {
-                throw AgentJournalError.concurrentWriter
-            }
-            if directorySyncPending {
-                try Self.syncDirectory(url.deletingLastPathComponent())
-                directorySyncPending = false
-            }
-            let appendOffset = current.exists ? current.validLength : Self.header.count
-            try Self.createOrTruncateTail(at: url, to: appendOffset)
-            try Self.appendAndSync(frame, to: url, offset: appendOffset)
-            if !current.exists {
-                do {
-                    if persistenceFault == .directorySync {
-                        throw AgentJournalError.persistenceUnavailable("injected journal directory sync failure")
-                    }
-                    try Self.syncDirectory(url.deletingLastPathComponent())
-                } catch {
-                    directorySyncPending = true
-                    try adopt(expectedRecords + committed)
-                    throw error
-                }
-            }
-        }
     }
 
     private func checkStartupAdmission(
@@ -1242,364 +719,13 @@ public actor AgentJournal {
         }
     }
 
-    private func adopt(_ durableRecords: [AgentJournalRecord]) throws {
-        let mutationState = try Self.buildMutationState(from: durableRecords)
-        records = durableRecords
-        nextSequence = (durableRecords.last?.sequence ?? 0) + 1
-        recoveryState = .clean
-        mutationRecords = mutationState.records
-        mutationIdentityIndex = mutationState.identityIndex
-        mutationIdentityMembers = mutationState.identityMembers
-        unresolvedMutationBySession = mutationState.unresolvedBySession
-    }
 
-    private static func encodeFile(records: [AgentJournalRecord]) throws -> Data {
-        var data = header
-        var start = 0
-        while start < records.count {
-            let checkpointID = records[start].checkpointID
-            var end = start + 1
-            while end < records.count, records[end].checkpointID == checkpointID { end += 1 }
-            data.append(try encodeFrame(records: Array(records[start..<end])))
-            start = end
-        }
-        return data
-    }
-
-    private static func canonicalRecoveryRecords(from records: [AgentJournalRecord]) -> [AgentJournalRecord] {
-        var latestCheckpointIndex: [UUID: Int] = [:]
-        var firstSessionCreatedIndex: [UUID: Int] = [:]
-        for (index, record) in records.enumerated() {
-            switch record.event {
-            case .sessionCreated:
-                if firstSessionCreatedIndex[record.sessionID] == nil { firstSessionCreatedIndex[record.sessionID] = index }
-            case .checkpoint:
-                latestCheckpointIndex[record.sessionID] = index
-            default:
-                break
-            }
-        }
-        let retained = Set(latestCheckpointIndex.values).union(firstSessionCreatedIndex.values)
-        let selected = records.enumerated().filter { index, record in
-            retained.contains(index) || isMutationLifecycleEvent(record.event)
-        }.map(\.element)
-        return selected.enumerated().map { offset, record in
-            AgentJournalRecord(
-                sequence: UInt64(offset + 1),
-                timestamp: record.timestamp,
-                schemaVersion: record.schemaVersion,
-                sessionID: record.sessionID,
-                runID: record.runID,
-                checkpointID: UUID(),
-                event: record.event
-            )
-        }
-    }
-
-    private static func encodeFrame(records: [AgentJournalRecord]) throws -> Data {
-        guard !records.isEmpty else { throw AgentJournalError.invalidFrame }
-        let checkpointID = records[0].checkpointID
-        guard records.allSatisfy({ $0.checkpointID == checkpointID }) else {
-            throw AgentJournalError.invalidRecord
-        }
-        let payload = try JSONEncoder().encode(JournalFrame(schemaVersion: AgentJournalRecord.schemaVersion, records: records))
-        guard payload.count <= maximumFrameSize else { throw AgentJournalError.invalidFrame }
-        var frame = Data()
-        frame.append(contentsOf: bytes(UInt32(payload.count)))
-        frame.append(contentsOf: bytes(crc32(payload)))
-        frame.append(payload)
-        return frame
-    }
-
-    private static func read(from url: URL) throws -> ReadResult {
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return ReadResult(records: [], recovery: .clean, validLength: 0, exists: false)
-        }
-        let data: Data
-        do { data = try Data(contentsOf: url) }
-        catch { throw AgentJournalError.persistenceUnavailable(error.localizedDescription) }
-        guard data.count >= header.count, data.prefix(header.count) == header else {
-            throw AgentJournalError.invalidHeader
-        }
-
-        var records: [AgentJournalRecord] = []
-        var offset = header.count
-        var expectedSequence: UInt64 = 1
-        var recovery: AgentJournalRecovery = .clean
-        while offset < data.count {
-            let remaining = data.count - offset
-            guard remaining >= 8 else {
-                recovery = .truncatedTail
-                break
-            }
-            let length = Int(readUInt32(data, at: offset))
-            let expectedChecksum = readUInt32(data, at: offset + 4)
-            if length <= 0 {
-                let rest = data[offset..<data.count]
-                if rest.allSatisfy({ $0 == 0 }) || remaining == 8 {
-                    recovery = .corruptTail
-                    break
-                }
-                throw AgentJournalError.invalidFrame
-            }
-            if length > maximumFrameSize {
-                if offset + 8 + length > data.count {
-                    recovery = .corruptTail
-                    break
-                }
-                throw AgentJournalError.invalidFrame
-            }
-            let end = offset + 8 + length
-            guard end <= data.count else {
-                recovery = .truncatedTail
-                break
-            }
-            let isTerminalFrame = end == data.count
-            let payload = data.subdata(in: (offset + 8)..<end)
-            if crc32(payload) != expectedChecksum {
-                if isTerminalFrame {
-                    recovery = .corruptTail
-                    break
-                }
-                throw AgentJournalError.checksumMismatch
-            }
-            let frame: JournalFrame
-            do {
-                frame = try JSONDecoder().decode(JournalFrame.self, from: payload)
-            } catch {
-                if isTerminalFrame {
-                    recovery = .corruptTail
-                    break
-                }
-                throw AgentJournalError.invalidFrame
-            }
-            let headerValid = Self.supportedSchemaVersions.contains(frame.schemaVersion)
-                && !frame.records.isEmpty
-                && frame.records.allSatisfy { $0.checkpointID == frame.records[0].checkpointID }
-            guard headerValid else {
-                if isTerminalFrame {
-                    recovery = .corruptTail
-                    break
-                }
-                throw AgentJournalError.invalidRecord
-            }
-            var accepted: [AgentJournalRecord] = []
-            var next = expectedSequence
-            var recordsValid = true
-            for record in frame.records {
-                guard Self.supportedSchemaVersions.contains(record.schemaVersion),
-                      record.sequence == next else {
-                    recordsValid = false
-                    break
-                }
-                accepted.append(record)
-                next += 1
-            }
-            guard recordsValid else {
-                if isTerminalFrame {
-                    recovery = .corruptTail
-                    break
-                }
-                throw AgentJournalError.invalidRecord
-            }
-            records.append(contentsOf: accepted)
-            expectedSequence = next
-            offset = end
-        }
-        return ReadResult(records: records, recovery: recovery, validLength: offset, exists: true)
-    }
-
-    private static func createOrTruncateTail(at url: URL, to offset: Int) throws {
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        if !FileManager.default.fileExists(atPath: url.path) {
-            guard FileManager.default.createFile(atPath: url.path, contents: header) else {
-                throw AgentJournalError.persistenceUnavailable("cannot create journal file")
-            }
-            return
-        }
-        let handle: FileHandle
-        do { handle = try FileHandle(forWritingTo: url) }
-        catch { throw AgentJournalError.persistenceUnavailable(error.localizedDescription) }
-        do {
-            try handle.truncate(atOffset: UInt64(offset))
-            try handle.close()
-        } catch {
-            try? handle.close()
-            throw AgentJournalError.persistenceUnavailable(error.localizedDescription)
-        }
-    }
-
-    private static func writeAndSync(_ data: Data, to url: URL) throws {
-        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
-            throw AgentJournalError.persistenceUnavailable("cannot create temporary journal file")
-        }
-        let handle: FileHandle
-        do { handle = try FileHandle(forWritingTo: url) }
-        catch { throw AgentJournalError.persistenceUnavailable(error.localizedDescription) }
-        do {
-            try handle.write(contentsOf: data)
-            try sync(handle)
-            try handle.close()
-        } catch {
-            try? handle.close()
-            throw error is AgentJournalError ? error : AgentJournalError.persistenceUnavailable(error.localizedDescription)
-        }
-    }
-
-    private static func appendAndSync(_ data: Data, to url: URL, offset: Int) throws {
-        if !FileManager.default.fileExists(atPath: url.path) {
-            guard FileManager.default.createFile(atPath: url.path, contents: header) else {
-                throw AgentJournalError.persistenceUnavailable("cannot create journal file")
-            }
-        }
-        let handle: FileHandle
-        do { handle = try FileHandle(forWritingTo: url) }
-        catch { throw AgentJournalError.persistenceUnavailable(error.localizedDescription) }
-        do {
-            try handle.seek(toOffset: UInt64(offset))
-            try handle.write(contentsOf: data)
-            try sync(handle)
-            try handle.close()
-        } catch {
-            try? handle.close()
-            throw error is AgentJournalError ? error : AgentJournalError.persistenceUnavailable(error.localizedDescription)
-        }
-    }
-
-    private static func sync(_ handle: FileHandle) throws {
-        try handle.synchronize()
-    }
-
-    private static func syncDirectory(_ url: URL) throws {
-        let descriptor = url.path.withCString { swiftAgentOpen($0, 0) }
-        guard descriptor >= 0 else {
-            throw AgentJournalError.persistenceUnavailable("cannot open journal directory for sync")
-        }
-        defer { _ = swiftAgentClose(descriptor) }
-        guard swiftAgentFSync(descriptor) == 0 else {
-            throw AgentJournalError.persistenceUnavailable("cannot sync journal directory")
-        }
-    }
-
-    private static func fileSize(at url: URL) throws -> Int {
-        guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
-        do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-            return (attributes[.size] as? NSNumber)?.intValue ?? 0
-        } catch {
-            throw AgentJournalError.persistenceUnavailable(error.localizedDescription)
-        }
-    }
-
-    private static func withFileLock<T>(
-        for url: URL,
-        waitDeadline: ContinuousClock.Instant? = nil,
-        checkCancellation: Bool = false,
-        _ body: () throws -> T
-    ) throws -> T {
-        let lockURL = URL(fileURLWithPath: url.path + ".lock")
-        do {
-            try FileManager.default.createDirectory(
-                at: lockURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-
-            // Older builds used a directory as a marker. Remove only that
-            // obsolete empty marker; the current lock is an OS advisory lock
-            // on a regular file and therefore survives a crashed process.
-            var isDirectory = ObjCBool(false)
-            if FileManager.default.fileExists(atPath: lockURL.path, isDirectory: &isDirectory),
-               isDirectory.boolValue {
-                try FileManager.default.removeItem(at: lockURL)
-            }
-            if !FileManager.default.fileExists(atPath: lockURL.path),
-               !FileManager.default.createFile(atPath: lockURL.path, contents: nil) {
-                throw AgentJournalError.persistenceUnavailable("cannot create journal lock file")
-            }
-        } catch {
-            throw error is AgentJournalError
-                ? error
-                : AgentJournalError.persistenceUnavailable(error.localizedDescription)
-        }
-
-        let handle: FileHandle
-        do {
-            handle = try FileHandle(forUpdating: lockURL)
-        } catch {
-            throw AgentJournalError.persistenceUnavailable(error.localizedDescription)
-        }
-
-        let deadline = Date().addingTimeInterval(5)
-        var didAcquireLock = false
-        defer {
-            if didAcquireLock {
-                _ = swiftAgentFlock(handle.fileDescriptor, SwiftAgentFileLockOperation.unlock)
-            }
-            try? handle.close()
-        }
-        #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Linux)
-        while swiftAgentFlock(handle.fileDescriptor, SwiftAgentFileLockOperation.exclusiveNonBlocking) != 0 {
-            if checkCancellation {
-                try Task.checkCancellation()
-                if let waitDeadline, ContinuousClock.now >= waitDeadline {
-                    throw AgentJournalStartupAdmissionError.deadlineExceeded
-                }
-            }
-            guard Date() < deadline else {
-                throw AgentJournalError.persistenceUnavailable("journal lock is busy")
-            }
-            Thread.sleep(forTimeInterval: 0.005)
-        }
-        didAcquireLock = true
-        if checkCancellation {
-            try Task.checkCancellation()
-            if let waitDeadline, ContinuousClock.now >= waitDeadline {
-                throw AgentJournalStartupAdmissionError.deadlineExceeded
-            }
-        }
-        return try body()
-        #else
-        try? handle.close()
-        throw AgentJournalError.persistenceUnavailable("journal locks are unsupported on this platform")
-        #endif
-    }
-
-    private static func bytes(_ value: UInt32) -> [UInt8] {
-        [
-            UInt8((value >> 24) & 0xff),
-            UInt8((value >> 16) & 0xff),
-            UInt8((value >> 8) & 0xff),
-            UInt8(value & 0xff),
-        ]
-    }
-
-    private static func readUInt32(_ data: Data, at offset: Int) -> UInt32 {
-        UInt32(data[offset]) << 24
-            | UInt32(data[offset + 1]) << 16
-            | UInt32(data[offset + 2]) << 8
-            | UInt32(data[offset + 3])
-    }
-
-    private static func crc32(_ data: Data) -> UInt32 {
-        var checksum: UInt32 = 0xffffffff
-        for byte in data {
-            checksum ^= UInt32(byte)
-            for _ in 0..<8 {
-                checksum = (checksum & 1) == 0
-                    ? checksum >> 1
-                    : (checksum >> 1) ^ 0xedb88320
-            }
-        }
-        return checksum ^ 0xffffffff
-    }
 }
 
 extension AgentJournal: ToolMutationAdmission {
     @discardableResult
     package func admit(_ request: ToolMutationAdmissionRequest) async throws -> ToolMutationAdmissionResult {
+        guard !closing else { throw AgentJournalError.storeClosed }
         guard !request.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !request.callID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !request.argumentsJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -1616,32 +742,264 @@ extension AgentJournal: ToolMutationAdmission {
             throw AgentJournalError.invalidMutationIntent
         }
         try ToolResource.validate(request.resources)
-        if let key = mutationIdentityIndex[request.idempotencyKey],
-           let existing = mutationRecords[key] {
-            guard existing.intent.call.name == request.name,
-                  try JSONValue.decodeToolArguments(existing.intent.call.argumentsJSON) == arguments else {
-                throw AgentJournalError.mutationIntentConflict
+        if let store {
+            let decision = try store.write { view -> ToolMutationAdmissionResult in
+                if let existing = try view.identity(request.idempotencyKey) {
+                    guard existing.intent.call.name == request.name,
+                          try JSONValue.decodeToolArguments(existing.intent.call.argumentsJSON) == arguments,
+                          existing.intent.resources == request.resources,
+                          existing.intent.receiptExpectation == request.receiptExpectation else {
+                        throw AgentJournalError.mutationIntentConflict
+                    }
+                    switch existing.state {
+                    case .settled:
+                        guard let receipt = existing.receipt else { throw AgentJournalError.mutationIntentConflict }
+                        guard let output = existing.output else { throw AgentJournalError.mutationReplayUnavailable }
+                        return .settled(receipt: receipt, output: output)
+                    case .intent: throw AgentJournalError.mutationPending
+                    case .needsReconciliation: throw AgentJournalError.mutationRequiresReconciliation
+                    case .aborted: break
+                    }
+                }
+                let call = ToolCall(id: request.callID, name: request.name,
+                                    argumentsJSON: request.argumentsJSON, completeness: .complete)
+                let intent = try PendingMutationIntent(call: call, resources: request.resources,
+                                                       idempotencyKey: request.idempotencyKey,
+                                                       receiptExpectation: request.receiptExpectation)
+                _ = try appendToStore([.pendingMutation(intent)], sessionID: request.sessionID,
+                                      runID: request.runID, timestamp: Date(), view: view,
+                                      allowMutationSettlement: false)
+                return .admitted
             }
-            switch existing.state {
-            case .settled:
-                guard let receipt = existing.receipt else { throw AgentJournalError.mutationIntentConflict }
-                guard let output = existing.output else { throw AgentJournalError.mutationReplayUnavailable }
-                return .settled(receipt: receipt, output: output)
-            case .intent:
-                throw AgentJournalError.mutationPending
-            case .needsReconciliation:
-                throw AgentJournalError.mutationRequiresReconciliation
-            case .aborted:
-                break
+            scheduleMaintenanceIfNeeded()
+            return decision
+        }
+        throw AgentJournalError.persistenceUnavailable("mutation admission requires a durable store")
+    }
+}
+
+extension AgentJournal {
+    private func mutationRecord(for key: MutationKey) throws -> MutationRecord? {
+        if let store {
+            return try store.read { view in
+                try view.mutation(sessionID: key.sessionID, runID: key.runID, callID: key.callID)
+                    .map(Self.mutationRecord)
             }
         }
-        let call = ToolCall(id: request.callID, name: request.name,
-                            argumentsJSON: request.argumentsJSON, completeness: .complete)
-        let intent = try PendingMutationIntent(call: call, resources: request.resources,
-                                               idempotencyKey: request.idempotencyKey,
-                                               receiptExpectation: request.receiptExpectation)
-        _ = try append(.pendingMutation(intent), sessionID: request.sessionID, runID: request.runID,
-                       durability: .durable)
-        return .admitted
+        return nil
+    }
+
+    package func hasSessionCreated(_ sessionID: UUID) throws -> Bool {
+        if let store { return try store.read { try $0.header(sessionID)?.created ?? false } }
+        return records.contains { record in
+            guard record.sessionID == sessionID else { return false }
+            if case .sessionCreated = record.event { return true }
+            return false
+        }
+    }
+
+    package func hasRun(_ runID: UUID, sessionID: UUID) throws -> Bool {
+        if let store { return try store.read { try $0.header(sessionID)?.lastRunID == runID } }
+        return records.contains { $0.sessionID == sessionID && $0.runID == runID }
+    }
+
+    public func readMessages(sessionID: UUID, after ordinal: UInt64 = 0, limit: Int = 100) throws -> [JournalConversationMessage] {
+        guard let store else { throw AgentJournalError.persistenceUnavailable("paginated messages require a durable store") }
+        return try store.read { view in
+            try view.messages(sessionID: sessionID, after: ordinal, limit: limit)
+                .map { JournalConversationMessage(id: $0.id, message: $0.value) }
+        }
+    }
+
+    public func mutationStatus(identity: String) throws -> JournalMutationStatus? {
+        guard let store else { return nil }
+        return try store.read { view in
+            try view.identity(identity).map {
+                JournalMutationStatus(state: $0.state, receipt: $0.receipt,
+                                      replayOutput: $0.output, abortConfirmation: $0.abortConfirmation)
+            }
+        }
+    }
+
+    private static func formalMessages(_ history: [ModelMessage]) -> [ModelMessage] {
+        var index = 0
+        while index < history.count {
+            switch history[index] {
+            case .system, .developer: index += 1
+            default: return Array(history[index...])
+            }
+        }
+        return []
+    }
+
+    private static func mutationRecord(_ stored: JournalStoredMutation) -> MutationRecord {
+        MutationRecord(key: MutationKey(sessionID: stored.sessionID, runID: stored.runID,
+                                        callID: stored.intent.call.id),
+                       intent: stored.intent, sequence: stored.sequence, state: stored.state,
+                       receipt: stored.receipt, output: stored.output,
+                       abortConfirmation: stored.abortConfirmation)
+    }
+
+    private static func storedMutation(_ record: MutationRecord) -> JournalStoredMutation {
+        JournalStoredMutation(sessionID: record.key.sessionID, runID: record.key.runID,
+                              intent: record.intent, sequence: record.sequence, state: record.state,
+                              receipt: record.receipt, output: record.output,
+                              abortConfirmation: record.abortConfirmation)
+    }
+
+    private func appendToStore(
+        _ events: [AgentJournalEvent], sessionID: UUID, runID: UUID?, timestamp: Date,
+        view: any JournalStoreView, allowMutationSettlement: Bool
+    ) throws -> [AgentJournalRecord] {
+        guard !events.isEmpty else { return [] }
+        guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
+            throw AgentJournalError.mutationSettlementRequiresReconciliation
+        }
+        let initialHeader = try view.header(sessionID) ?? JournalSessionHeader()
+        let sequence = try view.nextRecordSequence()
+        let committed = events.enumerated().map { offset, event in
+            AgentJournalRecord(sequence: sequence + UInt64(offset), timestamp: timestamp,
+                               sessionID: sessionID, runID: runID, event: event)
+        }
+        var storedRecords: [MutationKey: MutationRecord] = [:]
+        var identityIndex: [String: MutationKey] = [:]
+        var identityMembers: [String: Set<MutationKey>] = [:]
+        var unresolvedBySession: [UUID: MutationKey] = [:]
+        func include(_ stored: JournalStoredMutation) {
+            let record = Self.mutationRecord(stored)
+            storedRecords[record.key] = record
+            identityMembers[stored.intent.idempotencyKey, default: []].insert(record.key)
+            Self.refreshIdentityIndex(stored.intent.idempotencyKey, records: storedRecords,
+                                      identityIndex: &identityIndex,
+                                      identityMembers: identityMembers)
+            if stored.state == .intent || stored.state == .needsReconciliation {
+                unresolvedBySession[stored.sessionID] = record.key
+            }
+        }
+        if let unresolved = try view.pending(sessionID: sessionID).first { include(unresolved) }
+        var changedKey: MutationKey?
+        for (offset, event) in events.enumerated() {
+            let callID: ToolCallID?
+            switch event {
+            case .pendingMutation(let intent):
+                callID = intent.call.id
+                if let previous = try view.identity(intent.idempotencyKey) {
+                    if storedRecords[Self.mutationRecord(previous).key] == nil { include(previous) }
+                    guard previous.intent.call.name == intent.call.name,
+                          previous.intent.call.argumentsJSON == intent.call.argumentsJSON,
+                          previous.intent.resources == intent.resources,
+                          previous.intent.receiptExpectation == intent.receiptExpectation else {
+                        throw AgentJournalError.mutationIntentConflict
+                    }
+                }
+            case .mutationNeedsReconciliation(let id),
+                 .mutationOutput(let id, _), .mutationSettled(let id, _, _), .mutationAborted(let id, _):
+                callID = id
+            default: callID = nil
+            }
+            if let callID, let runID {
+                let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
+                if storedRecords[key] == nil,
+                   let previous = try view.mutation(sessionID: sessionID, runID: runID, callID: callID) {
+                    include(previous)
+                }
+                changedKey = key
+            }
+            try Self.applyMutationEvent(event, sessionID: sessionID, runID: runID,
+                                        sequence: sequence + UInt64(offset),
+                                        records: &storedRecords,
+                                        identityIndex: &identityIndex,
+                                        identityMembers: &identityMembers,
+                                        unresolvedBySession: &unresolvedBySession)
+        }
+        var nextHeader = initialHeader
+        nextHeader.revision += 1
+        nextHeader.created = nextHeader.created || events.contains { if case .sessionCreated = $0 { return true }; return false }
+        if let runID { nextHeader.lastRunID = runID }
+        var delta: [ModelMessage] = []
+        for event in events {
+            if case .checkpoint(let history, let steeringIDs) = event {
+                let formal = Self.formalMessages(history)
+                guard formal.count >= initialHeader.messageCount else { throw AgentJournalError.concurrentWriter }
+                delta = Array(formal.dropFirst(Int(initialHeader.messageCount)))
+                nextHeader.steeringIDs = steeringIDs
+            }
+        }
+        nextHeader.messageCount = initialHeader.messageCount + UInt64(delta.count)
+        if let pending = unresolvedBySession[sessionID], let record = storedRecords[pending] {
+            nextHeader.pendingIdentity = record.intent.idempotencyKey
+        } else if changedKey != nil {
+            nextHeader.pendingIdentity = nil
+        }
+        let mutation = changedKey.flatMap { storedRecords[$0] }.map(Self.storedMutation)
+        try view.publish(JournalStoreChange(sessionID: sessionID,
+                                            expectedRevision: initialHeader.revision,
+                                            header: nextHeader,
+                                            messages: delta.map(JournalMessage.init(value:)),
+                                            mutation: mutation, records: committed))
+        return committed
+    }
+
+    private func scheduleMaintenanceIfNeeded() {
+        guard let store, maintenanceTask == nil, !closing else { return }
+        maintenanceTick &+= 1
+        guard (try? store.maintenanceStatus().sealedSegments) ?? 0 > 0
+                || maintenanceTick.isMultiple(of: 32) else { return }
+        let task = Task { try await store.maintain() }
+        let id = UUID()
+        maintenanceID = id
+        maintenanceTask = task
+        Task { [weak self] in
+            let outcome = await task.result
+            await self?.maintenanceDidComplete(id: id, succeeded: (try? outcome.get()) != nil)
+        }
+    }
+
+    private func maintenanceDidComplete(id: UUID, succeeded: Bool) {
+        guard maintenanceID == id else { return }
+        maintenanceID = nil
+        maintenanceTask = nil
+        if succeeded { scheduleMaintenanceIfNeeded() }
+    }
+
+    public func maintenanceStatus() throws -> JournalMaintenanceStatus? {
+        try store?.maintenanceStatus()
+    }
+
+    public func storageMetrics() -> JournalStorageMetrics? { store?.metrics() }
+
+    public func storeIdentity() -> JournalStoreIdentity? {
+        store.map { JournalStoreIdentity(storeID: $0.storeID, operationDomain: $0.operationDomain) }
+    }
+
+    public func storeStatus() throws -> JournalStoreStatus? { try store?.status() }
+
+    @discardableResult
+    public func requestMaintenance() async throws -> JournalMaintenanceStatus? {
+        guard let store else { return nil }
+        let id = maintenanceID ?? UUID()
+        let task = maintenanceTask ?? Task { try await store.maintain() }
+        maintenanceID = id
+        maintenanceTask = task
+        do {
+            let result = try await task.value
+            maintenanceDidComplete(id: id, succeeded: true)
+            try Task.checkCancellation()
+            return result
+        } catch {
+            maintenanceDidComplete(id: id, succeeded: false)
+            throw error
+        }
+    }
+
+    public func close() async throws {
+        guard sessionLeases.isEmpty else { throw AgentJournalError.sessionLeaseUnavailable }
+        closing = true
+        if let maintenanceTask {
+            _ = await maintenanceTask.result
+            self.maintenanceTask = nil
+            maintenanceID = nil
+        }
+        try store?.close()
     }
 }
