@@ -67,7 +67,7 @@ struct ExternalClientTests {
         try await run.waitForDrain()
         #expect(result.receipts.count == 1)
 
-        #expect(try await journal.compactIfNeeded(maxJournalBytes: 1))
+        #expect(try await journal.compactIfNeeded(maxJournalBytes: 1, sessionID: sessionID))
         let restored = try AgentJournal.load(from: url)
         #expect(await restored.pendingMutations().isEmpty)
         #expect(await restored.latestCheckpoint(sessionID: sessionID) != nil)

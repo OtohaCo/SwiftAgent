@@ -1108,12 +1108,19 @@ public actor AgentJournal {
         storageBox.current = .durable
     }
 
-    /// Rewrites a durable journal when it exceeds the host's byte threshold.
+    /// Rewrites a dedicated single-Session journal when it exceeds the host's
+    /// byte threshold. Callers must use one persistence file per Session ID;
+    /// mixed-Session files fail closed.
     /// The latest Session checkpoint and mutation lifecycle records are retained;
     /// this does not summarize or discard the Session's conversational history.
-    /// The rewrite is atomic and rejects a concurrent writer.
-    public func compactIfNeeded(maxJournalBytes: Int) throws -> Bool {
-        try compactIfNeeded(maxJournalBytes: maxJournalBytes, fault: nil)
+    /// The rewrite is atomic and refuses to rewrite any active Session's history.
+    public func compactIfNeeded(maxJournalBytes: Int, sessionID: UUID) throws -> Bool {
+        guard records.allSatisfy({ $0.sessionID == sessionID }) else {
+            throw AgentJournalError.invalidRecord
+        }
+        try acquireSessionLease(sessionID: sessionID)
+        defer { releaseSessionLease(sessionID: sessionID) }
+        return try compactIfNeeded(maxJournalBytes: maxJournalBytes, fault: nil)
     }
 
     /// Rewrites durable history to the minimum state needed for Session restore
