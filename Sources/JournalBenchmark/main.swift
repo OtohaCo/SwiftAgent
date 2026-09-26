@@ -86,7 +86,12 @@ import Glibc
         let status = try await journal.maintenanceStatus()
         var usage = rusage()
         let peakBytes: UInt64
-        if getrusage(RUSAGE_SELF, &usage) == 0 {
+        #if os(Linux)
+        let usageResult = getrusage(Int32(RUSAGE_SELF.rawValue), &usage)
+        #else
+        let usageResult = getrusage(RUSAGE_SELF, &usage)
+        #endif
+        if usageResult == 0 {
             #if os(Linux)
             peakBytes = UInt64(usage.ru_maxrss) * 1024
             #else
