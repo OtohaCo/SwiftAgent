@@ -211,6 +211,7 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     case mutationSettlementRequiresReconciliation
     case persistenceUnavailable(String)
     case sessionLeaseUnavailable
+    case deadlineExceeded
     case repairRequired
 
     public var errorDescription: String? {
@@ -231,6 +232,7 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
         case .mutationSettlementRequiresReconciliation: "Mutation settlement must use the reconciliation API."
         case .persistenceUnavailable(let message): "Agent journal persistence is unavailable: \(message)"
         case .sessionLeaseUnavailable: "The durable Agent session is already active in another process."
+        case .deadlineExceeded: "Opening the durable Agent journal exceeded the caller's deadline."
         case .repairRequired: "The journal has a corrupt tail that must be discarded before another durable write."
         }
     }
@@ -370,6 +372,31 @@ public actor AgentJournal {
         uncertainPersistenceRecords = nil
         persistenceFault = nil
         let mutationState = try Self.buildMutationState(from: loaded.records)
+        mutationRecords = mutationState.records
+        mutationIdentityIndex = mutationState.identityIndex
+        mutationIdentityMembers = mutationState.identityMembers
+        unresolvedMutationBySession = mutationState.unresolvedBySession
+        storageBox = AgentJournalStorageBox(.durable)
+    }
+
+    /// Opens a durable Journal within a caller's admission budget. Decoding
+    /// checks the deadline and cancellation between validated frames; failure
+    /// leaves the on-disk file unchanged for a later maintenance attempt.
+    public init(persistenceURL: URL, deadline: ContinuousClock.Instant) throws {
+        let loaded = try Self.read(from: persistenceURL, deadline: deadline)
+        try Self.checkReadBudget(deadline)
+        records = loaded.records
+        nextSequence = (loaded.records.last?.sequence ?? 0) + 1
+        self.persistenceURL = persistenceURL
+        knownFileSize = loaded.recovery == .clean ? loaded.validLength : nil
+        recoveryState = loaded.recovery
+        sessionLeases = [:]
+        directorySyncPending = false
+        uncertainPersistenceURL = nil
+        uncertainPersistenceRecords = nil
+        persistenceFault = nil
+        let mutationState = try Self.buildMutationState(from: loaded.records)
+        try Self.checkReadBudget(deadline)
         mutationRecords = mutationState.records
         mutationIdentityIndex = mutationState.identityIndex
         mutationIdentityMembers = mutationState.identityMembers
@@ -1382,7 +1409,11 @@ public actor AgentJournal {
         return frame
     }
 
-    private static func read(from url: URL) throws -> ReadResult {
+    private static func read(
+        from url: URL,
+        deadline: ContinuousClock.Instant? = nil
+    ) throws -> ReadResult {
+        try checkReadBudget(deadline)
         guard FileManager.default.fileExists(atPath: url.path) else {
             return ReadResult(records: [], recovery: .clean, validLength: 0, exists: false)
         }
@@ -1398,6 +1429,7 @@ public actor AgentJournal {
         var expectedSequence: UInt64 = 1
         var recovery: AgentJournalRecovery = .clean
         while offset < data.count {
+            try checkReadBudget(deadline)
             let remaining = data.count - offset
             guard remaining >= 8 else {
                 recovery = .truncatedTail
@@ -1477,7 +1509,16 @@ public actor AgentJournal {
             expectedSequence = next
             offset = end
         }
+        try checkReadBudget(deadline)
         return ReadResult(records: records, recovery: recovery, validLength: offset, exists: true)
+    }
+
+    private static func checkReadBudget(_ deadline: ContinuousClock.Instant?) throws {
+        guard let deadline else { return }
+        try Task.checkCancellation()
+        guard ContinuousClock.now < deadline else {
+            throw AgentJournalError.deadlineExceeded
+        }
     }
 
     private static func createOrTruncateTail(at url: URL, to offset: Int) throws {

@@ -634,6 +634,29 @@ final class AgentJournalTests: XCTestCase {
         XCTAssertNotNil(checkpoint)
     }
 
+    func testDeadlineAwareColdOpenLeavesLargeJournalForSafeLaterRepair() async throws {
+        let url = temporaryURL()
+        defer { cleanup(url) }
+        let sessionID = UUID()
+        let journal = try AgentJournal(persistenceURL: url)
+        try await appendCompactionHistory(to: journal, sessionID: sessionID)
+        let before = try fileSize(url)
+
+        do {
+            _ = try AgentJournal(
+                persistenceURL: url,
+                deadline: .now.advanced(by: .milliseconds(-1))
+            )
+            XCTFail("expired cold open should stop before decoding old checkpoints")
+        } catch {
+            XCTAssertEqual(error as? AgentJournalError, .deadlineExceeded)
+        }
+        XCTAssertEqual(try fileSize(url), before)
+        let restored = try AgentJournal.load(from: url)
+        let checkpoint = await restored.latestCheckpoint(sessionID: sessionID)
+        XCTAssertNotNil(checkpoint)
+    }
+
     func testPublicCompactionRefusesAReservedSessionBeforeItsFirstCheckpoint() async throws {
         let url = temporaryURL()
         defer { cleanup(url) }
