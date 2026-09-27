@@ -27,7 +27,7 @@ let package = Package(
         .target(name: "AgentJournalFileStore", dependencies: [
             "AgentCore", "AgentModels", "AgentTools", .product(name: "Crypto", package: "swift-crypto"),
         ]),
-        .executableTarget(name: "JournalTestProcess", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentModels"]),
+        .executableTarget(name: "JournalTestProcess", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentModels", "AgentTools"]),
         .executableTarget(name: "JournalBenchmark", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentModels", "AgentTools"]),
         .target(name: "AgentProviders", dependencies: ["AgentModels", "AgentCatalog"]),
         .target(name: "AgentAppleProvider", dependencies: ["AgentModels"]),

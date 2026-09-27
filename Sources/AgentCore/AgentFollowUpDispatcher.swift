@@ -19,10 +19,10 @@ public struct AgentFollowUpResolution: Sendable {
 
 public struct AgentFollowUpConfiguration: Sendable {
     public let model: AgentModelBinding
-    public let capabilities: AgentCapabilityBinding?
+    public let capabilities: AgentCapabilityBinding
     public let expectedConversationRevision: UInt64?
 
-    public init(model: AgentModelBinding, capabilities: AgentCapabilityBinding?,
+    public init(model: AgentModelBinding, capabilities: AgentCapabilityBinding,
                 expectedConversationRevision: UInt64? = nil) {
         self.model = model; self.capabilities = capabilities
         self.expectedConversationRevision = expectedConversationRevision
@@ -312,13 +312,19 @@ public actor AgentFollowUpDispatcher {
         currentRun = nil
         currentInputID = nil
         guard outcome == .completed else {
+            interruptedInputID = head.input.inputID
             if mode != .stopped { mode = .paused; notifyPaused() }
             return
         }
         // This records that the existing Run actually completed and drained,
         // not that a Host business objective was fulfilled.
-        try await journal.releaseCompletedFollowUp(sessionID: sessionID,
-                                                   inputID: head.input.inputID, runID: run.id)
+        do {
+            try await journal.releaseCompletedFollowUp(sessionID: sessionID,
+                                                       inputID: head.input.inputID, runID: run.id)
+        } catch {
+            interruptedInputID = head.input.inputID
+            throw error
+        }
     }
 
     private static func failureKind(_ error: any Error) -> String {

@@ -1,6 +1,7 @@
 @testable import AgentCore
 import AgentJournalFileStore
 import AgentModels
+import AgentTools
 import Foundation
 import Testing
 import XCTest
@@ -19,7 +20,7 @@ struct AgentFollowUpQueueTests {
             operationID: "op-two", configurationRef: "v1"))
         let dispatcher = try await session.startFollowUpDispatch(
             policy: .init(maxModelTurns: 2, maxToolCalls: 0, runTimeout: .seconds(10)),
-            resolver: QueueFixtureResolver(provider: provider))
+            resolver: QueueFixtureResolver(session: session, provider: provider))
         await provider.waitForRequestCount(2)
         await dispatcher.stop()
         try await dispatcher.waitForDrain()
@@ -32,6 +33,8 @@ struct AgentFollowUpQueueTests {
             Issue.record("missing FIFO admissions"); return
         }
         #expect(firstRun != secondRun)
+        #expect(try await session.withdrawFollowUp(inputID: "one") ==
+                .alreadyAdmitted(runID: firstRun, formalMessageID: firstMessage))
         let formal = try await journal.readMessages(sessionID: session.id)
         #expect(formal.contains(where: { $0.id == firstMessage && $0.message == .user([.text("first")]) }))
         #expect(formal.contains(where: { $0.id == secondMessage && $0.message == .user([.text("second")]) }))
@@ -55,7 +58,7 @@ struct AgentFollowUpQueueTests {
         #expect(await provider.requests().isEmpty)
         let dispatcher = try await restored.startFollowUpDispatch(
             policy: .init(maxModelTurns: 2, maxToolCalls: 0, runTimeout: .seconds(10)),
-            resolver: QueueFixtureResolver(provider: provider))
+            resolver: QueueFixtureResolver(session: restored, provider: provider))
         await provider.waitForRequestCount(1)
         await dispatcher.stop()
         try await dispatcher.waitForDrain()
@@ -72,13 +75,13 @@ struct AgentFollowUpQueueTests {
         let id = UUID()
         let session = try agent.makeSession(id: id, journal: journal)
         let dispatcher = try await session.startFollowUpDispatch(
-            policy: .init(runTimeout: .seconds(10)), resolver: QueueFixtureResolver(provider: provider))
+            policy: .init(runTimeout: .seconds(10)), resolver: QueueFixtureResolver(session: session, provider: provider))
         await dispatcher.pause()
         await #expect(throws: AgentFollowUpError.dispatchOwned) { try await session.run("direct") }
         let replacement = try agent.makeSession(id: id, journal: journal)
         await #expect(throws: AgentFollowUpError.alreadyDispatching) {
             try await replacement.startFollowUpDispatch(
-                policy: .init(), resolver: QueueFixtureResolver(provider: provider))
+                policy: .init(), resolver: QueueFixtureResolver(session: replacement, provider: provider))
         }
         await #expect(throws: AgentFollowUpError.dispatchOwned) { try await replacement.run("direct") }
         await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
@@ -97,7 +100,7 @@ struct AgentFollowUpQueueTests {
         _ = try await session.enqueueFollowUp(.init(inputID: "remove", text: "must not run",
             operationID: "never-run", configurationRef: "v1"))
         let dispatcher = try await session.startFollowUpDispatch(policy: .init(runTimeout: .seconds(10)),
-            resolver: QueueFixtureResolver(provider: provider, gate: gate))
+            resolver: QueueFixtureResolver(session: session, provider: provider, gate: gate))
         await gate.waitUntilEntered()
         #expect(try await session.withdrawFollowUp(inputID: "remove") == .withdrawn)
         await gate.release()
@@ -119,7 +122,7 @@ struct AgentFollowUpQueueTests {
         _ = try await session.enqueueFollowUp(.init(inputID: "late", text: "late result",
             operationID: "op-late", configurationRef: "v1"))
         let dispatcher = try await session.startFollowUpDispatch(policy: .init(runTimeout: .seconds(10)),
-            resolver: QueueFixtureResolver(provider: provider, gate: gate))
+            resolver: QueueFixtureResolver(session: session, provider: provider, gate: gate))
         await gate.waitUntilEntered()
         await dispatcher.pause()
         #expect(await gate.waitUntilCancelled())
@@ -131,6 +134,49 @@ struct AgentFollowUpQueueTests {
         try await dispatcher.waitForDrain()
         #expect(try await session.followUp(inputID: "late")?.state == .queued)
         #expect(await provider.requests().isEmpty)
+        try await journal.close()
+    }
+
+    @Test func pauseCancelsCooperativeResolverAndKeepsTheInputQueued() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-cooperative-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "cooperative")
+        let provider = QueueFixtureProvider(), gate = QueueResolverGate(cooperative: true)
+        let session = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                                provider: provider).makeSession(journal: journal)
+        _ = try await session.enqueueFollowUp(.init(inputID: "cooperate", text: "later",
+            operationID: "op-later", configurationRef: "v1"))
+        let dispatcher = try await session.startFollowUpDispatch(policy: .init(runTimeout: .seconds(10)),
+            resolver: QueueFixtureResolver(session: session, provider: provider, gate: gate))
+        await gate.waitUntilEntered()
+        await dispatcher.pause()
+        #expect(await gate.waitUntilCancelled())
+        await dispatcher.stop()
+        try await dispatcher.waitForDrain()
+        #expect(try await session.followUp(inputID: "cooperate")?.state == .queued)
+        #expect(await provider.requests().isEmpty)
+        try await journal.close()
+    }
+
+    @Test func revokedCapabilityIsNotReplacedByADefaultBindingAtDispatch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-revoked-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "revoked")
+        let provider = QueueFixtureProvider()
+        let session = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                                provider: provider).makeSession(journal: journal)
+        _ = try await session.enqueueFollowUp(.init(inputID: "limited", text: "not authorized",
+            operationID: "op-limited", configurationRef: "old-scope"))
+        let old = try await session.bindCapabilities(identity: "old", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        await old.revoke()
+        let dispatcher = try await session.startFollowUpDispatch(policy: .init(runTimeout: .seconds(10)),
+            resolver: QueueRevokedResolver(session: session, provider: provider, capabilities: old))
+        await dispatcher.waitUntilPaused()
+        #expect(try await session.followUp(inputID: "limited")?.state == .queued)
+        #expect(await provider.requests().isEmpty)
+        await dispatcher.stop()
+        try await dispatcher.waitForDrain()
         try await journal.close()
     }
 
@@ -147,7 +193,7 @@ struct AgentFollowUpQueueTests {
             operationID: "op-next", configurationRef: "v1"))
         let dispatcher = try await session.startFollowUpDispatch(
             policy: .init(maxModelTurns: 2, maxToolCalls: 0, runTimeout: .seconds(10)),
-            resolver: QueueDrainResolver(provider: provider))
+            resolver: QueueDrainResolver(session: session, provider: provider))
         #expect(try await direct.wait().outcome == .completed)
         await gate.waitUntilEntered()
         #expect(await provider.requests().count == 1)
@@ -184,7 +230,7 @@ struct AgentFollowUpQueueTests {
         let restored = try agent.makeSession(id: sessionID, journal: reopened)
         let dispatcher = try await restored.startFollowUpDispatch(
             policy: .init(maxModelTurns: 2, maxToolCalls: 0, runTimeout: .seconds(10)),
-            resolver: QueueFixtureResolver(provider: provider))
+            resolver: QueueFixtureResolver(session: restored, provider: provider))
         await dispatcher.waitUntilPaused()
         #expect(await dispatcher.status().interruptedInputID == "admitted")
         #expect(await provider.requests().isEmpty)
@@ -224,6 +270,27 @@ struct AgentFollowUpQueueTests {
         try await journal.close()
     }
 
+    @Test func concurrentReceivesUsePublicationOrderAsFifoSequence() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-order-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = QueueCommitBarrier()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory,
+            operationDomain: "ordering", fault: { gate.check($0) })
+        let session = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                                provider: QueueFixtureProvider()).makeSession(journal: journal)
+        gate.arm()
+        let first = Task { try await session.enqueueFollowUp(.init(inputID: "first", text: "A",
+            operationID: "op-A", configurationRef: "v1")) }
+        #expect(await gate.waitUntilEntered())
+        let second = Task { try await session.enqueueFollowUp(.init(inputID: "second", text: "B",
+            operationID: "op-B", configurationRef: "v1")) }
+        gate.release()
+        #expect(try await first.value.ordinal == 0)
+        #expect(try await second.value.ordinal == 1)
+        #expect(try await session.followUps(after: nil, limit: 10).map(\.inputID) == ["first", "second"])
+        try await journal.close()
+    }
+
     @Test func schemaOneStoreIsRejectedWithoutModificationOrReset() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("follow-up-schema1-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -238,6 +305,119 @@ struct AgentFollowUpQueueTests {
             _ = try AgentIncrementalJournal.create(at: directory, operationDomain: "new")
         }
         #expect(try Data(contentsOf: format) == original)
+    }
+
+    @Test func preAppendReceiveFailureIsDefiniteAndDoesNotPoisonTheStore() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-before-append-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = QueueFaultProbe()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory,
+            operationDomain: "pre-append", fault: { try fault.check($0) })
+        let session = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                                provider: QueueFixtureProvider()).makeSession(journal: journal)
+        fault.arm(.beforeAppend)
+        await #expect(throws: AgentJournalError.persistenceUnavailable("synthetic prepublication failure")) {
+            try await session.enqueueFollowUp(.init(inputID: "first", text: "not received",
+                operationID: "op-first", configurationRef: "v1"))
+        }
+        #expect(try await session.followUp(inputID: "first") == nil)
+        #expect(try await session.enqueueFollowUp(.init(inputID: "first", text: "not received",
+            operationID: "op-first", configurationRef: "v1")).ordinal == 0)
+        try await journal.close()
+    }
+
+    @Test func uncertainReceivePublicationIsRecoveredByTheSameInputID() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-unknown-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = QueueFaultProbe()
+        var journal: AgentJournal? = try AgentIncrementalJournal.createForTesting(at: directory,
+            operationDomain: "unknown", fault: { try fault.check($0) })
+        let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                              provider: QueueFixtureProvider())
+        let id = UUID()
+        var session: AgentSession? = try agent.makeSession(id: id, journal: journal)
+        fault.arm(.afterCurrentReplace)
+        let input = AgentFollowUpInput(inputID: "stable", text: "received once",
+                                       operationID: "stable-operation", configurationRef: "v1")
+        await #expect(throws: AgentJournalError.commitUnknown) {
+            try await session?.enqueueFollowUp(input)
+        }
+        session = nil
+        journal = nil
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let restored = try agent.makeSession(id: id, journal: reopened)
+        #expect(try await restored.followUp(inputID: "stable")?.state == .queued)
+        #expect(try await restored.enqueueFollowUp(input).ordinal == 0)
+        #expect(try await restored.followUps(after: nil, limit: 10).count == 1)
+        try await reopened.close()
+    }
+
+    @Test func uncertainAtomicAdmissionDoesNotRequeueOrCallProviderAfterReopen() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-admit-unknown-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = QueueFaultProbe()
+        var journal: AgentJournal? = try AgentIncrementalJournal.createForTesting(at: directory,
+            operationDomain: "admit-unknown", fault: { try fault.check($0) })
+        let provider = QueueFixtureProvider()
+        let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"), provider: provider)
+        let id = UUID()
+        var session: AgentSession? = try agent.makeSession(id: id, journal: journal)
+        _ = try await session?.enqueueFollowUp(.init(inputID: "one", text: "committed once",
+            operationID: "stable-one", configurationRef: "v1"))
+        var boundSession: AgentSession? = try #require(session)
+        var dispatcher: AgentFollowUpDispatcher? = try await session?.startFollowUpDispatch(
+            policy: .init(maxModelTurns: 2, maxToolCalls: 0, runTimeout: .seconds(10)),
+            resolver: QueueFaultingResolver(session: try #require(boundSession), provider: provider, fault: fault))
+        await dispatcher?.waitUntilPaused()
+        #expect(await provider.requests().isEmpty)
+        await dispatcher?.stop()
+        try await dispatcher?.waitForDrain()
+        dispatcher = nil; session = nil; boundSession = nil; journal = nil
+
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let record = try #require(try await reopened.followUp(sessionID: id, inputID: "one"))
+        guard case .admitted(let runID, let formalID) = record.state else {
+            Issue.record("published startup lost its association"); return
+        }
+        let messages = try await reopened.readMessages(sessionID: id)
+        #expect(messages.count == 1)
+        #expect(messages.first?.id == formalID)
+        #expect(try await reopened.followUps(sessionID: id, after: nil, limit: 10).count == 1)
+        #expect(try await reopened.interruptedFollowUp(sessionID: id)?.ordinal == record.ordinal)
+        #expect(runID != UUID())
+        try await reopened.close()
+    }
+
+    @Test func maintenanceReclaimsSegmentsWithoutForgettingQueueIdentityOrBodies() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-gc-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: 8192,
+                                                  maxUnreclaimedBytes: 65536, maxSegmentBatches: 2)
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "queue-gc", policy: policy)
+        let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                              provider: QueueFixtureProvider())
+        let id = UUID(), session = try agent.makeSession(id: id, journal: journal)
+        for ordinal in 0..<16 {
+            _ = try await session.enqueueFollowUp(.init(inputID: "id-\(ordinal)",
+                text: "body-\(ordinal)-\(String(repeating: "x", count: 80))",
+                operationID: "op-\(ordinal)", configurationRef: "v1"))
+            if ordinal.isMultiple(of: 2) {
+                #expect(try await session.withdrawFollowUp(inputID: "id-\(ordinal)") == .withdrawn)
+            }
+        }
+        for _ in 0..<50 {
+            if try await journal.requestMaintenance()?.sealedSegments == 0 { break }
+        }
+        #expect(try await journal.storeStatus()?.sealedSegments == 0)
+        for ordinal in 0..<16 {
+            #expect(try await session.followUp(inputID: "id-\(ordinal)")?.state ==
+                    (ordinal.isMultiple(of: 2) ? .withdrawn : .queued))
+            #expect(try await session.followUpText(inputID: "id-\(ordinal)").hasPrefix("body-\(ordinal)-"))
+        }
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
+        #expect(try await reopened.followUps(sessionID: id, after: nil, limit: 100).count == 16)
+        try await reopened.close()
     }
 
     @Test func atomicAdmissionPublishesQueueRunAndFormalMessageTogether() async throws {
@@ -327,6 +507,44 @@ struct AgentFollowUpQueueTests {
         #expect(try await session.followUp(inputID: "next")?.state == .queued)
         try await journal.close()
     }
+
+    @Test func enqueueDuringRealMutationSettlementPreservesReceiptAndCallPairing() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-mutation-interleave-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("effect.txt")
+        try Data().write(to: file)
+        let journal = try AgentIncrementalJournal.create(at: directory.appendingPathComponent("journal"),
+                                                          operationDomain: "interleave")
+        let gate = QueueMutationGate()
+        let call = ToolCall(id: .init(rawValue: "write-B"), name: QueueMutationTool.name,
+                            argumentsJSON: #"{"id":"B"}"#, completeness: .complete)
+        let provider = ScriptedProvider { request, _ in
+            request.messages.last?.role == .tool ? textResponse(request, "done") : toolResponse(request, [call])
+        }
+        let agent = try Agent(model: fixtureModel, provider: provider,
+                              tools: [try QueueMutationTool(file: file, gate: gate)])
+        let sessionID = UUID(), session = try agent.makeSession(id: sessionID, journal: journal)
+        let run = try await session.run("write B", operationID: "stable-write")
+        await gate.waitUntilEntered()
+        #expect(try String(contentsOf: file, encoding: .utf8) == "effect\n")
+        let before = try await session.conversationSnapshot().revision
+        _ = try await session.enqueueFollowUp(.init(inputID: "next", text: "later",
+            operationID: "stable-next", configurationRef: "v1"))
+        #expect(try await session.conversationSnapshot().revision == before)
+        await gate.release()
+        #expect(try await run.wait().receipts.count == 1)
+        try await run.waitForDrain()
+        try await journal.close()
+
+        let reopened = try AgentIncrementalJournal.open(at: directory.appendingPathComponent("journal"))
+        let history = try #require(try await reopened.latestCheckpoint(sessionID: sessionID)?.history)
+        #expect(history.contains(.assistant(content: [], toolCalls: [call])))
+        #expect(history.contains(where: { if case .tool(let result) = $0 { return result.callID == call.id }; return false }))
+        #expect(try await reopened.mutationStatus(identity: #"stable-write/queue_mutation/{"id":"B"}"#)?.state == .settled)
+        #expect(try await reopened.followUp(sessionID: sessionID, inputID: "next")?.state == .queued)
+        try await reopened.close()
+    }
 }
 
 private actor QueueFixtureRequests {
@@ -361,14 +579,37 @@ private struct QueueFixtureProvider: ModelProvider {
 }
 
 private struct QueueFixtureResolver: AgentFollowUpResolver {
+    let session: AgentSession
     let provider: QueueFixtureProvider
     var gate: QueueResolverGate? = nil
     func resolve(_ request: AgentFollowUpResolution) async throws -> AgentFollowUpConfiguration {
         try await gate?.wait()
+        let scope = try await session.bindCapabilities(identity: "explicit-empty", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
         return .init(model: try AgentModelBinding(profileID: "queue-fixture", profileRevision: "1",
             model: .init(provider: "queue-fixture", name: "fixed"), provider: provider,
             deployment: .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture")),
-            capabilities: nil, expectedConversationRevision: nil)
+            capabilities: scope, expectedConversationRevision: nil)
+    }
+}
+
+private struct QueueFaultingResolver: AgentFollowUpResolver {
+    let session: AgentSession
+    let provider: QueueFixtureProvider
+    let fault: QueueFaultProbe
+    func resolve(_ request: AgentFollowUpResolution) async throws -> AgentFollowUpConfiguration {
+        fault.arm(.afterCurrentReplace)
+        return try await QueueFixtureResolver(session: session, provider: provider).resolve(request)
+    }
+}
+
+private struct QueueRevokedResolver: AgentFollowUpResolver {
+    let session: AgentSession
+    let provider: QueueFixtureProvider
+    let capabilities: AgentCapabilityBinding
+    func resolve(_ request: AgentFollowUpResolution) async throws -> AgentFollowUpConfiguration {
+        let unscoped = try await QueueFixtureResolver(session: session, provider: provider).resolve(request)
+        return .init(model: unscoped.model, capabilities: capabilities)
     }
 }
 
@@ -456,11 +697,106 @@ private struct QueueDrainProvider: ModelProvider, ModelProviderRunDrain {
 }
 
 private struct QueueDrainResolver: AgentFollowUpResolver {
+    let session: AgentSession
     let provider: QueueDrainProvider
     func resolve(_ request: AgentFollowUpResolution) async throws -> AgentFollowUpConfiguration {
-        .init(model: try AgentModelBinding(profileID: "queue-fixture", profileRevision: "1",
+        let scope = try await session.bindCapabilities(identity: "explicit-empty", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        return .init(model: try AgentModelBinding(profileID: "queue-fixture", profileRevision: "1",
             model: .init(provider: "queue-fixture", name: "fixed"), provider: provider,
             deployment: .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture")),
-            capabilities: nil, expectedConversationRevision: nil)
+            capabilities: scope, expectedConversationRevision: nil)
+    }
+}
+
+private final class QueueFaultProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var armed: JournalFileFaultStage?
+    func arm(_ stage: JournalFileFaultStage) { lock.lock(); armed = stage; lock.unlock() }
+    func check(_ stage: JournalFileFaultStage) throws {
+        lock.lock()
+        let shouldFail: Bool
+        switch (armed, stage) {
+        case (.beforeAppend?, .beforeAppend), (.afterCurrentReplace?, .afterCurrentReplace):
+            shouldFail = true; armed = nil
+        default: shouldFail = false
+        }
+        lock.unlock()
+        if shouldFail { throw AgentJournalError.persistenceUnavailable("synthetic prepublication failure") }
+    }
+}
+
+private final class QueueCommitBarrier: @unchecked Sendable {
+    private let condition = NSCondition()
+    private let entered = XCTestExpectation(description: "queue publisher reached append")
+    private var armed = false, released = false
+    func arm() { condition.lock(); armed = true; condition.unlock() }
+    func check(_ stage: JournalFileFaultStage) {
+        guard case .beforeAppend = stage else { return }
+        condition.lock()
+        guard armed else { condition.unlock(); return }
+        armed = false
+        entered.fulfill()
+        while !released { condition.wait() }
+        condition.unlock()
+    }
+    func waitUntilEntered() async -> Bool {
+        await XCTWaiter.fulfillment(of: [entered], timeout: 3) == .completed
+    }
+    func release() {
+        condition.lock(); released = true; condition.broadcast(); condition.unlock()
+    }
+}
+
+private actor QueueMutationGate {
+    private var entered = false, released = false
+    private var observers: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        entered = true
+        let current = observers; observers.removeAll(); current.forEach { $0.resume() }
+        if released { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { observers.append($0) }
+    }
+    func release() {
+        released = true
+        let current = waiters; waiters.removeAll(); current.forEach { $0.resume() }
+    }
+}
+
+private struct QueueMutationTool: AgentTool {
+    struct Input: Codable, Sendable { let id: String }
+    struct Output: Codable, Sendable { let updated: Bool }
+    static let name = "queue_mutation"
+    static let description = "Write to one disposable fixture resource"
+    static let inputSchema = ToolSchema.object(properties: ["id": .string], required: ["id"])
+    static let outputSchema = ToolSchema.object(properties: ["updated": .boolean], required: ["updated"])
+    let file: URL
+    let gate: QueueMutationGate
+    let policy: ToolPolicy
+    init(file: URL, gate: QueueMutationGate) throws {
+        self.file = file; self.gate = gate
+        policy = try .mutation(authorization: .notRequired, evidence: .none)
+    }
+    func resourceRequirements(for input: Input) throws -> [ToolResource] {
+        [.named(.init(namespace: "queue.test", id: input.id))]
+    }
+    func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation? {
+        try .init(targets: [.init(namespace: "queue.test", id: input.id)], revision: .present)
+    }
+    func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("effect\n".utf8))
+        try handle.synchronize()
+        try handle.close()
+        await gate.wait()
+        return .init(output: .init(updated: true), receipt: .init(
+            operationID: context.idempotencyKey ?? "", status: .succeeded,
+            confirmedTargets: [.init(namespace: "queue.test", id: input.id)], revision: "v1"))
     }
 }

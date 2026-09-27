@@ -840,7 +840,6 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private func append(_ data: Data, to root: Root) throws -> Location {
-        try fault?(.beforeAppend)
         let url = segmentURL(root.active)
         try validateManagedDirectory(url.deletingLastPathComponent())
         let fd = DarwinOrGlibcOpen(url.path, O_WRONLY | O_APPEND | O_NOFOLLOW, 0)
@@ -1612,6 +1611,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 updated.queuedCount -= 1
                 updated.queuedBytes -= text.utf8.count
                 updated.firstQueued = prior.nextQueued
+                updated.lastAdmitted = prior.ordinal
                 if updated.queuedCount == 0 { updated.lastQueued = nil }
                 var admitted = prior
                 admitted.state = .admitted(runID: runID, formalMessageID: last.id)
@@ -1631,7 +1631,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
 
         func publishFollowUp(_ change: JournalFollowUpChange) throws {
-            guard writable, !didPublish, (1...2).contains(change.records.count) else {
+            guard writable, !didPublish, (0...2).contains(change.records.count) else {
                 throw AgentJournalError.invalidRecord
             }
             let current = try followUpHead(sessionID: change.sessionID)
@@ -1653,6 +1653,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             let next = root.sequence + 1
             guard batch.sequence == next else { throw AgentJournalError.invalidRecord }
             let (bytes, digest, blob) = try store.frameBytes(batch)
+            // Before append there is no possibly published batch. A failure
+            // here has a definite noncommit result and leaves this handle
+            // usable; managed blob candidates are collected as orphans.
+            try store.fault?(.beforeAppend)
             // From the first write onward, a failure has a potentially
             // published result. Reopen and inspect the root before retrying.
             store.poisoned = true

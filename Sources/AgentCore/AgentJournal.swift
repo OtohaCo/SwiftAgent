@@ -836,6 +836,7 @@ extension AgentJournal {
     }
 
     package func enqueueFollowUp(_ input: AgentFollowUpInput, sessionID: UUID) async throws -> AgentFollowUpRecord {
+        try Task.checkCancellation()
         try input.validate()
         guard let store else { throw AgentFollowUpError.durableJournalRequired }
         let result = try store.write { view -> AgentFollowUpRecord in
@@ -966,6 +967,7 @@ extension AgentJournal {
     }
 
     package func withdrawFollowUp(sessionID: UUID, inputID: String) async throws -> AgentFollowUpWithdrawal {
+        try Task.checkCancellation()
         guard let store else { throw AgentFollowUpError.durableJournalRequired }
         let result = try store.write { view -> AgentFollowUpWithdrawal in
             guard var entry = try view.followUp(sessionID: sessionID, inputID: inputID) else {
