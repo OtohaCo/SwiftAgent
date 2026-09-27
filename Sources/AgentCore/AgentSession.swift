@@ -15,6 +15,7 @@ public actor AgentSession {
     public private(set) var activeRunID: UUID?
     private let defaultBinding: AgentModelBinding
     private let tools: ToolRegistry
+    private let instanceID = UUID()
     private let scheduler: ToolScheduler
     private let evidenceLedger = EvidenceLedger()
     private let contextEffects = AgentContextEffectLedger()
@@ -40,10 +41,13 @@ public actor AgentSession {
     private var preflightOperations: Set<UUID> = []
     private var deferredStartupReleases: Set<UUID> = []
     private var startupReservations: [UUID: StartupReservation] = [:]
+    private var scopesByRunID: [UUID: AgentCapabilityScope] = [:]
     private var conversationRevision: UInt64 = 0
 
     private struct StartupReservation {
         let journalLeaseAcquired: Bool
+        var capabilityScope: AgentCapabilityScope? = nil
+        var runID: UUID? = nil
     }
 
     init(id: UUID = UUID(), defaultBinding: AgentModelBinding, tools: ToolRegistry, scheduler: ToolScheduler,
@@ -99,6 +103,45 @@ public actor AgentSession {
         budget: AgentBudget? = nil,
         operationID: String? = nil
     ) async throws -> AgentRun {
+        try await runInternal(text, using: binding, capabilities: nil,
+                              expectedConversationRevision: expectedConversationRevision,
+                              budget: budget, operationID: operationID)
+    }
+
+    /// Runs with a fixed tool/backend/resource snapshot. An explicit binding
+    /// may select a model, but it cannot replace this Run's tool registry.
+    public func run(
+        _ text: String,
+        capabilities: AgentCapabilityBinding,
+        using binding: AgentModelBinding? = nil,
+        expectedConversationRevision: UInt64? = nil,
+        budget: AgentBudget? = nil,
+        operationID: String? = nil
+    ) async throws -> AgentRun {
+        try await runInternal(text, using: binding ?? defaultBinding, capabilities: capabilities,
+                              expectedConversationRevision: expectedConversationRevision,
+                              budget: budget, operationID: operationID)
+    }
+
+    public func bindCapabilities(identity: String, version: String,
+                                 scopeID: String? = nil, backendInstanceID: String,
+                                 backendVersion: String, allowedResources: [ToolResource],
+                                 tools: [AgentCapabilityTool]) throws -> AgentCapabilityBinding {
+        try AgentCapabilityBinding(sessionID: id, sessionInstanceID: instanceID,
+                                   identity: identity, version: version, scopeID: scopeID,
+                                   backendInstanceID: backendInstanceID,
+                                   backendVersion: backendVersion, allowedResources: allowedResources,
+                                   tools: tools)
+    }
+
+    private func runInternal(
+        _ text: String,
+        using binding: AgentModelBinding,
+        capabilities: AgentCapabilityBinding?,
+        expectedConversationRevision: UInt64?,
+        budget: AgentBudget?,
+        operationID: String?
+    ) async throws -> AgentRun {
         try Task.checkCancellation()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentSessionError.emptyInput }
         try contextPolicy.checkInput(text)
@@ -138,6 +181,7 @@ public actor AgentSession {
                     let run = try await startRun(
                         text,
                         binding: binding,
+                        capabilities: capabilities,
                         expectedConversationRevision: expectedConversationRevision,
                         budget: runBudget,
                         operationID: operationID,
@@ -187,6 +231,9 @@ public actor AgentSession {
     private func releaseStartupReservation(_ startupID: UUID) async {
         guard let reservation = startupReservations.removeValue(forKey: startupID) else { return }
         deferredStartupReleases.remove(startupID)
+        if let scope = reservation.capabilityScope, let runID = reservation.runID {
+            await scope.releaseRun(runID)
+        }
         if reservation.journalLeaseAcquired {
             await journal?.releaseSessionLease(sessionID: id)
         }
@@ -260,6 +307,7 @@ public actor AgentSession {
     private func startRun(
         _ text: String,
         binding: AgentModelBinding,
+        capabilities: AgentCapabilityBinding?,
         expectedConversationRevision: UInt64?,
         budget: AgentBudget,
         operationID: String?,
@@ -304,9 +352,22 @@ public actor AgentSession {
             throw AgentModelBindingError.staleConversationRevision
         }
         let runID = UUID()
-        let loop = AgentLoop(binding: binding, tools: tools, scheduler: scheduler,
+        let control = AgentRunControl()
+        let selectedTools = capabilities?.registry ?? tools
+        if selectedTools.hasMutation, journal?.storage != .durable {
+            throw AgentSessionError.durableJournalRequired
+        }
+        if let capabilities {
+            try await capabilities.scope.register(runID: runID, sessionID: id,
+                                                   sessionInstanceID: instanceID,
+                                                   cancel: { await control.cancel() })
+            startupReservations[startupID]?.capabilityScope = capabilities.scope
+            startupReservations[startupID]?.runID = runID
+        }
+        let loop = AgentLoop(binding: binding, tools: selectedTools, scheduler: scheduler,
                              modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes,
-                             journal: journal, contextEffects: contextEffects)
+                             journal: journal, contextEffects: contextEffects,
+                             capabilityScope: capabilities?.scope)
         let candidateMessages = prepared + [.user([.text(text)])]
         let preparedRequest: AgentPreparedModelRequest
         preparedRequest = try await withStartupDeadline(budget.deadline, startupID: startupID) { [weak self] in
@@ -319,6 +380,7 @@ public actor AgentSession {
                 structuredOutput: self.structuredOutput
             )
         }
+        try await capabilities?.scope.checkRun(runID)
         try Task.checkCancellation()
         try budget.checkActive()
         var uncertainStartup = false
@@ -327,6 +389,7 @@ public actor AgentSession {
             _ = try await withStartupDeadline(budget.deadline, startupID: startupID) {
                 try await journal.recoverPendingMutations(sessionID: sessionID)
             }
+            try await capabilities?.scope.checkRun(runID)
             try Task.checkCancellation()
             try budget.checkActive()
             let hasSessionRecord = try await journal.hasSessionCreated(id)
@@ -341,6 +404,7 @@ public actor AgentSession {
             lifecycleEvents.append(.userMessage(text))
             try Task.checkCancellation()
             try budget.checkActive()
+            try await capabilities?.scope.checkRun(runID)
             do {
                 try await journal.appendStartupCheckpoint(
                     lifecycleEvents,
@@ -363,7 +427,6 @@ public actor AgentSession {
             // atomic journal commit; continue creating the corresponding Run
             // rather than leaving a durable user event without an owner.
         }
-        let control = AgentRunControl()
         let channel = AsyncStream<AgentEvent>.makeStream()
         let emitter = AgentEventEmitter(channel.continuation, requiresConsumer: false)
         if history != prepared { history = prepared }
@@ -374,6 +437,7 @@ public actor AgentSession {
         let drain = AgentRunDrain()
         drainHandles[runID] = drain
         loopsByRunID[runID] = loop
+        if let capabilities { scopesByRunID[runID] = capabilities.scope }
         let messages = history
         let startupIsUncertain = uncertainStartup
         Task {
@@ -400,6 +464,7 @@ public actor AgentSession {
             id: runID,
             sessionID: id,
             binding: binding.info,
+            capabilities: capabilities?.info.forRun(runID),
             events: channel.stream,
             control: control,
             drain: drain
@@ -506,6 +571,7 @@ public actor AgentSession {
         let loop = loopsByRunID[runID]
         let journal = self.journal
         let drain = drainHandles[runID]
+        let scope = scopesByRunID[runID]
         let drainReleaseDidBegin = self.drainReleaseDidBegin
         pendingDrainTask = Task { [weak self] in
             async let logicalCompletion: Void = control.waitUntilCompleted()
@@ -515,6 +581,7 @@ public actor AgentSession {
             if let self {
                 await self.finishDraining(runID: runID)
             } else {
+                await scope?.releaseRun(runID)
                 await drainReleaseDidBegin?(runID)
                 await journal?.releaseSessionLease(sessionID: sessionID)
                 await AgentSessionIdentityRegistry.shared.release(sessionID, storeID: await journal?.storeIdentity()?.storeID)
@@ -526,6 +593,9 @@ public actor AgentSession {
     private func finishDraining(runID: UUID) async {
         guard drainingRunID == runID else { return }
         await drainReleaseDidBegin?(runID)
+        if let scope = scopesByRunID.removeValue(forKey: runID) {
+            await scope.releaseRun(runID)
+        }
         await journal?.releaseSessionLease(sessionID: id)
         await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal?.storeIdentity()?.storeID)
         if let drain = drainHandles[runID] {

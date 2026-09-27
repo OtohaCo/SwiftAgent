@@ -17,6 +17,7 @@ package struct AgentLoop: Sendable {
     private let modelContextByteLimit: Int?
     private let journal: AgentJournal?
     private let contextEffects: AgentContextEffectLedger
+    private let capabilityScope: AgentCapabilityScope?
     private let projectionDrain = AgentProjectionDrain()
 
     private var model: ModelID { binding.model }
@@ -25,13 +26,15 @@ package struct AgentLoop: Sendable {
     package init(binding: AgentModelBinding, tools: ToolRegistry,
                  scheduler: ToolScheduler = .init(), modelContextByteLimit: Int? = nil,
                  journal: AgentJournal? = nil,
-                 contextEffects: AgentContextEffectLedger = .init()) {
+                 contextEffects: AgentContextEffectLedger = .init(),
+                 capabilityScope: AgentCapabilityScope? = nil) {
         self.binding = binding
         self.tools = tools
         self.scheduler = scheduler
         self.modelContextByteLimit = modelContextByteLimit
         self.journal = journal
         self.contextEffects = contextEffects
+        self.capabilityScope = capabilityScope
     }
 
     package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
@@ -233,13 +236,15 @@ package struct AgentLoop: Sendable {
                     callID: call.id, deadline: budget.deadline,
                     idempotencyKey: Self.idempotencyKey(operationID: operationID, runID: runID, call: call),
                     argumentsJSON: call.argumentsJSON, evidenceLedger: evidenceLedger,
-                    mutationAdmission: lifecycle?.mutationAdmission))
+                    mutationAdmission: lifecycle?.mutationAdmission,
+                    executionAdmission: capabilityScope))
             }
             let progress = AgentToolBatchProgress(prefix: history, response: response, budget: budget,
                                                   lifecycle: lifecycle, emitter: emitter)
             do {
                 try await scheduler.execute(preparedCalls, deadline: budget.deadline, onStarted: { call in
                     try budget.checkActive()
+                    try await capabilityScope?.check(runID: runID, resources: call.resources)
                     try await emitter?.send(.toolStarted(call.call))
                 }, onCompleted: { index, call, result in
                     try await progress.record(index: index, call: call, result: result)

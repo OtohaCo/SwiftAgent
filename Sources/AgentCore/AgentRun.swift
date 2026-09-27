@@ -17,6 +17,7 @@ public struct AgentRun: Sendable {
     public let id: UUID
     public let sessionID: UUID
     public let binding: AgentModelBindingInfo
+    public let capabilities: AgentCapabilityInfo?
     public let events: AsyncStream<AgentEvent>
     private let control: AgentRunControl
     private let drain: AgentRunDrain
@@ -25,6 +26,7 @@ public struct AgentRun: Sendable {
         id: UUID,
         sessionID: UUID,
         binding: AgentModelBindingInfo,
+        capabilities: AgentCapabilityInfo? = nil,
         events: AsyncStream<AgentEvent>,
         control: AgentRunControl,
         drain: AgentRunDrain
@@ -32,6 +34,7 @@ public struct AgentRun: Sendable {
         self.id = id
         self.sessionID = sessionID
         self.binding = binding
+        self.capabilities = capabilities
         self.events = events
         self.control = control
         self.drain = drain

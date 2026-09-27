@@ -33,6 +33,10 @@ package struct ToolRegistry: Sendable {
         tools.values.map(\.tool.definition).sorted { $0.name < $1.name }
     }
 
+    package var hasMutation: Bool {
+        tools.values.contains { $0.tool.policy.effect == .mutation }
+    }
+
     package func prepare(_ call: ToolCall, context: ToolContext) throws -> PreparedToolCall {
         try context.checkActive()
         guard call.completeness == .complete else { throw ToolRegistryError.truncatedCall }
@@ -95,7 +99,8 @@ package struct PreparedToolCall: Sendable {
         else { effectiveDeadline = context.deadline ?? deadline }
         let executionContext = ToolContext(sessionID: context.sessionID, runID: context.runID, callID: context.callID,
             deadline: effectiveDeadline, idempotencyKey: context.idempotencyKey, argumentsJSON: context.argumentsJSON,
-            evidenceLedger: context.evidenceLedger, mutationAdmission: context.mutationAdmission)
+            evidenceLedger: context.evidenceLedger, mutationAdmission: context.mutationAdmission,
+            executionAdmission: context.executionAdmission)
         return try await operation(executionContext)
     }
 }
