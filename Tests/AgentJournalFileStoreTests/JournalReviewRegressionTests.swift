@@ -268,6 +268,79 @@ import Testing
         try await journal.close()
     }
 
+    @Test func statePacksSupersededByLaterProcessCommitsAreReclaimed() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: 4096,
+                                                  maxUnreclaimedBytes: 16384, maxSegmentBatches: 1)
+        let journal = try AgentIncrementalJournal.create(at: directory,
+                                                         operationDomain: "obsolete-packs", policy: policy)
+        let session = UUID()
+        for turn in 0..<8 {
+            _ = try await journal.append(.modelAttempt(turn: turn, model: .init(provider: "fixture", name: "test")),
+                                         sessionID: session, runID: UUID(), durability: .durable)
+            for _ in 0..<3 {
+                if try await journal.requestMaintenance()?.sealedSegments == 0 { break }
+            }
+        }
+        for _ in 0..<24 { _ = try await journal.requestMaintenance() }
+        let packs = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("state"),
+            includingPropertiesForKeys: nil).filter { $0.pathExtension == "pack" }
+        #expect(packs.count <= 1)
+        try await journal.close()
+    }
+
+    @Test func publishedObsoletePackCleanupResumesAfterInterruptedDeletion() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: 4096,
+                                                  maxUnreclaimedBytes: 16384, maxSegmentBatches: 1)
+        let gate = ReviewFaultOnce(.beforePackDelete)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory,
+            operationDomain: "pack-retry", policy: policy, fault: { try gate.check($0) })
+        let session = UUID()
+        for turn in 0..<4 {
+            _ = try await journal.append(.modelAttempt(turn: turn, model: .init(provider: "fixture", name: "test")),
+                                         sessionID: session, runID: UUID(), durability: .durable)
+            _ = try? await journal.requestMaintenance()
+        }
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
+        for _ in 0..<20 { _ = try await reopened.requestMaintenance() }
+        let packs = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("state"),
+            includingPropertiesForKeys: nil).filter { $0.pathExtension == "pack" }
+        #expect(packs.count <= 1)
+        try await reopened.close()
+    }
+
+    @Test func automaticMaintenanceEventuallyReclaimsObsoletePacksWithoutHostCalls() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: 4096,
+                                                  maxUnreclaimedBytes: 16384, maxSegmentBatches: 1)
+        let journal = try AgentIncrementalJournal.create(at: directory,
+                                                         operationDomain: "automatic-pack-gc", policy: policy)
+        let session = UUID()
+        for turn in 0..<8 {
+            _ = try await journal.append(.modelAttempt(turn: turn, model: .init(provider: "fixture", name: "test")),
+                                         sessionID: session, runID: UUID(), durability: .durable)
+        }
+        var complete = false
+        for _ in 0..<5000 {
+            let status = try #require(try await journal.storeStatus())
+            let packs = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("state"),
+                includingPropertiesForKeys: nil).filter { $0.pathExtension == "pack" }
+            if status.sealedSegments == 0 && status.pendingGarbageSegments == 0 &&
+               status.pendingGarbagePacks == 0 && packs.count <= 1 {
+                complete = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(complete)
+        try await journal.close()
+    }
+
     @Test func publishedRootCanFinishDiscardedBlobCleanupAfterDeletionFailure() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

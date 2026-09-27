@@ -76,15 +76,18 @@ public struct JournalStoreStatus: Sendable, Equatable {
     public let activeSegmentBytes: UInt64
     public let sealedSegments: Int
     public let pendingGarbageSegments: Int
+    public let pendingGarbagePacks: Int
     public init(identity: JournalStoreIdentity, logicalSequence: UInt64,
                 layoutGeneration: UInt64, activeSegmentBytes: UInt64,
-                sealedSegments: Int, pendingGarbageSegments: Int) {
+                sealedSegments: Int, pendingGarbageSegments: Int,
+                pendingGarbagePacks: Int) {
         self.identity = identity
         self.logicalSequence = logicalSequence
         self.layoutGeneration = layoutGeneration
         self.activeSegmentBytes = activeSegmentBytes
         self.sealedSegments = sealedSegments
         self.pendingGarbageSegments = pendingGarbageSegments
+        self.pendingGarbagePacks = pendingGarbagePacks
     }
 }
 

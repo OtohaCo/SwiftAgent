@@ -1017,7 +1017,10 @@ extension AgentJournal {
     private func scheduleMaintenanceIfNeeded() {
         guard let store, maintenanceTask == nil, !closing else { return }
         maintenanceTick &+= 1
-        guard (try? store.maintenanceStatus().sealedSegments) ?? 0 > 0
+        let status = try? store.status()
+        guard (status?.sealedSegments ?? 0) > 0 ||
+                (status?.pendingGarbageSegments ?? 0) > 0 ||
+                (status?.pendingGarbagePacks ?? 0) > 0
                 || maintenanceTick.isMultiple(of: 32) else { return }
         let task = Task { try await store.maintain() }
         let id = UUID()

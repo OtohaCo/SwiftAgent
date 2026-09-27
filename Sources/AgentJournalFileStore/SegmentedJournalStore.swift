@@ -46,6 +46,7 @@ package enum JournalFileFaultStage: Sendable {
     case beforeMaintenancePublish
     case afterMaintenanceSnapshot
     case beforeSegmentDelete
+    case beforePackDelete
     case beforeClose
     case beforeSessionRead
 }
@@ -201,11 +202,17 @@ private struct GarbageBlob: Codable {
     let id: UUID
 }
 
+private struct GarbagePack: Codable {
+    let id: UUID
+    let blobs: [GarbageBlob]
+}
+
 private struct Layout: Codable {
     let generation: UInt64
     let sealed: [Segment]
     let packs: [UUID]
     let garbage: [Segment]
+    let garbagePacks: [GarbagePack]
 }
 
 private struct Root: Codable {
@@ -298,6 +305,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private let fault: (@Sendable (JournalFileFaultStage) throws -> Void)?
     private var garbageShard = 0
     private var garbageIndexShard = 0
+    private var packCursor = 0
     private var garbageEnumerators: [String: FileManager.DirectoryEnumerator] = [:]
     private var finishedIndexKinds: Set<String> = []
 
@@ -341,7 +349,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             try store.writeNew(formatBytes, at: directory.appendingPathComponent("format.json"))
             let segment = UUID(), layoutID = UUID(), rootID = UUID()
             try store.writeNew(Data(), at: store.segmentURL(segment))
-            let layoutBytes = try JSONEncoder().encode(Layout(generation: 0, sealed: [], packs: [], garbage: []))
+            let layoutBytes = try JSONEncoder().encode(Layout(generation: 0, sealed: [], packs: [],
+                                                              garbage: [], garbagePacks: []))
             try store.writeNew(layoutBytes, at: store.layoutURL(layoutID))
             let root = Root(storeID: format.storeID, formatDigest: Self.digest(formatBytes),
                             sequence: 0, nextRecordSequence: 1,
@@ -510,7 +519,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 identity: .init(storeID: storeID, operationDomain: operationDomain),
                 logicalSequence: root.sequence, layoutGeneration: root.layoutGeneration,
                 activeSegmentBytes: root.activeEnd, sealedSegments: current.sealed.count,
-                pendingGarbageSegments: current.garbage.count
+                pendingGarbageSegments: current.garbage.count,
+                pendingGarbagePacks: current.garbagePacks.count
             )
         } catch { throw AgentIncrementalJournal.normalized(error) }
     }
@@ -793,6 +803,19 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         return false
     }
 
+    private func isBatchNeeded(_ batch: BatchV1, at location: Location, root: Root) throws -> Bool {
+        let sessionHead: UInt64? = try pointer("sessions", key: batch.sessionID.uuidString, root: root)
+        let callHead: UInt64?
+        if let mutation = batch.mutation {
+            let key = "\(mutation.sessionID.uuidString)/\(mutation.runID.uuidString)/\(mutation.intent.call.id)"
+            callHead = try pointer("calls", key: key, root: root)
+        } else { callHead = nil }
+        return try hasLiveMessage(batch, root: root) || sessionHead == batch.sequence ||
+            callHead == batch.sequence ||
+            (root.lastFrame?.kind == location.kind && root.lastFrame?.file == location.file &&
+             root.lastFrame?.offset == location.offset)
+    }
+
     private func append(_ data: Data, to root: Root) throws -> Location {
         try fault?(.beforeAppend)
         let url = segmentURL(root.active)
@@ -828,7 +851,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         try writeNew(Data(), at: segmentURL(nextSegment))
         let nextLayout = Layout(generation: root.layoutGeneration + 1,
                                 sealed: oldLayout.sealed + [Segment(id: root.active, end: root.activeEnd)],
-                                packs: oldLayout.packs, garbage: oldLayout.garbage)
+                                packs: oldLayout.packs, garbage: oldLayout.garbage,
+                                garbagePacks: oldLayout.garbagePacks)
         let nextLayoutBytes = try JSONEncoder().encode(nextLayout)
         try writeNew(nextLayoutBytes, at: layoutURL(nextLayoutID))
         let nextRoot = Root(storeID: storeID, formatDigest: root.formatDigest,
@@ -847,7 +871,12 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     func maintain() async throws -> JournalMaintenanceStatus {
         try await withCheckedThrowingContinuation { continuation in
             maintenanceQueue.async { [self] in
-                do { continuation.resume(returning: try performMaintenance()) }
+                do {
+                    _ = try performMaintenance()
+                    try cleanupObsoletePack()
+                    try cleanupGarbage()
+                    continuation.resume(returning: try maintenanceStatus())
+                }
                 catch {
                     lock.lock()
                     lastMaintenanceError = String(describing: error)
@@ -956,15 +985,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                       old.offset == frame.source.offset, old.length == frame.source.length else {
                     throw AgentJournalError.concurrentWriter
                 }
-                let sessionHead: UInt64? = try pointer("sessions", key: frame.batch.sessionID.uuidString, root: root)
-                let callHead: UInt64?
-                if let mutation = frame.batch.mutation {
-                    let key = "\(mutation.sessionID.uuidString)/\(mutation.runID.uuidString)/\(mutation.intent.call.id)"
-                    callHead = try pointer("calls", key: key, root: root)
-                } else { callHead = nil }
-                let liveMessage = try hasLiveMessage(frame.batch, root: root)
-                let isLast = root.lastFrame?.file == old.file && root.lastFrame?.offset == old.offset
-                if liveMessage || sessionHead == sequence || callHead == sequence || isLast {
+                if try isBatchNeeded(frame.batch, at: old, root: root) {
                     retained.append((sequence, UInt64(retainedData.count), old.length))
                     retainedData.append(frame.bytes)
                 } else {
@@ -1002,7 +1023,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                         garbageBlobs: discardedBlobs.map {
                                             GarbageBlob(sequence: $0.0, id: $0.1)
                                         }
-                                    )])
+                                    )], garbagePacks: currentLayout.garbagePacks)
             let nextLayoutBytes = try JSONEncoder().encode(nextLayout)
             try writeNew(nextLayoutBytes, at: layoutURL(nextLayoutID))
             let updated = Root(storeID: root.storeID, formatDigest: root.formatDigest,
@@ -1047,6 +1068,34 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         defer { lock.unlock() }
         let (root, oldRootID) = try currentRoot()
         let oldLayout = try layout(root)
+        if let pack = oldLayout.garbagePacks.first {
+            let url = stateURL(pack.id)
+            if FileManager.default.fileExists(atPath: url.path) {
+                guard try managedRegularFile(url) else { throw AgentJournalError.invalidRecord }
+                try FileManager.default.removeItem(at: url)
+            }
+            for blob in pack.blobs {
+                try removeDiscardedBlob(blob.id, sequence: blob.sequence, root: root)
+            }
+            let newID = UUID()
+            let next = Layout(generation: root.layoutGeneration + 1, sealed: oldLayout.sealed,
+                              packs: oldLayout.packs, garbage: oldLayout.garbage,
+                              garbagePacks: Array(oldLayout.garbagePacks.dropFirst()))
+            let bytes = try JSONEncoder().encode(next)
+            try writeNew(bytes, at: layoutURL(newID))
+            let updated = Root(storeID: root.storeID, formatDigest: root.formatDigest,
+                               sequence: root.sequence, nextRecordSequence: root.nextRecordSequence,
+                               active: root.active, activeEnd: root.activeEnd,
+                               activeBatches: root.activeBatches, layout: newID,
+                               layoutDigest: Self.digest(bytes), layoutGeneration: next.generation,
+                               lastFrame: root.lastFrame, lastDigest: root.lastDigest)
+            poisoned = true
+            try publishRoot(updated, id: UUID())
+            poisoned = false
+            try? FileManager.default.removeItem(at: rootURL(oldRootID))
+            try? FileManager.default.removeItem(at: layoutURL(root.layout))
+            return
+        }
         guard let segment = oldLayout.garbage.first else { return }
         let url = segmentURL(segment.id)
         try validateManagedDirectory(url.deletingLastPathComponent())
@@ -1084,7 +1133,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
         let newID = UUID()
         let next = Layout(generation: root.layoutGeneration + 1, sealed: oldLayout.sealed,
-                          packs: oldLayout.packs, garbage: Array(oldLayout.garbage.dropFirst()))
+                          packs: oldLayout.packs, garbage: Array(oldLayout.garbage.dropFirst()),
+                          garbagePacks: oldLayout.garbagePacks)
         let nextBytes = try JSONEncoder().encode(next)
         try writeNew(nextBytes, at: layoutURL(newID))
         let updated = Root(storeID: root.storeID, formatDigest: root.formatDigest,
@@ -1099,6 +1149,83 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         poisoned = false
         try? FileManager.default.removeItem(at: rootURL(oldRootID))
         try? FileManager.default.removeItem(at: layoutURL(root.layout))
+    }
+
+    /// Inspect at most one bounded pack per maintenance pass. Formal message
+    /// updates can make an earlier published pack obsolete after it was live.
+    private func cleanupObsoletePack() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        let (root, oldRootID) = try currentRoot()
+        let currentLayout = try layout(root)
+        guard !currentLayout.packs.isEmpty else { packCursor = 0; return }
+        let index = packCursor % currentLayout.packs.count
+        let packID = currentLayout.packs[index]
+        let url = stateURL(packID)
+        let file = try openRegularFile(url)
+        defer { try? file.close() }
+        let size = try file.seekToEnd()
+        guard size <= UInt64(policy.maxWorkBytes) else { throw AgentJournalError.invalidFrame }
+        var offset: UInt64 = 0
+        var oldPositions: [(UInt64, Location)] = []
+        var oldBlobs: [GarbageBlob] = []
+        while offset < size {
+            try file.seek(toOffset: offset)
+            guard let header = try file.read(upToCount: 4), header.count == 4 else {
+                throw AgentJournalError.invalidFrame
+            }
+            counters.add(read: header.count)
+            let payloadSize = UInt64(header.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) })
+            guard payloadSize > 0, payloadSize < 32 * 1024 * 1024,
+                  payloadSize + 4 <= size - offset else { throw AgentJournalError.invalidFrame }
+            let location = Location(kind: "state", file: packID, offset: offset,
+                                    length: UInt32(payloadSize + 4), generation: root.layoutGeneration)
+            let (batch, _, blob) = try readFrame(location)
+            if try isBatchNeeded(batch, at: location, root: root) {
+                packCursor = (index + 1) % currentLayout.packs.count
+                return
+            }
+            let current = try self.location(batch.sequence, root: root)
+            guard current.kind == "state", current.file == packID, current.offset == offset else {
+                throw AgentJournalError.invalidRecord
+            }
+            oldPositions.append((batch.sequence, current))
+            if let blob { oldBlobs.append(.init(sequence: batch.sequence, id: blob)) }
+            offset += payloadSize + 4
+        }
+        guard offset == size else { throw AgentJournalError.invalidFrame }
+        let generation = root.layoutGeneration + 1
+        for (sequence, old) in oldPositions {
+            let discarded = Location(kind: "discarded", file: packID, offset: old.offset,
+                                     length: old.length, generation: generation)
+            try updateIndex("positions", key: String(sequence), value: discarded,
+                            version: root.sequence, root: root)
+        }
+        let layoutID = UUID()
+        var packs = currentLayout.packs
+        packs.remove(at: index)
+        let next = Layout(generation: generation, sealed: currentLayout.sealed,
+                          packs: packs, garbage: currentLayout.garbage,
+                          garbagePacks: currentLayout.garbagePacks + [.init(id: packID, blobs: oldBlobs)])
+        let bytes = try JSONEncoder().encode(next)
+        try writeNew(bytes, at: layoutURL(layoutID))
+        let updated = Root(storeID: root.storeID, formatDigest: root.formatDigest,
+                           sequence: root.sequence, nextRecordSequence: root.nextRecordSequence,
+                           active: root.active, activeEnd: root.activeEnd,
+                           activeBatches: root.activeBatches, layout: layoutID,
+                           layoutDigest: Self.digest(bytes), layoutGeneration: next.generation,
+                           lastFrame: root.lastFrame, lastDigest: root.lastDigest)
+        poisoned = true
+        try publishRoot(updated, id: UUID())
+        poisoned = false
+        packCursor = packs.isEmpty ? 0 : index % packs.count
+        try? FileManager.default.removeItem(at: rootURL(oldRootID))
+        try? FileManager.default.removeItem(at: layoutURL(root.layout))
+        try fault?(.beforePackDelete)
+        try FileManager.default.removeItem(at: url)
+        for blob in oldBlobs {
+            try removeDiscardedBlob(blob.id, sequence: blob.sequence, root: updated)
+        }
     }
 
     private func removeDiscardedBlob(_ blob: UUID, sequence: UInt64, root: Root) throws {
@@ -1166,7 +1293,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             ("roots", "json", [rootID]),
             ("layouts", "json", [root.layout]),
             ("segments", "seg", Set([root.active] + currentLayout.sealed.map(\.id) + currentLayout.garbage.map(\.id))),
-            ("state", "pack", Set(currentLayout.packs)),
+            ("state", "pack", Set(currentLayout.packs + currentLayout.garbagePacks.map(\.id))),
             ("tmp", "tmp", []),
         ]
         for (kind, suffix, live) in sets {
