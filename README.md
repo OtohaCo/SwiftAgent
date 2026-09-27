@@ -234,10 +234,15 @@ in AgentCore. The multimedia guide does not add a service implementation.
 | Usage accounting | [Response, Run, and Session-window usage](docs/guides/swift-agent-usage.md) |
 | Tools and effects | [Typed tools](docs/guides/swift-agent-tools.md), [Evidence](docs/guides/swift-agent-evidence.md), [Receipts](docs/guides/swift-agent-receipts.md), [scheduling](docs/guides/swift-agent-scheduler.md) |
 | Persistence and lifetime | [Journal](docs/guides/swift-agent-journal.md), [mutation recovery](docs/guides/swift-agent-mutation-recovery.md), [context policy](docs/guides/swift-agent-context.md), [concurrency](docs/guides/swift-agent-concurrency.md) |
+
 | Dynamic model selection | [Catalog, Run binding, history compatibility and Host routing](docs/guides/swift-agent-dynamic-model-selection.md) |
 | Errors and compatibility | [Typed errors](docs/guides/swift-agent-errors.md), [versioning](docs/guides/swift-agent-versioning.md) |
 | Another app using the public API | [Workspace File Agent](docs/guides/swift-agent-workspace-host.md) |
 | Verification records | [Testing commands](docs/testing.md), [named regressions](docs/testing-regressions.md), [release records](docs/releases), [conformance matrix](docs/guides/swift-agent-conformance-matrix.md) |
+
+The [Context Pipeline fixture](Examples/ExternalClient/Sources/ContextPipelineFixture)
+shows source-bound Host materials, a verified summary, a read-only tool excerpt
+and two isolated Sessions without a network request.
 
 Model Codable data is not a vendor wire format or a frozen journal format.
 Usage is cumulative; unreported is not zero, and cache/reasoning subsets must not
