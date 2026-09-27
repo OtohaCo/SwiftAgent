@@ -3,8 +3,9 @@ import AgentModels
 import AgentTools
 import Foundation
 
-// These DTOs define schema 1 on disk. The public model and tool types are
-// converted explicitly; their synthesized Codable layouts are not the format.
+// These nested DTOs originated with schema 1 and remain explicitly converted
+// inside schema-2 batches. The public model/tool Codable layouts are not the
+// disk contract; format.json and BatchV2 enforce the new queue-aware boundary.
 struct DiskMessageV1: Codable {
     let id: UUID
     let role: String

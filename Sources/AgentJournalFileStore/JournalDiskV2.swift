@@ -13,7 +13,6 @@ struct DiskFollowUpV2: Codable {
     let status: String
     let runID: UUID?
     let formalMessageID: UUID?
-    let nextQueued: UInt64?
 
     init(_ value: JournalStoredFollowUp) {
         sessionID = value.sessionID
@@ -28,33 +27,41 @@ struct DiskFollowUpV2: Codable {
         case .admitted(let run, let message):
             status = "admitted"; runID = run; formalMessageID = message
         }
-        nextQueued = value.nextQueued
     }
 
     func value() throws -> JournalStoredFollowUp {
         let input = AgentFollowUpInput(inputID: inputID, text: text,
                                       operationID: operationID, configurationRef: configurationRef)
         try input.validate()
-        guard nextQueued.map({ $0 > ordinal }) ?? true else { throw AgentJournalError.invalidRecord }
         let state: AgentFollowUpState
         switch status {
         case "queued":
             guard runID == nil, formalMessageID == nil else { throw AgentJournalError.invalidRecord }
             state = .queued
         case "withdrawn":
-            guard runID == nil, formalMessageID == nil, nextQueued == nil else {
+            guard runID == nil, formalMessageID == nil else {
                 throw AgentJournalError.invalidRecord
             }
             state = .withdrawn
         case "admitted":
-            guard let runID, let formalMessageID, nextQueued == nil else {
+            guard let runID, let formalMessageID else {
                 throw AgentJournalError.invalidRecord
             }
             state = .admitted(runID: runID, formalMessageID: formalMessageID)
         default: throw AgentJournalError.unsupportedFormat
         }
         return JournalStoredFollowUp(sessionID: sessionID, ordinal: ordinal,
-                                     input: input, state: state, nextQueued: nextQueued)
+                                     input: input, state: state)
+    }
+}
+
+struct DiskFollowUpLinkV2: Codable {
+    let ordinal: UInt64
+    let next: UInt64?
+    init(_ value: JournalFollowUpLink) { ordinal = value.ordinal; next = value.next }
+    func value() throws -> JournalFollowUpLink {
+        guard next.map({ $0 > ordinal }) ?? true else { throw AgentJournalError.invalidRecord }
+        return .init(ordinal: ordinal, next: next)
     }
 }
 

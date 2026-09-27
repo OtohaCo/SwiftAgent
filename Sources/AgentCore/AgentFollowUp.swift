@@ -126,11 +126,21 @@ package struct JournalFollowUpChange: Sendable {
     package let expectedRevision: UInt64
     package let head: JournalFollowUpHead
     package let records: [JournalStoredFollowUp]
+    package let links: [JournalFollowUpLink]
 
     package init(sessionID: UUID, expectedRevision: UInt64, head: JournalFollowUpHead,
-                 records: [JournalStoredFollowUp]) {
+                 records: [JournalStoredFollowUp], links: [JournalFollowUpLink] = []) {
         self.sessionID = sessionID; self.expectedRevision = expectedRevision
         self.head = head; self.records = records
+        self.links = links
+    }
+}
+
+package struct JournalFollowUpLink: Sendable {
+    package let ordinal: UInt64
+    package let next: UInt64?
+    package init(ordinal: UInt64, next: UInt64?) {
+        self.ordinal = ordinal; self.next = next
     }
 }
 

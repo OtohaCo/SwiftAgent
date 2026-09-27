@@ -249,6 +249,7 @@ private struct BatchV2: Codable {
     let mutation: DiskMutationV1?
     let queueHead: DiskFollowUpHeadV2?
     let queueChanges: [DiskFollowUpV2]
+    let queueLinks: [DiskFollowUpLinkV2]
     let recordCount: UInt32
 }
 
@@ -543,7 +544,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private static let managedDirectories = [
         "roots", "layouts", "segments", "sessions", "operations", "calls",
         "messages", "positions", "state", "blobs", "blob-index", "tmp",
-        "queue-heads", "queue-ids", "queue-order",
+        "queue-heads", "queue-ids", "queue-order", "queue-links",
     ]
 
     private func validateManagedDirectories() throws {
@@ -832,6 +833,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             let idHead: UInt64? = try pointer("queue-ids", key: Self.followUpKey(batch.sessionID, record.inputID), root: root)
             let ordinalHead: UInt64? = try pointer("queue-order", key: Self.followUpOrdinalKey(batch.sessionID, record.ordinal), root: root)
             if idHead == batch.sequence || ordinalHead == batch.sequence { return true }
+        }
+        for link in batch.queueLinks {
+            let head: UInt64? = try pointer("queue-links", key: Self.followUpOrdinalKey(batch.sessionID, link.ordinal), root: root)
+            if head == batch.sequence { return true }
         }
         return try hasLiveMessage(batch, root: root) || sessionHead == batch.sequence ||
             callHead == batch.sequence ||
@@ -1355,7 +1360,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func cleanupUnpublishedIndexesLocked(root: Root) throws {
         let shard = String(format: "%02x", garbageIndexShard)
         let kinds = ["sessions", "operations", "calls", "messages", "positions", "blob-index",
-                     "queue-heads", "queue-ids", "queue-order"]
+                     "queue-heads", "queue-ids", "queue-order", "queue-links"]
         for kind in kinds {
             if finishedIndexKinds.contains(kind) { continue }
             let directory = directoryURL.appendingPathComponent("\(kind)/\(shard)")
@@ -1533,12 +1538,26 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             guard let sequence: UInt64 = try store.pointer("queue-ids", key: key, root: root) else { return nil }
             let found = try batch(sequence)
             guard found.sessionID == sessionID,
-                  let value = try found.queueChanges.first(where: {
+                  var value = try found.queueChanges.first(where: {
                       $0.inputID.utf8.elementsEqual(inputID.utf8)
                   })?.value(), value.sessionID == sessionID else {
                 throw AgentJournalError.invalidRecord
             }
+            value.nextQueued = try nextQueued(sessionID: sessionID, ordinal: value.ordinal)
             return value
+        }
+
+        private func nextQueued(sessionID: UUID, ordinal: UInt64) throws -> UInt64? {
+            let key = SegmentedJournalStore.followUpOrdinalKey(sessionID, ordinal)
+            guard let sequence: UInt64 = try store.pointer("queue-links", key: key, root: root) else {
+                throw AgentJournalError.invalidRecord
+            }
+            let found = try batch(sequence)
+            guard found.sessionID == sessionID,
+                  let link = try found.queueLinks.first(where: { $0.ordinal == ordinal })?.value() else {
+                throw AgentJournalError.invalidRecord
+            }
+            return link.next
         }
 
         private func followUp(sessionID: UUID, ordinal: UInt64) throws -> JournalStoredFollowUp? {
@@ -1546,8 +1565,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             guard let sequence: UInt64 = try store.pointer("queue-order", key: key, root: root) else { return nil }
             let found = try batch(sequence)
             guard found.sessionID == sessionID,
-                  let value = try found.queueChanges.first(where: { $0.ordinal == ordinal })?.value(),
+                  var value = try found.queueChanges.first(where: { $0.ordinal == ordinal })?.value(),
                   value.sessionID == sessionID else { throw AgentJournalError.invalidRecord }
+            value.nextQueued = try nextQueued(sessionID: sessionID, ordinal: ordinal)
             return value
         }
 
@@ -1591,6 +1611,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             finalHeader.historyHead = hasCheckpoint ? next : oldHistoryHead
             var queueHead: JournalFollowUpHead?
             var queueChanges: [JournalStoredFollowUp] = []
+            var queueLinks: [JournalFollowUpLink] = []
             if let admission = change.followUpAdmission {
                 let current = try followUpHead(sessionID: change.sessionID)
                 guard current.revision == admission.expectedQueueRevision,
@@ -1618,6 +1639,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 admitted.nextQueued = nil
                 queueHead = updated
                 queueChanges = [admitted]
+                queueLinks = [.init(ordinal: prior.ordinal, next: nil)]
             }
             let batch = BatchV2(schema: 2, commitID: UUID(), sequence: next,
                                 sessionID: change.sessionID, header: DiskHeaderV1(finalHeader),
@@ -1626,26 +1648,34 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                 mutation: try change.mutation.map(DiskMutationV1.init),
                                 queueHead: queueHead.map(DiskFollowUpHeadV2.init),
                                 queueChanges: queueChanges.map(DiskFollowUpV2.init),
+                                queueLinks: queueLinks.map(DiskFollowUpLinkV2.init),
                                 recordCount: UInt32(change.records.count))
             try publishBatch(batch, updateSession: true)
         }
 
         func publishFollowUp(_ change: JournalFollowUpChange) throws {
-            guard writable, !didPublish, (0...2).contains(change.records.count) else {
+            guard writable, !didPublish, (0...2).contains(change.records.count),
+                  change.links.count <= 2 else {
                 throw AgentJournalError.invalidRecord
             }
             let current = try followUpHead(sessionID: change.sessionID)
             guard current.revision == change.expectedRevision,
                   change.head.revision == current.revision + 1,
                   change.records.allSatisfy({ $0.sessionID == change.sessionID && $0.ordinal < change.head.nextOrdinal }),
-                  Set(change.records.map(\.ordinal)).count == change.records.count else {
+                  Set(change.records.map(\.ordinal)).count == change.records.count,
+                  Set(change.links.map(\.ordinal)).count == change.links.count,
+                  change.links.allSatisfy({ link in
+                      link.ordinal < change.head.nextOrdinal &&
+                          (link.next.map { $0 > link.ordinal && $0 < change.head.nextOrdinal } ?? true)
+                  }) else {
                 throw AgentJournalError.concurrentWriter
             }
             let batch = BatchV2(schema: 2, commitID: UUID(), sequence: root.sequence + 1,
                                 sessionID: change.sessionID, header: nil, messageStart: 0,
                                 messages: [], mutation: nil,
                                 queueHead: DiskFollowUpHeadV2(change.head),
-                                queueChanges: change.records.map(DiskFollowUpV2.init), recordCount: 0)
+                                queueChanges: change.records.map(DiskFollowUpV2.init),
+                                queueLinks: change.links.map(DiskFollowUpLinkV2.init), recordCount: 0)
             try publishBatch(batch, updateSession: false)
         }
 
@@ -1688,6 +1718,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 try store.updateIndex("queue-ids", key: SegmentedJournalStore.followUpKey(batch.sessionID, record.inputID),
                                       value: next, version: next, root: root)
                 try store.updateIndex("queue-order", key: SegmentedJournalStore.followUpOrdinalKey(batch.sessionID, record.ordinal),
+                                      value: next, version: next, root: root)
+            }
+            for link in batch.queueLinks {
+                try store.updateIndex("queue-links", key: SegmentedJournalStore.followUpOrdinalKey(batch.sessionID, link.ordinal),
                                       value: next, version: next, root: root)
             }
             if let blob {

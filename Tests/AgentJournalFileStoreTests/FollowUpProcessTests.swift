@@ -55,6 +55,9 @@ struct FollowUpProcessTests {
         let dispatch = try await restored.startFollowUpDispatch(policy: .init(), resolver: denied)
         await dispatch.waitUntilPaused()
         #expect(await denied.calls == 0)
+        await #expect(throws: AgentFollowUpError.needsInspection) {
+            try await dispatch.resumeAfterInspection(inputID: "one")
+        }
         await dispatch.stop()
         try await dispatch.waitForDrain()
         #expect(try String(contentsOf: file, encoding: .utf8) == "effect\n")

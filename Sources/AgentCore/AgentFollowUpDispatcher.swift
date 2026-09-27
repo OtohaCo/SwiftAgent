@@ -79,6 +79,7 @@ public actor AgentFollowUpDispatcher {
     private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
     private var drained = false
     private var drainWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
+    private var drainCountObservers: [(Int, CheckedContinuation<Void, Never>)] = []
 
     init(session: AgentSession, journal: AgentJournal, sessionID: UUID, ownerID: UUID,
                  policy: AgentFollowUpDispatchPolicy, resolver: any AgentFollowUpResolver,
@@ -158,7 +159,7 @@ public actor AgentFollowUpDispatcher {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
                 else if drained { continuation.resume() }
-                else { drainWaiters[id] = continuation }
+                else { drainWaiters[id] = continuation; notifyDrainCount() }
             }
         }, onCancel: {
             Task { await self.cancelDrainWaiter(id) }
@@ -168,6 +169,22 @@ public actor AgentFollowUpDispatcher {
 
     private func cancelDrainWaiter(_ id: UUID) {
         drainWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+        notifyDrainCount()
+    }
+
+    package func waitUntilDrainWaiterCount(_ count: Int) async {
+        if drainWaiters.count == count { return }
+        await withCheckedContinuation { drainCountObservers.append((count, $0)) }
+    }
+
+    private func notifyDrainCount() {
+        let count = drainWaiters.count
+        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
+        for observer in drainCountObservers {
+            if observer.0 == count { observer.1.resume() }
+            else { remaining.append(observer) }
+        }
+        drainCountObservers = remaining
     }
 
     package func waitUntilPaused() async {
@@ -245,6 +262,7 @@ public actor AgentFollowUpDispatcher {
         worker = nil
         let observers = drainWaiters
         drainWaiters.removeAll()
+        notifyDrainCount()
         observers.values.forEach { $0.resume() }
     }
 

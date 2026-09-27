@@ -852,13 +852,12 @@ extension AgentJournal {
             guard head.revision < .max, head.nextOrdinal < .max else { throw AgentJournalError.invalidRecord }
             let oldRevision = head.revision
             let ordinal = head.nextOrdinal
-            var changes: [JournalStoredFollowUp] = []
+            var links: [JournalFollowUpLink] = []
             if let last = head.lastQueued {
-                guard var tail = try view.followUps(sessionID: sessionID, after: last, limit: 1).first,
+                guard let tail = try view.followUps(sessionID: sessionID, after: last, limit: 1).first,
                       tail.ordinal == last, tail.state == .queued,
                       tail.nextQueued == nil else { throw AgentJournalError.invalidRecord }
-                tail.nextQueued = ordinal
-                changes.append(tail)
+                links.append(.init(ordinal: last, next: ordinal))
             } else { head.firstQueued = ordinal }
             head.lastQueued = ordinal
             head.nextOrdinal += 1
@@ -867,9 +866,9 @@ extension AgentJournal {
             head.queuedBytes += input.text.utf8.count
             let accepted = JournalStoredFollowUp(sessionID: sessionID, ordinal: ordinal,
                                                  input: input, state: .queued)
-            changes.append(accepted)
+            links.append(.init(ordinal: ordinal, next: nil))
             try view.publishFollowUp(.init(sessionID: sessionID, expectedRevision: oldRevision,
-                                            head: head, records: changes))
+                                            head: head, records: [accepted], links: links))
             return accepted.publicRecord(storeID: store.storeID)
         }
         scheduleMaintenanceIfNeeded()
@@ -983,7 +982,7 @@ extension AgentJournal {
             let oldRevision = head.revision
             guard head.revision < .max, head.queuedCount > 0,
                   head.queuedBytes >= entry.input.text.utf8.count else { throw AgentJournalError.invalidRecord }
-            var changes: [JournalStoredFollowUp] = []
+            var links: [JournalFollowUpLink] = []
             if head.firstQueued == entry.ordinal {
                 head.firstQueued = entry.nextQueued
             } else {
@@ -998,20 +997,20 @@ extension AgentJournal {
                     if candidate.nextQueued == entry.ordinal { predecessor = candidate; break }
                     cursor = candidate.nextQueued
                 }
-                guard var previous = predecessor else { throw AgentJournalError.invalidRecord }
-                previous.nextQueued = entry.nextQueued
-                changes.append(previous)
+                guard let previous = predecessor else { throw AgentJournalError.invalidRecord }
+                links.append(.init(ordinal: previous.ordinal, next: entry.nextQueued))
+                if head.lastQueued == entry.ordinal { head.lastQueued = previous.ordinal }
             }
-            if head.lastQueued == entry.ordinal { head.lastQueued = changes.last?.ordinal }
+            if head.lastQueued == entry.ordinal, head.firstQueued == entry.ordinal { head.lastQueued = nil }
             head.queuedCount -= 1
             head.queuedBytes -= entry.input.text.utf8.count
             if head.queuedCount == 0 { head.firstQueued = nil; head.lastQueued = nil }
             head.revision += 1
             entry.state = .withdrawn
             entry.nextQueued = nil
-            changes.append(entry)
+            links.append(.init(ordinal: entry.ordinal, next: nil))
             try view.publishFollowUp(.init(sessionID: sessionID, expectedRevision: oldRevision,
-                                            head: head, records: changes))
+                                            head: head, records: [entry], links: links))
             return .withdrawn
         }
         scheduleMaintenanceIfNeeded()

@@ -112,6 +112,29 @@ struct AgentFollowUpQueueTests {
         try await journal.close()
     }
 
+    @Test func stopWhileQueuedStartupWaitsBeforeCommitRetainsItsLeaseThenKeepsInputQueued() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-startup-stop-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "startup-stop")
+        let provider = QueueFixtureProvider(), gate = QueueResolverPhaseGate()
+        let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"), provider: provider)
+        let session = try agent.makeSession(journal: journal,
+            startupCommitWillBegin: { _ in await gate.wait() })
+        _ = try await session.enqueueFollowUp(.init(inputID: "stopped", text: "not admitted",
+            operationID: "op-stopped", configurationRef: "v1"))
+        let dispatcher = try await session.startFollowUpDispatch(policy: .init(runTimeout: .seconds(10)),
+            resolver: QueueFixtureResolver(session: session, provider: provider))
+        await gate.waitUntilEntered()
+        await dispatcher.stop()
+        await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
+        await gate.release()
+        try await dispatcher.waitForDrain()
+        #expect(try await session.followUp(inputID: "stopped")?.state == .queued)
+        #expect(try await journal.readMessages(sessionID: session.id).isEmpty)
+        #expect(await provider.requests().isEmpty)
+        try await journal.close()
+    }
+
     @Test func stopWaitsForNoncooperativeResolverWithoutRestoringItsLateResult() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-resolver-drain-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -134,6 +157,34 @@ struct AgentFollowUpQueueTests {
         try await dispatcher.waitForDrain()
         #expect(try await session.followUp(inputID: "late")?.state == .queued)
         #expect(await provider.requests().isEmpty)
+        try await journal.close()
+    }
+
+    @Test func cancellingOneDrainWaiterDoesNotReleaseResolverOrOtherWaiters() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-waiters-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "waiters")
+        let provider = QueueFixtureProvider(), gate = QueueResolverGate(cooperative: false)
+        let session = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                                provider: provider).makeSession(journal: journal)
+        _ = try await session.enqueueFollowUp(.init(inputID: "one", text: "later",
+            operationID: "op-one", configurationRef: "v1"))
+        let dispatcher = try await session.startFollowUpDispatch(policy: .init(runTimeout: .seconds(10)),
+            resolver: QueueFixtureResolver(session: session, provider: provider, gate: gate))
+        await gate.waitUntilEntered()
+        await dispatcher.stop()
+        #expect(await gate.waitUntilCancelled())
+        let abandoned = Task { try await dispatcher.waitForDrain() }
+        let retained = Task { try await dispatcher.waitForDrain() }
+        await dispatcher.waitUntilDrainWaiterCount(2)
+        abandoned.cancel()
+        await #expect(throws: CancellationError.self) { try await abandoned.value }
+        await dispatcher.waitUntilDrainWaiterCount(1)
+        await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
+        await gate.release()
+        try await retained.value
+        #expect(await dispatcher.status().physicallyDrained)
+        #expect(try await session.followUp(inputID: "one")?.state == .queued)
         try await journal.close()
     }
 
@@ -245,6 +296,29 @@ struct AgentFollowUpQueueTests {
         try await reopened.close()
     }
 
+    @Test(arguments: [StopReason.refusal, .maxOutputTokens])
+    func refusedOrIncompleteRunPausesBeforeTheNextQueuedInput(_ stop: StopReason) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-halt-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "halt")
+        let provider = QueueFixtureProvider(firstStop: stop)
+        let session = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                                provider: provider).makeSession(journal: journal)
+        _ = try await session.enqueueFollowUp(.init(inputID: "first", text: "first",
+            operationID: "op-first", configurationRef: "v1"))
+        _ = try await session.enqueueFollowUp(.init(inputID: "second", text: "second",
+            operationID: "op-second", configurationRef: "v1"))
+        let dispatcher = try await session.startFollowUpDispatch(policy: .init(runTimeout: .seconds(10)),
+            resolver: QueueFixtureResolver(session: session, provider: provider))
+        await dispatcher.waitUntilPaused()
+        #expect(await dispatcher.status().interruptedInputID == "first")
+        #expect(await provider.requests().count == 1)
+        #expect(try await session.followUp(inputID: "second")?.state == .queued)
+        await dispatcher.stop()
+        try await dispatcher.waitForDrain()
+        try await journal.close()
+    }
+
     @Test func fullQueueStillAcceptsAnExistingIdentityAndNeverEvicts() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("follow-up-capacity-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -267,6 +341,24 @@ struct AgentFollowUpQueueTests {
         #expect(try await session.enqueueFollowUp(.init(inputID: "next", text: "x",
             operationID: "op-next", configurationRef: "v1")).ordinal == 128)
         #expect(try await session.followUp(inputID: "id-0")?.state == .withdrawn)
+        try await journal.close()
+    }
+
+    @Test func smallEnqueueDoesNotRewriteThePreviousLargeQueuedBody() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-large-tail-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "large-tail")
+        let session = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                                provider: QueueFixtureProvider()).makeSession(journal: journal)
+        let large = String(repeating: "x", count: 200 * 1024)
+        _ = try await session.enqueueFollowUp(.init(inputID: "large", text: large,
+            operationID: "op-large", configurationRef: "v1"))
+        let before = try #require(await journal.storageMetrics())
+        _ = try await session.enqueueFollowUp(.init(inputID: "small", text: "short",
+            operationID: "op-small", configurationRef: "v1"))
+        let after = try #require(await journal.storageMetrics())
+        #expect(after.bytesWritten - before.bytesWritten < 64 * 1024)
+        #expect(try await session.followUpText(inputID: "large") == large)
         try await journal.close()
     }
 
@@ -352,6 +444,33 @@ struct AgentFollowUpQueueTests {
         try await reopened.close()
     }
 
+    @Test(arguments: [JournalFileFaultStage.partialAppend, .beforeAppendSync, .afterAppendSync,
+                      .beforeManagedWrite, .beforeManagedSync, .afterIndexSync,
+                      .beforeCurrentReplace])
+    func unpublishedQueueFailureDoesNotBecomeAnAcceptedInput(_ stage: JournalFileFaultStage) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-unpublished-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = QueueFaultProbe()
+        var journal: AgentJournal? = try AgentIncrementalJournal.createForTesting(at: directory,
+            operationDomain: "unpublished", fault: { try fault.check($0) })
+        let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                              provider: QueueFixtureProvider())
+        let id = UUID()
+        var session: AgentSession? = try agent.makeSession(id: id, journal: journal)
+        fault.arm(stage)
+        await #expect(throws: AgentJournalError.commitUnknown) {
+            try await session?.enqueueFollowUp(.init(inputID: "id", text: "not published",
+                operationID: "op-id", configurationRef: "v1"))
+        }
+        session = nil; journal = nil
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let restored = try agent.makeSession(id: id, journal: reopened)
+        #expect(try await restored.followUp(inputID: "id") == nil)
+        #expect(try await restored.enqueueFollowUp(.init(inputID: "id", text: "not published",
+            operationID: "op-id", configurationRef: "v1")).ordinal == 0)
+        try await reopened.close()
+    }
+
     @Test func uncertainAtomicAdmissionDoesNotRequeueOrCallProviderAfterReopen() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-admit-unknown-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -417,6 +536,42 @@ struct AgentFollowUpQueueTests {
         try await journal.close()
         let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
         #expect(try await reopened.followUps(sessionID: id, after: nil, limit: 100).count == 16)
+        try await reopened.close()
+    }
+
+    @Test func maintenanceSnapshotCannotOverwriteNewReceiveOrWithdrawal() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-maintenance-race-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: 8192,
+                                                  maxUnreclaimedBytes: 65536, maxSegmentBatches: 2)
+        let gate = QueueMaintenanceBarrier()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory,
+            operationDomain: "maintenance-race", policy: policy, fault: { gate.check($0) })
+        let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                              provider: QueueFixtureProvider())
+        let id = UUID(), session = try agent.makeSession(id: id, journal: journal)
+        // Arm before rotation; automatic maintenance may otherwise finish
+        // its only sealed candidate before an explicit request can pause it.
+        gate.arm()
+        for ordinal in 0..<5 {
+            _ = try await session.enqueueFollowUp(.init(inputID: "old-\(ordinal)", text: "old-\(ordinal)",
+                operationID: "op-old-\(ordinal)", configurationRef: "v1"))
+        }
+        let maintenance = Task { try await journal.requestMaintenance() }
+        #expect(await gate.waitUntilEntered())
+        _ = try await session.enqueueFollowUp(.init(inputID: "new", text: "after snapshot",
+            operationID: "op-new", configurationRef: "v2"))
+        #expect(try await session.withdrawFollowUp(inputID: "old-0") == .withdrawn)
+        gate.release()
+        _ = try await maintenance.value
+        for _ in 0..<30 {
+            if try await journal.requestMaintenance()?.sealedSegments == 0 { break }
+        }
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
+        #expect(try await reopened.followUp(sessionID: id, inputID: "new")?.state == .queued)
+        #expect(try await reopened.followUp(sessionID: id, inputID: "old-0")?.state == .withdrawn)
+        #expect(try await reopened.followUps(sessionID: id, after: nil, limit: 20).count == 6)
         try await reopened.close()
     }
 
@@ -564,6 +719,7 @@ private actor QueueFixtureRequests {
 
 private struct QueueFixtureProvider: ModelProvider {
     let descriptor = ModelProviderDescriptor(id: "queue-fixture", capabilities: [.streaming, .multiTurn])
+    var firstStop: StopReason? = nil
     private let log = QueueFixtureRequests()
     func requests() async -> [ModelRequest] { await log.values }
     func waitForRequestCount(_ count: Int) async { await log.waitForCount(count) }
@@ -573,7 +729,8 @@ private struct QueueFixtureProvider: ModelProvider {
             let info = ResponseInfo(id: "fixed", model: request.model)
             try emit(.responseStarted(info))
             try emit(.textDelta("done"))
-            try emit(.responseCompleted(.init(info: info, content: [.text("done")], stopReason: .endTurn)))
+            let stop: StopReason = request.messages.last == .user([.text("first")]) ? firstStop ?? .endTurn : .endTurn
+            try emit(.responseCompleted(.init(info: info, content: [.text("done")], stopReason: stop)))
         }
     }
 }
@@ -719,6 +876,11 @@ private final class QueueFaultProbe: @unchecked Sendable {
         switch (armed, stage) {
         case (.beforeAppend?, .beforeAppend), (.afterCurrentReplace?, .afterCurrentReplace):
             shouldFail = true; armed = nil
+        case (.partialAppend?, .partialAppend), (.beforeAppendSync?, .beforeAppendSync),
+             (.afterAppendSync?, .afterAppendSync), (.beforeManagedWrite?, .beforeManagedWrite),
+             (.beforeManagedSync?, .beforeManagedSync), (.afterIndexSync?, .afterIndexSync),
+             (.beforeCurrentReplace?, .beforeCurrentReplace):
+            shouldFail = true; armed = nil
         default: shouldFail = false
         }
         lock.unlock()
@@ -748,7 +910,47 @@ private final class QueueCommitBarrier: @unchecked Sendable {
     }
 }
 
+private final class QueueMaintenanceBarrier: @unchecked Sendable {
+    private let condition = NSCondition()
+    private let entered = XCTestExpectation(description: "maintenance captured a candidate")
+    private var armed = false, released = false
+    func arm() { condition.lock(); armed = true; condition.unlock() }
+    func check(_ stage: JournalFileFaultStage) {
+        guard case .afterMaintenanceSnapshot = stage else { return }
+        condition.lock()
+        guard armed else { condition.unlock(); return }
+        armed = false
+        entered.fulfill()
+        while !released { condition.wait() }
+        condition.unlock()
+    }
+    func waitUntilEntered() async -> Bool {
+        await XCTWaiter.fulfillment(of: [entered], timeout: 3) == .completed
+    }
+    func release() { condition.lock(); released = true; condition.broadcast(); condition.unlock() }
+}
+
 private actor QueueMutationGate {
+    private var entered = false, released = false
+    private var observers: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        entered = true
+        let current = observers; observers.removeAll(); current.forEach { $0.resume() }
+        if released { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { observers.append($0) }
+    }
+    func release() {
+        released = true
+        let current = waiters; waiters.removeAll(); current.forEach { $0.resume() }
+    }
+}
+
+private actor QueueResolverPhaseGate {
     private var entered = false, released = false
     private var observers: [CheckedContinuation<Void, Never>] = []
     private var waiters: [CheckedContinuation<Void, Never>] = []
