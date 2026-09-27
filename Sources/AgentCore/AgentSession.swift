@@ -39,6 +39,7 @@ public actor AgentSession {
     private var pendingDrainTask: Task<Void, Never>?
     private var drainingRunID: UUID?
     private var drainHandles: [UUID: AgentRunDrain] = [:]
+    private var runsByRunID: [UUID: AgentRun] = [:]
     private var loopsByRunID: [UUID: AgentLoop] = [:]
     private var startingRun = false
     private var dispatchStarting = false
@@ -297,7 +298,9 @@ public actor AgentSession {
     /// Starts one explicit FIFO consumer. A paused consumer still owns this
     /// Session; stopping and physical drain release that ownership.
     public func startFollowUpDispatch(policy: AgentFollowUpDispatchPolicy,
-                                      resolver: any AgentFollowUpResolver) async throws -> AgentFollowUpDispatcher {
+                                      resolver: any AgentFollowUpResolver,
+                                      onRun: (@Sendable (AgentFollowUpRecord, AgentRun) async -> Void)? = nil
+    ) async throws -> AgentFollowUpDispatcher {
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
         guard !dispatchStarting, dispatcherID == nil else { throw AgentFollowUpError.alreadyDispatching }
         guard !startingRun else { throw AgentSessionError.runInProgress }
@@ -305,12 +308,12 @@ public actor AgentSession {
         dispatchStarting = true
         defer { dispatchStarting = false }
         let ownerID = UUID()
-        let priorDrain = (activeRunID ?? drainingRunID).flatMap { drainHandles[$0] }
+        let priorRun = (activeRunID ?? drainingRunID).flatMap { runsByRunID[$0] }
         let handle = AgentFollowUpDispatcher(session: self, journal: journal, sessionID: id,
                                              ownerID: ownerID, policy: policy, resolver: resolver,
-                                             initialDrain: priorDrain)
+                                             initialRun: priorRun, onRun: onRun)
         try await journal.acquireDispatcherLease(sessionID: id, owner: ownerID,
-                                                 allowExistingRun: priorDrain != nil,
+                                                 allowExistingRun: priorRun != nil,
                                                  notify: { await handle.signal() })
         dispatcherID = ownerID
         dispatcher = handle
@@ -533,7 +536,10 @@ public actor AgentSession {
             // atomic journal commit; continue creating the corresponding Run
             // rather than leaving a durable user event without an owner.
         }
-        let channel = AsyncStream<AgentEvent>.makeStream()
+        // A slow Host observer must not accumulate an unbounded queue of
+        // transient progress while the durable conversation continues.
+        let channel = AsyncStream<AgentEvent>.makeStream(bufferingPolicy:
+            followUpInputID == nil ? .unbounded : .bufferingNewest(256))
         let emitter = AgentEventEmitter(channel.continuation, requiresConsumer: false)
         if history != prepared { history = prepared }
         history.append(.user([.text(text)]))
@@ -567,7 +573,7 @@ public actor AgentSession {
                 )
             }
         }
-        return AgentRun(
+        let run = AgentRun(
             id: runID,
             sessionID: id,
             binding: binding.info,
@@ -576,6 +582,8 @@ public actor AgentSession {
             control: control,
             drain: drain
         )
+        runsByRunID[runID] = run
+        return run
     }
     private func perform(_ messages: [ModelMessage], loop: AgentLoop, initialRequest: AgentPreparedModelRequest,
                          runID: UUID, operationID: String?, budget: AgentBudget,
@@ -708,6 +716,7 @@ public actor AgentSession {
             await drain.complete()
         }
         drainHandles.removeValue(forKey: runID)
+        runsByRunID.removeValue(forKey: runID)
         loopsByRunID.removeValue(forKey: runID)
         drainingRunID = nil
         pendingDrainTask = nil

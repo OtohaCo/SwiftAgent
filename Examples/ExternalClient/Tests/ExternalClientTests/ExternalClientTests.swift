@@ -7,11 +7,93 @@ import AgentModels
 import AgentProviders
 import AgentTools
 import AgentUsage
+import ExecutionReportingSupport
 import Foundation
 import Testing
 
 /// Package-level consumer of the public Agent, Tool, Provider, and recovery API.
 struct ExternalClientTests {
+    @Test func queuedRunIsDeliveredToTheSinglePublicEventObserverAndExecutionReport() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-events-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("effect.txt")
+        try Data().write(to: file)
+        let journal = try AgentIncrementalJournal.create(at: directory.appendingPathComponent("store"),
+                                                         operationDomain: "queue-events")
+        let probe = SideEffectProbe()
+        let provider = MutationProvider(probe: probe)
+        let tool = try ListingUpdateTool(probe: probe, file: file)
+        let agent = try Agent(model: .init(provider: "external-client", name: "echo"),
+                              provider: provider, tools: [tool])
+        let session = try agent.makeSession(journal: journal)
+        let received = try await session.enqueueFollowUp(.init(inputID: "report-1", text: "Update",
+            operationID: "report-operation", configurationRef: "current-approval"))
+        let observed = PublicQueueReportCapture()
+        let dispatcher = try await session.startFollowUpDispatch(
+            policy: .init(maxModelTurns: 3, maxToolCalls: 2, runTimeout: .seconds(10)),
+            resolver: PublicQueueResolver(session: session, provider: provider, tool: tool),
+            onRun: { record, run in
+                var report = ExecutionReportReducer(sessionID: run.sessionID, runID: run.id)
+                for await event in run.events { report.consume(event) }
+                report.markStreamEnded()
+                report.recordPresentation(.malformed(reason: "fixture display rejected final text"))
+                do { report.recordWait(.success(try await run.wait())) }
+                catch { report.recordWait(.failure(ExecutionReportReducer.classify(error))) }
+                do { try await run.waitForDrain(); report.markDrainCompleted() }
+                catch { /* A missing drain remains visible in coverage. */ }
+                await observed.record(input: record, runID: run.id, report: report.report)
+            })
+        let entry = await observed.next()
+        #expect(entry.input.inputID == received.inputID)
+        guard case .admitted(let runID, _)? = try await session.followUp(inputID: received.inputID)?.state else {
+            Issue.record("the delivered Run has no durable admission"); return
+        }
+        #expect(entry.runID == runID)
+        #expect(entry.report.coverage.runStarted && entry.report.coverage.streamEnded)
+        #expect(entry.report.coverage.terminalObserved && entry.report.coverage.drainCompleted)
+        #expect(entry.report.modelText.contains("Done"))
+        #expect(entry.report.toolObservations.count == 1)
+        #expect(entry.report.receipts.count == 1)
+        #expect(entry.report.presentation == .malformed(reason: "fixture display rejected final text"))
+        #expect(probe.toolExecutions == 1)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "effect\n")
+        await dispatcher.stop()
+        try await dispatcher.waitForDrain()
+        try await journal.close()
+    }
+
+    @Test func disconnectedQueueObserverCannotEraseDurableMutationSettlement() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-observer-exit-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("effect.txt")
+        try Data().write(to: file)
+        let journal = try AgentIncrementalJournal.create(at: directory.appendingPathComponent("store"),
+                                                         operationDomain: "queue-observer-exit")
+        let probe = SideEffectProbe(), provider = MutationProvider(probe: probe)
+        let tool = try ListingUpdateTool(probe: probe, file: file)
+        let session = try Agent(model: .init(provider: "external-client", name: "echo"),
+                                provider: provider, tools: [tool]).makeSession(journal: journal)
+        _ = try await session.enqueueFollowUp(.init(inputID: "one", text: "Update",
+            operationID: "disconnected-observer", configurationRef: "approved"))
+        let observed = PublicQueueObserverExit()
+        let dispatcher = try await session.startFollowUpDispatch(
+            policy: .init(maxModelTurns: 3, maxToolCalls: 2, runTimeout: .seconds(10)),
+            resolver: PublicQueueResolver(session: session, provider: provider, tool: tool),
+            onRun: { _, run in
+                for await _ in run.events { break }
+                await observed.mark()
+            })
+        await observed.wait()
+        await dispatcher.stop()
+        try await dispatcher.waitForDrain()
+        #expect(probe.toolExecutions == 1)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "effect\n")
+        #expect(try await journal.pendingMutations().isEmpty)
+        try await journal.close()
+    }
+
     @Test func readOnlyAgentRunsWithoutAJournal() async throws {
         let session = try makeReadOnlyAgent().makeSession()
         let result = try await session.run("hello").wait()
@@ -277,6 +359,58 @@ struct ExternalClientTests {
 
         #expect(run.binding.profileID == "future-model-defaults")
         #expect(try await run.wait().outcome == .completed)
+    }
+}
+
+private actor PublicQueueReportCapture {
+    struct Entry: Sendable {
+        let input: AgentFollowUpRecord
+        let runID: UUID
+        let report: RunExecutionReport
+    }
+    private var value: Entry?
+    private var waiters: [CheckedContinuation<Entry, Never>] = []
+    func record(input: AgentFollowUpRecord, runID: UUID, report: RunExecutionReport) {
+        let entry = Entry(input: input, runID: runID, report: report)
+        value = entry
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume(returning: entry) }
+    }
+    func next() async -> Entry {
+        if let value { return value }
+        return await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
+private actor PublicQueueObserverExit {
+    private var finished = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func mark() {
+        finished = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+    func wait() async {
+        if finished { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
+private struct PublicQueueResolver: AgentFollowUpResolver {
+    let session: AgentSession
+    let provider: MutationProvider
+    let tool: ListingUpdateTool
+    func resolve(_ request: AgentFollowUpResolution) async throws -> AgentFollowUpConfiguration {
+        let scope = try await session.bindCapabilities(identity: "report", version: "1",
+            backendInstanceID: "temp-file", backendVersion: "1",
+            allowedResources: [.named(.init(namespace: "listing", id: "listing-1"))],
+            tools: [.init(id: "write", version: "1", tool: tool)])
+        return .init(model: try AgentModelBinding(profileID: "report", profileRevision: "1",
+            model: .init(provider: "external-client", name: "echo"), provider: provider,
+            deployment: .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture")),
+            capabilities: scope)
     }
 }
 

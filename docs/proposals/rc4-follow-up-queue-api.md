@@ -53,7 +53,8 @@ extension AgentSession {
     // Acquires the only `(storeID, sessionID)` consumer claim; the Host opts in.
     public func startFollowUpDispatch(
         policy: AgentFollowUpDispatchPolicy,
-        resolver: any AgentFollowUpResolver
+        resolver: any AgentFollowUpResolver,
+        onRun: (@Sendable (AgentFollowUpRecord, AgentRun) async -> Void)? = nil
     ) async throws -> AgentFollowUpDispatcher
 }
 
@@ -130,8 +131,11 @@ let resumed = try await restored.startFollowUpDispatch(policy: policy,
 
 The executable fixture arranges pause timing with a resolver barrier;
 this shortened sketch illustrates ownership. The
-dispatcher must use `AgentRun.wait()` and `waitForDrain()` without becoming a
-second consumer of `AgentRun.events`. Existing `AgentSession.run` and
+dispatcher uses `AgentRun.wait()` and `waitForDrain()` without becoming a
+second consumer of `AgentRun.events`. `onRun` hands the actual Run to the Host
+as its single observer; without it, the SDK drains and discards bounded
+progress. The callback's actual exit is included in dispatcher drain.
+Existing `AgentSession.run` and
 `AgentRun.steer` meanings remain unchanged. Direct `run` while a dispatcher
 owns the Session returns a typed `dispatchOwned` error; an internal queued
 startup uses the same Session admission/reservation path. A paused dispatcher

@@ -296,6 +296,161 @@ struct AgentFollowUpQueueTests {
         try await reopened.close()
     }
 
+    @Test(arguments: [false, true])
+    func stoppedInspectionCannotRestartDispatcherOrReleaseItsLeaseEarly(_ cancelCaller: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-inspection-stop-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let barrier = QueueCommitBarrier()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory,
+            operationDomain: "inspection-stop", fault: { barrier.check($0) })
+        let provider = QueueFixtureProvider()
+        let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"), provider: provider)
+        let id = UUID()
+        let session = try agent.makeSession(id: id, journal: journal)
+        _ = try await session.enqueueFollowUp(.init(inputID: "interrupted", text: "first",
+            operationID: "op-first", configurationRef: "v1"))
+        _ = try await session.enqueueFollowUp(.init(inputID: "later", text: "second",
+            operationID: "op-second", configurationRef: "v1"))
+        _ = try await journal.appendStartupCheckpoint([
+            .sessionCreated, .checkpoint(history: [.user([.text("first")])], steeringIDs: []),
+            .userMessage("first")
+        ], sessionID: id, runID: UUID(), deadline: .now.advanced(by: .seconds(5)),
+           durability: .durable, followUpInputID: "interrupted")
+        let dispatcher = try await session.startFollowUpDispatch(policy: .init(),
+            resolver: QueueFixtureResolver(session: session, provider: provider))
+        await dispatcher.waitUntilPaused()
+        barrier.arm()
+        let inspection = Task { try await dispatcher.resumeAfterInspection(inputID: "interrupted") }
+        #expect(await barrier.waitUntilEntered())
+        if cancelCaller { inspection.cancel() }
+        await dispatcher.stop()
+        await #expect(throws: AgentFollowUpError.staleDispatch) {
+            try await dispatcher.resumeAfterInspection(inputID: "interrupted")
+        }
+        #expect(!(await dispatcher.status().physicallyDrained))
+        barrier.release()
+        await #expect(throws: AgentFollowUpError.staleDispatch) { try await inspection.value }
+        try await dispatcher.waitForDrain()
+        let status = await dispatcher.status()
+        #expect(status.mode == .stopped && status.physicallyDrained)
+        #expect(await provider.requests().isEmpty)
+        #expect(try await session.followUp(inputID: "later")?.state == .queued)
+        try await journal.close()
+    }
+
+    @Test(arguments: [StopReason.refusal, .maxOutputTokens])
+    func existingDirectRunFailurePausesBeforeQueuedInput(_ stop: StopReason) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-initial-outcome-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "initial-outcome")
+        let gate = QueuePhysicalDrainGate()
+        let provider = QueueInitialOutcomeProvider(stop: stop, gate: gate)
+        let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"), provider: provider)
+        let session = try agent.makeSession(journal: journal)
+        let direct = try await session.run("first")
+        _ = try await session.enqueueFollowUp(.init(inputID: "later", text: "second",
+            operationID: "op-second", configurationRef: "v1"))
+        let dispatcher = try await session.startFollowUpDispatch(policy: .init(runTimeout: .seconds(10)),
+            resolver: QueueInitialOutcomeResolver(session: session, provider: provider))
+        _ = try? await direct.wait()
+        await gate.waitUntilEntered()
+        #expect(await provider.requests().count == 1)
+        await gate.release()
+        try await direct.waitForDrain()
+        let unexpected = await XCTWaiter.fulfillment(of: [provider.secondRequest], timeout: 2)
+        #expect(unexpected == .timedOut)
+        #expect(await dispatcher.status().mode == .paused)
+        #expect(await provider.requests().count == 1)
+        #expect(try await session.followUp(inputID: "later")?.state == .queued)
+        await dispatcher.stop()
+        try await dispatcher.waitForDrain()
+        try await journal.close()
+    }
+
+    @Test func manualPauseCannotInspectAnUnfinishedReadOnlyRun() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-inspection-active-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "inspection-active")
+        let provider = QueueDrainProvider(gate: QueuePhysicalDrainGate())
+        let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"), provider: provider)
+        let id = UUID(), session = try agent.makeSession(id: id, journal: journal)
+        _ = try await session.enqueueFollowUp(.init(inputID: "old", text: "old",
+            operationID: "op-old", configurationRef: "v1"))
+        _ = try await session.enqueueFollowUp(.init(inputID: "later", text: "later",
+            operationID: "op-later", configurationRef: "v1"))
+        _ = try await journal.appendStartupCheckpoint([
+            .sessionCreated, .checkpoint(history: [.user([.text("old")])], steeringIDs: []),
+            .userMessage("old")
+        ], sessionID: id, runID: UUID(), deadline: .now.advanced(by: .seconds(5)),
+           durability: .durable, followUpInputID: "old")
+        let direct = try await session.run("current")
+        let dispatcher = try await session.startFollowUpDispatch(policy: .init(),
+            resolver: QueueDrainResolver(session: session, provider: provider))
+        await dispatcher.pause()
+        await #expect(throws: AgentFollowUpError.staleDispatch) {
+            try await dispatcher.resumeAfterInspection(inputID: "old")
+        }
+        #expect(try await session.followUp(inputID: "later")?.state == .queued)
+        await dispatcher.stop()
+        await provider.gate.release()
+        _ = try? await direct.wait()
+        try await dispatcher.waitForDrain()
+        try await journal.close()
+    }
+
+    @Test func failedExistingDirectRunCannotStartQueuedInput() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-initial-error-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "initial-error")
+        let gate = QueuePhysicalDrainGate()
+        let provider = QueueInitialOutcomeProvider(stop: .endTurn, gate: gate, failFirst: true)
+        let session = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                                provider: provider).makeSession(journal: journal)
+        let direct = try await session.run("first")
+        _ = try await session.enqueueFollowUp(.init(inputID: "later", text: "second",
+            operationID: "op-second", configurationRef: "v1"))
+        let dispatcher = try await session.startFollowUpDispatch(policy: .init(),
+            resolver: QueueInitialOutcomeResolver(session: session, provider: provider))
+        _ = try? await direct.wait()
+        await gate.waitUntilEntered()
+        await gate.release()
+        try await direct.waitForDrain()
+        await dispatcher.waitUntilPaused()
+        #expect(await provider.requests().count == 1)
+        #expect(try await session.followUp(inputID: "later")?.state == .queued)
+        await dispatcher.stop()
+        try await dispatcher.waitForDrain()
+        try await journal.close()
+    }
+
+    @Test func cancelledExistingDirectRunCannotStartQueuedInput() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-initial-cancel-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "initial-cancel")
+        let work = QueueResolverGate(cooperative: true), drain = QueuePhysicalDrainGate()
+        let provider = QueueCancellableProvider(work: work, drain: drain)
+        let session = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                                provider: provider).makeSession(journal: journal)
+        let direct = try await session.run("first")
+        await work.waitUntilEntered()
+        _ = try await session.enqueueFollowUp(.init(inputID: "later", text: "second",
+            operationID: "op-second", configurationRef: "v1"))
+        let dispatcher = try await session.startFollowUpDispatch(policy: .init(),
+            resolver: QueueCancellableResolver(session: session, provider: provider))
+        await direct.cancel()
+        #expect(await work.waitUntilCancelled())
+        _ = try? await direct.wait()
+        await drain.waitUntilEntered()
+        await drain.release()
+        try await direct.waitForDrain()
+        await dispatcher.waitUntilPaused()
+        #expect(await provider.requests().count == 1)
+        #expect(try await session.followUp(inputID: "later")?.state == .queued)
+        await dispatcher.stop()
+        try await dispatcher.waitForDrain()
+        try await journal.close()
+    }
+
     @Test(arguments: [StopReason.refusal, .maxOutputTokens])
     func refusedOrIncompleteRunPausesBeforeTheNextQueuedInput(_ stop: StopReason) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-halt-\(UUID())")
@@ -863,6 +1018,74 @@ private struct QueueDrainResolver: AgentFollowUpResolver {
             model: .init(provider: "queue-fixture", name: "fixed"), provider: provider,
             deployment: .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture")),
             capabilities: scope, expectedConversationRevision: nil)
+    }
+}
+
+private struct QueueInitialOutcomeProvider: ModelProvider, ModelProviderRunDrain {
+    let descriptor = ModelProviderDescriptor(id: "queue-fixture", capabilities: [.streaming, .multiTurn])
+    let stop: StopReason
+    let gate: QueuePhysicalDrainGate
+    var failFirst = false
+    let secondRequest = XCTestExpectation(description: "unexpected second Provider request")
+    private let log = QueueFixtureRequests()
+    func requests() async -> [ModelRequest] { await log.values }
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            await log.append(request)
+            if await log.values.count == 2 { secondRequest.fulfill() }
+            let info = ResponseInfo(id: "fixed", model: request.model)
+            try emit(.responseStarted(info))
+            if failFirst && request.messages.last == .user([.text("first")]) {
+                throw AgentJournalError.invalidRecord
+            }
+            try emit(.responseCompleted(.init(info: info, content: [.text("done")],
+                                             stopReason: request.messages.last == .user([.text("first")]) ? stop : .endTurn)))
+        }
+    }
+    func waitForRunToDrain(sessionID: UUID, runID: UUID) async { await gate.wait() }
+}
+
+private struct QueueInitialOutcomeResolver: AgentFollowUpResolver {
+    let session: AgentSession
+    let provider: QueueInitialOutcomeProvider
+    func resolve(_ request: AgentFollowUpResolution) async throws -> AgentFollowUpConfiguration {
+        let scope = try await session.bindCapabilities(identity: "initial-outcome", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        return .init(model: try AgentModelBinding(profileID: "queue-fixture", profileRevision: "1",
+            model: .init(provider: "queue-fixture", name: "fixed"), provider: provider,
+            deployment: .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture")),
+            capabilities: scope)
+    }
+}
+
+private struct QueueCancellableProvider: ModelProvider, ModelProviderRunDrain {
+    let descriptor = ModelProviderDescriptor(id: "queue-fixture", capabilities: [.streaming, .multiTurn])
+    let work: QueueResolverGate
+    let drain: QueuePhysicalDrainGate
+    private let log = QueueFixtureRequests()
+    func requests() async -> [ModelRequest] { await log.values }
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            await log.append(request)
+            if request.messages.last == .user([.text("first")]) { try await work.wait() }
+            let info = ResponseInfo(id: "fixed", model: request.model)
+            try emit(.responseStarted(info))
+            try emit(.responseCompleted(.init(info: info, content: [.text("done")], stopReason: .endTurn)))
+        }
+    }
+    func waitForRunToDrain(sessionID: UUID, runID: UUID) async { await drain.wait() }
+}
+
+private struct QueueCancellableResolver: AgentFollowUpResolver {
+    let session: AgentSession
+    let provider: QueueCancellableProvider
+    func resolve(_ request: AgentFollowUpResolution) async throws -> AgentFollowUpConfiguration {
+        let scope = try await session.bindCapabilities(identity: "cancelled-run", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        return .init(model: try AgentModelBinding(profileID: "queue-fixture", profileRevision: "1",
+            model: .init(provider: "queue-fixture", name: "fixed"), provider: provider,
+            deployment: .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture")),
+            capabilities: scope)
     }
 }
 

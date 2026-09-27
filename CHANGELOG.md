@@ -20,6 +20,11 @@ Development after `1.0.0-rc.3` is not part of the RC3 release scope.
   and reconciliation remain in their existing execution paths. Terminal
   input identities remain indexed without TTL. The queue does not retry an
   interrupted admitted Run on process reopen.
+- Review fixes keep inspection publication owned through stop/drain, require an
+  actual interrupted admission before inspection release, and pause dispatch
+  after an abnormal pre-existing direct Run. `startFollowUpDispatch(onRun:)`
+  delivers admitted Runs to the Host's single event observer; headless dispatch
+  discards bounded progress without affecting trusted settlement.
 
 ### RC4 scoped capabilities
 

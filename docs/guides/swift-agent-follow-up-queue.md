@@ -57,12 +57,23 @@ swift run --package-path Examples/ExternalClient FollowUpQueueFixture
 
 Only one dispatcher owns a `(storeID, Session ID)` pair. Direct `run` while
 it owns the Session returns `dispatchOwned`; another Session can keep using
-the same Journal and scheduler. A dispatcher does not consume
-`AgentRun.events`: the Host still owns its **single** observer and can fan out
-UI/Usage/ExecutionReport projections. The dispatcher waits on existing
-`run.wait()` and `waitForDrain()` boundaries. After `.completed` *and physical
+the same Journal and scheduler. Pass `onRun` to `startFollowUpDispatch` to
+receive each admitted `AgentRun` with its input record. That callback owns the
+**single** `run.events` consumer and may feed the existing
+`ExecutionReportReducer`; the dispatcher observes `wait()` and
+`waitForDrain()` without competing for events. The callback is asynchronous
+and is owned through physical drain. Without `onRun`, the dispatcher consumes
+and discards progress in headless mode. Queued Run streams retain at most 256
+unconsumed progress events; a slow observer can lose intermediate events, so
+use the Journal for trusted Receipt/output and do not treat a partial event
+report as the durable ledger. After `.completed` *and physical
 drain*, it records an ordering release and may dispatch the next queued item.
 Runtime completion is not Host business fulfillment.
+
+The [ExternalClient public API test](../../Examples/ExternalClient/Tests/ExternalClientTests/ExternalClientTests.swift)
+shows the complete `onRun` callback: the `inputID` links the delivered Run
+to its durable queue record, and the single event consumer feeds the existing
+`ExecutionReportReducer` without controlling mutation settlement.
 
 `pause()` cancels a pending resolver/startup but does not cancel an admitted
 Run or release the consumer claim. `resume()` is explicit. `stop()` prevents
@@ -82,6 +93,13 @@ items, provided no unresolved Session mutation remains. It does not mark the
 old Run successful, abort an external effect, or retry that item. Use the
 existing Journal reconciliation and stable operation ID rules for an unknown
 mutation. Receipt/output/conversation settlement remains in the Journal.
+Manual pause during an unfinished Run is not an interrupted admission; the
+inspection release rejects it. An inspection accepted before `stop()` may
+publish its ordering release, but its late return cannot restart the stopped
+dispatcher. `waitForDrain()` continues to own that accepted storage operation.
+An existing direct Run captured when dispatch starts must complete normally
+and physically drain before dispatch advances; refusal, incomplete, failure
+and cancellation pause the queue for explicit Host action.
 
 ## Disk format and failure handling
 

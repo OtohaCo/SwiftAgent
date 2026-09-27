@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v13), .iOS(.v16)],
     dependencies: [
         .package(name: "SwiftAgent", path: "../.."),
+        .package(name: "SwiftAgentExecutionReportingSupport", path: "../ExecutionReportingSupport"),
     ],
     targets: [
         .executableTarget(name: "JournalReplayFixture", dependencies: [
@@ -44,6 +45,7 @@ let package = Package(
                 .product(name: "AgentProviders", package: "SwiftAgent"),
                 .product(name: "AgentTools", package: "SwiftAgent"),
                 .product(name: "AgentUsage", package: "SwiftAgent"),
+                .product(name: "ExecutionReportingSupport", package: "SwiftAgentExecutionReportingSupport"),
                 "JournalReplayFixture",
             ]
         ),

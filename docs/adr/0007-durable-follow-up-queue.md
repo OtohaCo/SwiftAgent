@@ -148,10 +148,11 @@ binding. Model text or a queue configuration label creates no authorization.
 stops admission and cancels the owned resolver; it does not by itself erase
 queued records or cancel a current Run. `cancelCurrent` delegates to
 `AgentRun.cancel()`. `waitForDrain` waits for accepted queue I/O, resolver,
-startup, Run physical drain and the dispatch claim/lease release; it does **not**
-wait for every queued item to be consumed. One cancelled waiter observes only
-its own cancellation. No new consumer of `AgentRun.events` is installed;
-one existing Host consumer may fan out display/usage/ExecutionReport facts.
+startup, inspection I/O, Run physical drain, event observation and the dispatch
+claim/lease release; it does **not** wait for every queued item to be consumed.
+One cancelled waiter observes only its own cancellation. An `onRun` callback
+receives the actual Run for the Host's single event consumer; headless dispatch
+owns a bounded discard consumer. Neither observer controls trusted settlement.
 
 The dispatcher may advance after `.completed` and physical drain only. A
 refusal, incomplete response, failure, cancellation, `commitUnknown`, resolver

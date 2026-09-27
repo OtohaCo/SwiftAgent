@@ -125,9 +125,12 @@ approved scope leaves the file-write count at one.
     power-loss test.
 
 Use the existing `AgentContextSourceReferencing` and scope/Run cancellation
-fixtures to guard #20/#21 semantics. Keep one `AgentRun.events` consumer and
-fan out its observations to UI/Usage/ExecutionReport; the dispatcher waits on
-`run.wait()` and `waitForDrain()` without consuming that stream. Assert the
+fixtures to guard #20/#21 semantics. A supplied `onRun` callback receives the
+actual queued Run and owns its single `AgentRun.events` consumer; headless
+dispatch consumes and discards bounded progress. The dispatcher waits on
+`run.wait()` and `waitForDrain()` without competing for that stream. The public
+ExternalClient regression feeds the Host stream into `ExecutionReportReducer`
+and verifies that a presentation error cannot erase the tool's Receipt. Assert the
 Host's domain-fulfillment result separately from Runtime completion.
 
 ## ExternalClient executable acceptance
