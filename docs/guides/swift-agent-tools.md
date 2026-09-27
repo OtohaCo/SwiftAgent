@@ -116,6 +116,15 @@ not enforce execution policy. Registry validation, scheduler timeouts, evidence
 checks and receipt verification are separate runtime responsibilities. See the
 [conformance matrix](swift-agent-conformance-matrix.md) for the permanent regression evidence.
 
+`AgentCapabilityBinding` optionally freezes one Run's registry, executors and
+declared backend version. The exact resource set is checked on preparation
+and again at final execution admission after async authorization and durable
+mutation intent. Revocation applies even to `authorization: .notRequired`.
+This does not replace Host authorization or Evidence. The Host must map model
+arguments to honest resource identities and keep a stable backend handle;
+`Sendable` does not freeze an underlying mutable service. This is not an OS
+sandbox or a defense against a trusted Host bypassing the Agent execution path.
+
 The package invocation bridge checks cancellation and deadline around decoding,
 authorization and execution. It does not interrupt an uncooperative executor or
 schedule parallel/exclusive lanes. Timeout enforcement belongs to orchestration

@@ -6,6 +6,21 @@ All notable changes to SwiftAgent are recorded here.
 
 Development after `1.0.0-rc.3` is not part of the RC3 release scope.
 
+### RC4 scoped capabilities
+
+- Add Session-created, Run-bound tool/backend/resource snapshots with one
+  actor-linearized whole-scope revocation and separate physical drain wait.
+  Dynamic mutation tools recheck the durable Journal prerequisite before
+  input admission. Version changes affect later Runs; the Journal format,
+  operation identity, Receipt settlement and shared resource scheduler remain.
+- Add a credential-free ExternalClient example for isolated Session tool sets,
+  resource refusal, revocation and cross-restart mutation no-replay. A scope
+  diagnostic cannot be decoded into an execution credential.
+- Propagate scope revocation to cooperative startup projection and estimation;
+  retain leases for noncooperative work through physical exit. Scope drain now
+  includes the bound Run's Journal/Session cleanup. Reject out-of-scope typed
+  resources before scheduler dispatch as well as at final execution admission.
+
 ### RC4 context pipeline
 
 - Add source-scoped, deterministically ordered Host materials and Journal-ID-bound

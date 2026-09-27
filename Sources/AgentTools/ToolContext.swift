@@ -11,6 +11,7 @@ public struct ToolContext: Sendable, Equatable {
     public let argumentsJSON: String?
     package let evidenceLedger: EvidenceLedger?
     package let mutationAdmission: (any ToolMutationAdmission)?
+    package let executionAdmission: (any ToolExecutionAdmission)?
 
     public init(
         sessionID: UUID,
@@ -29,6 +30,7 @@ public struct ToolContext: Sendable, Equatable {
         self.argumentsJSON = argumentsJSON
         self.evidenceLedger = evidenceLedger
         mutationAdmission = nil
+        executionAdmission = nil
     }
 
     package init(
@@ -39,7 +41,8 @@ public struct ToolContext: Sendable, Equatable {
         idempotencyKey: String? = nil,
         argumentsJSON: String? = nil,
         evidenceLedger: EvidenceLedger? = nil,
-        mutationAdmission: (any ToolMutationAdmission)?
+        mutationAdmission: (any ToolMutationAdmission)?,
+        executionAdmission: (any ToolExecutionAdmission)? = nil
     ) {
         self.sessionID = sessionID
         self.runID = runID
@@ -49,6 +52,7 @@ public struct ToolContext: Sendable, Equatable {
         self.argumentsJSON = argumentsJSON
         self.evidenceLedger = evidenceLedger
         self.mutationAdmission = mutationAdmission
+        self.executionAdmission = executionAdmission
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {

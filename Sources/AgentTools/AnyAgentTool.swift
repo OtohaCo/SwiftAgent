@@ -54,12 +54,14 @@ package struct AnyAgentTool: Sendable {
                     }
                 }
                 try await Self.validateEvidence(requirements, context: context)
+                try await context.executionAdmission?.check(runID: context.runID, resources: resources)
                 if policy.authorization == .required {
                     let authorization = try await tool.authorize(input, context: context)
                     try context.checkActive()
                     guard authorization == .allowed else { throw ToolInvocationError.authorizationDenied }
                     try await Self.validateEvidence(requirements, context: context)
                 }
+                try await context.executionAdmission?.check(runID: context.runID, resources: resources)
                 if policy.effect == .mutation {
                     let mutationAdmission = context.mutationAdmission!
                     let argumentsJSON = context.argumentsJSON!
@@ -75,6 +77,7 @@ package struct AnyAgentTool: Sendable {
                     ))
                     try context.checkActive()
                     if case .settled(let receipt, let output) = admission {
+                        try await context.executionAdmission?.check(runID: context.runID, resources: resources)
                         guard let receiptExpectation else { throw ToolReceiptError.unexpectedReceipt }
                         guard let operationID = context.idempotencyKey else {
                             throw ToolInvocationError.missingIdempotencyKey
@@ -89,7 +92,19 @@ package struct AnyAgentTool: Sendable {
                 }
                 let result: ToolResult<T.Output>
                 do {
-                    result = try await tool.execute(input, context: context)
+                    if let admission = context.executionAdmission {
+                        let ticket = try await admission.admit(runID: context.runID, resources: resources)
+                        do {
+                            try context.checkActive()
+                            result = try await tool.execute(input, context: context)
+                            await admission.release(ticket)
+                        } catch {
+                            await admission.release(ticket)
+                            throw error
+                        }
+                    } else {
+                        result = try await tool.execute(input, context: context)
+                    }
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let error as RecoverableToolError {

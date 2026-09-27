@@ -17,6 +17,7 @@ public struct AgentRun: Sendable {
     public let id: UUID
     public let sessionID: UUID
     public let binding: AgentModelBindingInfo
+    public let capabilities: AgentCapabilityInfo?
     public let events: AsyncStream<AgentEvent>
     private let control: AgentRunControl
     private let drain: AgentRunDrain
@@ -25,6 +26,7 @@ public struct AgentRun: Sendable {
         id: UUID,
         sessionID: UUID,
         binding: AgentModelBindingInfo,
+        capabilities: AgentCapabilityInfo? = nil,
         events: AsyncStream<AgentEvent>,
         control: AgentRunControl,
         drain: AgentRunDrain
@@ -32,6 +34,7 @@ public struct AgentRun: Sendable {
         self.id = id
         self.sessionID = sessionID
         self.binding = binding
+        self.capabilities = capabilities
         self.events = events
         self.control = control
         self.drain = drain
@@ -62,6 +65,7 @@ struct AgentSteeringInput: Sendable {
 
 actor AgentRunControl {
     private var worker: Task<Void, Never>?
+    private var startupWorkers: [UUID: @Sendable () -> Void] = [:]
     private var result: Result<AgentLoopResult, Error>?
     private var cancelled = false
     private var finishing = false
@@ -82,7 +86,19 @@ actor AgentRunControl {
         guard result == nil, !finishing else { return }
         cancelled = true
         worker?.cancel()
+        for cancelStartup in startupWorkers.values { cancelStartup() }
     }
+
+    /// The same Run cancellation owner reaches cooperative preflight work
+    /// before the post-admission worker has been installed.
+    func registerStartupWorker(cancelStartup: @escaping @Sendable () -> Void) -> UUID {
+        let id = UUID()
+        if cancelled { cancelStartup() }
+        else { startupWorkers[id] = cancelStartup }
+        return id
+    }
+
+    func unregisterStartupWorker(_ id: UUID) { startupWorkers.removeValue(forKey: id) }
 
     func beginFinish() -> [AgentSteeringInput] {
         finishing = true

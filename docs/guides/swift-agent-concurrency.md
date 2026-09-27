@@ -10,6 +10,7 @@ AgentModels, AgentTools, and AgentCore do not import or isolate to MainActor.
 | Type | Isolation | Notes |
 | --- | --- | --- |
 | Agent / AgentConfiguration | struct, Sendable | Configuration only |
+| AgentCapabilityBinding / scope | Sendable value + actor | Immutable Run registry and actor-linearized revoke/admission; Host owns shared backend close |
 | AgentSession | actor | Canonical history and single active run |
 | AgentRun | struct, Sendable | Holds `AsyncStream` and an internal control actor |
 | ToolScheduler | struct, Sendable | Coordinates through internal actors |
@@ -18,6 +19,15 @@ AgentModels, AgentTools, and AgentCore do not import or isolate to MainActor.
 
 Share one `ToolScheduler` across every Session that can touch the same real
 resources. Isolation is per scheduler instance, not per Session.
+Run-scoped resource allowlists do not change lock identities; two scopes
+touching one account or file still coordinate through the same scheduler.
+`revoke()` stops future executor admission and requests cancellation;
+`waitForDrain()` waits until bound Run work actually exits. One cancelled
+observer does not cancel the drain owner or another Session. Startup projection
+and estimation share the Run cancellation owner before its post-admission
+worker is installed. Scope drain is published only after the bound Session
+identity and Journal lease are released; a Host may then close a store that
+has no other active users.
 
 ## Continuations and streams
 
