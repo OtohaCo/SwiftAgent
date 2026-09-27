@@ -187,6 +187,18 @@ private struct MessagePointer: Codable {
 private struct Segment: Codable {
     let id: UUID
     let end: UInt64
+    let garbageBlobs: [GarbageBlob]
+
+    init(id: UUID, end: UInt64, garbageBlobs: [GarbageBlob] = []) {
+        self.id = id
+        self.end = end
+        self.garbageBlobs = garbageBlobs
+    }
+}
+
+private struct GarbageBlob: Codable {
+    let sequence: UInt64
+    let id: UUID
 }
 
 private struct Layout: Codable {
@@ -198,6 +210,7 @@ private struct Layout: Codable {
 
 private struct Root: Codable {
     let storeID: UUID
+    let formatDigest: String
     let sequence: UInt64
     let nextRecordSequence: UInt64
     let active: UUID
@@ -223,7 +236,7 @@ private struct BatchV1: Codable {
     let sequence: UInt64
     let sessionID: UUID
     let header: DiskHeaderV1
-    let historyParent: UInt64?
+    let messageStart: UInt64
     let messages: [DiskMessageV1]
     let mutation: DiskMutationV1?
     let recordCount: UInt32
@@ -277,6 +290,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private var closed = false
     private var poisoned = false
     private var expectedCurrent: Current?
+    private let expectedFormatDigest: String
     private var reclaimed: UInt64 = 0
     private var lastMaintenanceError: String?
     private let counters = MetricsBox()
@@ -288,11 +302,13 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private var finishedIndexKinds: Set<String> = []
 
     private init(directoryURL: URL, format: Format, descriptor: Int32,
+                 formatDigest: String,
                  policy: JournalMaintenancePolicy,
                  fault: (@Sendable (JournalFileFaultStage) throws -> Void)? = nil) {
         self.directoryURL = directoryURL
         storeID = format.storeID
         operationDomain = format.domain
+        expectedFormatDigest = formatDigest
         self.descriptor = descriptor
         self.policy = policy
         self.fault = fault
@@ -316,15 +332,19 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let descriptor = try lockStore(directory)
         let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: 1,
                             storeID: UUID(), domain: domain)
+        let formatBytes = try JSONEncoder().encode(format)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
-                                          descriptor: descriptor, policy: policy, fault: fault)
+                                          descriptor: descriptor, formatDigest: Self.digest(formatBytes),
+                                          policy: policy, fault: fault)
         do {
-            try store.writeNew(JSONEncoder().encode(format), at: directory.appendingPathComponent("format.json"))
+            try store.validateManagedDirectories()
+            try store.writeNew(formatBytes, at: directory.appendingPathComponent("format.json"))
             let segment = UUID(), layoutID = UUID(), rootID = UUID()
             try store.writeNew(Data(), at: store.segmentURL(segment))
             let layoutBytes = try JSONEncoder().encode(Layout(generation: 0, sealed: [], packs: [], garbage: []))
             try store.writeNew(layoutBytes, at: store.layoutURL(layoutID))
-            let root = Root(storeID: format.storeID, sequence: 0, nextRecordSequence: 1,
+            let root = Root(storeID: format.storeID, formatDigest: Self.digest(formatBytes),
+                            sequence: 0, nextRecordSequence: 1,
                             active: segment, activeEnd: 0, activeBatches: 0, layout: layoutID,
                             layoutDigest: Self.digest(layoutBytes), layoutGeneration: 0,
                             lastFrame: nil, lastDigest: nil)
@@ -355,8 +375,18 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             throw AgentJournalError.invalidHeader
         }
         let format: Format
+        let formatBytes: Data
         do {
-            format = try JSONDecoder().decode(Format.self, from: Data(contentsOf: formatURL))
+            let fd = DarwinOrGlibcOpen(formatURL.path, O_RDONLY | O_NOFOLLOW, 0)
+            guard fd >= 0 else { throw AgentJournalError.invalidHeader }
+            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            defer { try? handle.close() }
+            var info = stat()
+            guard fstat(fd, &info) == 0, (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+                throw AgentJournalError.invalidHeader
+            }
+            formatBytes = try handle.readToEnd() ?? Data()
+            format = try JSONDecoder().decode(Format.self, from: formatBytes)
         } catch is DecodingError {
             throw AgentJournalError.invalidHeader
         } catch {
@@ -367,8 +397,11 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
         guard format.schema == 1 else { throw AgentJournalError.unsupportedFormat }
         let descriptor = try lockStore(directory)
-        let store = SegmentedJournalStore(directoryURL: directory, format: format, descriptor: descriptor, policy: policy)
+        let store = SegmentedJournalStore(directoryURL: directory, format: format,
+                                          descriptor: descriptor, formatDigest: Self.digest(formatBytes),
+                                          policy: policy)
         do {
+            try store.validateManagedDirectories()
             let (root, _) = try store.currentRoot()
             _ = try store.layout(root)
             if let location = root.lastFrame {
@@ -377,6 +410,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                       try store.frameDigest(location) == root.lastDigest else { throw AgentJournalError.invalidRecord }
             }
             let activeURL = store.segmentURL(root.active)
+            let activeHandle = try store.openRegularFile(activeURL)
+            try activeHandle.close()
             let size = try Self.fileSize(activeURL)
             guard size >= root.activeEnd else { throw AgentJournalError.invalidFrame }
             // The exclusive owner can remove only bytes beyond the committed
@@ -397,7 +432,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     private static func lockStore(_ directory: URL) throws -> Int32 {
         let path = directory.appendingPathComponent(".writer.lock").path
-        let fd = DarwinOrGlibcOpen(path, O_CREAT | O_RDWR, 0o600)
+        let fd = DarwinOrGlibcOpen(path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { throw ioError("open writer lock") }
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
             _ = DarwinOrGlibcClose(fd)
@@ -483,9 +518,41 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     func metrics() -> JournalStorageMetrics { counters.snapshot() }
 
     private func readData(_ url: URL) throws -> Data {
-        let data = try Data(contentsOf: url)
+        let handle = try openRegularFile(url)
+        defer { try? handle.close() }
+        let data = try handle.readToEnd() ?? Data()
         counters.add(read: data.count)
         return data
+    }
+
+    private static let managedDirectories = [
+        "roots", "layouts", "segments", "sessions", "operations", "calls",
+        "messages", "positions", "state", "blobs", "blob-index", "tmp",
+    ]
+
+    private func validateManagedDirectories() throws {
+        for name in Self.managedDirectories {
+            try validateManagedDirectory(directoryURL.appendingPathComponent(name))
+        }
+    }
+
+    private func validateManagedDirectory(_ url: URL) throws {
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true else {
+            throw AgentJournalError.invalidHeader
+        }
+    }
+
+    private func openRegularFile(_ url: URL) throws -> FileHandle {
+        try validateManagedDirectory(url.deletingLastPathComponent())
+        let fd = DarwinOrGlibcOpen(url.path, O_RDONLY | O_NOFOLLOW, 0)
+        guard fd >= 0 else { throw Self.ioError("open managed file") }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+            _ = DarwinOrGlibcClose(fd)
+            throw AgentJournalError.invalidFrame
+        }
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
     }
 
     private func managedName(_ id: UUID) -> String { "\(storeID.uuidString)_\(id.uuidString)" }
@@ -520,6 +587,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard Self.digest(bytes) == current.digest else { throw AgentJournalError.checksumMismatch }
         let root = try JSONDecoder().decode(Root.self, from: bytes)
         guard root.storeID == storeID, root.nextRecordSequence > 0 else { throw AgentJournalError.invalidHeader }
+        guard root.formatDigest == expectedFormatDigest,
+              Self.digest(try readData(directoryURL.appendingPathComponent("format.json"))) == expectedFormatDigest else {
+            throw AgentJournalError.checksumMismatch
+        }
         return (root, current.root)
     }
 
@@ -551,14 +622,20 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private static func truncate(_ url: URL, to offset: UInt64) throws {
-        let fd = DarwinOrGlibcOpen(url.path, O_RDWR, 0)
+        let fd = DarwinOrGlibcOpen(url.path, O_RDWR | O_NOFOLLOW, 0)
         guard fd >= 0 else { throw ioError("open segment") }
         defer { _ = DarwinOrGlibcClose(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG),
+              info.st_size >= 0, UInt64(info.st_size) >= offset else {
+            throw AgentJournalError.invalidFrame
+        }
         guard ftruncate(fd, off_t(offset)) == 0, fsync(fd) == 0 else { throw ioError("truncate unpublished tail") }
     }
 
     private func writeNew(_ data: Data, at url: URL) throws {
-        let fd = DarwinOrGlibcOpen(url.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        try validateManagedDirectory(url.deletingLastPathComponent())
+        let fd = DarwinOrGlibcOpen(url.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { throw Self.ioError("create managed file") }
         defer { _ = DarwinOrGlibcClose(fd) }
         try fault?(.beforeManagedWrite)
@@ -569,6 +646,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private func atomicWrite(_ data: Data, at url: URL) throws {
+        try validateManagedDirectory(url.deletingLastPathComponent())
         let temporary = directoryURL.appendingPathComponent("tmp/\(managedName(UUID())).tmp")
         try writeNew(data, at: temporary)
         defer { try? FileManager.default.removeItem(at: temporary) }
@@ -593,7 +671,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private static func syncDirectory(_ url: URL) throws {
-        let fd = DarwinOrGlibcOpen(url.path, O_RDONLY, 0)
+        let fd = DarwinOrGlibcOpen(url.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0)
         guard fd >= 0 else { throw ioError("open managed directory") }
         defer { _ = DarwinOrGlibcClose(fd) }
         guard fsync(fd) == 0 else { throw ioError("sync managed directory") }
@@ -623,11 +701,11 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         return (data, digest, frame.blob)
     }
 
-    private func readFrame(_ location: Location) throws -> (BatchV1, String) {
+    private func readFrame(_ location: Location) throws -> (BatchV1, String, UUID?) {
         guard location.length >= 4, location.length <= 32 * 1024 * 1024,
               location.kind == "segment" || location.kind == "state" else { throw AgentJournalError.invalidFrame }
         let url = location.kind == "segment" ? segmentURL(location.file) : stateURL(location.file)
-        let handle = try FileHandle(forReadingFrom: url)
+        let handle = try openRegularFile(url)
         defer { try? handle.close() }
         try handle.seek(toOffset: location.offset)
         guard let data = try handle.read(upToCount: Int(location.length)), data.count == location.length else {
@@ -635,7 +713,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
         counters.add(read: data.count)
         let length = data.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
-        guard length + 4 == location.length else { throw AgentJournalError.invalidFrame }
+        guard UInt64(length) + 4 == UInt64(location.length) else { throw AgentJournalError.invalidFrame }
         let frame = try JSONDecoder().decode(Frame.self, from: Data(data.dropFirst(4)))
         guard (frame.payload == nil) != (frame.blob == nil) else { throw AgentJournalError.invalidFrame }
         let payload = try frame.payload ?? readData(blobURL(frame.blob!))
@@ -643,7 +721,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let batch = try JSONDecoder().decode(BatchV1.self, from: payload)
         counters.add(decoded: 1)
         guard batch.schema == 1 else { throw AgentJournalError.invalidRecord }
-        return (batch, frame.digest)
+        return (batch, frame.digest, frame.blob)
     }
 
     private func load(_ location: Location) throws -> BatchV1 { try readFrame(location).0 }
@@ -702,15 +780,31 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         return location
     }
 
+    private func hasLiveMessage(_ batch: BatchV1, root: Root) throws -> Bool {
+        let count = try View(store: self, root: root, writable: false)
+            .header(batch.sessionID)?.messageCount ?? 0
+        for offset in batch.messages.indices {
+            let ordinal = batch.messageStart + UInt64(offset)
+            guard ordinal < count else { continue }
+            let key = "\(batch.sessionID.uuidString)/\(ordinal)"
+            let pointer: MessagePointer? = try pointer("messages", key: key, root: root)
+            if pointer?.sequence == batch.sequence && pointer?.offset == offset { return true }
+        }
+        return false
+    }
+
     private func append(_ data: Data, to root: Root) throws -> Location {
         try fault?(.beforeAppend)
         let url = segmentURL(root.active)
-        guard try Self.fileSize(url) == root.activeEnd else {
-            throw AgentJournalError.persistenceUnavailable("active segment length changed outside the owner")
-        }
-        let fd = DarwinOrGlibcOpen(url.path, O_WRONLY | O_APPEND, 0)
+        try validateManagedDirectory(url.deletingLastPathComponent())
+        let fd = DarwinOrGlibcOpen(url.path, O_WRONLY | O_APPEND | O_NOFOLLOW, 0)
         guard fd >= 0 else { throw Self.ioError("open active segment") }
         defer { _ = DarwinOrGlibcClose(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG),
+              info.st_size >= 0, UInt64(info.st_size) == root.activeEnd else {
+            throw AgentJournalError.persistenceUnavailable("active segment changed outside the owner")
+        }
         if let fault {
             do { try fault(.partialAppend) }
             catch {
@@ -737,7 +831,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                 packs: oldLayout.packs, garbage: oldLayout.garbage)
         let nextLayoutBytes = try JSONEncoder().encode(nextLayout)
         try writeNew(nextLayoutBytes, at: layoutURL(nextLayoutID))
-        let nextRoot = Root(storeID: storeID, sequence: root.sequence,
+        let nextRoot = Root(storeID: storeID, formatDigest: root.formatDigest,
+                            sequence: root.sequence,
                             nextRecordSequence: root.nextRecordSequence, active: nextSegment,
                             activeEnd: 0, activeBatches: 0, layout: nextLayoutID,
                             layoutDigest: Self.digest(nextLayoutBytes),
@@ -766,12 +861,16 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func performMaintenance() throws -> JournalMaintenanceStatus {
         let began = DispatchTime.now().uptimeNanoseconds
         defer { counters.add(maintenanceNanoseconds: DispatchTime.now().uptimeNanoseconds - began) }
+        struct CandidateFrame {
+            let batch: BatchV1
+            let bytes: Data
+            let blob: UUID?
+            let source: Location
+        }
         struct Candidate {
             let segment: Segment
             let rootSequence: UInt64
-            let data: Data
-            let offsets: [(UInt64, UInt64, UInt32)]
-            let discarded: [UInt64]
+            let frames: [CandidateFrame]
         }
         // Pin one sealed segment by owning the only maintenance candidate.
         // Foreground commits can proceed while immutable bytes are copied.
@@ -798,12 +897,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         try fault?(.afterMaintenanceSnapshot)
         let candidate: Candidate?
         if let (root, segment) = snapshot {
-            let file = try FileHandle(forReadingFrom: segmentURL(segment.id))
+            let file = try openRegularFile(segmentURL(segment.id))
             defer { try? file.close() }
             var sourceOffset: UInt64 = 0
-            var packed = Data()
-            var positions: [(UInt64, UInt64, UInt32)] = []
-            var discarded: [UInt64] = []
+            var frames: [CandidateFrame] = []
             while sourceOffset < segment.end {
                 try Task.checkCancellation()
                 try file.seek(toOffset: sourceOffset)
@@ -811,34 +908,23 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                     throw AgentJournalError.invalidFrame
                 }
                 counters.add(read: header.count)
-                let size = header.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+                let size = UInt64(header.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) })
                 guard size > 0, size < 32 * 1024 * 1024,
-                      sourceOffset + UInt64(size) + 4 <= segment.end else {
+                      sourceOffset <= segment.end, size + 4 <= segment.end - sourceOffset else {
                     throw AgentJournalError.invalidFrame
                 }
                 let source = Location(kind: "segment", file: segment.id, offset: sourceOffset,
-                                      length: size + 4, generation: root.layoutGeneration)
-                let batch = try load(source)
-                let sessionHead: UInt64? = try pointer("sessions", key: batch.sessionID.uuidString, root: root)
-                let callHead: UInt64?
-                if let mutation = batch.mutation {
-                    let key = "\(mutation.sessionID.uuidString)/\(mutation.runID.uuidString)/\(mutation.intent.call.id)"
-                    callHead = try pointer("calls", key: key, root: root)
-                } else { callHead = nil }
-                let isLast = root.lastFrame?.file == segment.id && root.lastFrame?.offset == sourceOffset
-                if !batch.messages.isEmpty || sessionHead == batch.sequence || callHead == batch.sequence || isLast {
-                    try file.seek(toOffset: sourceOffset)
-                    guard let bytes = try file.read(upToCount: Int(size + 4)), bytes.count == size + 4 else {
-                        throw AgentJournalError.invalidFrame
-                    }
-                    counters.add(read: bytes.count)
-                    positions.append((batch.sequence, UInt64(packed.count), size + 4))
-                    packed.append(bytes)
-                } else { discarded.append(batch.sequence) }
-                sourceOffset += UInt64(size) + 4
+                                      length: UInt32(size + 4), generation: root.layoutGeneration)
+                let (batch, _, blob) = try readFrame(source)
+                try file.seek(toOffset: sourceOffset)
+                guard let bytes = try file.read(upToCount: Int(size + 4)), bytes.count == size + 4 else {
+                    throw AgentJournalError.invalidFrame
+                }
+                counters.add(read: bytes.count)
+                frames.append(CandidateFrame(batch: batch, bytes: bytes, blob: blob, source: source))
+                sourceOffset += size + 4
             }
-            candidate = Candidate(segment: segment, rootSequence: root.sequence,
-                                  data: packed, offsets: positions, discarded: discarded)
+            candidate = Candidate(segment: segment, rootSequence: root.sequence, frames: frames)
         } else { candidate = nil }
 
         guard let candidate else {
@@ -847,8 +933,6 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             return try maintenanceStatus()
         }
         try Task.checkCancellation()
-        let packID = UUID()
-        try writeNew(candidate.data, at: stateURL(packID))
         lock.lock()
         defer { lock.unlock() }
         do {
@@ -856,17 +940,43 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             let currentLayout = try layout(root)
             guard currentLayout.sealed.contains(where: { $0.id == candidate.segment.id }),
                   root.sequence >= candidate.rootSequence else {
-                try? FileManager.default.removeItem(at: stateURL(packID))
                 throw AgentJournalError.concurrentWriter
             }
             try Task.checkCancellation()
             let generation = root.layoutGeneration + 1
             var relocatedLast = root.lastFrame
-            for (sequence, offset, length) in candidate.offsets {
+            var retainedData = Data()
+            var retained: [(UInt64, UInt64, UInt32)] = []
+            var discarded: [UInt64] = []
+            var discardedBlobs: [(UInt64, UUID)] = []
+            for frame in candidate.frames {
+                let sequence = frame.batch.sequence
                 let old = try location(sequence, root: root)
-                guard old.kind == "segment", old.file == candidate.segment.id else {
+                guard old.kind == "segment", old.file == candidate.segment.id,
+                      old.offset == frame.source.offset, old.length == frame.source.length else {
                     throw AgentJournalError.concurrentWriter
                 }
+                let sessionHead: UInt64? = try pointer("sessions", key: frame.batch.sessionID.uuidString, root: root)
+                let callHead: UInt64?
+                if let mutation = frame.batch.mutation {
+                    let key = "\(mutation.sessionID.uuidString)/\(mutation.runID.uuidString)/\(mutation.intent.call.id)"
+                    callHead = try pointer("calls", key: key, root: root)
+                } else { callHead = nil }
+                let liveMessage = try hasLiveMessage(frame.batch, root: root)
+                let isLast = root.lastFrame?.file == old.file && root.lastFrame?.offset == old.offset
+                if liveMessage || sessionHead == sequence || callHead == sequence || isLast {
+                    retained.append((sequence, UInt64(retainedData.count), old.length))
+                    retainedData.append(frame.bytes)
+                } else {
+                    discarded.append(sequence)
+                    if let blob = frame.blob { discardedBlobs.append((sequence, blob)) }
+                }
+            }
+            let packID: UUID? = retained.isEmpty ? nil : UUID()
+            if let packID { try writeNew(retainedData, at: stateURL(packID)) }
+            for (sequence, offset, length) in retained {
+                guard let packID else { throw AgentJournalError.invalidRecord }
+                let old = try location(sequence, root: root)
                 let new = Location(kind: "state", file: packID, offset: offset,
                                    length: length, generation: generation)
                 try updateIndex("positions", key: String(sequence), value: new,
@@ -875,37 +985,53 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                     relocatedLast = new
                 }
             }
+            for sequence in discarded {
+                let old = try location(sequence, root: root)
+                let discardedLocation = Location(kind: "discarded", file: candidate.segment.id,
+                                                  offset: old.offset, length: old.length, generation: generation)
+                try updateIndex("positions", key: String(sequence), value: discardedLocation,
+                                version: root.sequence, root: root)
+            }
             guard relocatedLast?.file != candidate.segment.id else { throw AgentJournalError.invalidRecord }
             let nextLayoutID = UUID()
             let nextLayout = Layout(generation: generation,
-                                    sealed: currentLayout.sealed.filter { $0.id != candidate.segment.id },
-                                    packs: currentLayout.packs + [packID],
-                                    garbage: currentLayout.garbage + [candidate.segment])
+                                   sealed: currentLayout.sealed.filter { $0.id != candidate.segment.id },
+                                    packs: currentLayout.packs + (packID.map { [$0] } ?? []),
+                                    garbage: currentLayout.garbage + [Segment(
+                                        id: candidate.segment.id, end: candidate.segment.end,
+                                        garbageBlobs: discardedBlobs.map {
+                                            GarbageBlob(sequence: $0.0, id: $0.1)
+                                        }
+                                    )])
             let nextLayoutBytes = try JSONEncoder().encode(nextLayout)
             try writeNew(nextLayoutBytes, at: layoutURL(nextLayoutID))
-            let updated = Root(storeID: root.storeID, sequence: root.sequence,
+            let updated = Root(storeID: root.storeID, formatDigest: root.formatDigest,
+                               sequence: root.sequence,
                                nextRecordSequence: root.nextRecordSequence,
                                active: root.active, activeEnd: root.activeEnd,
                                activeBatches: root.activeBatches,
                                layout: nextLayoutID, layoutDigest: Self.digest(nextLayoutBytes),
                                layoutGeneration: generation,
                                lastFrame: relocatedLast, lastDigest: root.lastDigest)
-            poisoned = true
             try fault?(.beforeMaintenancePublish)
+            poisoned = true
             try publishRoot(updated, id: UUID())
             poisoned = false
             try? FileManager.default.removeItem(at: rootURL(oldRootID))
             try? FileManager.default.removeItem(at: layoutURL(root.layout))
-            for sequence in candidate.discarded {
+            for sequence in discarded {
                 let pointer: Location? = try pointer("positions", key: String(sequence), root: updated)
-                if pointer?.kind == "segment" && pointer?.file == candidate.segment.id {
-                    try FileManager.default.removeItem(at: indexURL("positions", String(sequence)))
+                guard pointer?.kind == "discarded", pointer?.file == candidate.segment.id else {
+                    throw AgentJournalError.invalidRecord
                 }
             }
             let oldSize = try Self.fileSize(segmentURL(candidate.segment.id))
             try fault?(.beforeSegmentDelete)
             try FileManager.default.removeItem(at: segmentURL(candidate.segment.id))
             reclaimed += oldSize
+            for (sequence, blob) in discardedBlobs {
+                try removeDiscardedBlob(blob, sequence: sequence, root: updated)
+            }
             try cleanupManagedOrphansLocked()
             lastMaintenanceError = nil
             return JournalMaintenanceStatus(sealedSegments: nextLayout.sealed.count,
@@ -923,34 +1049,46 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let oldLayout = try layout(root)
         guard let segment = oldLayout.garbage.first else { return }
         let url = segmentURL(segment.id)
+        try validateManagedDirectory(url.deletingLastPathComponent())
         if FileManager.default.fileExists(atPath: url.path) {
-            let file = try FileHandle(forReadingFrom: url)
+            let file = try openRegularFile(url)
             defer { try? file.close() }
             var offset: UInt64 = 0
             while offset < segment.end {
                 try file.seek(toOffset: offset)
                 guard let header = try file.read(upToCount: 4), header.count == 4 else { throw AgentJournalError.invalidFrame }
                 counters.add(read: header.count)
-                let length = header.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) } + 4
-                guard length > 4, offset + UInt64(length) <= segment.end else { throw AgentJournalError.invalidFrame }
-                let batch = try load(Location(kind: "segment", file: segment.id, offset: offset,
-                                              length: length, generation: root.layoutGeneration))
-                let active: Location? = try pointer("positions", key: String(batch.sequence), root: root)
-                if active?.kind == "segment" && active?.file == segment.id {
-                    try FileManager.default.removeItem(at: indexURL("positions", String(batch.sequence)))
+                let length = UInt64(header.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }) + 4
+                guard length > 4, length <= 32 * 1024 * 1024,
+                      offset <= segment.end, length <= segment.end - offset else {
+                    throw AgentJournalError.invalidFrame
                 }
-                offset += UInt64(length)
+                let batch = try load(Location(kind: "segment", file: segment.id, offset: offset,
+                                              length: UInt32(length), generation: root.layoutGeneration))
+                let active: Location? = try pointer("positions", key: String(batch.sequence), root: root)
+                if active == nil || (active?.kind == "segment" && active?.file == segment.id) {
+                    let position = indexURL("positions", String(batch.sequence))
+                    if FileManager.default.fileExists(atPath: position.path) {
+                        try FileManager.default.removeItem(at: position)
+                    }
+                }
+                offset += length
             }
             let bytes = try Self.fileSize(url)
+            guard try managedRegularFile(url) else { throw AgentJournalError.invalidRecord }
             try FileManager.default.removeItem(at: url)
             reclaimed += bytes
+        }
+        for blob in segment.garbageBlobs {
+            try removeDiscardedBlob(blob.id, sequence: blob.sequence, root: root)
         }
         let newID = UUID()
         let next = Layout(generation: root.layoutGeneration + 1, sealed: oldLayout.sealed,
                           packs: oldLayout.packs, garbage: Array(oldLayout.garbage.dropFirst()))
         let nextBytes = try JSONEncoder().encode(next)
         try writeNew(nextBytes, at: layoutURL(newID))
-        let updated = Root(storeID: root.storeID, sequence: root.sequence,
+        let updated = Root(storeID: root.storeID, formatDigest: root.formatDigest,
+                           sequence: root.sequence,
                            nextRecordSequence: root.nextRecordSequence, active: root.active,
                            activeEnd: root.activeEnd, activeBatches: root.activeBatches, layout: newID,
                            layoutDigest: Self.digest(nextBytes),
@@ -961,6 +1099,26 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         poisoned = false
         try? FileManager.default.removeItem(at: rootURL(oldRootID))
         try? FileManager.default.removeItem(at: layoutURL(root.layout))
+    }
+
+    private func removeDiscardedBlob(_ blob: UUID, sequence: UInt64, root: Root) throws {
+        let key = blob.uuidString
+        let referenced: UInt64? = try pointer("blob-index", key: key, root: root)
+        guard referenced == nil || referenced == sequence else { throw AgentJournalError.invalidRecord }
+        if let active: Location = try pointer("positions", key: String(sequence), root: root),
+           active.kind == "state" || active.kind == "segment" {
+            return
+        }
+        let index = indexURL("blob-index", key)
+        if FileManager.default.fileExists(atPath: index.path) {
+            try FileManager.default.removeItem(at: index)
+        }
+        let url = blobURL(blob)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try validateManagedDirectory(url.deletingLastPathComponent())
+            guard try managedRegularFile(url) else { throw AgentJournalError.invalidRecord }
+            try FileManager.default.removeItem(at: url)
+        }
     }
 
     private func cleanupManagedOrphans() throws {
@@ -974,6 +1132,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             garbageEnumerators.removeValue(forKey: key)
             return ([], true)
         }
+        try validateManagedDirectory(directory)
         let enumerator: FileManager.DirectoryEnumerator
         if let current = garbageEnumerators[key] {
             enumerator = current
@@ -1106,7 +1265,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
 
         private func batch(_ sequence: UInt64) throws -> BatchV1 {
-            let batch = try store.load(store.location(sequence, root: root))
+            let position = try store.location(sequence, root: root)
+            let batch = try store.load(position)
             guard batch.sequence == sequence else { throw AgentJournalError.invalidRecord }
             return batch
         }
@@ -1199,7 +1359,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                     cachedSequence = pointer.sequence
                 }
                 guard let cached, cached.sessionID == sessionID,
-                      cached.messages.indices.contains(pointer.offset) else { throw AgentJournalError.invalidRecord }
+                      cached.messages.indices.contains(pointer.offset) else {
+                    throw AgentJournalError.invalidRecord
+                }
                 result.append(try cached.messages[pointer.offset].value())
             }
             return result
@@ -1218,7 +1380,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                   !change.records.isEmpty,
                   change.records.first?.sequence == root.nextRecordSequence,
                   change.records.last?.sequence == root.nextRecordSequence + UInt64(change.records.count) - 1,
-                  change.header.messageCount == (try header(change.sessionID)?.messageCount ?? 0) + UInt64(change.messages.count) else {
+                  change.messageStart <= (try header(change.sessionID)?.messageCount ?? 0),
+                  change.header.messageCount == change.messageStart + UInt64(change.messages.count),
+                  change.header.messageCount >= (try header(change.sessionID)?.messageCount ?? 0) else {
                 throw AgentJournalError.concurrentWriter
             }
             let hasCheckpoint = change.records.contains { if case .checkpoint = $0.event { return true }; return false }
@@ -1229,7 +1393,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             finalHeader.historyHead = hasCheckpoint ? next : oldHistoryHead
             let batch = BatchV1(schema: 1, commitID: UUID(), sequence: next,
                                 sessionID: change.sessionID, header: DiskHeaderV1(finalHeader),
-                                historyParent: hasCheckpoint ? oldHistoryHead : nil,
+                                messageStart: change.messageStart,
                                 messages: change.messages.map(DiskMessageV1.init),
                                 mutation: try change.mutation.map(DiskMutationV1.init),
                                 recordCount: UInt32(change.records.count))
@@ -1242,9 +1406,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                   version: next, root: root)
             try store.updateIndex("sessions", key: change.sessionID.uuidString, value: next,
                                   version: next, root: root)
-            let firstOrdinal = finalHeader.messageCount - UInt64(change.messages.count)
             for offset in change.messages.indices {
-                let key = "\(change.sessionID.uuidString)/\(firstOrdinal + UInt64(offset))"
+                let key = "\(change.sessionID.uuidString)/\(change.messageStart + UInt64(offset))"
                 try store.updateIndex("messages", key: key,
                                       value: MessagePointer(sequence: next, offset: offset),
                                       version: next, root: root)
@@ -1260,7 +1423,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                       version: next, root: root)
             }
             try store.fault?(.afterIndexSync)
-            let updated = Root(storeID: root.storeID, sequence: next,
+            let updated = Root(storeID: root.storeID, formatDigest: root.formatDigest,
+                               sequence: next,
                                nextRecordSequence: root.nextRecordSequence + UInt64(change.records.count),
                                active: root.active, activeEnd: root.activeEnd + UInt64(bytes.count),
                                activeBatches: root.activeBatches + 1,

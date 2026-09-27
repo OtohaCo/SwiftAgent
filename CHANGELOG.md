@@ -25,6 +25,10 @@ Development after `1.0.0-rc.3` is not part of the RC3 release scope.
   Abort requires a trusted `AgentNoEffectConfirmation` and reconciliation
   requires replay output. Context limits apply to the projected model request
   without rewriting formal history.
+- Review hardening binds the stored domain to the published root, rejects
+  symlinked managed paths and oversized corrupt frame lengths, preserves paired
+  assistant calls when a tool batch extends its committed tail, and reclaims
+  superseded lifecycle blobs after safe maintenance publication.
 
 ## [1.0.0-rc.3] - 2026-09-21
 

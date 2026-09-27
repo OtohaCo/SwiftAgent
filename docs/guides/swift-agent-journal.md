@@ -70,7 +70,9 @@ output, terminal state, and its formal assistant/tool result publish together.
 Large batches use a synced managed blob before the batch refers to it. A new
 root and its indexes are synced before an atomic `CURRENT` replacement and
 parent-directory sync. A complete unpublished tail is truncated on exclusive
-open; a damaged published batch or root fails explicitly. Checksums detect
+open; a damaged published batch or root fails explicitly. The root also binds
+the persisted store identity and operation domain. Managed directories and
+file descriptors reject symbolic links before any repair or GC. Checksums detect
 accidental damage, not malicious tampering.
 
 The SDK rotates segments and incrementally packs sealed ones. It retains

@@ -80,6 +80,7 @@ swift test --filter ProviderFallbackTests
 
 ```sh
 swift test --filter SegmentedJournalStoreTests --disable-sandbox --no-parallel
+swift test --filter JournalReviewRegressionTests --disable-sandbox --no-parallel
 swift test --filter AgentMutationRecoveryTests --disable-sandbox --no-parallel
 swift test --package-path Examples/ExternalClient --disable-sandbox --no-parallel
 swift test --package-path Examples/HeadlessExecutionHost --disable-sandbox --no-parallel

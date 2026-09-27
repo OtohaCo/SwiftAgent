@@ -886,7 +886,8 @@ extension AgentJournal {
                 if let previous = try view.identity(intent.idempotencyKey) {
                     if storedRecords[Self.mutationRecord(previous).key] == nil { include(previous) }
                     guard previous.intent.call.name == intent.call.name,
-                          previous.intent.call.argumentsJSON == intent.call.argumentsJSON,
+                          try JSONValue.decodeToolArguments(previous.intent.call.argumentsJSON)
+                              == JSONValue.decodeToolArguments(intent.call.argumentsJSON),
                           previous.intent.resources == intent.resources,
                           previous.intent.receiptExpectation == intent.receiptExpectation else {
                         throw AgentJournalError.mutationIntentConflict
@@ -916,16 +917,22 @@ extension AgentJournal {
         nextHeader.revision += 1
         nextHeader.created = nextHeader.created || events.contains { if case .sessionCreated = $0 { return true }; return false }
         if let runID { nextHeader.lastRunID = runID }
-        var delta: [ModelMessage] = []
+        var messageStart = initialHeader.messageCount
+        var changedMessages: [JournalMessage] = []
         for event in events {
             if case .checkpoint(let history, let steeringIDs) = event {
                 let formal = Self.formalMessages(history)
-                guard formal.count >= initialHeader.messageCount else { throw AgentJournalError.concurrentWriter }
-                delta = Array(formal.dropFirst(Int(initialHeader.messageCount)))
+                guard initialHeader.messageCount <= UInt64(formal.count) else {
+                    throw AgentJournalError.concurrentWriter
+                }
+                (messageStart, changedMessages) = try Self.messageChange(
+                    formal, previousCount: initialHeader.messageCount,
+                    sessionID: sessionID, view: view
+                )
                 nextHeader.steeringIDs = steeringIDs
             }
         }
-        nextHeader.messageCount = initialHeader.messageCount + UInt64(delta.count)
+        nextHeader.messageCount = messageStart + UInt64(changedMessages.count)
         if let pending = unresolvedBySession[sessionID], let record = storedRecords[pending] {
             nextHeader.pendingIdentity = record.intent.idempotencyKey
         } else if changedKey != nil {
@@ -935,9 +942,76 @@ extension AgentJournal {
         try view.publish(JournalStoreChange(sessionID: sessionID,
                                             expectedRevision: initialHeader.revision,
                                             header: nextHeader,
-                                            messages: delta.map(JournalMessage.init(value:)),
+                                            messageStart: messageStart, messages: changedMessages,
                                             mutation: mutation, records: committed))
         return committed
+    }
+
+    /// A tool batch may enlarge its assistant call set and insert a completed
+    /// result ahead of an earlier result. Only that active, paired tail may be
+    /// republished; stable message IDs follow unchanged results by call ID.
+    private static func messageChange(
+        _ formal: [ModelMessage], previousCount: UInt64, sessionID: UUID,
+        view: any JournalStoreView
+    ) throws -> (UInt64, [JournalMessage]) {
+        let appendFrom = Int(previousCount)
+        var tailStart: Int?
+        for index in formal.indices.reversed() {
+            if case .assistant(_, let calls) = formal[index], !calls.isEmpty,
+               formal[(index + 1)...].allSatisfy({ if case .tool = $0 { true } else { false } }) {
+                tailStart = index
+                break
+            }
+        }
+        guard let start = tailStart, start < appendFrom else {
+            return (previousCount, formal.dropFirst(appendFrom).map(JournalMessage.init(value:)))
+        }
+        var oldTail: [JournalMessage] = []
+        var cursor = UInt64(start)
+        while cursor < previousCount {
+            let page = try view.messages(sessionID: sessionID, after: cursor,
+                                         limit: Int(min(1000, previousCount - cursor)))
+            guard !page.isEmpty else { throw AgentJournalError.invalidRecord }
+            oldTail.append(contentsOf: page)
+            cursor += UInt64(page.count)
+        }
+        let candidateTail = Array(formal[start...])
+        if oldTail.map(\.value) == Array(formal[start..<appendFrom]) {
+            return (previousCount, formal.dropFirst(appendFrom).map(JournalMessage.init(value:)))
+        }
+        guard case .assistant(_, let oldCalls) = oldTail.first?.value,
+              case .assistant(_, let newCalls) = candidateTail.first,
+              oldCalls.allSatisfy({ old in newCalls.contains(old) }),
+              candidateTail.dropFirst().allSatisfy({ if case .tool = $0 { true } else { false } }) else {
+            throw AgentJournalError.concurrentWriter
+        }
+        var oldResults: [ToolCallID: JournalMessage] = [:]
+        for old in oldTail.dropFirst() {
+            guard case .tool(let value) = old.value,
+                  oldResults.updateValue(old, forKey: value.callID) == nil else {
+                throw AgentJournalError.invalidRecord
+            }
+        }
+        let currentResults = candidateTail.dropFirst().compactMap { message -> ToolResultMessage? in
+            if case .tool(let result) = message { return result }
+            return nil
+        }
+        guard oldResults.allSatisfy({ key, prior in
+            currentResults.contains { result in
+                result.callID == key && prior.value == .tool(result)
+            }
+        }) else { throw AgentJournalError.concurrentWriter }
+        let replacement = candidateTail.enumerated().map { offset, value in
+            if offset == 0, let assistant = oldTail.first {
+                return JournalMessage(id: assistant.id, value: value)
+            }
+            if case .tool(let result) = value,
+               let prior = oldResults[result.callID] {
+                return JournalMessage(id: prior.id, value: value)
+            }
+            return JournalMessage(value: value)
+        }
+        return (UInt64(start), replacement)
     }
 
     private func scheduleMaintenanceIfNeeded() {

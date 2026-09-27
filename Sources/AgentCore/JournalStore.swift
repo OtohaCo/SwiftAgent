@@ -165,15 +165,18 @@ package struct JournalStoreChange: Sendable {
     package let sessionID: UUID
     package let expectedRevision: UInt64
     package let header: JournalSessionHeader
+    package let messageStart: UInt64
     package let messages: [JournalMessage]
     package let mutation: JournalStoredMutation?
     package let records: [AgentJournalRecord]
 
     package init(sessionID: UUID, expectedRevision: UInt64, header: JournalSessionHeader,
-                 messages: [JournalMessage], mutation: JournalStoredMutation?, records: [AgentJournalRecord]) {
+                 messageStart: UInt64, messages: [JournalMessage],
+                 mutation: JournalStoredMutation?, records: [AgentJournalRecord]) {
         self.sessionID = sessionID
         self.expectedRevision = expectedRevision
         self.header = header
+        self.messageStart = messageStart
         self.messages = messages
         self.mutation = mutation
         self.records = records
