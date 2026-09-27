@@ -14,8 +14,9 @@ Development after `1.0.0-rc.3` is not part of the RC3 release scope.
   current model/capability bindings, the existing Run admission, and one
   atomic queue/Run/formal-input Journal publication. Pause, stop, current-Run
   cancellation and actual drain remain separate operations.
-- New stores write format schema 2 / `BatchV2` with indexed queue facts.
-  Schema-1 stores are rejected unchanged; no implicit migration or memory
+- New stores write format schema 3 with the bounded `BatchV2` payload and
+  committed index witnesses. Schema-1 and unreleased schema-2 stores are
+  rejected unchanged; no implicit migration or memory
   fallback is supplied. Formal messages, mutation identity, trusted receipts
   and reconciliation remain in their existing execution paths. Terminal
   input identities remain indexed without TTL. The queue does not retry an
@@ -25,6 +26,12 @@ Development after `1.0.0-rc.3` is not part of the RC3 release scope.
   after an abnormal pre-existing direct Run. `startFollowUpDispatch(onRun:)`
   delivers admitted Runs to the Host's single event observer; headless dispatch
   discards bounded progress without affecting trusted settlement.
+- Close a poisoned store after actual drain without resolving its unknown
+  commit. A withdrawn head may advance only when its typed, scoped
+  pre-admission result and cleanup are confirmed. Missing published Session,
+  queue or operation indexes now fail closed rather than looking empty; the
+  per-key witness and stable position commit identity are the reason for the
+  schema-3 boundary.
 
 ### RC4 scoped capabilities
 

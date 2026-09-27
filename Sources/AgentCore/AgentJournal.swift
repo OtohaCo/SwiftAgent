@@ -268,10 +268,11 @@ public actor AgentJournal {
     }
 
     package func acquireSessionLease(sessionID: UUID, dispatcherID: UUID? = nil) throws {
+        guard !closing else { throw AgentJournalError.storeClosed }
         if let owner = dispatcherLeases[sessionID]?.owner, owner != dispatcherID {
             throw AgentFollowUpError.dispatchOwned
         }
-        guard !closing, sessionLeases.insert(sessionID).inserted else {
+        guard sessionLeases.insert(sessionID).inserted else {
             throw AgentJournalError.sessionLeaseUnavailable
         }
     }
@@ -284,7 +285,8 @@ public actor AgentJournal {
                                         allowExistingRun: Bool,
                                         notify: @escaping @Sendable () async -> Void) throws {
         guard storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
-        guard !closing, dispatcherLeases[sessionID] == nil else { throw AgentFollowUpError.alreadyDispatching }
+        guard !closing else { throw AgentFollowUpError.dispatcherStopped }
+        guard dispatcherLeases[sessionID] == nil else { throw AgentFollowUpError.alreadyDispatching }
         guard allowExistingRun || !sessionLeases.contains(sessionID) else {
             throw AgentSessionError.runInProgress
         }
@@ -1266,6 +1268,7 @@ extension AgentJournal {
 
     @discardableResult
     public func requestMaintenance() async throws -> JournalMaintenanceStatus? {
+        guard !closing else { throw AgentJournalError.storeClosed }
         guard let store else { return nil }
         let id = maintenanceID ?? UUID()
         let task = maintenanceTask ?? Task { try await store.maintain() }

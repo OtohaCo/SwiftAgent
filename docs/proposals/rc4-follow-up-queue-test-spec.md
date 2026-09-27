@@ -11,7 +11,7 @@ business mutation. A `SIGKILL` test proves process-termination recovery only,
 not power-loss durability.
 
 `Tests/AgentCoreTests/AgentFollowUpQueueTests.swift` exercises indexed
-enqueue/dedup/conflict/capacity, FIFO, schema-1 rejection, the atomic startup
+enqueue/dedup/conflict/capacity, FIFO, schema-1/schema-2 rejection, the atomic startup
 boundary, both publication outcomes, withdrawal races, fresh scopes, resolver
 cancellation/drain, concurrent mutation settlement and maintenance interleaving.
 `Tests/AgentJournalFileStoreTests/FollowUpProcessTests.swift` terminates a child

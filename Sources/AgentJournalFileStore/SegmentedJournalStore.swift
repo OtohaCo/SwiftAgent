@@ -162,6 +162,20 @@ private struct Location: Codable {
     let offset: UInt64
     let length: UInt32
     let generation: UInt64
+    let commitID: UUID?
+
+    init(kind: String, file: UUID, offset: UInt64, length: UInt32,
+         generation: UInt64, commitID: UUID? = nil) {
+        self.kind = kind; self.file = file; self.offset = offset
+        self.length = length; self.generation = generation; self.commitID = commitID
+    }
+}
+
+private struct IndexWitness: Codable {
+    let kind: String
+    let keyDigest: String
+    let firstSequence: UInt64
+    let commitID: UUID
 }
 
 private struct Slot<Value: Codable>: Codable {
@@ -236,8 +250,8 @@ private struct Current: Codable, Equatable {
     let digest: String
 }
 
-// Schema 2: queue-only and combined startup batches share one root publication.
-// The public model/queue enums are converted via explicit disk DTOs.
+// Format schema 3 keeps the bounded BatchV2 payload and adds index witnesses
+// plus stable position commit IDs. Old schema-2 readers reject format.json.
 private struct BatchV2: Codable {
     let schema: Int
     let commitID: UUID
@@ -342,7 +356,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
         }
         let descriptor = try lockStore(directory)
-        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: 2,
+        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: 3,
                             storeID: UUID(), domain: domain)
         let formatBytes = try JSONEncoder().encode(format)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -408,7 +422,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard format.magic == "SWIFTAGENT-SEGMENTED-JOURNAL", !format.domain.isEmpty else {
             throw AgentJournalError.invalidHeader
         }
-        guard format.schema == 2 else { throw AgentJournalError.unsupportedFormat }
+        guard format.schema == 3 else { throw AgentJournalError.unsupportedFormat }
         let descriptor = try lockStore(directory)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
                                           descriptor: descriptor, formatDigest: Self.digest(formatBytes),
@@ -458,12 +472,14 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard !closed else { return }
-        guard !poisoned else { throw AgentJournalError.commitUnknown }
+        // Closing relinquishes ownership only; it does not interpret, repair,
+        // publish or roll back an uncertain transaction. Keep the handle
+        // poisoned until a new owner validates CURRENT on reopen.
         try fault?(.beforeClose)
-        closed = true
         let fd = descriptor
+        guard DarwinOrGlibcClose(fd) == 0 else { throw Self.ioError("close writer lock") }
         descriptor = -1
-        guard flock(fd, LOCK_UN) == 0, DarwinOrGlibcClose(fd) == 0 else { throw Self.ioError("close writer lock") }
+        closed = true
     }
 
     func read<T>(_ body: (any JournalStoreView) throws -> T) throws -> T {
@@ -478,6 +494,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             if poisoned { throw AgentJournalError.commitUnknown }
             if let error = error as? AgentJournalError { throw error }
             if let error = error as? AgentFollowUpError { throw error }
+            if let error = error as? JournalFollowUpAdmissionError { throw error }
             if error is DecodingError { throw AgentJournalError.invalidRecord }
             throw AgentJournalError.persistenceUnavailable(error.localizedDescription)
         }
@@ -499,6 +516,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             if poisoned { throw AgentJournalError.commitUnknown }
             if let error = error as? AgentJournalError { throw error }
             if let error = error as? AgentFollowUpError { throw error }
+            if let error = error as? JournalFollowUpAdmissionError { throw error }
             if error is DecodingError { throw AgentJournalError.invalidRecord }
             throw AgentJournalError.persistenceUnavailable(error.localizedDescription)
         }
@@ -507,6 +525,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     func maintenanceStatus() throws -> JournalMaintenanceStatus {
         lock.lock()
         defer { lock.unlock() }
+        guard !closed else { throw AgentJournalError.storeClosed }
+        guard !poisoned else { throw AgentJournalError.commitUnknown }
         do {
             let (root, _) = try currentRoot()
             return JournalMaintenanceStatus(sealedSegments: try layout(root).sealed.count,
@@ -544,7 +564,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private static let managedDirectories = [
         "roots", "layouts", "segments", "sessions", "operations", "calls",
         "messages", "positions", "state", "blobs", "blob-index", "tmp",
-        "queue-heads", "queue-ids", "queue-order", "queue-links",
+        "queue-heads", "queue-ids", "queue-order", "queue-links", "witnesses",
     ]
 
     private func validateManagedDirectories() throws {
@@ -586,6 +606,67 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         return directoryURL.appendingPathComponent(kind)
             .appendingPathComponent(String(digest.prefix(2)))
             .appendingPathComponent("\(storeID.uuidString)_\(digest).json")
+    }
+
+    private static let witnessedIndexes: Set<String> = [
+        "sessions", "queue-heads", "queue-ids", "operations",
+    ]
+
+    private func witnessURL(_ kind: String, _ key: String) -> URL {
+        let digest = Self.digest(Data(key.utf8))
+        return directoryURL.appendingPathComponent("witnesses")
+            .appendingPathComponent(String(digest.prefix(2)))
+            .appendingPathComponent("\(storeID.uuidString)_\(kind)_\(digest).witness")
+    }
+
+    private func witnessExists(_ kind: String, _ key: String) throws -> Bool {
+        let url = witnessURL(kind, key)
+        let shard = url.deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: shard.path) {
+            try validateManagedDirectory(shard)
+        }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    private func loadWitness(_ kind: String, _ key: String) throws -> IndexWitness {
+        try validateManagedDirectory(directoryURL.appendingPathComponent("witnesses"))
+        try validateManagedDirectory(witnessURL(kind, key).deletingLastPathComponent())
+        let wrapped = try JSONDecoder().decode(IndexEnvelope.self,
+            from: readData(witnessURL(kind, key)))
+        guard wrapped.storeID == storeID,
+              Self.digest(wrapped.payload) == wrapped.digest else {
+            throw AgentJournalError.checksumMismatch
+        }
+        let witness = try JSONDecoder().decode(IndexWitness.self, from: wrapped.payload)
+        guard witness.kind == kind, witness.keyDigest == Self.digest(Data(key.utf8)),
+              witness.firstSequence > 0 else { throw AgentJournalError.invalidRecord }
+        return witness
+    }
+
+    /// An orphan witness can precede an unpublished transaction. The
+    /// position's stable commit ID distinguishes that candidate from the
+    /// different batch later published at the same sequence, even after GC.
+    private func witnessWasPublished(_ witness: IndexWitness, root: Root) throws -> Bool {
+        guard witness.firstSequence <= root.sequence else { return false }
+        let published = try location(witness.firstSequence, root: root)
+        guard let commitID = published.commitID else { throw AgentJournalError.invalidRecord }
+        return commitID == witness.commitID
+    }
+
+    private func publishWitness(_ kind: String, key: String, sequence: UInt64,
+                                commitID: UUID) throws {
+        let target = witnessURL(kind, key)
+        let shard = target.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: shard.path) {
+            try FileManager.default.createDirectory(at: shard, withIntermediateDirectories: false)
+            try Self.syncDirectory(shard.deletingLastPathComponent())
+        }
+        try validateManagedDirectory(shard)
+        let witness = IndexWitness(kind: kind, keyDigest: Self.digest(Data(key.utf8)),
+                                   firstSequence: sequence, commitID: commitID)
+        let bytes = try JSONEncoder().encode(witness)
+        try atomicWrite(JSONEncoder().encode(IndexEnvelope(storeID: storeID,
+            digest: Self.digest(bytes), payload: bytes)), at: target)
     }
 
     private static func followUpKey(_ sessionID: UUID, _ inputID: String) -> String {
@@ -745,7 +826,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard Self.digest(payload) == frame.digest else { throw AgentJournalError.checksumMismatch }
         let batch = try JSONDecoder().decode(BatchV2.self, from: payload)
         counters.add(decoded: 1)
-        guard batch.schema == 2 else { throw AgentJournalError.invalidRecord }
+        guard batch.schema == 2,
+              location.commitID.map({ $0 == batch.commitID }) ?? true else {
+            throw AgentJournalError.invalidRecord
+        }
         return (batch, frame.digest, frame.blob)
     }
 
@@ -754,7 +838,22 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     private func pointer<Value: Codable>(_ kind: String, key: String, root: Root) throws -> Value? {
         let url = indexURL(kind, key)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            if Self.witnessedIndexes.contains(kind),
+               try witnessExists(kind, key),
+               try witnessWasPublished(loadWitness(kind, key), root: root) {
+                throw AgentJournalError.invalidRecord
+            }
+            return nil
+        }
+        if Self.witnessedIndexes.contains(kind) {
+            guard try witnessExists(kind, key) else {
+                throw AgentJournalError.invalidRecord
+            }
+            // An index candidate written before a failed CURRENT publication
+            // can reuse a sequence later occupied by a different commit.
+            guard try witnessWasPublished(loadWitness(kind, key), root: root) else { return nil }
+        }
         let index: Index<Value> = try loadIndex(url)
         for slot in [index.current, index.previous].compactMap({ $0 }) {
             guard slot.key == key else { throw AgentJournalError.invalidRecord }
@@ -766,7 +865,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private func updateIndex<Value: Codable>(_ kind: String, key: String, value: Value,
-                                              version: UInt64, root: Root) throws {
+                                              version: UInt64, root: Root,
+                                              commitID: UUID? = nil) throws {
         let url = indexURL(kind, key)
         let shard = url.deletingLastPathComponent()
         if !FileManager.default.fileExists(atPath: shard.path) {
@@ -779,11 +879,32 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         } else {
             old = nil
         }
+        let witnessExists = try Self.witnessedIndexes.contains(kind) &&
+            self.witnessExists(kind, key)
+        let witnessPublished = try witnessExists && witnessWasPublished(loadWitness(kind, key), root: root)
         let previous = [old?.current, old?.previous].compactMap { $0 }.first { slot in
             slot.key == key && slot.version <= root.sequence &&
-                (kind != "positions" || ((slot.value as? Location)?.generation ?? UInt64.max) <= root.layoutGeneration)
+                (kind != "positions" || ((slot.value as? Location)?.generation ?? UInt64.max) <= root.layoutGeneration) &&
+                (!Self.witnessedIndexes.contains(kind) || witnessPublished)
         }
         if let old, old.current.key != key { throw AgentJournalError.invalidRecord }
+        if Self.witnessedIndexes.contains(kind) {
+            guard let commitID else { throw AgentJournalError.invalidRecord }
+            if previous != nil {
+                guard witnessPublished else {
+                    throw AgentJournalError.invalidRecord
+                }
+            } else {
+                if witnessPublished {
+                    // The published key's index disappeared; never turn a
+                    // retry into a new identity or Session.
+                    throw AgentJournalError.invalidRecord
+                }
+                // The witness is durable before the index and CURRENT. A
+                // failed candidate may safely be replaced on the next write.
+                try publishWitness(kind, key: key, sequence: version, commitID: commitID)
+            }
+        }
         let index = Index(current: Slot(key: key, version: version, value: value), previous: previous)
         let bytes = try JSONEncoder().encode(index)
         try atomicWrite(JSONEncoder().encode(IndexEnvelope(storeID: storeID,
@@ -802,6 +923,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
               let location: Location = try pointer("positions", key: String(sequence), root: root) else {
             throw AgentJournalError.invalidRecord
         }
+        guard location.commitID != nil else { throw AgentJournalError.invalidRecord }
         return location
     }
 
@@ -844,7 +966,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
              root.lastFrame?.offset == location.offset)
     }
 
-    private func append(_ data: Data, to root: Root) throws -> Location {
+    private func append(_ data: Data, to root: Root, commitID: UUID) throws -> Location {
         let url = segmentURL(root.active)
         try validateManagedDirectory(url.deletingLastPathComponent())
         let fd = DarwinOrGlibcOpen(url.path, O_WRONLY | O_APPEND | O_NOFOLLOW, 0)
@@ -867,7 +989,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard fsync(fd) == 0 else { throw Self.ioError("sync active segment") }
         try fault?(.afterAppendSync)
         return Location(kind: "segment", file: root.active, offset: root.activeEnd,
-                        length: UInt32(data.count), generation: root.layoutGeneration)
+                        length: UInt32(data.count), generation: root.layoutGeneration,
+                        commitID: commitID)
     }
 
     private func rotateIfNeeded(_ root: Root) throws {
@@ -1026,7 +1149,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 guard let packID else { throw AgentJournalError.invalidRecord }
                 let old = try location(sequence, root: root)
                 let new = Location(kind: "state", file: packID, offset: offset,
-                                   length: length, generation: generation)
+                                   length: length, generation: generation,
+                                   commitID: old.commitID)
                 try updateIndex("positions", key: String(sequence), value: new,
                                 version: root.sequence, root: root)
                 if root.lastFrame?.file == old.file && root.lastFrame?.offset == old.offset {
@@ -1036,7 +1160,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             for sequence in discarded {
                 let old = try location(sequence, root: root)
                 let discardedLocation = Location(kind: "discarded", file: candidate.segment.id,
-                                                  offset: old.offset, length: old.length, generation: generation)
+                                                  offset: old.offset, length: old.length,
+                                                  generation: generation, commitID: old.commitID)
                 try updateIndex("positions", key: String(sequence), value: discardedLocation,
                                 version: root.sequence, root: root)
             }
@@ -1224,7 +1349,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let generation = root.layoutGeneration + 1
         for (sequence, old) in oldPositions {
             let discarded = Location(kind: "discarded", file: packID, offset: old.offset,
-                                     length: old.length, generation: generation)
+                                     length: old.length, generation: generation,
+                                     commitID: old.commitID)
             try updateIndex("positions", key: String(sequence), value: discarded,
                             version: root.sequence, root: root)
         }
@@ -1614,9 +1740,15 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             var queueLinks: [JournalFollowUpLink] = []
             if let admission = change.followUpAdmission {
                 let current = try followUpHead(sessionID: change.sessionID)
+                let prior = try followUp(sessionID: change.sessionID, inputID: admission.inputID)
+                if let prior, prior.state == .withdrawn {
+                    throw JournalFollowUpAdmissionError.withdrawn(
+                        storeID: store.storeID, sessionID: change.sessionID,
+                        inputID: admission.inputID, ordinal: prior.ordinal)
+                }
                 guard current.revision == admission.expectedQueueRevision,
                       current.queuedCount > 0, current.firstQueued != nil,
-                      let prior = try followUp(sessionID: change.sessionID, inputID: admission.inputID),
+                      let prior,
                       prior.state == .queued, current.firstQueued == prior.ordinal,
                       let runID = change.records.first?.runID,
                       change.records.allSatisfy({ $0.runID == runID }),
@@ -1690,12 +1822,12 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             // From the first write onward, a failure has a potentially
             // published result. Reopen and inspect the root before retrying.
             store.poisoned = true
-            let location = try store.append(bytes, to: root)
+            let location = try store.append(bytes, to: root, commitID: batch.commitID)
             try store.updateIndex("positions", key: String(next), value: location,
                                   version: next, root: root)
             if updateSession {
                 try store.updateIndex("sessions", key: batch.sessionID.uuidString, value: next,
-                                      version: next, root: root)
+                                      version: next, root: root, commitID: batch.commitID)
                 for offset in batch.messages.indices {
                     let key = "\(batch.sessionID.uuidString)/\(batch.messageStart + UInt64(offset))"
                     try store.updateIndex("messages", key: key,
@@ -1705,18 +1837,18 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             }
             if let mutation = batch.mutation {
                 try store.updateIndex("operations", key: mutation.intent.identity, value: next,
-                                      version: next, root: root)
+                                      version: next, root: root, commitID: batch.commitID)
                 try store.updateIndex("calls", key: Self.callKey(mutation.sessionID, mutation.runID,
                     .init(rawValue: mutation.intent.call.id)),
                                       value: next, version: next, root: root)
             }
             if batch.queueHead != nil {
                 try store.updateIndex("queue-heads", key: batch.sessionID.uuidString,
-                                      value: next, version: next, root: root)
+                                      value: next, version: next, root: root, commitID: batch.commitID)
             }
             for record in batch.queueChanges {
                 try store.updateIndex("queue-ids", key: SegmentedJournalStore.followUpKey(batch.sessionID, record.inputID),
-                                      value: next, version: next, root: root)
+                                      value: next, version: next, root: root, commitID: batch.commitID)
                 try store.updateIndex("queue-order", key: SegmentedJournalStore.followUpOrdinalKey(batch.sessionID, record.ordinal),
                                       value: next, version: next, root: root)
             }

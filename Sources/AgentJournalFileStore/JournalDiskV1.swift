@@ -4,8 +4,8 @@ import AgentTools
 import Foundation
 
 // These nested DTOs originated with schema 1 and remain explicitly converted
-// inside schema-2 batches. The public model/tool Codable layouts are not the
-// disk contract; format.json and BatchV2 enforce the new queue-aware boundary.
+// inside format-schema-3 BatchV2 frames. The public model/tool Codable layouts
+// are not the disk contract; format.json enforces this queue-aware boundary.
 struct DiskMessageV1: Codable {
     let id: UUID
     let role: String

@@ -4,7 +4,7 @@
 does not call a model or append to the formal conversation. `session.run(_:)`
 still starts immediately (or rejects overlap); `run.steer(_:)` still corrects
 the current Run. This queue is FIFO within one Session and is available only
-with a schema-2 `AgentJournalFileStore` durable Journal. A memory-only Agent
+with a schema-3 `AgentJournalFileStore` durable Journal. A memory-only Agent
 can still run read-only work without a queue.
 
 ## Public API and identities
@@ -29,6 +29,10 @@ complete request log.
 The durable states are `queued`, `withdrawn`, and `admitted(runID,
 formalMessageID)`. Withdrawal wins only before the combined startup commit;
 after that boundary it returns `.alreadyAdmitted` with the real association.
+If it wins while the resolver is still running, the dispatcher confirms the
+selected store/Session/input/ordinal and waits for startup cleanup before
+advancing to the next FIFO item. A true writer conflict or unknown publication
+still pauses; a withdrawal is never inferred from a generic conflict error.
 Cancellation of that Run does not undo the formal input. A queue-only commit
 does not advance conversation revision or change the active model context.
 
@@ -103,26 +107,35 @@ and cancellation pause the queue for explicit Host action.
 
 ## Disk format and failure handling
 
-New stores use `format.json` schema 2 with `BatchV2` queue deltas and managed
+New stores use `format.json` schema 3 with `BatchV2` queue deltas and managed
 `queue-heads/`, `queue-ids/`, `queue-order/` and `queue-links/` indexes. The
 successor link is a small delta, so a new short item does not rewrite the
 preceding large input body. The unchanged nested
 message/mutation DTOs remain explicitly converted under this batch format.
-Schema-1 stores, unknown future schemas and older framed Journal files are
+Schema-1, unreleased schema-2, unknown future schemas and older framed Journal files are
 rejected without overwrite, reset, memory fallback or implicit migration.
-Old binaries reject schema 2 before writing. A queue admission, Run ID and
+Old binaries reject schema 3 before writing. A queue admission, Run ID and
 formal user message publish in **one** checksummed startup frame and one
 `CURRENT` visibility boundary. Queue-only writes touch the queue revision,
 not the Session conversation revision. Physical packing may reclaim obsolete
 process files after the current indexes retain queued text, terminal inputID
 identity, admitted links and all mutation facts. Total disk usage can still
 grow with genuinely retained inputs and operation identities.
+Schema 3 adds a first-publication witness in a separate managed shard for the Session, queue-head,
+queue-ID and operation index files. A missing committed index cannot be read
+as an empty Session/queue/ledger; the store fails explicitly. A witness from a
+failed, unpublished transaction does not create an input or block a different
+first-use identity. These per-key checks do not scan the whole store.
 
 If a write result is `commitUnknown`, stop writing through that poisoned
 handle, reopen and query the same input ID; do not allocate a new ID or infer
 noncommit from cancellation. Permission, corruption and disk-full failures
 remain explicit. The independent-process `SIGKILL` fixture tests process
 termination and uncertain external effects, **not** power-loss durability.
+After stop and actual drain, a poisoned Journal can be closed to release the
+writer lock; this does not settle or undo its uncertain batch. Retained old
+Session objects cannot start work through that closed handle. If close fails,
+ownership remains with the old handle until a successful retry.
 This local single-writer format is not cross-device replication or an OS
 sandbox. See [ADR 0007](../adr/0007-durable-follow-up-queue.md) and
 [mutation recovery](swift-agent-mutation-recovery.md).

@@ -2,6 +2,7 @@
 
 Status: Implemented on `codex/rc4-follow-up-queue`; exact-head qualification is recorded in PR #22
 Date: 2026-09-27
+Closeout amendment: 2026-09-28 (PR #22 index integrity and poisoned close)
 
 ## Integrated baseline and scope
 
@@ -87,8 +88,11 @@ after reopening before either outcome is reported as certain.
 
 ## Journal format and cost boundary
 
-The integrated baseline opens format schema 1 and writes `BatchV1`. The new
-runtime **creates and opens only format schema 2** with `BatchV2`. The
+The integrated baseline opens format schema 1 and writes `BatchV1`. The
+unreleased first queue candidate used schema 2 / `BatchV2`. Independent PR #22
+review reproduced silent loss of committed facts when a required index file
+vanished. The corrected runtime **creates and opens only format schema 3**;
+its queue batch still uses the explicit `BatchV2` payload. The
 unchanged nested `DiskMessageV1`/`DiskMutationV1` DTOs remain explicitly
 converted under the new batch boundary. `BatchV1` stores a Session header, formal messages, optional
 mutation and record count; it does **not** persist arbitrary `AgentJournalEvent`
@@ -111,13 +115,21 @@ integrity, maintenance and GC proof; do not retain a segment forever merely
 because it once held a queued item. Normal enqueue encodes only its delta and
 bounded index/root metadata, never a full queue or conversation.
 
-Creating a new store uses schema 2. Opening a schema-1 store with the new
-queue runtime returns typed `unsupportedFormat` and leaves bytes untouched;
-opening schema 2 with an old reader must likewise reject it. No implicit
-migration, reset, dual-writer mode or file-copy cutover is part of this
-slice. The queue index positions and managed blob references participate in
+Creating a new store uses schema 3. Opening a schema-1 or unreleased schema-2
+store returns typed `unsupportedFormat` and leaves bytes untouched; old readers
+reject schema 3. There is no implicit migration, reset, dual-writer mode or
+file-copy cutover in this slice. Queue index positions and managed blob references participate in
 segment packing, obsolete-pack cleanup and GC. Storage corruption or an
 unrecognized format fails explicitly; neither path creates an empty store.
+
+Each first published Session, queue-head, queue-ID and operation index now
+has a separate per-key witness. A witness is synchronized before its index
+and root publication; an unpublished candidate is distinguished from an
+actual commit by the immutable commit ID retained in the position index,
+including after physical packing. A missing published index or witness fails
+before a dangerous query/write; a key never published remains absent. Checks
+touch the requested key and at most one commit position, not the full log.
+Witnesses and terminal identity indexes live as long as the operation domain.
 
 ## Dispatch, re-binding, cancellation and drain
 
@@ -162,3 +174,10 @@ fulfillment. `journal.close()` rejects an active dispatcher/Run/resolver lease;
 after stop and real drain a sole-user store can close, while another Session's
 valid work still prevents close. No store transaction/lock spans Provider,
 resolver, executor or drain awaits.
+
+The dispatcher may skip a head withdrawn during resolution only after the
+atomic startup rejects that exact store/Session/input/ordinal as withdrawn,
+startup cleanup has exited, and its owner/generation still permits dispatch.
+Neither `concurrentWriter` nor `commitUnknown` is a withdrawal result.
+A poisoned handle may close after all owners drain; close does not decide the
+unknown publication and the same handle cannot resume reads or writes.

@@ -1,8 +1,9 @@
 import AgentCore
 import Foundation
 
-// Queue-specific schema-2 DTOs. Old schema-1 readers reject format.json
-// before they can misinterpret these records as ordinary Session commits.
+// Queue payload DTOs introduced with the unreleased schema-2 candidate.
+// Format schema 3 retains them and adds per-key index witnesses; older
+// readers reject format.json before decoding these records.
 struct DiskFollowUpV2: Codable {
     let sessionID: UUID
     let ordinal: UInt64

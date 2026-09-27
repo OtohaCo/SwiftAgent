@@ -133,6 +133,7 @@ public actor AgentFollowUpDispatcher {
     /// inspecting an interrupted admitted Run. This never retries that Run,
     /// marks it successful or clears an unresolved mutation.
     public func resumeAfterInspection(inputID: String) async throws {
+        guard mode != .stopped else { throw AgentFollowUpError.dispatcherStopped }
         guard mode == .paused else { throw AgentFollowUpError.staleDispatch }
         guard let interrupted = interruptedInputID,
               interrupted.utf8.elementsEqual(inputID.utf8),
@@ -347,6 +348,24 @@ public actor AgentFollowUpDispatcher {
         startupTask = startup
         let run: AgentRun
         do { run = try await startup.value }
+        catch let JournalFollowUpAdmissionError.withdrawn(storeID, withdrawnSessionID, withdrawnInputID, ordinal) {
+            startupTask = nil
+            currentInputID = nil
+            await session.waitForQueuedStartupExit(ownerID: ownerID)
+            guard mode == .running, attemptGeneration == generation else { return }
+            guard storeID == identity.storeID, withdrawnSessionID == sessionID,
+                  withdrawnInputID.utf8.elementsEqual(head.input.inputID.utf8),
+                  ordinal == head.ordinal,
+                  let actual = try await journal.followUp(sessionID: sessionID, inputID: withdrawnInputID),
+                  actual.storeID == storeID, actual.sessionID == sessionID,
+                  actual.ordinal == ordinal, actual.state == .withdrawn else {
+                throw AgentJournalError.concurrentWriter
+            }
+            // The other store commit won, and no Run/formal input was admitted.
+            // A pause or stop during the confirming read still owns the decision.
+            guard mode == .running, attemptGeneration == generation else { return }
+            return
+        }
         catch {
             startupTask = nil
             currentInputID = nil

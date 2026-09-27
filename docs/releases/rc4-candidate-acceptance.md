@@ -1,6 +1,6 @@
 # RC4 candidate acceptance record
 
-Status: PR #22 candidate under independent review. This is not a release or
+Status: PR #22 candidate under independent review and closeout. This is not a release or
 final-main qualification. The reviewed base is `44e48f0783be0c467d45ac4b7d9f98c42e01718e`;
 the original queue head was `1f573252ec65a8cd897b5ec37f2c638ae8f521b2`.
 Record the final PR head, tree and exact CI checkout in the PR review before a
@@ -10,7 +10,7 @@ merge decision. Recheck the resulting `main` and production Hosts separately.
 
 | Slice | Candidate contract and evidence boundary |
 | --- | --- |
-| Segmented Journal | Indexed, incrementally committed schema-2 durable facts; trusted intent, settlement and recovery remain in the Journal. Schema 1 and older formats have no automatic migration. |
+| Segmented Journal | Indexed, incrementally committed schema-3 durable facts; trusted intent, settlement and recovery remain in the Journal. Schema 1 and unreleased schema 2 have no automatic migration. |
 | Context Pipeline | Request-only sourced projection with per-request budget; summary and excerpt are derived views, not formal messages or Evidence. |
 | Scoped Capability Binding | Run-bound tool/backend/resource snapshot; revocation blocks new final execution admission, while in-flight physical drain retains its owner. |
 | Durable Follow-up Queue | Stable input identity, FIFO receive, combined queued-to-Run/formal-input publication, explicit Host dispatch and inspection after uncertain admission. |
@@ -38,9 +38,32 @@ for live Provider, OS sandbox, power-loss or production Host qualification.
   isolated store can reopen without automatically running queued or uncertain
   admitted inputs. Host inspection explicitly decides when later inputs may run.
 
+## Independent review closeout boundaries
+
+- The preserved `/tmp/rc4-review-probe.diff` originally exposed a withdrawn
+  resolver head that stalled later FIFO input. Formal barrier tests show that
+  only the selected, reliably withdrawn store/Session/input/ordinal can advance
+  after startup cleanup; pause/stop, a real Journal error, `commitUnknown` and
+  other conflicts do not become silent withdrawal results.
+- A poisoned handle can close after its dispatcher, Run, observer and accepted
+  I/O drain. Closing decides no uncertain commit. The old Session remains
+  unusable; a new owner reopens and inspects the published root. Failed close
+  retains the old writer lock for an explicit retry.
+- Removing one necessary index from a closed synthetic store previously made
+  Session/queue/mutation facts look absent; operation identity could then
+  reach a second real disposable-file execution. The schema-3 index witness
+  and stable position commit ID make these reads/writes fail explicitly while
+  preserving legitimately unpublished keys. Normal maintenance, retained
+  messages, queue associations and settled mutation state are regression
+  checked with the damaged index restored after inspection.
+- The earlier `793403d` push/PR results qualify that historical schema-2
+  candidate only. The closeout SHA/tree, local gates, Release count benchmark
+  and hosted checkout evidence must be recorded separately in PR #22 after
+  final validation.
+
 ## Release decision still separate
 
-- Schema 2 is a breaking format change. Schema 1 and legacy Journal files are
+- Schema 3 is a breaking format change. Schema 1, unreleased schema 2 and legacy Journal files are
   rejected without conversion. Creating an empty store for an old task does
   **not** preserve its operation-domain deduplication and must not be treated
   as a migration or safe resume.

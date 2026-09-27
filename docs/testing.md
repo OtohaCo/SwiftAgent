@@ -58,8 +58,8 @@ and a real disposable-file mutation without re-execution on settled replay.
 write and verifies the admitted queue link, unresolved mutation and absence of
 automatic replay. This is a process-crash test, not power-loss qualification.
 `AgentFollowUpQueueTests` injects pre-publication and uncertain publication
-failures, plus maintenance and resolver/startup races. Old schema-1 fixtures
-are explicitly rejected by the schema-2 reader; no automatic migration test
+failures, plus maintenance and resolver/startup races. Old schema-1 and
+unreleased schema-2 fixtures are explicitly rejected by the schema-3 reader; no automatic migration test
 is expected to pass.
 
 `Scripts/benchmark-follow-up-queue.sh COUNT SEED` builds Release and measures

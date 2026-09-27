@@ -80,6 +80,12 @@ public enum AgentFollowUpError: Error, Equatable, Sendable {
     case needsInspection
 }
 
+/// Produced only by the atomic startup publication after reading the actual
+/// selected input. It is not a general concurrent-writer escape hatch.
+package enum JournalFollowUpAdmissionError: Error, Equatable, Sendable {
+    case withdrawn(storeID: UUID, sessionID: UUID, inputID: String, ordinal: UInt64)
+}
+
 package struct JournalFollowUpHead: Codable, Equatable, Sendable {
     package var revision: UInt64
     package var nextOrdinal: UInt64
