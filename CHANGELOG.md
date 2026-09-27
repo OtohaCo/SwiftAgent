@@ -4,7 +4,12 @@ All notable changes to SwiftAgent are recorded here.
 
 ## [Unreleased]
 
-Development after `1.0.0-rc.3` is not part of the RC3 release scope.
+Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
+
+## [1.0.0-rc.4] - 2026-09-28
+
+RC4 is a breaking SDK prerelease, not a stable 1.0 release or production Host
+cutover. See [RC4 release notes](docs/releases/1.0.0-rc.4.md).
 
 ### Breaking: RC4 durable follow-up queue
 

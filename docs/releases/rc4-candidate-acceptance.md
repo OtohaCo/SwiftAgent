@@ -1,10 +1,11 @@
 # RC4 candidate acceptance record
 
-Status: PR #22 candidate under independent review and closeout. This is not a release or
-final-main qualification. The reviewed base is `44e48f0783be0c467d45ac4b7d9f98c42e01718e`;
+Status: PR #22 merged as `3e9c57ff9f4857430d0bee1ecaa2314d558dcb5f`.
+This record describes the reviewed candidate, not final-main or live
+qualification. The reviewed base is `44e48f0783be0c467d45ac4b7d9f98c42e01718e`;
 the original queue head was `1f573252ec65a8cd897b5ec37f2c638ae8f521b2`.
-Record the final PR head, tree and exact CI checkout in the PR review before a
-merge decision. Recheck the resulting `main` and production Hosts separately.
+The PR records its final head, tree and exact CI checkouts. Recheck the
+release-metadata main commit and production Hosts separately.
 
 ## Four frozen RC4 feature slices
 
@@ -57,9 +58,9 @@ for live Provider, OS sandbox, power-loss or production Host qualification.
   messages, queue associations and settled mutation state are regression
   checked with the damaged index restored after inspection.
 - The earlier `793403d` push/PR results qualify that historical schema-2
-  candidate only. The closeout SHA/tree, local gates, Release count benchmark
-  and hosted checkout evidence must be recorded separately in PR #22 after
-  final validation.
+  candidate only. PR #22 records the schema-3 closeout SHA/tree, local gates,
+  Release count benchmark and hosted checkout evidence. Its checks do not
+  qualify a later release-metadata commit on `main`.
 
 ## Release decision still separate
 
@@ -70,9 +71,9 @@ for live Provider, OS sandbox, power-loss or production Host qualification.
 - Queue input identities and terminal mutation identities are retained for the
   operation-domain lifetime. Packing reclaims redundant process files but
   cannot promise fixed total disk usage.
-- Capture exact-head local macOS and concurrency gates, queue/process and
-  ExternalClient fixtures, and hosted macOS/Linux/Apple push and PR checkout
-  SHA/tree in PR #22. Re-run after any code change. A merged-main check is
-  required later; green candidate CI is not a published RC4 approval.
+- Capture release-metadata main's local macOS and concurrency gates,
+  queue/process and ExternalClient fixtures, hosted macOS/Linux/Apple push
+  checkout SHA/tree, and a clean remote SwiftPM consumer in the release
+  record. PR #22's green candidate CI is not final-main release approval.
 - No release tag, production store cutover or Host dependency change is
   authorized by this record.

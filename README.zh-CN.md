@@ -40,20 +40,20 @@ SwiftAgent 是一个不绑定模型厂商的 Swift Agent 运行时，提供类�
 
 ## 版本范围与安装
 
-last-verified: 2026-09-21
+last-verified: 2026-09-28
 
-当前已发布的预发布版本是 `1.0.0-rc.3`，使用明确版本固定依赖：
+RC4 预发布候选版本是 `1.0.0-rc.4`。发布标签创建后，使用明确版本固定依赖：
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/OtohaCo/SwiftAgent.git",
-        exact: "1.0.0-rc.3"
+        exact: "1.0.0-rc.4"
     )
 ]
 ```
 
-参见[RC3 发布说明](docs/releases/1.0.0-rc.3.md)。RC3 是聚焦兼容性和执行报告加固的预发布 hotfix，不是稳定版 `1.0.0`。应始终阅读与 App 实际安装的依赖版本一致的文档。只添加目标实际需要的 products。参见[版本策略](docs/guides/swift-agent-versioning.md)。
+参见[RC4 发布说明](docs/releases/1.0.0-rc.4.md)。RC4 是 SDK 预发布版本，包含不兼容的 Journal 格式与公开 API 变化，不是稳定版 `1.0.0`；旧存储不会自动迁移，也不代表生产 Host 已完成切换验收。应始终阅读与 App 实际安装的依赖版本一致的文档。只添加目标实际需要的 products。参见[版本策略](docs/guides/swift-agent-versioning.md)。
 
 通过 Git submodule 提供本地 package 时，SDK commit 由父仓库 gitlink 固定；App 的 `Package.resolved` 不负责固定这个本地 package。先提交并推送 SDK 修改，再验证使用它的 App，最后更新 gitlink。不要静默跟随远端分支，也不要为了让猜测出来的 API 编译通过而升级依赖。
 

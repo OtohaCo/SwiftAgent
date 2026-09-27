@@ -1,6 +1,6 @@
 # SwiftAgent Semantic Versioning
 
-last-verified: 2026-09-27
+last-verified: 2026-09-28
 
 SwiftAgent follows Swift Package Manager rules, not a promise of ABI stability.
 A major version is required when a change can fail a client that compiled
@@ -38,7 +38,7 @@ These source breaks happen before the first tagged 1.0:
 - `AnyAgentTool`, `ToolRegistry`, and `PreparedToolCall` are package-only.
   `ToolRegistryError` remains public.
 
-## Journal replacement in unreleased work
+## RC4 Journal replacement
 
 The RC4 follow-up queue advances the segmented file store from format schema
 1 / `BatchV1` through an unreleased schema-2 candidate to schema 3. Schema 3
@@ -70,16 +70,16 @@ RC4 adds opt-in Session-created `AgentCapabilityBinding` and a
 non-authorizing `AgentRun.capabilities` diagnostic snapshot; `revoke()` and
 `waitForDrain()` are distinct. Existing Runs without an explicit binding
 retain their current tool behavior. Dynamic mutation tools require durable
-Journal storage before candidate input admission. This is unreleased API
-development, not a claim of runtime permission recovery after restart.
+Journal storage before candidate input admission. The RC4 API does not restore
+runtime permissions after restart.
 
 RC4 adds opt-in `AgentCompositeContextProjector`, source materials, bounded
 reports and indexed `AgentSession` source-range queries. The existing binding
 initializer gains an optional report buffer with a default of `nil`; identity
 projection remains the default. The public projection input/result structs
 gain defaulted source-ID and report parameters. Rebuild downstream clients
-against the eventual release candidate and regenerate its symbol graph; this
-entry is an API change notice, not a release qualification.
+against the RC4 tag and regenerate their symbol graph; this entry describes
+the API contract, while the release note records qualification limits.
 
 Source-bound wrappers now declare `AgentContextSourceReferencing` requirements;
 `AgentContextProjectionInput` carries committed read-only result evidence
