@@ -1,8 +1,10 @@
 # RC4 durable follow-up queue: acceptance and fault specification
 
 Status: review-only test specification; **none of these queue tests exist or
-pass at this SHA**. The implementation gate is the integrated `main` described
-in [ADR 0007](../adr/0007-durable-follow-up-queue.md). Use synthetic inputs,
+pass at this SHA**. PR #20 and PR #21 are integrated in `main` at
+`44e48f0783be0c467d45ac4b7d9f98c42e01718e`; this is the implementation
+baseline described in [ADR 0007](../adr/0007-durable-follow-up-queue.md).
+Use synthetic inputs,
 temporary stores/files and fixture Providers; no live credentials or real
 business mutation. A `SIGKILL` test proves process-termination recovery only,
 not power-loss durability.
@@ -153,5 +155,5 @@ On a **clean checkout of the final implemented SHA**, run
 queue/fault/process suites, Journal/Context/Capability regressions, the
 ExternalClient executable and Provider fixtures. Verify hosted macOS, Linux
 and Apple push/PR jobs by *actual checkout SHA and tree*, not workflow
-`head_sha`. If #20/#21 merge or the queue code changes after testing, rerun
-the affected gates. Until then all queue validation is **not run**.
+`head_sha`. If the integrated base or queue code changes after testing, rerun
+the affected gates. Queue validation remains **not run** until code exists.

@@ -1,10 +1,11 @@
 # RC4 durable follow-up queue: public API draft
 
-Status: review-only sketch, **not a compiled Swift API**. Depends on both PR
-#20 (`033bf567b64ebd1b9dcee6f31ed8c2168600c694`) and PR #21
-(`056c790e1f6d93b10989697914aa46a0e4eea94a`) landing on `main` first.
-No queue methods or schema-2 writer exist at this SHA. After integration,
-verify the final signatures and revise this draft before implementation.
+Status: review-only sketch, **not a compiled Swift API**. PR #20 and PR #21
+are integrated in `main` at `44e48f0783be0c467d45ac4b7d9f98c42e01718e`
+(tree `cda1c2f7bd5fa28bf15e8713166522ff4bbf0562`). This draft has been
+checked against `AgentSession.run`, `AgentModelBinding`,
+`AgentCapabilityBinding`, `AgentJournal.appendStartupCheckpoint` and
+`JournalStoreChange` there. No queue methods or schema-2 writer exist yet.
 
 ## Proposed Core surface
 
@@ -112,6 +113,7 @@ let dispatcher = try await session.startFollowUpDispatch(policy: policy, resolve
 _ = try await current.wait()
 try await current.waitForDrain()
 await dispatcher.pause()
+await dispatcher.stop()                     // pause alone retains the consumer claim
 try await dispatcher.waitForDrain()
 
 try await journal.close()

@@ -1,17 +1,19 @@
-# ADR 0007: Durable FIFO follow-up queue (pre-integration proposal)
+# ADR 0007: Durable FIFO follow-up queue
 
 Status: Proposed; **no queue runtime or disk schema is implemented**
 Date: 2026-09-27
 
-## Integration gate and scope
+## Integrated baseline and scope
 
-This proposal was reviewed against PR #20 at `033bf567b64ebd1b9dcee6f31ed8c2168600c694`
-and PR #21 at `056c790e1f6d93b10989697914aa46a0e4eea94a` (tree
-`cda1c2f7bd5fa28bf15e8713166522ff4bbf0562`). Both are still open;
-`main` is `6c399374440562063a3692e9ea732f8df33aa0f4`. Implementation
-starts only from a future `main` containing their *actual final* fixes. At
-that point, inspect the integrated API and revise this ADR before writing the
-first queue batch. This document does not authorize a third stacked feature PR.
+PR #20 (`033bf567b64ebd1b9dcee6f31ed8c2168600c694`) merged as
+`3d25da6de66e36287f942bc6956ddceb6a789779`. PR #21
+(`056c790e1f6d93b10989697914aa46a0e4eea94a`) merged on top as
+`44e48f0783be0c467d45ac4b7d9f98c42e01718e`. This proposal is based on
+that final `main` tree, `cda1c2f7bd5fa28bf15e8713166522ff4bbf0562`.
+The main-line macOS, Linux and Apple CI jobs passed on that exact merge SHA.
+The three design documents were cherry-picked from local commit
+`f12730ab8922d597d98216de1f96b486b59d7ae7` and corrected against the
+integrated implementation. Queue runtime and queue tests remain future work.
 
 Version one is FIFO within one Session. `run(_:)` still starts immediately or
 rejects conflict; `run.steer(_:)` still corrects the current Run. An explicit
@@ -74,7 +76,8 @@ after reopening before either outcome is reported as certain.
 
 ## Journal format and cost boundary
 
-The present `BatchV1` stores a Session header, formal messages, optional
+The integrated `main` still opens format schema 1 and writes `BatchV1`
+(schema 1). `BatchV1` stores a Session header, formal messages, optional
 mutation and record count; it does **not** persist arbitrary `AgentJournalEvent`
 cases. `JournalStoreChange` increments the Session revision on every existing
 publish. Merely adding an enum case or writing an adjacent queue file cannot
@@ -95,8 +98,10 @@ Creating a new store uses schema 2. Opening a schema-1 store with the new
 queue runtime returns typed `unsupportedFormat` and leaves bytes untouched;
 opening schema 2 with an old reader must likewise reject it. No implicit
 migration, reset, dual-writer mode or file-copy cutover is part of this
-slice. Do not begin implementing until the integrated main's actual schema
-and GC representation are rechecked.
+slice. The integrated `JournalStoreView`, `JournalStoreChange`,
+`SegmentedJournalStore` index/GC and `AgentSession.startRun` seams have been
+checked; none currently records queue state. Recheck those seams before
+writing the first schema-2 batch if the implementation base changes.
 
 ## Dispatch, re-binding, cancellation and drain
 
