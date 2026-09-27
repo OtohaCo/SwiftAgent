@@ -63,6 +63,9 @@ request still passes Core's byte check and the existing token estimator for
 messages, tools and structured output, with output/reasoning/protocol reserve.
 An estimate is not actual Provider usage. If no safe view fits, the request
 fails; formal conversation is unchanged by projection.
+An in-Run projector or estimator that ignores cancellation still owns the
+Session's physical drain until it exits; a replacement Run waits or reaches
+its own deadline. A late result cannot enter the Provider after cancellation.
 
 For older, closed text-only groups, the Host asks
 `session.contextHistorySpan(start:count:)` for indexed Journal message IDs

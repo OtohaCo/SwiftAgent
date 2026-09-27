@@ -16,6 +16,7 @@ package struct AgentLoop: Sendable {
     private let scheduler: ToolScheduler
     private let modelContextByteLimit: Int?
     private let journal: AgentJournal?
+    private let projectionDrain = AgentProjectionDrain()
 
     private var model: ModelID { binding.model }
     private var provider: any ModelProvider { binding.provider }
@@ -81,8 +82,10 @@ package struct AgentLoop: Sendable {
     package func waitForRunToDrain(sessionID: UUID, runID: UUID) async {
         async let providerDrain = waitForProviderToDrain(sessionID: sessionID, runID: runID)
         async let toolDrain = scheduler.waitForRunToDrain(sessionID: sessionID, runID: runID)
+        async let contextDrain = projectionDrain.wait()
         await providerDrain
         await toolDrain
+        await contextDrain
     }
 
     private func waitForProviderToDrain(sessionID: UUID, runID: UUID) async {
@@ -306,6 +309,33 @@ package struct AgentLoop: Sendable {
         modelTurn: Int,
         structuredOutput: StructuredOutputSchema?,
         allowUnresolvedToolTail: Bool = false
+    ) async throws -> AgentPreparedModelRequest {
+        try Task.checkCancellation()
+        await projectionDrain.begin()
+        do {
+            try Task.checkCancellation()
+            let prepared = try await buildRequest(
+                messages: messages, sessionID: sessionID, runID: runID,
+                conversationRevision: conversationRevision, contextEpoch: contextEpoch,
+                modelTurn: modelTurn, structuredOutput: structuredOutput,
+                allowUnresolvedToolTail: allowUnresolvedToolTail)
+            await projectionDrain.finish()
+            return prepared
+        } catch {
+            await projectionDrain.finish()
+            throw error
+        }
+    }
+
+    private func buildRequest(
+        messages: [ModelMessage],
+        sessionID: UUID,
+        runID: UUID,
+        conversationRevision: UInt64,
+        contextEpoch: UInt64,
+        modelTurn: Int,
+        structuredOutput: StructuredOutputSchema?,
+        allowUnresolvedToolTail: Bool
     ) async throws -> AgentPreparedModelRequest {
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else {
             throw AgentLoopError.providerMismatch
@@ -531,6 +561,28 @@ package struct AgentLoop: Sendable {
             arguments = call.argumentsJSON
         }
         return "\(operationID)/\(call.name)/\(arguments)"
+    }
+}
+
+/// A timed-out noncooperative projector/estimator may still be physically
+/// running. Session drain must retain the Run and store lease until it exits.
+private actor AgentProjectionDrain {
+    private var active = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func begin() { active += 1 }
+
+    func finish() {
+        active -= 1
+        guard active == 0 else { return }
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    func wait() async {
+        guard active > 0 else { return }
+        await withCheckedContinuation { waiters.append($0) }
     }
 }
 

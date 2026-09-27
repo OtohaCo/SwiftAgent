@@ -474,6 +474,34 @@ struct AgentModelBindingTests {
         #expect(await session.activeRunID == nil)
     }
 
+    @Test func cancelledInRunProjectionKeepsDrainOwnershipUntilCollectorFinishes() async throws {
+        let gate = NonCooperativeProjectionGate()
+        let provider = ScriptedProvider { request, turn in
+            turn == 1 ? toolResponse(request, [addition("context-drain")]) : textResponse(request, "unexpected")
+        }
+        let agent = try Agent(model: fixtureModel, provider: provider,
+                              tools: [try AddTool(log: EffectLog())])
+        let session = try agent.makeSession()
+        let binding = try AgentModelBinding(
+            profileID: "slow-second-projection", profileRevision: "1",
+            model: fixtureModel, provider: provider, deployment: deployment("slow-projection"),
+            projector: SecondTurnBlockingProjector(gate: gate))
+        let run = try await session.run("calculate", using: binding)
+        await gate.waitUntilBlocked()
+        await run.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await run.wait() }
+        #expect(await run.isDrainComplete() == false)
+        let short = try AgentBudget(maxModelTurns: 1, maxToolCalls: 0,
+                                    deadline: .now.advanced(by: .milliseconds(100)))
+        await #expect(throws: AgentLoopError.deadlineExceeded) {
+            try await session.run("next", budget: short)
+        }
+        await gate.release()
+        try await run.waitForDrain()
+        #expect(await run.isDrainComplete())
+        #expect(await provider.log.requests.count == 1)
+    }
+
     @Test func projectorExceedingRunDeadlineDoesNotCommitInput() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("swift-agent-preflight-projector-\(UUID().uuidString).log")
@@ -876,6 +904,18 @@ private struct NonCooperativeBlockingProjector: AgentContextProjector {
         let projection = try await AgentIdentityContextProjector().project(input)
         await gate.finished()
         return projection
+    }
+}
+
+private struct SecondTurnBlockingProjector: AgentContextProjector {
+    let gate: NonCooperativeProjectionGate
+
+    func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
+        if input.modelTurn > 1 {
+            await gate.wait()
+            await gate.finished()
+        }
+        return try await AgentIdentityContextProjector().project(input)
     }
 }
 

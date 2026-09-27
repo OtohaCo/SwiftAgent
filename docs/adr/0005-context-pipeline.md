@@ -47,6 +47,11 @@ another Run. The report sink receives sanitized bounded metadata, never full
 prompts, paths, credentials or opaque continuation. Source hashes are version
 markers, not authorization or malicious-tamper authentication.
 
+In-Run projection and estimation are counted as physical work. A cooperative
+deadline can logically finish a Run before a Host projector/estimator exits;
+Session drain retains its identity and store lease until that work completes.
+The cancelled worker checks its cancellation again before any Provider send.
+
 ## Scope
 
 The first slice accepts Host-prepared source snapshots through the Run binding.
