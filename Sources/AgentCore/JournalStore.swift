@@ -100,6 +100,10 @@ package protocol JournalStoreView: AnyObject {
     func nextRecordSequence() throws -> UInt64
     func publish(_ change: JournalStoreChange) throws
     func messages(sessionID: UUID, after ordinal: UInt64, limit: Int) throws -> [JournalMessage]
+    func followUpHead(sessionID: UUID) throws -> JournalFollowUpHead
+    func followUp(sessionID: UUID, inputID: String) throws -> JournalStoredFollowUp?
+    func followUps(sessionID: UUID, after ordinal: UInt64, limit: Int) throws -> [JournalStoredFollowUp]
+    func publishFollowUp(_ change: JournalFollowUpChange) throws
 }
 
 package struct JournalSessionHeader: Codable, Equatable, Sendable {
@@ -172,10 +176,12 @@ package struct JournalStoreChange: Sendable {
     package let messages: [JournalMessage]
     package let mutation: JournalStoredMutation?
     package let records: [AgentJournalRecord]
+    package let followUpAdmission: JournalFollowUpAdmission?
 
     package init(sessionID: UUID, expectedRevision: UInt64, header: JournalSessionHeader,
                  messageStart: UInt64, messages: [JournalMessage],
-                 mutation: JournalStoredMutation?, records: [AgentJournalRecord]) {
+                 mutation: JournalStoredMutation?, records: [AgentJournalRecord],
+                 followUpAdmission: JournalFollowUpAdmission? = nil) {
         self.sessionID = sessionID
         self.expectedRevision = expectedRevision
         self.header = header
@@ -183,6 +189,7 @@ package struct JournalStoreChange: Sendable {
         self.messages = messages
         self.mutation = mutation
         self.records = records
+        self.followUpAdmission = followUpAdmission
     }
 }
 

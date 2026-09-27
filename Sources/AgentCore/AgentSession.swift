@@ -257,6 +257,33 @@ public actor AgentSession {
         return .init(revision: conversationRevision, messages: history)
     }
 
+    /// Receives a future input without changing the current Run or formal
+    /// conversation. The durable store, not this actor's memory, confirms it.
+    public func enqueueFollowUp(_ input: AgentFollowUpInput) async throws -> AgentFollowUpRecord {
+        guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
+        return try await journal.enqueueFollowUp(input, sessionID: id)
+    }
+
+    public func followUp(inputID: String) async throws -> AgentFollowUpRecord? {
+        guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
+        return try await journal.followUp(sessionID: id, inputID: inputID)
+    }
+
+    public func followUpText(inputID: String) async throws -> String {
+        guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
+        return try await journal.followUpText(sessionID: id, inputID: inputID)
+    }
+
+    public func followUps(after ordinal: UInt64? = nil, limit: Int = 100) async throws -> [AgentFollowUpRecord] {
+        guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
+        return try await journal.followUps(sessionID: id, after: ordinal, limit: limit)
+    }
+
+    public func withdrawFollowUp(inputID: String) async throws -> AgentFollowUpWithdrawal {
+        guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
+        return try await journal.withdrawFollowUp(sessionID: id, inputID: inputID)
+    }
+
     /// Anchors a closed range to actual Journal message IDs. The caller can
     /// derive a request-only summary; no conversation or ledger write occurs.
     public func contextHistorySpan(start: Int, count: Int) async throws -> AgentContextHistorySpan {

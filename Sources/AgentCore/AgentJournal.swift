@@ -333,7 +333,8 @@ public actor AgentJournal {
         runID: UUID,
         deadline: ContinuousClock.Instant,
         timestamp: Date = Date(),
-        durability: AgentJournalDurability
+        durability: AgentJournalDurability,
+        followUpInputID: String? = nil
     ) throws -> [AgentJournalRecord] {
         try appendCheckpoint(
             events,
@@ -343,7 +344,8 @@ public actor AgentJournal {
             durability: durability,
             allowMutationSettlement: false,
             admissionDeadline: deadline,
-            checkAdmissionCancellation: true
+            checkAdmissionCancellation: true,
+            followUpInputID: followUpInputID
         )
     }
 
@@ -379,7 +381,8 @@ public actor AgentJournal {
         durability: AgentJournalDurability,
         allowMutationSettlement: Bool,
         admissionDeadline: ContinuousClock.Instant? = nil,
-        checkAdmissionCancellation: Bool = false
+        checkAdmissionCancellation: Bool = false,
+        followUpInputID: String? = nil
     ) throws -> [AgentJournalRecord] {
         try checkStartupAdmission(deadline: admissionDeadline, checkCancellation: checkAdmissionCancellation)
         if let store {
@@ -387,7 +390,8 @@ public actor AgentJournal {
             let result = try store.write { view in
                 try appendToStore(events, sessionID: sessionID, runID: runID,
                                   timestamp: timestamp, view: view,
-                                  allowMutationSettlement: allowMutationSettlement)
+                                  allowMutationSettlement: allowMutationSettlement,
+                                  followUpInputID: followUpInputID)
             }
             scheduleMaintenanceIfNeeded()
             return result
@@ -395,6 +399,7 @@ public actor AgentJournal {
         guard durability == .memory else {
             throw AgentJournalError.persistenceUnavailable("a durable store is required")
         }
+        guard followUpInputID == nil else { throw AgentFollowUpError.durableJournalRequired }
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
             throw AgentJournalError.mutationSettlementRequiresReconciliation
@@ -811,6 +816,135 @@ extension AgentJournal {
         }
     }
 
+    package func enqueueFollowUp(_ input: AgentFollowUpInput, sessionID: UUID) throws -> AgentFollowUpRecord {
+        try input.validate()
+        guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        let result = try store.write { view -> AgentFollowUpRecord in
+            if let existing = try view.followUp(sessionID: sessionID, inputID: input.inputID) {
+                guard existing.input.matches(input) else { throw AgentFollowUpError.inputConflict }
+                return existing.publicRecord(storeID: store.storeID)
+            }
+            var head = try view.followUpHead(sessionID: sessionID)
+            guard head.queuedCount < 128,
+                  input.text.utf8.count <= 8 * 1024 * 1024 - head.queuedBytes else {
+                throw AgentFollowUpError.queueFull
+            }
+            guard head.revision < .max, head.nextOrdinal < .max else { throw AgentJournalError.invalidRecord }
+            let oldRevision = head.revision
+            let ordinal = head.nextOrdinal
+            var changes: [JournalStoredFollowUp] = []
+            if let last = head.lastQueued {
+                guard var tail = try view.followUps(sessionID: sessionID, after: last, limit: 1).first,
+                      tail.ordinal == last, tail.state == .queued,
+                      tail.nextQueued == nil else { throw AgentJournalError.invalidRecord }
+                tail.nextQueued = ordinal
+                changes.append(tail)
+            } else { head.firstQueued = ordinal }
+            head.lastQueued = ordinal
+            head.nextOrdinal += 1
+            head.revision += 1
+            head.queuedCount += 1
+            head.queuedBytes += input.text.utf8.count
+            let accepted = JournalStoredFollowUp(sessionID: sessionID, ordinal: ordinal,
+                                                 input: input, state: .queued)
+            changes.append(accepted)
+            try view.publishFollowUp(.init(sessionID: sessionID, expectedRevision: oldRevision,
+                                            head: head, records: changes))
+            return accepted.publicRecord(storeID: store.storeID)
+        }
+        scheduleMaintenanceIfNeeded()
+        return result
+    }
+
+    package func followUp(sessionID: UUID, inputID: String) throws -> AgentFollowUpRecord? {
+        guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        return try store.read { view in
+            try view.followUp(sessionID: sessionID, inputID: inputID)?.publicRecord(storeID: store.storeID)
+        }
+    }
+
+    package func followUpText(sessionID: UUID, inputID: String) throws -> String {
+        guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        return try store.read { view in
+            guard let record = try view.followUp(sessionID: sessionID, inputID: inputID) else {
+                throw AgentFollowUpError.missingInput
+            }
+            return record.input.text
+        }
+    }
+
+    package func followUps(sessionID: UUID, after ordinal: UInt64?, limit: Int) throws -> [AgentFollowUpRecord] {
+        guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        guard (1...100).contains(limit) else { throw AgentFollowUpError.invalidInput }
+        guard ordinal != .max else { return [] }
+        return try store.read { view in
+            try view.followUps(sessionID: sessionID, after: ordinal.map { $0 + 1 } ?? 0, limit: limit)
+                .map { $0.publicRecord(storeID: store.storeID) }
+        }
+    }
+
+    package func firstQueuedFollowUp(sessionID: UUID) throws -> JournalStoredFollowUp? {
+        guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        return try store.read { view in
+            let head = try view.followUpHead(sessionID: sessionID)
+            guard let first = head.firstQueued else { return nil }
+            guard let record = try view.followUps(sessionID: sessionID, after: first, limit: 1).first,
+                  record.state == .queued else { throw AgentJournalError.invalidRecord }
+            return record
+        }
+    }
+
+    package func withdrawFollowUp(sessionID: UUID, inputID: String) throws -> AgentFollowUpWithdrawal {
+        guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        let result = try store.write { view -> AgentFollowUpWithdrawal in
+            guard var entry = try view.followUp(sessionID: sessionID, inputID: inputID) else {
+                throw AgentFollowUpError.missingInput
+            }
+            switch entry.state {
+            case .withdrawn: return .withdrawn
+            case .admitted(let runID, let messageID):
+                return .alreadyAdmitted(runID: runID, formalMessageID: messageID)
+            case .queued: break
+            }
+            var head = try view.followUpHead(sessionID: sessionID)
+            let oldRevision = head.revision
+            guard head.revision < .max, head.queuedCount > 0,
+                  head.queuedBytes >= entry.input.text.utf8.count else { throw AgentJournalError.invalidRecord }
+            var changes: [JournalStoredFollowUp] = []
+            if head.firstQueued == entry.ordinal {
+                head.firstQueued = entry.nextQueued
+            } else {
+                var cursor = head.firstQueued
+                var predecessor: JournalStoredFollowUp?
+                for _ in 0..<head.queuedCount {
+                    guard let ordinal = cursor,
+                          let candidate = try view.followUps(sessionID: sessionID, after: ordinal, limit: 1).first,
+                          candidate.ordinal == ordinal, candidate.state == .queued else {
+                        throw AgentJournalError.invalidRecord
+                    }
+                    if candidate.nextQueued == entry.ordinal { predecessor = candidate; break }
+                    cursor = candidate.nextQueued
+                }
+                guard var previous = predecessor else { throw AgentJournalError.invalidRecord }
+                previous.nextQueued = entry.nextQueued
+                changes.append(previous)
+            }
+            if head.lastQueued == entry.ordinal { head.lastQueued = changes.last?.ordinal }
+            head.queuedCount -= 1
+            head.queuedBytes -= entry.input.text.utf8.count
+            if head.queuedCount == 0 { head.firstQueued = nil; head.lastQueued = nil }
+            head.revision += 1
+            entry.state = .withdrawn
+            entry.nextQueued = nil
+            changes.append(entry)
+            try view.publishFollowUp(.init(sessionID: sessionID, expectedRevision: oldRevision,
+                                            head: head, records: changes))
+            return .withdrawn
+        }
+        scheduleMaintenanceIfNeeded()
+        return result
+    }
+
     public func mutationStatus(identity: String) throws -> JournalMutationStatus? {
         guard let store else { return nil }
         return try store.read { view in
@@ -849,7 +983,8 @@ extension AgentJournal {
 
     private func appendToStore(
         _ events: [AgentJournalEvent], sessionID: UUID, runID: UUID?, timestamp: Date,
-        view: any JournalStoreView, allowMutationSettlement: Bool
+        view: any JournalStoreView, allowMutationSettlement: Bool,
+        followUpInputID: String? = nil
     ) throws -> [AgentJournalRecord] {
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
@@ -939,11 +1074,16 @@ extension AgentJournal {
             nextHeader.pendingIdentity = nil
         }
         let mutation = changedKey.flatMap { storedRecords[$0] }.map(Self.storedMutation)
+        let admission = try followUpInputID.map { id in
+            JournalFollowUpAdmission(inputID: id,
+                expectedQueueRevision: try view.followUpHead(sessionID: sessionID).revision)
+        }
         try view.publish(JournalStoreChange(sessionID: sessionID,
                                             expectedRevision: initialHeader.revision,
                                             header: nextHeader,
                                             messageStart: messageStart, messages: changedMessages,
-                                            mutation: mutation, records: committed))
+                                            mutation: mutation, records: committed,
+                                            followUpAdmission: admission))
         return committed
     }
 
