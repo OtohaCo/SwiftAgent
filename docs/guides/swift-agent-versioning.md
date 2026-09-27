@@ -40,6 +40,19 @@ These source breaks happen before the first tagged 1.0:
 
 ## Journal replacement in unreleased work
 
+The RC4 follow-up queue advances the segmented file store from format schema
+1 / `BatchV1` through an unreleased schema-2 candidate to schema 3. Schema 3
+retains the `BatchV2` payload and adds committed per-key index witnesses and
+stable commit IDs on positions. New readers reject schema 1 and 2 without
+overwrite or migration, and old readers reject schema 3. This is a
+breaking durable-format boundary; Host operators must stop old workflows and
+resolve their pending effects before choosing a new store. It does not alter
+the Journal operation domain or a mutation's stable `operationID`. The
+queue-specific public API is opt-in; `run` and `steer` retain their meaning.
+`AgentJournal.close()` now releases an otherwise drained poisoned handle while
+preserving its `commitUnknown` recovery responsibility. Its old Session cannot
+restart work; only a fresh open may interpret the durable root.
+
 The segmented file Journal intentionally breaks the old framed file format and
 public `AgentJournal(persistenceURL:)`, `load(from:)`, `persist(to:)`,
 `snapshot()`, and manual file compaction surface. `pendingMutations`,

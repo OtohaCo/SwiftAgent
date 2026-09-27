@@ -149,7 +149,7 @@ WorkspaceAgent 还通过 [swift-crypto](https://github.com/apple/swift-crypto) �
 | Runtime 与进度 | [Agent loop](docs/guides/swift-agent-loop.md)、[Session/Run](docs/guides/swift-agent-sessions.md)、[Agent 事件](docs/guides/swift-agent-events.md) |
 | Usage 统计 | [Response、Run 与 Session 统计窗口用量](docs/guides/swift-agent-usage.md) |
 | 工具与副作用 | [类型化工具](docs/guides/swift-agent-tools.md)、[Evidence](docs/guides/swift-agent-evidence.md)、[Receipts](docs/guides/swift-agent-receipts.md)、[调度](docs/guides/swift-agent-scheduler.md) |
-| 持久化与生命周期 | [Journal](docs/guides/swift-agent-journal.md)、[mutation 恢复](docs/guides/swift-agent-mutation-recovery.md)、[上下文策略](docs/guides/swift-agent-context.md)、[并发](docs/guides/swift-agent-concurrency.md) |
+| 持久化与生命周期 | [Journal](docs/guides/swift-agent-journal.md)、[持久化后续输入队列](docs/guides/swift-agent-follow-up-queue.md)、[mutation 恢复](docs/guides/swift-agent-mutation-recovery.md)、[上下文策略](docs/guides/swift-agent-context.md)、[并发](docs/guides/swift-agent-concurrency.md) |
 | 动态模型选择 | [目录、Run 绑定、历史兼容和 Host 路由](docs/guides/swift-agent-dynamic-model-selection.md) |
 | 错误与兼容性 | [类型化错误](docs/guides/swift-agent-errors.md)、[版本策略](docs/guides/swift-agent-versioning.md) |
 | 另一个使用 public API 的 App | [Workspace File Agent](docs/guides/swift-agent-workspace-host.md) |

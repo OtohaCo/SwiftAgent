@@ -34,6 +34,13 @@ resource still has the same current state.
 
 ## One event consumer, then drain
 
+The [follow-up dispatcher](swift-agent-follow-up-queue.md) waits on Run
+termination and physical drain; it is **not** a second consumer of
+`AgentRun.events`. The Host remains responsible for one event observer that
+can fan out display, usage and execution-report projections. Queue admission
+is not a tool fact or Host business fulfillment, and an interrupted admitted
+input on restart is not automatically declared successful or retried.
+
 `AgentRun.events` is a single-consumer stream. The controller that owns the Run
 should feed the same event into its existing UI/Usage projection and into one
 `ExecutionReportReducer`. Do not start a second event loop just for reporting.

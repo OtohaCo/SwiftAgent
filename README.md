@@ -233,8 +233,7 @@ in AgentCore. The multimedia guide does not add a service implementation.
 | Runtime and progress | [Agent loop](docs/guides/swift-agent-loop.md), [Sessions/Runs](docs/guides/swift-agent-sessions.md), [Agent events](docs/guides/swift-agent-events.md) |
 | Usage accounting | [Response, Run, and Session-window usage](docs/guides/swift-agent-usage.md) |
 | Tools and effects | [Typed tools](docs/guides/swift-agent-tools.md), [Evidence](docs/guides/swift-agent-evidence.md), [Receipts](docs/guides/swift-agent-receipts.md), [scheduling](docs/guides/swift-agent-scheduler.md) |
-| Persistence and lifetime | [Journal](docs/guides/swift-agent-journal.md), [mutation recovery](docs/guides/swift-agent-mutation-recovery.md), [context policy](docs/guides/swift-agent-context.md), [concurrency](docs/guides/swift-agent-concurrency.md) |
-
+| Persistence and lifetime | [Journal](docs/guides/swift-agent-journal.md), [durable follow-up queue](docs/guides/swift-agent-follow-up-queue.md), [mutation recovery](docs/guides/swift-agent-mutation-recovery.md), [context policy](docs/guides/swift-agent-context.md), [concurrency](docs/guides/swift-agent-concurrency.md) |
 | Dynamic model selection | [Catalog, Run binding, history compatibility and Host routing](docs/guides/swift-agent-dynamic-model-selection.md) |
 | Errors and compatibility | [Typed errors](docs/guides/swift-agent-errors.md), [versioning](docs/guides/swift-agent-versioning.md) |
 | Another app using the public API | [Workspace File Agent](docs/guides/swift-agent-workspace-host.md) |
@@ -247,6 +246,10 @@ and two isolated Sessions without a network request.
 The [Scoped Capability fixture](Examples/ExternalClient/Sources/ScopedCapabilityFixture)
 demonstrates Run-bound tools and resources, revocation and durable mutation
 replay using a temporary file and deterministic Provider.
+
+The [Follow-up Queue fixture](Examples/ExternalClient/Sources/FollowUpQueueFixture)
+exercises explicit FIFO dispatch, withdrawal, reopen with current bindings,
+and a no-replay temporary-file mutation without credentials or network.
 
 Model Codable data is not a vendor wire format or a frozen journal format.
 Usage is cumulative; unreported is not zero, and cache/reasoning subsets must not

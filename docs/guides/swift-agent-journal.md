@@ -4,6 +4,12 @@ last-verified: 2026-09-27
 
 `AgentJournal` owns trusted mutation transitions and Session restoration. The
 optional `AgentJournalFileStore` product supplies the local durable format.
+New stores use segmented format schema 3 with the bounded `BatchV2` payload
+and committed index witnesses. Schema-1 and unreleased schema-2 directories
+are rejected intact, with no implicit migration or reset. A queue
+admission, Run ID and formal user input share one `CURRENT` root publication;
+queue-only writes do not advance conversation revision. See the
+[follow-up guide](swift-agent-follow-up-queue.md) and [ADR 0007](../adr/0007-durable-follow-up-queue.md).
 Read-only Agents can omit a Journal or use `AgentJournal()` in memory. An Agent
 with mutation tools requires a durable Journal at `makeSession`.
 
@@ -43,6 +49,12 @@ as equivalent maintenance. The owner can run multiple
 Sessions and provider/tool calls concurrently; only short commits are
 serialized. `close()` rejects an active Session lease, waits for accepted
 maintenance, then unlocks. Wait for `run.waitForDrain()` before closing.
+After `commitUnknown`, the handle remains poisoned for all reads and writes.
+Once every Run, resolver, observer and accepted I/O has drained, `close()` may
+release its OS lock without publishing or rolling back anything. Keep the old
+Session and Journal objects from starting further work; reopen the same
+directory to inspect its verified root. A failed close retains ownership for
+a retry of close, never for another mutation.
 
 ## Committed state and queries
 
@@ -54,6 +66,12 @@ Agent. `pendingMutations(sessionID:)` and `recoverPendingMutations(sessionID:)`
 are throwing scoped queries. `mutationStatus(identity:)` inspects the
 indexed state, trusted receipt, replay output and no-effect confirmation for
 one operation. There is no nonthrowing full-record snapshot API.
+The schema-3 store also keeps a small per-key first-publication witness for
+Session, queue-head, queue-ID and operation indexes. A missing published index
+or witness fails explicitly; an absent key with no published witness remains
+a legitimate first use. These checks read the queried key and at most its
+first commit position, not all Sessions or history. Witnesses retain key
+identity for the store lifetime, so space still grows with real identities.
 
 `AgentContextProjector` affects only the next model request. Request summaries
 or shortened views do not delete formal messages, restore Evidence, or grant

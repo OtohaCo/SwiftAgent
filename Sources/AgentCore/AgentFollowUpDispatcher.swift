@@ -1,0 +1,419 @@
+import AgentModels
+import Foundation
+
+public protocol AgentFollowUpResolver: Sendable {
+    func resolve(_ request: AgentFollowUpResolution) async throws -> AgentFollowUpConfiguration
+}
+
+public struct AgentFollowUpResolution: Sendable {
+    public let record: AgentFollowUpRecord
+    public let text: String
+    public let attemptID: UUID
+    public let deadline: ContinuousClock.Instant
+
+    public init(record: AgentFollowUpRecord, text: String, attemptID: UUID,
+                deadline: ContinuousClock.Instant) {
+        self.record = record; self.text = text; self.attemptID = attemptID; self.deadline = deadline
+    }
+}
+
+public struct AgentFollowUpConfiguration: Sendable {
+    public let model: AgentModelBinding
+    public let capabilities: AgentCapabilityBinding
+    public let expectedConversationRevision: UInt64?
+
+    public init(model: AgentModelBinding, capabilities: AgentCapabilityBinding,
+                expectedConversationRevision: UInt64? = nil) {
+        self.model = model; self.capabilities = capabilities
+        self.expectedConversationRevision = expectedConversationRevision
+    }
+}
+
+public struct AgentFollowUpDispatchPolicy: Sendable {
+    public let maxModelTurns: Int
+    public let maxToolCalls: Int
+    public let runTimeout: Duration
+
+    public init(maxModelTurns: Int = 8, maxToolCalls: Int = 16, runTimeout: Duration = .seconds(30)) {
+        self.maxModelTurns = maxModelTurns; self.maxToolCalls = maxToolCalls; self.runTimeout = runTimeout
+    }
+
+    package func validate() throws {
+        guard maxModelTurns > 0, maxToolCalls >= 0, runTimeout > .zero else {
+            throw AgentLoopError.invalidBudget
+        }
+    }
+}
+
+public struct AgentFollowUpDispatchStatus: Sendable {
+    public enum Mode: String, Sendable { case running, paused, stopped }
+    public let mode: Mode
+    public let currentInputID: String?
+    public let interruptedInputID: String?
+    public let lastFailureKind: String?
+    public let physicallyDrained: Bool
+}
+
+/// An explicitly started single-Session consumer. It does not own a second
+/// AgentRun.events listener or a new tool/Journal execution state machine.
+public actor AgentFollowUpDispatcher {
+    private let session: AgentSession
+    private let journal: AgentJournal
+    private let sessionID: UUID
+    private let ownerID: UUID
+    private let policy: AgentFollowUpDispatchPolicy
+    private let resolver: any AgentFollowUpResolver
+    private let onRun: (@Sendable (AgentFollowUpRecord, AgentRun) async -> Void)?
+    private let initialRun: AgentRun?
+    private var mode: AgentFollowUpDispatchStatus.Mode = .running
+    private var worker: Task<Void, Never>?
+    private var resolverTask: Task<AgentFollowUpConfiguration, Error>?
+    private var startupTask: Task<AgentRun, Error>?
+    private var resolverWorkers = 0
+    private var inspectionOperations = 0
+    private var currentRun: AgentRun?
+    private var observationTask: Task<Void, Never>?
+    private var currentInputID: String?
+    private var interruptedInputID: String?
+    private var lastFailureKind: String?
+    private var attemptGeneration: UInt64 = 0
+    private var signalVersion: UInt64 = 0
+    private var signals: [CheckedContinuation<Void, Never>] = []
+    private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var drained = false
+    private var drainWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
+    private var drainCountObservers: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    init(session: AgentSession, journal: AgentJournal, sessionID: UUID, ownerID: UUID,
+                 policy: AgentFollowUpDispatchPolicy, resolver: any AgentFollowUpResolver,
+                 initialRun: AgentRun?,
+                 onRun: (@Sendable (AgentFollowUpRecord, AgentRun) async -> Void)?) {
+        self.session = session; self.journal = journal; self.sessionID = sessionID
+        self.ownerID = ownerID; self.policy = policy; self.resolver = resolver
+        self.initialRun = initialRun
+        self.onRun = onRun
+    }
+
+    package func start() {
+        guard worker == nil else { return }
+        worker = Task { await runLoop() }
+    }
+
+    package func signal() {
+        signalVersion &+= 1
+        let pending = signals
+        signals.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    public func status() -> AgentFollowUpDispatchStatus {
+        .init(mode: mode, currentInputID: currentInputID,
+              interruptedInputID: interruptedInputID,
+              lastFailureKind: lastFailureKind, physicallyDrained: drained)
+    }
+
+    public func pause() {
+        guard mode == .running else { return }
+        mode = .paused
+        notifyPaused()
+        attemptGeneration &+= 1
+        resolverTask?.cancel()
+        startupTask?.cancel()
+        signal()
+    }
+
+    public func resume() throws {
+        guard mode != .stopped else { throw AgentFollowUpError.dispatcherStopped }
+        guard interruptedInputID == nil else { throw AgentFollowUpError.needsInspection }
+        mode = .running
+        signal()
+    }
+
+    /// Explicit Host decision to continue *later* queued inputs after
+    /// inspecting an interrupted admitted Run. This never retries that Run,
+    /// marks it successful or clears an unresolved mutation.
+    public func resumeAfterInspection(inputID: String) async throws {
+        guard mode != .stopped else { throw AgentFollowUpError.dispatcherStopped }
+        guard mode == .paused else { throw AgentFollowUpError.staleDispatch }
+        guard let interrupted = interruptedInputID,
+              interrupted.utf8.elementsEqual(inputID.utf8),
+              currentRun == nil, startupTask == nil else {
+            throw AgentFollowUpError.staleDispatch
+        }
+        let generation = attemptGeneration
+        inspectionOperations += 1
+        do {
+            try await journal.releaseInspectedFollowUp(sessionID: sessionID, inputID: inputID)
+        } catch {
+            inspectionOperations -= 1
+            signal()
+            throw error
+        }
+        inspectionOperations -= 1
+        signal()
+        guard mode == .paused, generation == attemptGeneration else {
+            throw AgentFollowUpError.staleDispatch
+        }
+        interruptedInputID = nil
+        lastFailureKind = nil
+        mode = .running
+        signal()
+    }
+
+    public func stop() {
+        guard mode != .stopped else { return }
+        mode = .stopped
+        attemptGeneration &+= 1
+        resolverTask?.cancel()
+        startupTask?.cancel()
+        signal()
+    }
+
+    public func cancelCurrent() async { await currentRun?.cancel() }
+
+    public func waitForDrain() async throws {
+        try Task.checkCancellation()
+        guard !drained else { return }
+        let id = UUID()
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
+                else if drained { continuation.resume() }
+                else { drainWaiters[id] = continuation; notifyDrainCount() }
+            }
+        }, onCancel: {
+            Task { await self.cancelDrainWaiter(id) }
+        })
+        try Task.checkCancellation()
+    }
+
+    private func cancelDrainWaiter(_ id: UUID) {
+        drainWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+        notifyDrainCount()
+    }
+
+    package func waitUntilDrainWaiterCount(_ count: Int) async {
+        if drainWaiters.count == count { return }
+        await withCheckedContinuation { drainCountObservers.append((count, $0)) }
+    }
+
+    private func notifyDrainCount() {
+        let count = drainWaiters.count
+        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
+        for observer in drainCountObservers {
+            if observer.0 == count { observer.1.resume() }
+            else { remaining.append(observer) }
+        }
+        drainCountObservers = remaining
+    }
+
+    package func waitUntilPaused() async {
+        guard mode != .paused else { return }
+        await withCheckedContinuation { pauseWaiters.append($0) }
+    }
+
+    private func notifyPaused() {
+        let pending = pauseWaiters
+        pauseWaiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    private func waitForSignal(since observed: UInt64) async {
+        guard mode != .stopped, observed == signalVersion else { return }
+        await withCheckedContinuation { continuation in
+            if mode == .stopped || observed != signalVersion { continuation.resume() }
+            else { signals.append(continuation) }
+        }
+    }
+
+    private func waitForPhysicalSignal(since observed: UInt64) async {
+        guard observed == signalVersion else { return }
+        await withCheckedContinuation { continuation in
+            if observed != signalVersion { continuation.resume() }
+            else { signals.append(continuation) }
+        }
+    }
+
+    private func resolverDidExit() {
+        resolverWorkers -= 1
+        signal()
+    }
+
+    private func runLoop() async {
+        if let initialRun {
+            let outcome = try? await initialRun.wait().outcome
+            try? await initialRun.waitForDrain()
+            if outcome != .completed, mode == .running {
+                lastFailureKind = "prior_run"
+                mode = .paused
+                notifyPaused()
+            }
+        }
+        while mode != .stopped {
+            let observed = signalVersion
+            var generation = attemptGeneration
+            if mode == .paused || resolverWorkers > 0 || inspectionOperations > 0 {
+                await waitForSignal(since: observed)
+                continue
+            }
+            do {
+                if let interrupted = try await journal.interruptedFollowUp(sessionID: sessionID) {
+                    guard mode == .running, attemptGeneration == generation else { continue }
+                    interruptedInputID = interrupted.input.inputID
+                    mode = .paused
+                    notifyPaused()
+                    continue
+                }
+                guard let head = try await journal.firstQueuedFollowUp(sessionID: sessionID) else {
+                    await waitForSignal(since: observed)
+                    continue
+                }
+                guard mode == .running, attemptGeneration == generation,
+                      observed == signalVersion else { continue }
+                guard attemptGeneration < .max else { throw AgentFollowUpError.staleDispatch }
+                attemptGeneration += 1
+                generation = attemptGeneration
+                try await dispatch(head, generation: generation)
+            } catch {
+                guard mode == .running, attemptGeneration == generation else { continue }
+                lastFailureKind = Self.failureKind(error)
+                mode = .paused
+                notifyPaused()
+            }
+        }
+        // A cancelled deadline race may have returned before a Host resolver
+        // actually exits. Its onOperationFinished callback owns that cleanup.
+        while resolverWorkers > 0 || inspectionOperations > 0 {
+            let observed = signalVersion
+            await waitForPhysicalSignal(since: observed)
+        }
+        await session.waitForQueuedStartupExit(ownerID: ownerID)
+        if let run = currentRun {
+            _ = try? await run.wait()
+            try? await run.waitForDrain()
+            currentRun = nil
+        }
+        await observationTask?.value
+        observationTask = nil
+        await journal.releaseDispatcherLease(sessionID: sessionID, owner: ownerID)
+        await session.followUpDispatcherDidStop(ownerID: ownerID)
+        drained = true
+        worker = nil
+        let observers = drainWaiters
+        drainWaiters.removeAll()
+        notifyDrainCount()
+        observers.values.forEach { $0.resume() }
+    }
+
+    private func dispatch(_ head: JournalStoredFollowUp, generation: UInt64) async throws {
+        let deadline = ContinuousClock.now.advanced(by: policy.runTimeout)
+        let budget = try AgentBudget(maxModelTurns: policy.maxModelTurns,
+                                      maxToolCalls: policy.maxToolCalls, deadline: deadline)
+        guard let identity = await journal.storeIdentity() else {
+            throw AgentFollowUpError.durableJournalRequired
+        }
+        guard mode == .running, attemptGeneration == generation else { return }
+        currentInputID = head.input.inputID
+        resolverWorkers += 1
+        let resolver = self.resolver
+        let request = AgentFollowUpResolution(record: head.publicRecord(
+            storeID: identity.storeID),
+            text: head.input.text, attemptID: UUID(), deadline: deadline)
+        let resolution = Task { [self] in
+            try await withAgentDeadline(deadline, operation: {
+                try await resolver.resolve(request)
+            }, onOperationFinished: {
+                await self.resolverDidExit()
+            })
+        }
+        resolverTask = resolution
+        let configuration: AgentFollowUpConfiguration
+        do { configuration = try await resolution.value }
+        catch {
+            resolverTask = nil
+            currentInputID = nil
+            throw error
+        }
+        resolverTask = nil
+        guard mode == .running, attemptGeneration == generation else {
+            currentInputID = nil
+            return
+        }
+        // The store checks head identity and state again in the combined
+        // startup publication, so withdrawal can win after resolution.
+        let startup = Task { [session, ownerID] in
+            try await session.startQueuedFollowUp(head, using: configuration,
+                                                  ownerID: ownerID, budget: budget)
+        }
+        startupTask = startup
+        let run: AgentRun
+        do { run = try await startup.value }
+        catch let JournalFollowUpAdmissionError.withdrawn(storeID, withdrawnSessionID, withdrawnInputID, ordinal) {
+            startupTask = nil
+            currentInputID = nil
+            await session.waitForQueuedStartupExit(ownerID: ownerID)
+            guard mode == .running, attemptGeneration == generation else { return }
+            guard storeID == identity.storeID, withdrawnSessionID == sessionID,
+                  withdrawnInputID.utf8.elementsEqual(head.input.inputID.utf8),
+                  ordinal == head.ordinal,
+                  let actual = try await journal.followUp(sessionID: sessionID, inputID: withdrawnInputID),
+                  actual.storeID == storeID, actual.sessionID == sessionID,
+                  actual.ordinal == ordinal, actual.state == .withdrawn else {
+                throw AgentJournalError.concurrentWriter
+            }
+            // The other store commit won, and no Run/formal input was admitted.
+            // A pause or stop during the confirming read still owns the decision.
+            guard mode == .running, attemptGeneration == generation else { return }
+            return
+        }
+        catch {
+            startupTask = nil
+            currentInputID = nil
+            await session.waitForQueuedStartupExit(ownerID: ownerID)
+            throw error
+        }
+        startupTask = nil
+        currentRun = run
+        let record = head.publicRecord(storeID: identity.storeID)
+        if let onRun {
+            observationTask = Task { await onRun(record, run) }
+        } else {
+            // Explicit headless owner: consume and discard bounded progress.
+            observationTask = Task { for await _ in run.events {} }
+        }
+        let outcome: AgentLoopOutcome?
+        do {
+            outcome = try await run.wait().outcome
+        } catch {
+            outcome = nil
+            lastFailureKind = Self.failureKind(error)
+        }
+        try await run.waitForDrain()
+        await observationTask?.value
+        observationTask = nil
+        currentRun = nil
+        currentInputID = nil
+        guard outcome == .completed else {
+            interruptedInputID = head.input.inputID
+            if mode != .stopped { mode = .paused; notifyPaused() }
+            return
+        }
+        // This records that the existing Run actually completed and drained,
+        // not that a Host business objective was fulfilled.
+        do {
+            try await journal.releaseCompletedFollowUp(sessionID: sessionID,
+                                                       inputID: head.input.inputID, runID: run.id)
+        } catch {
+            interruptedInputID = head.input.inputID
+            throw error
+        }
+    }
+
+    private static func failureKind(_ error: any Error) -> String {
+        if error is AgentJournalError { return "journal" }
+        if error is AgentFollowUpError { return "follow_up" }
+        if error is AgentContextError { return "context" }
+        if error is CancellationError { return "cancelled" }
+        return "resolver_or_run"
+    }
+}

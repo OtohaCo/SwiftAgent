@@ -149,7 +149,7 @@ WorkspaceAgent は SHA-256 に [swift-crypto](https://github.com/apple/swift-cry
 | Runtime と進捗 | [Agent loop](docs/guides/swift-agent-loop.md)、[Session/Run](docs/guides/swift-agent-sessions.md)、[Agent イベント](docs/guides/swift-agent-events.md) |
 | Usage 集計 | [Response、Run、Session 集計ウィンドウの Usage](docs/guides/swift-agent-usage.md) |
 | ツールと副作用 | [型付きツール](docs/guides/swift-agent-tools.md)、[Evidence](docs/guides/swift-agent-evidence.md)、[Receipts](docs/guides/swift-agent-receipts.md)、[スケジューリング](docs/guides/swift-agent-scheduler.md) |
-| 永続化とライフサイクル | [Journal](docs/guides/swift-agent-journal.md)、[mutation 復旧](docs/guides/swift-agent-mutation-recovery.md)、[コンテキストポリシー](docs/guides/swift-agent-context.md)、[並行処理](docs/guides/swift-agent-concurrency.md) |
+| 永続化とライフサイクル | [Journal](docs/guides/swift-agent-journal.md)、[永続的な後続入力キュー](docs/guides/swift-agent-follow-up-queue.md)、[mutation 復旧](docs/guides/swift-agent-mutation-recovery.md)、[コンテキストポリシー](docs/guides/swift-agent-context.md)、[並行処理](docs/guides/swift-agent-concurrency.md) |
 | 動的モデル選択 | [カタログ、Run バインディング、履歴互換性、Host ルーティング](docs/guides/swift-agent-dynamic-model-selection.md) |
 | エラーと互換性 | [型付きエラー](docs/guides/swift-agent-errors.md)、[バージョン方針](docs/guides/swift-agent-versioning.md) |
 | public API を使う別の App | [Workspace File Agent](docs/guides/swift-agent-workspace-host.md) |

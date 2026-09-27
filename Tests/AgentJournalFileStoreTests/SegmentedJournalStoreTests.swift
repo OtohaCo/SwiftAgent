@@ -250,7 +250,8 @@ import Glibc
         try await journal.close()
         let format = directory.appendingPathComponent("format.json")
         let original = try Data(contentsOf: format)
-        let modified = String(decoding: original, as: UTF8.self).replacingOccurrences(of: "\"schema\":1", with: "\"schema\":999")
+        let modified = String(decoding: original, as: UTF8.self).replacingOccurrences(of: "\"schema\":3", with: "\"schema\":999")
+        #expect(Data(modified.utf8) != original)
         try Data(modified.utf8).write(to: format)
         #expect(throws: AgentJournalError.unsupportedFormat) { _ = try AgentIncrementalJournal.open(at: directory) }
         try original.write(to: format)
