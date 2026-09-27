@@ -26,6 +26,16 @@ read-only interaction, but formal Session messages, tool-call/result
 pairing, Evidence, mutation state, and indexed Journal recovery remain separate.
 Projection output cannot mint Evidence or upgrade the authority of a message.
 
+The durable follow-up queue stores an input and non-authorizing configuration
+reference, not a provider, credential, executor, capability binding or prior
+authorization. Only explicit Host dispatch resolves a current Session-bound
+capability and enters the normal evidence/authorization/durable-intent path.
+An admitted input cannot return to queued after a crash. A Host's explicit
+inspection may unblock *later* inputs, but cannot settle or silently abort
+an uncertain mutation. `inputID` deduplicates reception within one actual
+store and Session; `operationID` remains the distinct, stable identity for
+external mutation retries.
+
 ## LLM output is untrusted
 
 A model response is a proposal. Text, tool names, arguments, and structured

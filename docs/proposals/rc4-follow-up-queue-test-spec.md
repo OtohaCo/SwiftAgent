@@ -1,13 +1,23 @@
 # RC4 durable follow-up queue: acceptance and fault specification
 
-Status: review-only test specification; **none of these queue tests exist or
-pass at this SHA**. PR #20 and PR #21 are integrated in `main` at
+Status: acceptance specification with active regression coverage on the RC4
+queue branch. Final counts/benchmarks must be tied to the PR's exact head;
+the initial parent PR #20 and PR #21 are integrated in `main` at
 `44e48f0783be0c467d45ac4b7d9f98c42e01718e`; this is the implementation
 baseline described in [ADR 0007](../adr/0007-durable-follow-up-queue.md).
 Use synthetic inputs,
 temporary stores/files and fixture Providers; no live credentials or real
 business mutation. A `SIGKILL` test proves process-termination recovery only,
 not power-loss durability.
+
+`Tests/AgentCoreTests/AgentFollowUpQueueTests.swift` exercises indexed
+enqueue/dedup/conflict/capacity, FIFO, schema-1 rejection, the atomic startup
+boundary, both publication outcomes, withdrawal races, fresh scopes, resolver
+cancellation/drain, concurrent mutation settlement and maintenance interleaving.
+`Tests/AgentJournalFileStoreTests/FollowUpProcessTests.swift` terminates a child
+with `SIGKILL` **after** its real temporary-file mutation writes, then checks
+the persisted admitted link and unresolved intent without replay. The
+credential-free `FollowUpQueueFixture` is an external public-API consumer.
 
 ## Reference model and measured facts
 
@@ -133,7 +143,7 @@ must never write twice. Print independent received/admitted/Provider/executor/
 write counts. Fixture model responses are deterministic, not a live Provider
 qualification.
 
-## Performance and final gate (only after implementation)
+## Performance and final gate
 
 Use Release, fixed fixture seed and final SHA/toolchain/hardware. Measure:
 
@@ -156,4 +166,5 @@ queue/fault/process suites, Journal/Context/Capability regressions, the
 ExternalClient executable and Provider fixtures. Verify hosted macOS, Linux
 and Apple push/PR jobs by *actual checkout SHA and tree*, not workflow
 `head_sha`. If the integrated base or queue code changes after testing, rerun
-the affected gates. Queue validation remains **not run** until code exists.
+the affected gates. Even a complete fixture matrix does not claim live
+Provider, network filesystem, power-loss or OS sandbox qualification.

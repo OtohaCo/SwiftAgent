@@ -4,6 +4,12 @@ last-verified: 2026-09-27
 
 `AgentJournal` owns trusted mutation transitions and Session restoration. The
 optional `AgentJournalFileStore` product supplies the local durable format.
+New stores now use segmented format schema 2 / `BatchV2` to publish bounded
+follow-up queue changes. Schema-1 directories from the previous unreleased
+candidate are rejected intact, with no implicit migration or reset. A queue
+admission, Run ID and formal user input share one `CURRENT` root publication;
+queue-only writes do not advance conversation revision. See the
+[follow-up guide](swift-agent-follow-up-queue.md) and [ADR 0007](../adr/0007-durable-follow-up-queue.md).
 Read-only Agents can omit a Journal or use `AgentJournal()` in memory. An Agent
 with mutation tools requires a durable Journal at `makeSession`.
 

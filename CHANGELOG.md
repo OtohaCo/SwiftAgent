@@ -6,6 +6,21 @@ All notable changes to SwiftAgent are recorded here.
 
 Development after `1.0.0-rc.3` is not part of the RC3 release scope.
 
+### Breaking: RC4 durable follow-up queue
+
+- Add explicit per-Session FIFO `enqueueFollowUp`, paginated status and
+  withdrawal; same-ID retries keep one ordinal, while changed payloads
+  conflict. Dispatcher startup is Host-owned and disabled on reopen. It uses
+  current model/capability bindings, the existing Run admission, and one
+  atomic queue/Run/formal-input Journal publication. Pause, stop, current-Run
+  cancellation and actual drain remain separate operations.
+- New stores write format schema 2 / `BatchV2` with indexed queue facts.
+  Schema-1 stores are rejected unchanged; no implicit migration or memory
+  fallback is supplied. Formal messages, mutation identity, trusted receipts
+  and reconciliation remain in their existing execution paths. Terminal
+  input identities remain indexed without TTL. The queue does not retry an
+  interrupted admitted Run on process reopen.
+
 ### RC4 scoped capabilities
 
 - Add Session-created, Run-bound tool/backend/resource snapshots with one

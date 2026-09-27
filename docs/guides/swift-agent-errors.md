@@ -20,6 +20,7 @@ switch on them rather than wrapping arbitrary errors themselves.
 | Scheduler timeout | `ToolSchedulerError` or `AgentLoopError.toolTimedOut` | Lease wait / tool deadline |
 | Run budget / deadline | `AgentLoopError` | `invalidBudget`, `deadlineExceeded`, turn/call limits |
 | Session contract | `AgentSessionError` | `emptyInput`, `runInProgress`, `durableJournalRequired` (nil or memory journal on a mutation Agent) |
+| Future input / dispatch | `AgentFollowUpError` | `inputConflict`, `queueFull`, `dispatchOwned`, `needsInspection`, `durableJournalRequired` |
 | Cancellation | `CancellationError` | `AgentFailure.cancelled` |
 | Persistence failure | `AgentJournalError.persistenceUnavailable` | Durable journal I/O |
 | Unknown or unsupported store | `AgentJournalError.unsupportedLegacyFormat`, `unsupportedFormat`, `invalidHeader` | Open rejects old/unknown formats without creating a new ledger |

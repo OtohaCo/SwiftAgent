@@ -1,16 +1,17 @@
-# RC4 durable follow-up queue: public API draft
+# RC4 durable follow-up queue: public API contract
 
-Status: review-only sketch, **not a compiled Swift API**. PR #20 and PR #21
-are integrated in `main` at `44e48f0783be0c467d45ac4b7d9f98c42e01718e`
-(tree `cda1c2f7bd5fa28bf15e8713166522ff4bbf0562`). This draft has been
-checked against `AgentSession.run`, `AgentModelBinding`,
-`AgentCapabilityBinding`, `AgentJournal.appendStartupCheckpoint` and
-`JournalStoreChange` there. No queue methods or schema-2 writer exist yet.
+Status: implemented in the RC4 queue branch; these signatures summarize
+the public types in `Sources/AgentCore/AgentFollowUp.swift` and
+`AgentFollowUpDispatcher.swift`. The executable
+`Examples/ExternalClient/Sources/FollowUpQueueFixture/main.swift` uses the
+real API without a key or network request. The final PR head still requires
+its own qualification and review. Integrated parent `main` is
+`44e48f0783be0c467d45ac4b7d9f98c42e01718e`.
 
-## Proposed Core surface
+## Public Core surface
 
-The following Swift-shaped declarations describe semantics, not promised
-source compatibility or a temporary Host array:
+Selected declarations below omit initializer bodies and storage details; the
+linked source and executable fixture are authoritative, not a Host array:
 
 ```swift
 public struct AgentFollowUpInput: Sendable {
@@ -38,7 +39,7 @@ public struct AgentFollowUpRecord: Sendable {
 }
 
 public enum AgentFollowUpWithdrawal: Sendable {
-    case withdrawn(AgentFollowUpRecord)        // includes already-withdrawn idempotent retry
+    case withdrawn                           // includes already-withdrawn idempotent retry
     case alreadyAdmitted(runID: UUID, formalMessageID: UUID)
 }
 
@@ -69,7 +70,7 @@ public struct AgentFollowUpResolution: Sendable {
 
 public struct AgentFollowUpConfiguration: Sendable {
     public let model: AgentModelBinding
-    public let capabilities: AgentCapabilityBinding?   // fresh, same Session instance
+    public let capabilities: AgentCapabilityBinding    // required, fresh, same Session instance
     public let expectedConversationRevision: UInt64?  // Host's current binding check
 }
 
@@ -79,9 +80,10 @@ public struct AgentFollowUpDispatchPolicy: Sendable {
     public let runTimeout: Duration            // clock begins BEFORE resolver work
 }
 
-public struct AgentFollowUpDispatcher: Sendable {
+public actor AgentFollowUpDispatcher {
     public func pause() async                  // no next admission, retain queued records
     public func resume() async throws          // explicit; validate owner generation
+    public func resumeAfterInspection(inputID: String) async throws
     public func stop() async                   // revoke resolver/dispatch claim after drain
     public func cancelCurrent() async          // delegates to actual AgentRun.cancel()
     public func waitForDrain() async throws    // no requirement to empty the backlog
@@ -89,15 +91,17 @@ public struct AgentFollowUpDispatcher: Sendable {
 }
 ```
 
-These signatures need final Swift isolation/error design after the integrated
-`main` exists. All durable reads throw; a corrupt/unavailable store never
+Actor isolation and typed errors are implemented in the linked source. All
+durable reads throw; a corrupt/unavailable store never
 becomes an empty list. Enqueue and withdraw distinguish definite noncommit,
 definite publication and `commitUnknown`. Unknown publication is not reported
 as success; callers reopen/query the *same* `inputID`, never invent a new one.
-The scoped durable store is required. No in-memory success surface is offered
+The scoped durable store is required. The resolver must explicitly provide a
+fresh capability binding; `nil` cannot expose the Agent's default tool set.
+No in-memory success surface is offered
 in v1; a read-only Agent may still use memory for ordinary `run`.
 
-## Host usage sketch (future API only)
+## Host usage pattern (abbreviated)
 
 ```swift
 let current = try await session.run("Current request")
@@ -124,14 +128,22 @@ let resumed = try await restored.startFollowUpDispatch(policy: policy,
     resolver: freshApprovedResolver)
 ```
 
-The executable acceptance fixture must arrange pause timing deterministically;
-this sketch illustrates ownership and is not a runnable example today. The
+The executable fixture arranges pause timing with a resolver barrier;
+this shortened sketch illustrates ownership. The
 dispatcher must use `AgentRun.wait()` and `waitForDrain()` without becoming a
 second consumer of `AgentRun.events`. Existing `AgentSession.run` and
 `AgentRun.steer` meanings remain unchanged. Direct `run` while a dispatcher
 owns the Session returns a typed `dispatchOwned` error; an internal queued
 startup uses the same Session admission/reservation path. A paused dispatcher
 still owns the Session until `stop` and actual drain release its claim.
+
+On process reopen an admitted input without a reliable completed-and-drained
+release marker blocks later heads. `resume()` throws `needsInspection`.
+`resumeAfterInspection(inputID:)` requires an explicit Host decision and no
+unresolved Session mutation; it unblocks *later* queued inputs without
+reclassifying the original admitted item, granting permission or replaying
+its Run. `followUps(after:limit:)` uses an exclusive ordinal cursor (maximum
+100 per page); the list omits prompt text, which requires `followUpText`.
 
 `configurationRef` may describe a project or model profile, but does not
 recreate `AgentCapabilityBinding` or trusted Evidence. A newly revoked scope

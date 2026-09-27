@@ -35,6 +35,11 @@ written back as Session history. Formal messages, tool identity checks,
 budget accounting, Evidence, and mutation settlement continue to use formal
 runtime state.
 
+An enqueued [follow-up](swift-agent-follow-up-queue.md) is not yet a canonical
+message and cannot alter the current Run's projection or source revision.
+When the Host explicitly dispatches it, the ordinary Session startup and
+current model/context budget checks apply to the admitted user input.
+
 The default projector is identity. A Host-approved
 `AgentResolvedReadOnlyToolSpan` can replace a complete failed/read-only and
 later successful tool group with a source-marked summary. Permission failures,

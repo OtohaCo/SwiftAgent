@@ -19,6 +19,15 @@ AgentModels, AgentTools, and AgentCore do not import or isolate to MainActor.
 
 Share one `ToolScheduler` across every Session that can touch the same real
 resources. Isolation is per scheduler instance, not per Session.
+
+The durable [follow-up queue](swift-agent-follow-up-queue.md) uses the same
+Session Run identity and scheduler. One store-level dispatcher claim per
+Session prevents direct `run` or a second dispatcher from starting another
+input. Queue-only commits use the short store writer boundary and leave the
+conversation revision alone. A paused dispatcher still holds its claim;
+`stop()` and `waitForDrain()` release it only after the owned resolver,
+startup and Run work actually exit. Other Sessions can continue through the
+same Journal and scheduler.
 Run-scoped resource allowlists do not change lock identities; two scopes
 touching one account or file still coordinate through the same scheduler.
 `revoke()` stops future executor admission and requests cancellation;

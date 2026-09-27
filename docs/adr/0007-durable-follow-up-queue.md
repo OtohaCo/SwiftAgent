@@ -1,6 +1,6 @@
 # ADR 0007: Durable FIFO follow-up queue
 
-Status: Proposed; **no queue runtime or disk schema is implemented**
+Status: Implemented on `codex/rc4-follow-up-queue`; final qualification pending
 Date: 2026-09-27
 
 ## Integrated baseline and scope
@@ -11,9 +11,10 @@ PR #20 (`033bf567b64ebd1b9dcee6f31ed8c2168600c694`) merged as
 `44e48f0783be0c467d45ac4b7d9f98c42e01718e`. This proposal is based on
 that final `main` tree, `cda1c2f7bd5fa28bf15e8713166522ff4bbf0562`.
 The main-line macOS, Linux and Apple CI jobs passed on that exact merge SHA.
-The three design documents were cherry-picked from local commit
+The three original design documents were cherry-picked from local commit
 `f12730ab8922d597d98216de1f96b486b59d7ae7` and corrected against the
-integrated implementation. Queue runtime and queue tests remain future work.
+integrated implementation. This branch now implements the first durable FIFO
+slice; its final validation belongs to the PR's exact head, not the baseline CI.
 
 Version one is FIFO within one Session. `run(_:)` still starts immediately or
 rejects conflict; `run.steer(_:)` still corrects the current Run. An explicit
@@ -45,11 +46,21 @@ never automatically retried. Even if a prior Run may have finished, absent a
 durable terminal fact the queue does not invent its outcome. The Journal's
 trusted mutation state and Receipt remain separate.
 
+The queue head also stores `lastAdmitted` and `lastReleased` ordinals. After
+`.completed` **and physical drain**, the dispatcher durably releases the
+admission barrier before taking another head; this records a Runtime ordering
+fact, not Host fulfillment. A crash or abnormal outcome before that release
+leaves the admitted item's original Run/message association and blocks later
+heads on reopen. `resumeAfterInspection(inputID:)` is an explicit Host decision
+to release that barrier **without** changing the item's admitted state or
+replaying it. It rejects unresolved mutation records. Ordinary `resume()`
+cannot clear the barrier. No queue state asserts that a business goal succeeded.
+
 Start with durable-only enqueue. A missing/memory Journal returns a typed
 durability error; no memory fallback or pretend cross-process recovery.
-Proposed initial per-Session bounds: 128 queued entries, 256 KiB UTF-8 per
-entry, 8 MiB total queued text; evaluate these defaults with the specified
-Release fixtures. Full queues fail without eviction. An admitted/withdrawn
+Per-Session bounds are 128 queued entries, 256 KiB UTF-8 per entry and 8 MiB
+total queued text. A same-ID retry is checked before capacity. Full queues
+fail without eviction. An admitted/withdrawn
 identity does not count toward pending capacity but remains indexed.
 
 ## Single atomic queue-to-Run boundary
@@ -76,15 +87,21 @@ after reopening before either outcome is reported as certain.
 
 ## Journal format and cost boundary
 
-The integrated `main` still opens format schema 1 and writes `BatchV1`
-(schema 1). `BatchV1` stores a Session header, formal messages, optional
+The integrated baseline opens format schema 1 and writes `BatchV1`. The new
+runtime **creates and opens only format schema 2** with `BatchV2`. The
+unchanged nested `DiskMessageV1`/`DiskMutationV1` DTOs remain explicitly
+converted under the new batch boundary. `BatchV1` stores a Session header, formal messages, optional
 mutation and record count; it does **not** persist arbitrary `AgentJournalEvent`
 cases. `JournalStoreChange` increments the Session revision on every existing
 publish. Merely adding an enum case or writing an adjacent queue file cannot
-provide atomic admission. Introduce an explicit `BatchV2` DTO and store
-`format.json` schema 2, with a bounded queue delta, independent per-Session
-queue head/next ordinal/revision, and indexed `(sessionID,inputID)` plus
-`(sessionID,ordinal)` lookups. A queue-only commit changes queue state and
+provide atomic admission. `BatchV2` carries a bounded queue delta and
+independent per-Session queue head/next ordinal/revision. The managed
+`queue-heads/`, `queue-ids/`, `queue-order/`, and `queue-links/` indexes resolve a Session head,
+its full UTF-8 input identity and its ordinal without decoding another
+Session's queue. The linked successor is a separate small delta: appending a
+short item does not re-encode a previous large queued body. A bounded linked
+queued chain finds the next dispatch head;
+terminal ID/ordinal indexes remain. A queue-only commit changes queue state and
 the store's logical position but **does not** increment the conversation
 revision or invalidate an active Run's expected Session revision. The combined
 startup batch checks both revisions at one publication boundary. Session B's
@@ -98,10 +115,9 @@ Creating a new store uses schema 2. Opening a schema-1 store with the new
 queue runtime returns typed `unsupportedFormat` and leaves bytes untouched;
 opening schema 2 with an old reader must likewise reject it. No implicit
 migration, reset, dual-writer mode or file-copy cutover is part of this
-slice. The integrated `JournalStoreView`, `JournalStoreChange`,
-`SegmentedJournalStore` index/GC and `AgentSession.startRun` seams have been
-checked; none currently records queue state. Recheck those seams before
-writing the first schema-2 batch if the implementation base changes.
+slice. The queue index positions and managed blob references participate in
+segment packing, obsolete-pack cleanup and GC. Storage corruption or an
+unrecognized format fails explicitly; neither path creates an empty store.
 
 ## Dispatch, re-binding, cancellation and drain
 
@@ -114,9 +130,10 @@ poll/retry loop. A second dispatcher or old Session instance cannot claim the
 same head. The store's lifetime writer lock remains ADR 0004's same-machine
 single writer; this proposal adds no distributed coordination.
 
-For each head, the Host asynchronously resolves a *fresh* `AgentModelBinding`,
-optional `AgentCapabilityBinding`, current authorization and Run budget from
-the configuration reference. Persist no executor, credential, permission,
+For each head, the Host asynchronously resolves a *fresh* `AgentModelBinding`
+and a **required** same-Session `AgentCapabilityBinding` from the configuration
+reference; the existing tool path performs current authorization later. The
+dispatcher builds a Run budget before resolver work. Persist no executor, credential, permission,
 binding, closure or monotonic-clock instant. The resolver has an owned attempt
 generation: pause/stop/cancellation invalidate a late result. If it ignores
 cancellation, its worker and lease remain owned until physical exit. The Run

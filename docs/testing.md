@@ -23,6 +23,10 @@ swift test --filter ContextPipelineProviderMappingTests --disable-sandbox --no-p
 swift run --package-path Examples/ExternalClient ContextPipelineFixture
 swift test --filter AgentCapabilityScopeTests --disable-sandbox --no-parallel
 swift run --package-path Examples/ExternalClient ScopedCapabilityFixture
+swift test --filter AgentFollowUpQueueTests --disable-sandbox --no-parallel
+swift test --filter FollowUpProcessTests --disable-sandbox --no-parallel
+swift run --package-path Examples/ExternalClient FollowUpQueueFixture
+bash Scripts/benchmark-follow-up-queue.sh 80 20260927
 bash Scripts/ci-execution-reporting.sh
 ```
 
@@ -46,6 +50,27 @@ call groups, protected ranges and deterministic budget selection. The
 case writes a real temporary file and checks that a restarted Session cannot
 reclassify its settled mutation through a same-name read-only tool. No live
 model is involved.
+
+The follow-up queue's public fixture exercises receiving while another Run is
+active, FIFO dispatch, withdrawal, pause/stop/drain, new bindings after reopen
+and a real disposable-file mutation without re-execution on settled replay.
+`FollowUpProcessTests` kills a separate process **after** its temporary file
+write and verifies the admitted queue link, unresolved mutation and absence of
+automatic replay. This is a process-crash test, not power-loss qualification.
+`AgentFollowUpQueueTests` injects pre-publication and uncertain publication
+failures, plus maintenance and resolver/startup races. Old schema-1 fixtures
+are explicitly rejected by the schema-2 reader; no automatic migration test
+is expected to pass.
+
+`Scripts/benchmark-follow-up-queue.sh COUNT SEED` builds Release and measures
+per-Session terminal input growth, growth in unrelated Sessions, and enqueue
+while a Run is active. It reports small-commit p50/p95, read/decoded/written
+bytes, writer-lock time, maintenance time/reclaimed bytes, peak resident
+memory and a new-process open/page sample. OS page cache is **uncontrolled**;
+the sample is not a cold-disk measurement. Report the actual SHA, toolchain,
+hardware, seed/count and all three scenarios together. Maintenance bytes and
+true retained identities remain part of cost; the queue does not promise
+constant total disk usage.
 
 Do not treat skipped live tests as passes. Anthropic, OpenAI, Local Responses, and Apple live
 tests are env-gated. OpenAI live coverage requires

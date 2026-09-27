@@ -47,6 +47,15 @@ Share the Agent's `ToolScheduler` whenever another Session can mutate the same
 host resources. Two Agents that control one account or one file store must be
 constructed with the same scheduler value.
 
+For a *future* user input, use the explicit
+[durable follow-up queue](swift-agent-follow-up-queue.md). Enqueue does not
+change the current Run or formal history. The dispatcher requires a fresh
+Host-approved model and capability binding, waits for physical drain, and
+holds a distinct consumer claim. Direct `run` remains immediate and returns
+`dispatchOwned` while that dispatcher is active; `run.steer` still targets
+only the active Run. A queued input becomes a formal user message only in the
+same durable frame that binds its Run ID.
+
 ## Run-scoped capability binding (RC4)
 
 An Agent may have no default tools and bind an immutable tool set for one
