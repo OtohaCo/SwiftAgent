@@ -36,6 +36,13 @@ The Run keeps the reservation until provider/tool/projection/estimation work
 physically drains; logical completion alone does not release it. A failure
 before startup publication unregisters the reservation. A commit whose result
 is unknown still creates an owned failed Run under existing Session rules.
+The Run control also owns cooperative startup projection and estimation before
+its post-admission worker is installed. Revocation cancels those workers;
+noncooperative preflight continues to hold the scope reservation, Session
+identity and Journal lease until it physically exits. Revocation after startup
+publication retains an owned Run even before worker installation. Scope drain
+becomes complete only after Run physical drain, Session identity and Journal
+lease release.
 
 Typed preparation, resource acquisition, Evidence, Host authorization and
 durable intent may suspend. They are not final execution admission. Directly

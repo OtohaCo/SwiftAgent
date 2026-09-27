@@ -118,12 +118,6 @@ public struct AgentCapabilityBinding: Sendable {
     public func waitForDrain() async throws { try await scope.waitForDrain() }
     public func status() async -> AgentCapabilityStatus { await scope.status() }
 
-    package func checkResources(_ resources: [ToolResource]) throws {
-        guard Set(resources).isSubset(of: allowedResources) else {
-            throw AgentCapabilityError.resourceOutsideScope
-        }
-    }
-
     private static func valid(_ value: String) -> Bool {
         value == value.trimmingCharacters(in: .whitespacesAndNewlines)
             && !value.isEmpty && value.utf8.count <= 128

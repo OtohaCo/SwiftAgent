@@ -29,6 +29,9 @@ public actor AgentSession {
     private let checkpointDidExit: (@Sendable (UUID) -> Void)?
     private let drainWaitDidBegin: (@Sendable (UUID) -> Void)?
     private let drainReleaseDidBegin: (@Sendable (UUID) async -> Void)?
+    private let scopeReleaseDidFinish: (@Sendable (UUID) async -> Void)?
+    private let startupCommitWillBegin: (@Sendable (UUID) async -> Void)?
+    private let runWorkerWillStart: (@Sendable (UUID) async -> Void)?
     private let startupReleaseDidFinish: (@Sendable (UUID) async -> Void)?
     private let mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)?
     private var appliedSteeringIDs: Set<UUID> = []
@@ -56,6 +59,9 @@ public actor AgentSession {
          checkpointDidExit: (@Sendable (UUID) -> Void)? = nil,
          drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil,
          drainReleaseDidBegin: (@Sendable (UUID) async -> Void)? = nil,
+         scopeReleaseDidFinish: (@Sendable (UUID) async -> Void)? = nil,
+         startupCommitWillBegin: (@Sendable (UUID) async -> Void)? = nil,
+         runWorkerWillStart: (@Sendable (UUID) async -> Void)? = nil,
         startupReleaseDidFinish: (@Sendable (UUID) async -> Void)? = nil,
         mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)? = nil) {
         self.id = id
@@ -73,6 +79,9 @@ public actor AgentSession {
         self.checkpointDidExit = checkpointDidExit
         self.drainWaitDidBegin = drainWaitDidBegin
         self.drainReleaseDidBegin = drainReleaseDidBegin
+        self.scopeReleaseDidFinish = scopeReleaseDidFinish
+        self.startupCommitWillBegin = startupCommitWillBegin
+        self.runWorkerWillStart = runWorkerWillStart
         self.startupReleaseDidFinish = startupReleaseDidFinish
         self.mutationQuarantineDidBegin = mutationQuarantineDidBegin
     }
@@ -231,15 +240,16 @@ public actor AgentSession {
     private func releaseStartupReservation(_ startupID: UUID) async {
         guard let reservation = startupReservations.removeValue(forKey: startupID) else { return }
         deferredStartupReleases.remove(startupID)
-        if let scope = reservation.capabilityScope, let runID = reservation.runID {
-            await scope.releaseRun(runID)
-        }
         if reservation.journalLeaseAcquired {
             await journal?.releaseSessionLease(sessionID: id)
         }
         await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal?.storeIdentity()?.storeID)
         startingRun = false
         await startupReleaseDidFinish?(startupID)
+        if let scope = reservation.capabilityScope, let runID = reservation.runID {
+            await scope.releaseRun(runID)
+            await scopeReleaseDidFinish?(runID)
+        }
     }
 
     public func conversationSnapshot() async throws -> AgentConversationSnapshot {
@@ -367,10 +377,12 @@ public actor AgentSession {
         let loop = AgentLoop(binding: binding, tools: selectedTools, scheduler: scheduler,
                              modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes,
                              journal: journal, contextEffects: contextEffects,
-                             capabilityScope: capabilities?.scope)
+                             capabilityScope: capabilities?.scope,
+                             allowedResources: capabilities?.allowedResources)
         let candidateMessages = prepared + [.user([.text(text)])]
         let preparedRequest: AgentPreparedModelRequest
-        preparedRequest = try await withStartupDeadline(budget.deadline, startupID: startupID) { [weak self] in
+        preparedRequest = try await withStartupDeadline(budget.deadline, startupID: startupID,
+                                                         control: control) { [weak self] in
             guard let self else { throw CancellationError() }
             return try await loop.preflight(
                 messages: candidateMessages,
@@ -386,7 +398,8 @@ public actor AgentSession {
         var uncertainStartup = false
         if let journal {
             let sessionID = id
-            _ = try await withStartupDeadline(budget.deadline, startupID: startupID) {
+            _ = try await withStartupDeadline(budget.deadline, startupID: startupID,
+                                               control: control) {
                 try await journal.recoverPendingMutations(sessionID: sessionID)
             }
             try await capabilities?.scope.checkRun(runID)
@@ -402,6 +415,7 @@ public actor AgentSession {
                 steeringIDs: Array(appliedSteeringIDs)
             ))
             lifecycleEvents.append(.userMessage(text))
+            await startupCommitWillBegin?(runID)
             try Task.checkCancellation()
             try budget.checkActive()
             try await capabilities?.scope.checkRun(runID)
@@ -440,6 +454,7 @@ public actor AgentSession {
         if let capabilities { scopesByRunID[runID] = capabilities.scope }
         let messages = history
         let startupIsUncertain = uncertainStartup
+        await runWorkerWillStart?(runID)
         Task {
             await control.start {
                 if startupIsUncertain {
@@ -573,6 +588,7 @@ public actor AgentSession {
         let drain = drainHandles[runID]
         let scope = scopesByRunID[runID]
         let drainReleaseDidBegin = self.drainReleaseDidBegin
+        let scopeReleaseDidFinish = self.scopeReleaseDidFinish
         pendingDrainTask = Task { [weak self] in
             async let logicalCompletion: Void = control.waitUntilCompleted()
             async let physicalCompletion: Void = loop?.waitForRunToDrain(sessionID: sessionID, runID: runID) ?? ()
@@ -581,11 +597,12 @@ public actor AgentSession {
             if let self {
                 await self.finishDraining(runID: runID)
             } else {
-                await scope?.releaseRun(runID)
                 await drainReleaseDidBegin?(runID)
                 await journal?.releaseSessionLease(sessionID: sessionID)
                 await AgentSessionIdentityRegistry.shared.release(sessionID, storeID: await journal?.storeIdentity()?.storeID)
                 await drain?.complete()
+                await scope?.releaseRun(runID)
+                if scope != nil { await scopeReleaseDidFinish?(runID) }
             }
         }
     }
@@ -593,9 +610,6 @@ public actor AgentSession {
     private func finishDraining(runID: UUID) async {
         guard drainingRunID == runID else { return }
         await drainReleaseDidBegin?(runID)
-        if let scope = scopesByRunID.removeValue(forKey: runID) {
-            await scope.releaseRun(runID)
-        }
         await journal?.releaseSessionLease(sessionID: id)
         await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal?.storeIdentity()?.storeID)
         if let drain = drainHandles[runID] {
@@ -605,6 +619,10 @@ public actor AgentSession {
         loopsByRunID.removeValue(forKey: runID)
         drainingRunID = nil
         pendingDrainTask = nil
+        if let scope = scopesByRunID.removeValue(forKey: runID) {
+            await scope.releaseRun(runID)
+            await scopeReleaseDidFinish?(runID)
+        }
     }
 
     private func restoreJournalStateIfNeeded() async throws {
@@ -629,18 +647,30 @@ public actor AgentSession {
     private func withStartupDeadline<Value: Sendable>(
         _ deadline: ContinuousClock.Instant,
         startupID: UUID,
+        control: AgentRunControl? = nil,
         operation: @escaping @Sendable () async throws -> Value
     ) async throws -> Value {
         preflightOperations.insert(startupID)
-        do {
-            return try await withAgentDeadline(
+        let work = Task {
+            try await withAgentDeadline(
                 deadline,
                 operation: operation,
                 onOperationFinished: { [self] in
                     await self.preflightDidFinish(startupID)
                 }
             )
+        }
+        let workerID = await control?.registerStartupWorker(cancelStartup: { work.cancel() })
+        do {
+            let value = try await withTaskCancellationHandler {
+                try await work.value
+            } onCancel: {
+                work.cancel()
+            }
+            if let workerID { await control?.unregisterStartupWorker(workerID) }
+            return value
         } catch {
+            if let workerID { await control?.unregisterStartupWorker(workerID) }
             if preflightOperations.contains(startupID) {
                 deferredStartupReleases.insert(startupID)
             }

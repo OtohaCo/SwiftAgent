@@ -4,8 +4,319 @@ import AgentModels
 import AgentTools
 import Foundation
 import Testing
+import XCTest
 
 struct AgentCapabilityScopeTests {
+    @Test(arguments: [false, true])
+    func revokeCancelsCooperativeStartupProjectionOrEstimator(estimator: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scope-startup-cancel-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "cancel-startup")
+        let gate = ScopeCancellationGate(cooperative: true)
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unexpected") }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(journal: journal)
+        let scope = try await session.bindCapabilities(identity: "startup", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        let binding = try AgentModelBinding(profileID: "startup", profileRevision: "1", model: fixtureModel,
+            provider: provider, deployment: try .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture"),
+            projector: estimator ? AgentIdentityContextProjector() : ScopeCancellationProjector(gate: gate),
+            tokenBudget: estimator ? try AgentContextTokenBudget(maximumContextTokens: 100,
+                reservedOutputTokens: 10, estimator: ScopeCancellationEstimator(gate: gate)) : nil)
+        let startup = Task { try await session.run("candidate", capabilities: scope, using: binding) }
+        await gate.waitUntilEntered()
+        await scope.revoke()
+        let observed = await gate.waitForCancellation(timeout: 2)
+        if !observed { await gate.finishForCleanup() }
+        #expect(observed, "Scope revoke must cancel the actual preflight worker")
+        await #expect(throws: CancellationError.self) { _ = try await startup.value }
+        try await scope.waitForDrain()
+        #expect(await session.history.isEmpty)
+        #expect(try await journal.readMessages(sessionID: session.id).isEmpty)
+        #expect(await provider.log.requests.isEmpty)
+        try await journal.close()
+    }
+
+    @Test func revokeSignalsNonCooperativePreflightButRetainsTheRealOwnerUntilExit() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scope-startup-noncoop-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "noncoop")
+        let gate = ScopeCancellationGate(cooperative: false)
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unexpected") }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let sessionID = UUID()
+        let session = try agent.makeSession(id: sessionID, journal: journal)
+        let scope = try await session.bindCapabilities(identity: "startup", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        let binding = try AgentModelBinding(profileID: "startup", profileRevision: "1", model: fixtureModel,
+            provider: provider, deployment: try .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture"), projector: ScopeCancellationProjector(gate: gate))
+        let startup = Task { try await session.run("candidate", capabilities: scope, using: binding) }
+        await gate.waitUntilEntered()
+        await scope.revoke()
+        let observed = await gate.waitForCancellation(timeout: 2)
+        #expect(observed)
+        await #expect(throws: CancellationError.self) { _ = try await startup.value }
+        #expect(await scope.status().activeRuns == 1)
+        await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
+        let replacement = try agent.makeSession(id: sessionID, journal: journal)
+        await #expect(throws: AgentSessionError.runInProgress) { try await replacement.run("replacement") }
+        await gate.finishForCleanup()
+        try await scope.waitForDrain()
+        #expect(await session.history.isEmpty)
+        #expect(try await journal.readMessages(sessionID: sessionID).isEmpty)
+        #expect(await provider.log.requests.isEmpty)
+        try await journal.close()
+    }
+
+    @Test func scopeDrainIncludesJournalLeaseAndRunDrainForTheLastUser() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scope-drain-order-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "drain-order")
+        let gate = ScopeGate()
+        let provider = ScriptedProvider { request, _ in textResponse(request, "done") }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let sessionID = UUID()
+        let session = try agent.makeSession(id: sessionID, journal: journal,
+            scopeReleaseDidFinish: { _ in await gate.wait() })
+        let scope = try await session.bindCapabilities(identity: "last", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        let run = try await session.run("done", capabilities: scope)
+        _ = try await run.wait()
+        await gate.waitUntilEntered()
+        try await scope.waitForDrain()
+        #expect(await run.isDrainComplete(), "Scope drain must include Run physical drain completion")
+        do {
+            try await journal.close()
+        } catch {
+            Issue.record("Scope drain returned before Journal lease release: \(error)")
+        }
+        await gate.open()
+        try await run.waitForDrain()
+    }
+
+    @Test func scopeDrainIncludesStartupFailureLeaseAndSessionIdentityRelease() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scope-startup-drain-order-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "startup-drain")
+        let cleanupGate = ScopeGate()
+        let projectorGate = ScopeCancellationGate(cooperative: true)
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unexpected") }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let sessionID = UUID()
+        let session = try agent.makeSession(id: sessionID, journal: journal,
+            scopeReleaseDidFinish: { _ in await cleanupGate.wait() })
+        let scope = try await session.bindCapabilities(identity: "failed", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        let binding = try AgentModelBinding(profileID: "failed", profileRevision: "1", model: fixtureModel,
+            provider: provider, deployment: try .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture"),
+            projector: ScopeCancellationProjector(gate: projectorGate))
+        let starting = Task { try await session.run("candidate", capabilities: scope, using: binding) }
+        await projectorGate.waitUntilEntered()
+        await scope.revoke()
+        await projectorGate.finishForCleanup()
+        await cleanupGate.waitUntilEntered()
+        try await scope.waitForDrain()
+        let replacement = try agent.makeSession(id: sessionID, journal: journal)
+        do {
+            let newRun = try await replacement.run("new")
+            _ = try await newRun.wait()
+            try await newRun.waitForDrain()
+        } catch {
+            Issue.record("Scope drain returned before Session identity release: \(error)")
+        }
+        await cleanupGate.open()
+        await #expect(throws: (any Error).self) { _ = try await starting.value }
+        try await journal.close()
+    }
+
+    @Test func revokeAfterStartupPublicationBeforeWorkerInstallationRetainsOwnedRun() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scope-handoff-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "handoff")
+        let gate = ScopeGate()
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unexpected") }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let sessionID = UUID()
+        let session = try agent.makeSession(id: sessionID, journal: journal,
+            runWorkerWillStart: { _ in await gate.wait() })
+        let scope = try await session.bindCapabilities(identity: "handoff", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        let startup = Task { try await session.run("committed input", capabilities: scope) }
+        await gate.waitUntilEntered()
+        #expect(try await journal.latestCheckpoint(sessionID: sessionID)?.history == [.user([.text("committed input")])])
+        await scope.revoke()
+        #expect(await scope.status().activeRuns == 1)
+        await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
+        await gate.open()
+        let run = try await startup.value
+        await #expect(throws: CancellationError.self) { _ = try await run.wait() }
+        try await scope.waitForDrain()
+        #expect(await run.isDrainComplete())
+        #expect(await provider.log.requests.isEmpty)
+        try await journal.close()
+    }
+
+    @Test func revokeAfterPreflightBeforeStartupCommitLeavesNoCandidateInput() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scope-precommit-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "precommit")
+        let gate = ScopeGate()
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unexpected") }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let session = try agent.makeSession(journal: journal,
+            startupCommitWillBegin: { _ in await gate.wait() })
+        let scope = try await session.bindCapabilities(identity: "precommit", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        let starting = Task { try await session.run("candidate", capabilities: scope) }
+        await gate.waitUntilEntered()
+        await scope.revoke()
+        await gate.open()
+        await #expect(throws: AgentCapabilityError.revoked) { _ = try await starting.value }
+        try await scope.waitForDrain()
+        #expect(await session.history.isEmpty)
+        #expect(try await journal.readMessages(sessionID: session.id).isEmpty)
+        #expect(await provider.log.requests.isEmpty)
+        try await journal.close()
+    }
+
+    @Test func revokeDuringPublishedStartupCommitStillReturnsAnOwnedCancelledRun() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scope-publishing-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = ScopeIntentCommitGate()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory,
+            operationDomain: "publishing", fault: { gate.check($0) })
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unexpected") }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let session = try agent.makeSession(journal: journal)
+        let scope = try await session.bindCapabilities(identity: "publishing", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        gate.arm()
+        let starting = Task { try await session.run("committed", capabilities: scope) }
+        #expect(await gate.waitUntilEntered())
+        await scope.revoke()
+        gate.release()
+        let run = try await starting.value
+        await #expect(throws: CancellationError.self) { _ = try await run.wait() }
+        try await scope.waitForDrain()
+        #expect(await run.isDrainComplete())
+        #expect(try await journal.latestCheckpoint(sessionID: session.id)?.history == [.user([.text("committed")])])
+        #expect(await provider.log.requests.isEmpty)
+        try await journal.close()
+    }
+
+    @Test func uncertainStartupPublicationWithScopeKeepsFailedRunUntilPhysicalDrain() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scope-unknown-start-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = ScopeStartupFault()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory,
+            operationDomain: "unknown-start", fault: { try fault.check($0) })
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unexpected") }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let sessionID = UUID()
+        let session = try agent.makeSession(id: sessionID, journal: journal)
+        let scope = try await session.bindCapabilities(identity: "unknown", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        fault.arm()
+        let run = try await session.run("maybe committed", capabilities: scope)
+        await #expect(throws: AgentJournalError.commitUnknown) { _ = try await run.wait() }
+        try await scope.waitForDrain()
+        #expect(await run.isDrainComplete())
+        #expect(await provider.log.requests.isEmpty)
+        // The poisoned handle cannot be used again. OS ownership transfers
+        // only after this handle and its owned Run have gone away.
+        _ = session
+        _ = journal
+    }
+
+    @Test func revokeWhileDurableIntentPublishesNeverEntersMutationExecutor() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scope-intent-race-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let effect = directory.appendingPathComponent("effect.txt")
+        try Data().write(to: effect)
+        let gate = ScopeIntentCommitGate()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory.appendingPathComponent("journal"),
+            operationDomain: "intent-race", fault: { gate.check($0) })
+        let counts = ScopeCounts()
+        let call = ToolCall(id: .init(rawValue: "intent-race"), name: ScopeFileMutationTool.name,
+                            argumentsJSON: #"{"id":"B"}"#, completeness: .complete)
+        let provider = ScriptedProvider { request, _ in
+            gate.arm()
+            return toolResponse(request, [call])
+        }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let session = try agent.makeSession(journal: journal)
+        let scope = try await session.bindCapabilities(identity: "write", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1",
+            allowedResources: [.named(.init(namespace: "fixture.scope", id: "B"))],
+            tools: [.init(id: "write", version: "1", tool: try ScopeFileMutationTool(
+                file: effect, gate: ScopeGate(), counts: counts))])
+        let run = try await session.run("write", capabilities: scope, operationID: "intent-race")
+        #expect(await gate.waitUntilEntered())
+        await scope.revoke()
+        gate.release()
+        await #expect(throws: (any Error).self) { _ = try await run.wait() }
+        try await scope.waitForDrain()
+        #expect(await counts.executorEntries == 0)
+        #expect(await scope.status().finalAdmissions == 0)
+        #expect(try String(contentsOf: effect, encoding: .utf8).isEmpty)
+        #expect(try await journal.pendingMutations(sessionID: session.id).map(\.state) == [.needsReconciliation])
+        try await journal.close()
+    }
+
+    @Test func cancellingOneScopeDrainWaiterDoesNotReleaseTheOwnerOrOtherWaiters() async throws {
+        let gate = ScopeGate()
+        let provider = ScriptedProvider { request, _ in
+            await gate.wait()
+            return textResponse(request, "done")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let scope = try await session.bindCapabilities(identity: "waiters", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
+        let run = try await session.run("work", capabilities: scope)
+        await gate.waitUntilEntered()
+        let abandoned = Task { try await scope.waitForDrain() }
+        let retained = Task { try await scope.waitForDrain() }
+        await scope.scope.waitUntilWaiterCount(2)
+        abandoned.cancel()
+        await #expect(throws: CancellationError.self) { try await abandoned.value }
+        await scope.scope.waitUntilWaiterCount(1)
+        #expect(await scope.status().activeRuns == 1)
+        await gate.open()
+        #expect(try await run.wait().outcome == .completed)
+        try await retained.value
+        #expect(await run.isDrainComplete())
+    }
+
+    @Test func drainedScopeDoesNotUnlockSharedStoreWhileAnotherScopeRuns() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scope-shared-owner-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "shared-owner")
+        let gate = ScopeGate()
+        let provider = ScriptedProvider { request, _ in
+            if request.messages.last == .user([.text("B")]) { await gate.wait() }
+            return textResponse(request, "done")
+        }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let a = try agent.makeSession(journal: journal)
+        let b = try agent.makeSession(journal: journal)
+        let aScope = try await a.bindCapabilities(identity: "A", version: "1",
+            backendInstanceID: "shared", backendVersion: "1", allowedResources: [], tools: [])
+        let bScope = try await b.bindCapabilities(identity: "B", version: "1",
+            backendInstanceID: "shared", backendVersion: "1", allowedResources: [], tools: [])
+        let bRun = try await b.run("B", capabilities: bScope)
+        await gate.waitUntilEntered()
+        let aRun = try await a.run("A", capabilities: aScope)
+        #expect(try await aRun.wait().outcome == .completed)
+        await aScope.revoke()
+        try await aScope.waitForDrain()
+        #expect(await aRun.isDrainComplete())
+        #expect(await bScope.status().activeRuns == 1)
+        await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
+        await gate.open()
+        #expect(try await bRun.wait().outcome == .completed)
+        try await bScope.waitForDrain()
+        try await journal.close()
+    }
     @Test func duplicateAndInvalidBindingsFailBeforeAUserInput() async throws {
         let agent = try Agent(model: fixtureModel,
                               provider: ScriptedProvider { request, _ in textResponse(request, "unused") })
@@ -323,7 +634,7 @@ struct AgentCapabilityScopeTests {
         await scope.revoke()
         await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
         await gate.open()
-        await #expect(throws: AgentCapabilityError.revoked) { _ = try await starting.value }
+        await #expect(throws: CancellationError.self) { _ = try await starting.value }
         try await scope.waitForDrain()
         #expect(await session.history == [])
         #expect(try await journal.readMessages(sessionID: session.id).isEmpty)
@@ -518,6 +829,120 @@ private struct ScopeBlockingProjector: AgentContextProjector {
     func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
         await gate.wait()
         return try await AgentIdentityContextProjector().project(input)
+    }
+}
+
+private actor ScopeCancellationGate {
+    private let cooperative: Bool
+    private let cancelled = XCTestExpectation(description: "startup preflight received cancellation")
+    private var entered = false
+    private var enteredObservers: [CheckedContinuation<Void, Never>] = []
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    init(cooperative: Bool) { self.cooperative = cooperative }
+
+    func wait() async throws {
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                self.continuation = continuation
+                entered = true
+                let observers = enteredObservers
+                enteredObservers.removeAll()
+                observers.forEach { $0.resume() }
+                if Task.isCancelled && cooperative {
+                    self.continuation = nil
+                    continuation.resume(throwing: CancellationError())
+                }
+            }
+        }, onCancel: {
+            cancelled.fulfill()
+            Task { await self.cancelIfCooperative() }
+        })
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { enteredObservers.append($0) }
+    }
+
+    func waitForCancellation(timeout: TimeInterval) async -> Bool {
+        await XCTWaiter.fulfillment(of: [cancelled], timeout: timeout) == .completed
+    }
+
+    func finishForCleanup() {
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
+    }
+
+    private func cancelIfCooperative() {
+        guard cooperative else { return }
+        finishForCleanup()
+    }
+}
+
+private struct ScopeCancellationProjector: AgentContextProjector {
+    let gate: ScopeCancellationGate
+    func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
+        try await gate.wait()
+        return try await AgentIdentityContextProjector().project(input)
+    }
+}
+
+private struct ScopeCancellationEstimator: AgentContextTokenEstimator {
+    let gate: ScopeCancellationGate
+    func estimate(_ input: AgentContextTokenEstimationInput) async throws -> AgentContextTokenEstimate {
+        try await gate.wait()
+        return .init(inputTokens: 1, accuracy: .estimated)
+    }
+}
+
+private final class ScopeStartupFault: @unchecked Sendable {
+    private let lock = NSLock()
+    private var armed = false
+
+    func arm() { lock.lock(); armed = true; lock.unlock() }
+
+    func check(_ stage: JournalFileFaultStage) throws {
+        guard case .afterCurrentReplace = stage else { return }
+        lock.lock()
+        let shouldFail = armed
+        armed = false
+        lock.unlock()
+        if shouldFail { throw AgentJournalError.persistenceUnavailable("synthetic post-publication fault") }
+    }
+}
+
+private final class ScopeIntentCommitGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private let entered = XCTestExpectation(description: "intent publication reached CURRENT")
+    private var armed = false
+    private var released = false
+
+    func arm() {
+        condition.lock()
+        armed = true
+        condition.unlock()
+    }
+
+    func check(_ stage: JournalFileFaultStage) {
+        guard case .afterCurrentReplace = stage else { return }
+        condition.lock()
+        guard armed else { condition.unlock(); return }
+        armed = false
+        entered.fulfill()
+        while !released { condition.wait() }
+        condition.unlock()
+    }
+
+    func waitUntilEntered() async -> Bool {
+        await XCTWaiter.fulfillment(of: [entered], timeout: 3) == .completed
+    }
+
+    func release() {
+        condition.lock()
+        released = true
+        condition.broadcast()
+        condition.unlock()
     }
 }
 

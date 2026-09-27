@@ -76,7 +76,12 @@ it does not assert an in-flight external effect was rolled back. A call that
 obtained admission first keeps its cleanup and settlement owner until drain;
 a call waiting for resources, Host authorization or durable intent cannot
 enter the executor after revoke. `waitForDrain()` separately observes the
-actual exit. Cancelling one waiter cannot release the Journal lease. Scope
+actual exit, including startup preflight and the bound Run's Journal lease and
+Session identity release. A cooperative startup projector or estimator receives
+revocation before the normal Run worker exists; uncooperative work keeps the
+lease until it actually returns. A committed user input retains an owned Run
+even if revoke races worker installation. Cancelling one waiter cannot release
+the Journal lease. Scope
 status counts Run reservations and admissions; admission does not prove
 executor entry or a file write. Diagnostic `AgentCapabilityInfo` is not a
 recoverable permission credential.

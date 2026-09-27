@@ -18,6 +18,7 @@ package struct AgentLoop: Sendable {
     private let journal: AgentJournal?
     private let contextEffects: AgentContextEffectLedger
     private let capabilityScope: AgentCapabilityScope?
+    private let allowedResources: Set<ToolResource>?
     private let projectionDrain = AgentProjectionDrain()
 
     private var model: ModelID { binding.model }
@@ -27,7 +28,8 @@ package struct AgentLoop: Sendable {
                  scheduler: ToolScheduler = .init(), modelContextByteLimit: Int? = nil,
                  journal: AgentJournal? = nil,
                  contextEffects: AgentContextEffectLedger = .init(),
-                 capabilityScope: AgentCapabilityScope? = nil) {
+                 capabilityScope: AgentCapabilityScope? = nil,
+                 allowedResources: Set<ToolResource>? = nil) {
         self.binding = binding
         self.tools = tools
         self.scheduler = scheduler
@@ -35,6 +37,7 @@ package struct AgentLoop: Sendable {
         self.journal = journal
         self.contextEffects = contextEffects
         self.capabilityScope = capabilityScope
+        self.allowedResources = allowedResources
     }
 
     package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
@@ -232,12 +235,16 @@ package struct AgentLoop: Sendable {
             guard response.toolCalls.count <= budget.maxToolCalls - toolCalls else { throw AgentLoopError.toolCallLimitReached }
             let preparedCalls = try response.toolCalls.map { call in
                 guard usedCallIDs.insert(call.id).inserted else { throw AgentLoopError.reusedToolCallID(call.id) }
-                return try tools.prepare(call, context: ToolContext(sessionID: sessionID, runID: runID,
+                let prepared = try tools.prepare(call, context: ToolContext(sessionID: sessionID, runID: runID,
                     callID: call.id, deadline: budget.deadline,
                     idempotencyKey: Self.idempotencyKey(operationID: operationID, runID: runID, call: call),
                     argumentsJSON: call.argumentsJSON, evidenceLedger: evidenceLedger,
                     mutationAdmission: lifecycle?.mutationAdmission,
                     executionAdmission: capabilityScope))
+                if let allowedResources, !Set(prepared.resources).isSubset(of: allowedResources) {
+                    throw AgentCapabilityError.resourceOutsideScope
+                }
+                return prepared
             }
             let progress = AgentToolBatchProgress(prefix: history, response: response, budget: budget,
                                                   lifecycle: lifecycle, emitter: emitter)

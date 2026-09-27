@@ -26,6 +26,12 @@ swift run --package-path Examples/ExternalClient ScopedCapabilityFixture
 bash Scripts/ci-execution-reporting.sh
 ```
 
+`AgentCapabilityScopeTests` uses cancellation and cleanup barriers for
+cooperative/noncooperative startup preflight, post-publication worker handoff,
+unknown startup publication, sole-user scope drain before Journal close,
+cancelled drain waiters, shared store ownership and revocation during durable
+intent publication. These tests do not claim OS crash or power-loss coverage.
+
 The Context Pipeline fixture prints assembly nanoseconds, indexed Journal
 bytes read during its budgeted Run and the projected request size. It uses
 deterministic model/summary fixtures and a real temporary file store with a

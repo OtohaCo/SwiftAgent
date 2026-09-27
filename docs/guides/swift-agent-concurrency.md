@@ -23,7 +23,11 @@ Run-scoped resource allowlists do not change lock identities; two scopes
 touching one account or file still coordinate through the same scheduler.
 `revoke()` stops future executor admission and requests cancellation;
 `waitForDrain()` waits until bound Run work actually exits. One cancelled
-observer does not cancel the drain owner or another Session.
+observer does not cancel the drain owner or another Session. Startup projection
+and estimation share the Run cancellation owner before its post-admission
+worker is installed. Scope drain is published only after the bound Session
+identity and Journal lease are released; a Host may then close a store that
+has no other active users.
 
 ## Continuations and streams
 

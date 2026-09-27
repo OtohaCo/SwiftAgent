@@ -16,6 +16,10 @@ Development after `1.0.0-rc.3` is not part of the RC3 release scope.
 - Add a credential-free ExternalClient example for isolated Session tool sets,
   resource refusal, revocation and cross-restart mutation no-replay. A scope
   diagnostic cannot be decoded into an execution credential.
+- Propagate scope revocation to cooperative startup projection and estimation;
+  retain leases for noncooperative work through physical exit. Scope drain now
+  includes the bound Run's Journal/Session cleanup. Reject out-of-scope typed
+  resources before scheduler dispatch as well as at final execution admission.
 
 ### RC4 context pipeline
 

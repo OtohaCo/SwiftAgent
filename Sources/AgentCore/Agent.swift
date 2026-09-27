@@ -91,6 +91,9 @@ public struct Agent: Sendable {
             checkpointDidExit: nil,
             drainWaitDidBegin: nil,
             drainReleaseDidBegin: nil,
+            scopeReleaseDidFinish: nil,
+            startupCommitWillBegin: nil,
+            runWorkerWillStart: nil,
             startupReleaseDidFinish: nil,
             mutationQuarantineDidBegin: nil
         )
@@ -102,6 +105,9 @@ public struct Agent: Sendable {
         checkpointDidExit: (@Sendable (UUID) -> Void)? = nil,
         drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil,
         drainReleaseDidBegin: (@Sendable (UUID) async -> Void)? = nil,
+        scopeReleaseDidFinish: (@Sendable (UUID) async -> Void)? = nil,
+        startupCommitWillBegin: (@Sendable (UUID) async -> Void)? = nil,
+        runWorkerWillStart: (@Sendable (UUID) async -> Void)? = nil,
         startupReleaseDidFinish: (@Sendable (UUID) async -> Void)? = nil,
         mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)? = nil
     ) throws -> AgentSession {
@@ -116,6 +122,9 @@ public struct Agent: Sendable {
             contextPolicy: configuration.contextPolicy, journal: journal,
             checkpointDidExit: checkpointDidExit, drainWaitDidBegin: drainWaitDidBegin,
             drainReleaseDidBegin: drainReleaseDidBegin,
+            scopeReleaseDidFinish: scopeReleaseDidFinish,
+            startupCommitWillBegin: startupCommitWillBegin,
+            runWorkerWillStart: runWorkerWillStart,
             startupReleaseDidFinish: startupReleaseDidFinish,
             mutationQuarantineDidBegin: mutationQuarantineDidBegin
         )
