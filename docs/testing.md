@@ -19,6 +19,7 @@ swift test --package-path Examples/HeadlessExecutionHost --disable-sandbox --no-
 swift run --package-path Examples/HeadlessExecutionHost HeadlessExecutionHostCLI failure-after-write
 swift test --filter UsageLedgerTests
 swift test --filter AgentContextPipelineTests --disable-sandbox --no-parallel
+swift test --filter ContextPipelineProviderMappingTests --disable-sandbox --no-parallel
 swift run --package-path Examples/ExternalClient ContextPipelineFixture
 bash Scripts/ci-execution-reporting.sh
 ```
