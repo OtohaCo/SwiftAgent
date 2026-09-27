@@ -40,20 +40,20 @@ Provider ごとの契約：
 
 ## 対象バージョンとインストール
 
-last-verified: 2026-09-21
+last-verified: 2026-09-28
 
-現在公開されているプレリリースは `1.0.0-rc.3` です。明示的なバージョンを固定します。
+RC4 のプレリリース候補は `1.0.0-rc.4` です。タグの公開後は、そのバージョンを明示的に固定します。
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/OtohaCo/SwiftAgent.git",
-        exact: "1.0.0-rc.3"
+        exact: "1.0.0-rc.4"
     )
 ]
 ```
 
-[RC3 のリリースノート](docs/releases/1.0.0-rc.3.md)を参照してください。RC3 は互換性と実行レポートを強化する限定的なプレリリース hotfix であり、安定版 `1.0.0` ではありません。App に導入した依存関係と同じ revision のドキュメントを参照してください。ターゲットが実際に使う products だけを追加してください。[バージョン方針](docs/guides/swift-agent-versioning.md)も参照してください。
+[RC4 のリリースノート](docs/releases/1.0.0-rc.4.md)を参照してください。RC4 は Journal の保存形式と公開 API に互換性のない変更を含む SDK プレリリースであり、安定版 `1.0.0` ではありません。旧ストアの自動移行や本番 Host の切り替え検証は含まれません。App に導入した依存関係と同じ revision のドキュメントを参照してください。ターゲットが実際に使う products だけを追加してください。[バージョン方針](docs/guides/swift-agent-versioning.md)も参照してください。
 
 Git submodule でローカル package を提供する場合、SDK commit は親リポジトリの gitlink で固定します。App の `Package.resolved` はそのローカル package の固定には使われません。SDK の変更を先に commit・push し、利用側 App を検証してから gitlink を更新します。暗黙にリモートブランチを追従したり、推測した API をコンパイルするために依存関係を更新したりしないでください。
 

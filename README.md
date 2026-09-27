@@ -49,22 +49,23 @@ Provider-specific contracts:
 
 ## Version scope and installation
 
-last-verified: 2026-09-21
+last-verified: 2026-09-28
 
-The current published prerelease is `1.0.0-rc.3`. Pin it explicitly:
+The RC4 prerelease candidate is `1.0.0-rc.4`. Pin the released tag explicitly:
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/OtohaCo/SwiftAgent.git",
-        exact: "1.0.0-rc.3"
+        exact: "1.0.0-rc.4"
     )
 ]
 ```
 
-See the [RC3 release notes](docs/releases/1.0.0-rc.3.md). RC3 is a focused
-compatibility and execution-reporting hotfix prerelease, not a stable
-`1.0.0` release. Always read documentation from the same revision as the
+See the [RC4 release notes](docs/releases/1.0.0-rc.4.md). RC4 is an SDK
+prerelease with breaking Journal format and public API changes, not a stable
+`1.0.0` release. It does not migrate old stores or qualify production Host
+cutover. Always read documentation from the same revision as the
 dependency installed in your app. Add only the products your target uses.
 See [versioning](docs/guides/swift-agent-versioning.md).
 
