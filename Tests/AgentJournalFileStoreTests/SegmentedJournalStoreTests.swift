@@ -423,10 +423,18 @@ import Glibc
         gate.arm(.beforeSegmentDelete)
         // An automatic candidate might have won the race. A manual pass must
         // still be safe and eventually remove every sealed segment.
-        _ = try? await journal.requestMaintenance()
-        for _ in 0..<20 {
-            if try await journal.requestMaintenance()?.sealedSegments == 0 { break }
+        var status = try #require(await journal.storeStatus())
+        for _ in 0..<32 {
+            if status.sealedSegments == 0 && status.pendingGarbageSegments == 0 { break }
+            do { _ = try await journal.requestMaintenance() }
+            catch AgentJournalError.persistenceUnavailable(let reason)
+                where reason == "injected beforeSegmentDelete" {
+                // The one-shot fault can belong to an automatic candidate or
+                // any later manual pass; only this exact fault is expected.
+            }
+            status = try #require(await journal.storeStatus())
         }
+        #expect(status.sealedSegments == 0 && status.pendingGarbageSegments == 0)
         #expect(try await journal.latestCheckpoint(sessionID: session)?.history == history)
         try await journal.close()
         let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
