@@ -84,6 +84,7 @@ public struct AgentModelBinding: Sendable {
     public let provider: any ModelProvider
     public let projector: any AgentContextProjector
     public let tokenBudget: AgentContextTokenBudget?
+    public let contextReports: AgentContextReportBuffer?
     public let legacyContinuationPolicy: AgentLegacyContinuationPolicy
 
     public var profileID: String { info.profileID }
@@ -101,6 +102,7 @@ public struct AgentModelBinding: Sendable {
         configurationSummary: [String: JSONValue] = [:],
         projector: any AgentContextProjector = AgentIdentityContextProjector(),
         tokenBudget: AgentContextTokenBudget? = nil,
+        contextReports: AgentContextReportBuffer? = nil,
         legacyContinuationPolicy: AgentLegacyContinuationPolicy = .reject
     ) throws {
         guard Self.valid(profileID) else { throw AgentModelBindingError.invalidIdentity("profileID") }
@@ -118,6 +120,7 @@ public struct AgentModelBinding: Sendable {
         self.provider = provider
         self.projector = projector
         self.tokenBudget = tokenBudget
+        self.contextReports = contextReports
         self.legacyContinuationPolicy = legacyContinuationPolicy
     }
 
@@ -126,12 +129,14 @@ public struct AgentModelBinding: Sendable {
         provider: any ModelProvider,
         projector: any AgentContextProjector,
         tokenBudget: AgentContextTokenBudget?,
+        contextReports: AgentContextReportBuffer?,
         legacyContinuationPolicy: AgentLegacyContinuationPolicy
     ) {
         self.info = info
         self.provider = provider
         self.projector = projector
         self.tokenBudget = tokenBudget
+        self.contextReports = contextReports
         self.legacyContinuationPolicy = legacyContinuationPolicy
     }
 
@@ -164,6 +169,7 @@ public struct AgentModelBinding: Sendable {
             provider: provider,
             projector: AgentIdentityContextProjector(),
             tokenBudget: nil,
+            contextReports: nil,
             legacyContinuationPolicy: .allowMatchingModel
         )
     }

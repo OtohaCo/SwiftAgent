@@ -9,6 +9,10 @@ public struct AgentContextProjectionInput: Hashable, Sendable, Codable {
     public let conversationRevision: UInt64
     public let contextEpoch: UInt64
     public let modelTurn: Int
+    /// Formal-message ordinal (excluding current runtime instructions) to Journal ID.
+    /// Only source ranges requested by a source-bound projector need entries.
+    public let formalMessageIDs: [Int: UUID]
+    public let readOnlyToolNames: Set<String>
 
     public init(
         canonicalMessages: [ModelMessage],
@@ -17,7 +21,9 @@ public struct AgentContextProjectionInput: Hashable, Sendable, Codable {
         runID: UUID,
         conversationRevision: UInt64,
         contextEpoch: UInt64,
-        modelTurn: Int
+        modelTurn: Int,
+        formalMessageIDs: [Int: UUID] = [:],
+        readOnlyToolNames: Set<String> = []
     ) {
         self.canonicalMessages = canonicalMessages
         self.model = model
@@ -26,6 +32,8 @@ public struct AgentContextProjectionInput: Hashable, Sendable, Codable {
         self.conversationRevision = conversationRevision
         self.contextEpoch = contextEpoch
         self.modelTurn = modelTurn
+        self.formalMessageIDs = formalMessageIDs
+        self.readOnlyToolNames = readOnlyToolNames
     }
 }
 
@@ -76,10 +84,13 @@ public enum AgentContextProjectionSource {
 public struct AgentContextProjection: Hashable, Sendable, Codable {
     public let messages: [ModelMessage]
     public let plan: AgentContextProjectionPlan
+    public let report: AgentContextAssemblyReport?
 
-    public init(messages: [ModelMessage], plan: AgentContextProjectionPlan) {
+    public init(messages: [ModelMessage], plan: AgentContextProjectionPlan,
+                report: AgentContextAssemblyReport? = nil) {
         self.messages = messages
         self.plan = plan
+        self.report = report
     }
 }
 

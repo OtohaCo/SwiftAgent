@@ -199,6 +199,46 @@ public actor AgentSession {
         return .init(revision: conversationRevision, messages: history)
     }
 
+    /// Anchors a closed range to actual Journal message IDs. The caller can
+    /// derive a request-only summary; no conversation or ledger write occurs.
+    public func contextHistorySpan(start: Int, count: Int) async throws -> AgentContextHistorySpan {
+        try await restoreJournalStateIfNeeded()
+        guard let journal, start >= 0, count > 0, count <= 256,
+              start <= Int.max - count else { throw AgentContextPipelineError.unsafeSummary }
+        let formal = history.filter { $0.role != .system && $0.role != .developer }
+        guard start + count <= formal.count else { throw AgentContextPipelineError.unsafeSummary }
+        let page = try await journal.readMessages(sessionID: id, after: UInt64(start), limit: count)
+        let expected = Array(formal[start..<(start + count)])
+        guard page.count == count, page.map(\.message) == expected else {
+            throw AgentContextPipelineError.staleSummary
+        }
+        return .init(sessionID: id, start: start, messageIDs: page.map(\.id),
+                     sourceDigest: try AgentContextProjectionSource.digest(messages: expected))
+    }
+
+    /// Selects a committed successful result from a registered read-only tool.
+    /// A projection may shorten its model view; the Journal result stays whole.
+    public func contextToolExcerpt(callID: ToolCallID, text: String) async throws -> AgentContextToolExcerpt {
+        try await restoreJournalStateIfNeeded()
+        let formal = history.filter { $0.role != .system && $0.role != .developer }
+        guard let index = formal.firstIndex(where: {
+            if case .tool(let result) = $0 { return result.callID == callID }
+            return false
+        }), case .tool(let result) = formal[index], !result.isError,
+              let assistant = formal[..<index].lastIndex(where: { $0.role == .assistant }),
+              case .assistant(_, let calls) = formal[assistant],
+              let call = calls.first(where: { $0.id == callID }),
+              tools.readOnlyNames.contains(call.name), let journal else {
+            throw AgentContextPipelineError.unsafeToolExcerpt
+        }
+        let page = try await journal.readMessages(sessionID: id, after: UInt64(index), limit: 1)
+        guard page.count == 1, page[0].message == formal[index] else {
+            throw AgentContextPipelineError.staleToolExcerpt
+        }
+        return .init(callID: callID, messageID: page[0].id,
+                     sourceDigest: try AgentContextProjectionSource.digest(messages: [formal[index]]), text: text)
+    }
+
     /// Waits until provider/tool work for `runID` has exited and this Session
     /// identity is released. Same owner as `AgentRun.waitForDrain()`.
     public func waitForRunToDrain(runID: UUID) async {
@@ -260,7 +300,8 @@ public actor AgentSession {
         }
         let runID = UUID()
         let loop = AgentLoop(binding: binding, tools: tools, scheduler: scheduler,
-                             modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes)
+                             modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes,
+                             journal: journal)
         let candidateMessages = prepared + [.user([.text(text)])]
         let preparedRequest: AgentPreparedModelRequest
         preparedRequest = try await withStartupDeadline(budget.deadline, startupID: startupID) { [weak self] in
