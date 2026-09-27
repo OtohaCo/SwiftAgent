@@ -41,6 +41,10 @@ public actor AgentSession {
     private var drainHandles: [UUID: AgentRunDrain] = [:]
     private var loopsByRunID: [UUID: AgentLoop] = [:]
     private var startingRun = false
+    private var dispatchStarting = false
+    private var dispatcherID: UUID?
+    private var dispatcher: AgentFollowUpDispatcher?
+    private var startupWaiters: [CheckedContinuation<Void, Never>] = []
     private var preflightOperations: Set<UUID> = []
     private var deferredStartupReleases: Set<UUID> = []
     private var startupReservations: [UUID: StartupReservation] = [:]
@@ -149,7 +153,9 @@ public actor AgentSession {
         capabilities: AgentCapabilityBinding?,
         expectedConversationRevision: UInt64?,
         budget: AgentBudget?,
-        operationID: String?
+        operationID: String?,
+        dispatchOwnerID: UUID? = nil,
+        followUpInputID: String? = nil
     ) async throws -> AgentRun {
         try Task.checkCancellation()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentSessionError.emptyInput }
@@ -159,6 +165,9 @@ public actor AgentSession {
             maxToolCalls: maxToolCalls,
             deadline: .now.advanced(by: runTimeout)
         )
+        if dispatchStarting || (dispatcherID != nil && dispatcherID != dispatchOwnerID) {
+            throw AgentFollowUpError.dispatchOwned
+        }
         guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
         try runBudget.checkActive()
         startingRun = true
@@ -179,7 +188,7 @@ public actor AgentSession {
             do {
                 if let journal {
                     do {
-                        try await journal.acquireSessionLease(sessionID: id)
+                        try await journal.acquireSessionLease(sessionID: id, dispatcherID: dispatchOwnerID)
                     } catch AgentJournalError.sessionLeaseUnavailable {
                         throw AgentSessionError.runInProgress
                     }
@@ -194,17 +203,18 @@ public actor AgentSession {
                         expectedConversationRevision: expectedConversationRevision,
                         budget: runBudget,
                         operationID: operationID,
-                        startupID: startupID
+                        startupID: startupID,
+                        followUpInputID: followUpInputID
                     )
                     startupReservations.removeValue(forKey: startupID)
-                    startingRun = false
+                    startupFinished()
                     return run
                 } catch {
                     if !deferredStartupReleases.contains(startupID) {
                         await releaseStartupReservation(startupID)
                         identityAcquired = false
                         journalLeaseAcquired = false
-                        startingRun = false
+                        startupFinished()
                     }
                     throw error
                 }
@@ -219,13 +229,13 @@ public actor AgentSession {
                         identityAcquired = false
                     }
                     startupReservations.removeValue(forKey: startupID)
-                    startingRun = false
+                    startupFinished()
                 }
                 throw error
             }
         } catch {
             if !deferredStartupReleases.contains(startupID) {
-                startingRun = false
+                startupFinished()
             }
             throw error
         }
@@ -244,7 +254,7 @@ public actor AgentSession {
             await journal?.releaseSessionLease(sessionID: id)
         }
         await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal?.storeIdentity()?.storeID)
-        startingRun = false
+        startupFinished()
         await startupReleaseDidFinish?(startupID)
         if let scope = reservation.capabilityScope, let runID = reservation.runID {
             await scope.releaseRun(runID)
@@ -282,6 +292,59 @@ public actor AgentSession {
     public func withdrawFollowUp(inputID: String) async throws -> AgentFollowUpWithdrawal {
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
         return try await journal.withdrawFollowUp(sessionID: id, inputID: inputID)
+    }
+
+    /// Starts one explicit FIFO consumer. A paused consumer still owns this
+    /// Session; stopping and physical drain release that ownership.
+    public func startFollowUpDispatch(policy: AgentFollowUpDispatchPolicy,
+                                      resolver: any AgentFollowUpResolver) async throws -> AgentFollowUpDispatcher {
+        guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
+        guard !dispatchStarting, dispatcherID == nil else { throw AgentFollowUpError.alreadyDispatching }
+        guard !startingRun else { throw AgentSessionError.runInProgress }
+        try policy.validate()
+        dispatchStarting = true
+        defer { dispatchStarting = false }
+        let ownerID = UUID()
+        let priorDrain = (activeRunID ?? drainingRunID).flatMap { drainHandles[$0] }
+        let handle = AgentFollowUpDispatcher(session: self, journal: journal, sessionID: id,
+                                             ownerID: ownerID, policy: policy, resolver: resolver,
+                                             initialDrain: priorDrain)
+        try await journal.acquireDispatcherLease(sessionID: id, owner: ownerID,
+                                                 allowExistingRun: priorDrain != nil,
+                                                 notify: { await handle.signal() })
+        dispatcherID = ownerID
+        dispatcher = handle
+        await handle.start()
+        return handle
+    }
+
+    package func startQueuedFollowUp(_ input: JournalStoredFollowUp,
+                                     using configuration: AgentFollowUpConfiguration,
+                                     ownerID: UUID, budget: AgentBudget) async throws -> AgentRun {
+        guard dispatcherID == ownerID else { throw AgentFollowUpError.staleDispatch }
+        return try await runInternal(input.input.text, using: configuration.model,
+            capabilities: configuration.capabilities,
+            expectedConversationRevision: configuration.expectedConversationRevision,
+            budget: budget, operationID: input.input.operationID,
+            dispatchOwnerID: ownerID, followUpInputID: input.input.inputID)
+    }
+
+    package func waitForQueuedStartupExit(ownerID: UUID) async {
+        guard dispatcherID == ownerID, startingRun else { return }
+        await withCheckedContinuation { startupWaiters.append($0) }
+    }
+
+    package func followUpDispatcherDidStop(ownerID: UUID) {
+        guard dispatcherID == ownerID else { return }
+        dispatcherID = nil
+        dispatcher = nil
+    }
+
+    private func startupFinished() {
+        startingRun = false
+        let waiters = startupWaiters
+        startupWaiters.removeAll()
+        waiters.forEach { $0.resume() }
     }
 
     /// Anchors a closed range to actual Journal message IDs. The caller can
@@ -348,7 +411,8 @@ public actor AgentSession {
         expectedConversationRevision: UInt64?,
         budget: AgentBudget,
         operationID: String?,
-        startupID: UUID
+        startupID: UUID,
+        followUpInputID: String? = nil
     ) async throws -> AgentRun {
         try budget.checkActive()
         let restoredCheckpoint: (history: [ModelMessage], steeringIDs: [UUID])?
@@ -452,7 +516,8 @@ public actor AgentSession {
                     sessionID: id,
                     runID: runID,
                     deadline: budget.deadline,
-                    durability: journal.storage == .durable ? .durable : .memory
+                    durability: journal.storage == .durable ? .durable : .memory,
+                    followUpInputID: followUpInputID
                 )
             } catch AgentJournalStartupAdmissionError.deadlineExceeded {
                 throw AgentLoopError.deadlineExceeded

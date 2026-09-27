@@ -77,6 +77,7 @@ public enum AgentFollowUpError: Error, Equatable, Sendable {
     case alreadyDispatching
     case dispatcherStopped
     case staleDispatch
+    case needsInspection
 }
 
 package struct JournalFollowUpHead: Codable, Equatable, Sendable {
@@ -86,13 +87,17 @@ package struct JournalFollowUpHead: Codable, Equatable, Sendable {
     package var queuedBytes: Int
     package var firstQueued: UInt64?
     package var lastQueued: UInt64?
+    package var lastAdmitted: UInt64?
+    package var lastReleased: UInt64?
 
     package init(revision: UInt64 = 0, nextOrdinal: UInt64 = 0,
                  queuedCount: Int = 0, queuedBytes: Int = 0,
-                 firstQueued: UInt64? = nil, lastQueued: UInt64? = nil) {
+                 firstQueued: UInt64? = nil, lastQueued: UInt64? = nil,
+                 lastAdmitted: UInt64? = nil, lastReleased: UInt64? = nil) {
         self.revision = revision; self.nextOrdinal = nextOrdinal
         self.queuedCount = queuedCount; self.queuedBytes = queuedBytes
         self.firstQueued = firstQueued; self.lastQueued = lastQueued
+        self.lastAdmitted = lastAdmitted; self.lastReleased = lastReleased
     }
 }
 

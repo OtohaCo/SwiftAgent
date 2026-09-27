@@ -227,6 +227,7 @@ public actor AgentJournal {
     private var maintenanceTick: UInt64 = 0
     private var closing = false
     private var sessionLeases: Set<UUID>
+    private var dispatcherLeases: [UUID: (owner: UUID, notify: @Sendable () async -> Void)] = [:]
     /// Immutable configured capability. A durable commit can still fail.
     public nonisolated let storage: AgentJournalStorage
 
@@ -266,7 +267,10 @@ public actor AgentJournal {
         storage = .durable
     }
 
-    package func acquireSessionLease(sessionID: UUID) throws {
+    package func acquireSessionLease(sessionID: UUID, dispatcherID: UUID? = nil) throws {
+        if let owner = dispatcherLeases[sessionID]?.owner, owner != dispatcherID {
+            throw AgentFollowUpError.dispatchOwned
+        }
         guard !closing, sessionLeases.insert(sessionID).inserted else {
             throw AgentJournalError.sessionLeaseUnavailable
         }
@@ -274,6 +278,21 @@ public actor AgentJournal {
 
     package func releaseSessionLease(sessionID: UUID) {
         sessionLeases.remove(sessionID)
+    }
+
+    package func acquireDispatcherLease(sessionID: UUID, owner: UUID,
+                                        allowExistingRun: Bool,
+                                        notify: @escaping @Sendable () async -> Void) throws {
+        guard storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
+        guard !closing, dispatcherLeases[sessionID] == nil else { throw AgentFollowUpError.alreadyDispatching }
+        guard allowExistingRun || !sessionLeases.contains(sessionID) else {
+            throw AgentSessionError.runInProgress
+        }
+        dispatcherLeases[sessionID] = (owner, notify)
+    }
+
+    package func releaseDispatcherLease(sessionID: UUID, owner: UUID) {
+        if dispatcherLeases[sessionID]?.owner == owner { dispatcherLeases.removeValue(forKey: sessionID) }
     }
 
     /// Returns the most recent canonical session history checkpoint. The
@@ -816,7 +835,7 @@ extension AgentJournal {
         }
     }
 
-    package func enqueueFollowUp(_ input: AgentFollowUpInput, sessionID: UUID) throws -> AgentFollowUpRecord {
+    package func enqueueFollowUp(_ input: AgentFollowUpInput, sessionID: UUID) async throws -> AgentFollowUpRecord {
         try input.validate()
         guard let store else { throw AgentFollowUpError.durableJournalRequired }
         let result = try store.write { view -> AgentFollowUpRecord in
@@ -853,6 +872,7 @@ extension AgentJournal {
             return accepted.publicRecord(storeID: store.storeID)
         }
         scheduleMaintenanceIfNeeded()
+        if let notify = dispatcherLeases[sessionID]?.notify { await notify() }
         return result
     }
 
@@ -894,7 +914,58 @@ extension AgentJournal {
         }
     }
 
-    package func withdrawFollowUp(sessionID: UUID, inputID: String) throws -> AgentFollowUpWithdrawal {
+    package func interruptedFollowUp(sessionID: UUID) throws -> JournalStoredFollowUp? {
+        guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        return try store.read { view in
+            let head = try view.followUpHead(sessionID: sessionID)
+            guard head.lastAdmitted != head.lastReleased else { return nil }
+            guard let ordinal = head.lastAdmitted,
+                  let record = try view.followUps(sessionID: sessionID, after: ordinal, limit: 1).first,
+                  record.ordinal == ordinal,
+                  case .admitted = record.state else { throw AgentJournalError.invalidRecord }
+            return record
+        }
+    }
+
+    package func releaseCompletedFollowUp(sessionID: UUID, inputID: String, runID: UUID) throws {
+        guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        try store.write { view in
+            let head = try view.followUpHead(sessionID: sessionID)
+            guard let record = try view.followUp(sessionID: sessionID, inputID: inputID),
+                  case .admitted(let originalRun, _) = record.state,
+                  originalRun == runID, head.lastAdmitted == record.ordinal,
+                  head.lastReleased != record.ordinal, head.revision < .max else {
+                throw AgentFollowUpError.staleDispatch
+            }
+            var updated = head
+            updated.revision += 1
+            updated.lastReleased = record.ordinal
+            try view.publishFollowUp(.init(sessionID: sessionID, expectedRevision: head.revision,
+                                            head: updated, records: []))
+        }
+        scheduleMaintenanceIfNeeded()
+    }
+
+    package func releaseInspectedFollowUp(sessionID: UUID, inputID: String) throws {
+        guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        try store.write { view in
+            let head = try view.followUpHead(sessionID: sessionID)
+            guard let record = try view.followUp(sessionID: sessionID, inputID: inputID),
+                  case .admitted = record.state, head.lastAdmitted == record.ordinal,
+                  head.lastReleased != record.ordinal, head.revision < .max,
+                  try view.pending(sessionID: sessionID).isEmpty else {
+                throw AgentFollowUpError.needsInspection
+            }
+            var updated = head
+            updated.revision += 1
+            updated.lastReleased = record.ordinal
+            try view.publishFollowUp(.init(sessionID: sessionID, expectedRevision: head.revision,
+                                            head: updated, records: []))
+        }
+        scheduleMaintenanceIfNeeded()
+    }
+
+    package func withdrawFollowUp(sessionID: UUID, inputID: String) async throws -> AgentFollowUpWithdrawal {
         guard let store else { throw AgentFollowUpError.durableJournalRequired }
         let result = try store.write { view -> AgentFollowUpWithdrawal in
             guard var entry = try view.followUp(sessionID: sessionID, inputID: inputID) else {
@@ -942,6 +1013,7 @@ extension AgentJournal {
             return .withdrawn
         }
         scheduleMaintenanceIfNeeded()
+        if let notify = dispatcherLeases[sessionID]?.notify { await notify() }
         return result
     }
 
@@ -1210,7 +1282,7 @@ extension AgentJournal {
     }
 
     public func close() async throws {
-        guard sessionLeases.isEmpty else { throw AgentJournalError.sessionLeaseUnavailable }
+        guard sessionLeases.isEmpty, dispatcherLeases.isEmpty else { throw AgentJournalError.sessionLeaseUnavailable }
         closing = true
         if let maintenanceTask {
             _ = await maintenanceTask.result

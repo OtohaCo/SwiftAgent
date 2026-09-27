@@ -35,6 +35,7 @@ struct DiskFollowUpV2: Codable {
         let input = AgentFollowUpInput(inputID: inputID, text: text,
                                       operationID: operationID, configurationRef: configurationRef)
         try input.validate()
+        guard nextQueued.map({ $0 > ordinal }) ?? true else { throw AgentJournalError.invalidRecord }
         let state: AgentFollowUpState
         switch status {
         case "queued":
@@ -64,11 +65,14 @@ struct DiskFollowUpHeadV2: Codable {
     let queuedBytes: Int
     let firstQueued: UInt64?
     let lastQueued: UInt64?
+    let lastAdmitted: UInt64?
+    let lastReleased: UInt64?
 
     init(_ value: JournalFollowUpHead) {
         revision = value.revision; nextOrdinal = value.nextOrdinal
         queuedCount = value.queuedCount; queuedBytes = value.queuedBytes
         firstQueued = value.firstQueued; lastQueued = value.lastQueued
+        lastAdmitted = value.lastAdmitted; lastReleased = value.lastReleased
     }
 
     func value() throws -> JournalFollowUpHead {
@@ -77,11 +81,16 @@ struct DiskFollowUpHeadV2: Codable {
               (firstQueued == nil) == (queuedCount == 0),
               (lastQueued == nil) == (queuedCount == 0),
               firstQueued.map({ $0 < nextOrdinal }) ?? true,
-              lastQueued.map({ $0 < nextOrdinal }) ?? true else {
+              lastQueued.map({ $0 < nextOrdinal }) ?? true,
+              lastAdmitted.map({ $0 < nextOrdinal }) ?? true,
+              lastReleased.map({ $0 < nextOrdinal }) ?? true,
+              lastReleased == nil || lastAdmitted != nil,
+              lastReleased.map({ released in lastAdmitted.map { released <= $0 } ?? false }) ?? true else {
             throw AgentJournalError.invalidRecord
         }
         return .init(revision: revision, nextOrdinal: nextOrdinal,
                      queuedCount: queuedCount, queuedBytes: queuedBytes,
-                     firstQueued: firstQueued, lastQueued: lastQueued)
+                     firstQueued: firstQueued, lastQueued: lastQueued,
+                     lastAdmitted: lastAdmitted, lastReleased: lastReleased)
     }
 }
