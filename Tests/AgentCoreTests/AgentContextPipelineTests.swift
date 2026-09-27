@@ -56,6 +56,10 @@ struct AgentContextPipelineTests {
         await #expect(throws: AgentContextPipelineError.staleSummary) {
             try await projector.project(input(canonical, ids: [0: UUID(), 1: ids[1]]))
         }
+        await #expect(throws: AgentContextPipelineError.unsafeSummary) {
+            try await AgentCompositeContextProjector(summaries: [summary],
+                protectedMessageIDs: [ids[0]]).project(input(canonical, ids: [0: ids[0], 1: ids[1]]))
+        }
     }
 
     @Test func summaryNeverHidesDeniedOrUnresolvedToolFacts() async throws {

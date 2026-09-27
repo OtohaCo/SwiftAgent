@@ -30,7 +30,8 @@ contains stable formal message IDs, range and a digest of that exact range.
 Summaries are explicit lossy materials tied to a span and generator version.
 On every projection the span's exact message content and boundaries must still
 match. New messages outside the span do not invalidate it; edits inside do.
-Only a closed, past conversation group may be replaced. Current instructions,
+Only a closed, past conversation group may be replaced. Host-pinned correction
+and constraint IDs cannot be covered by a summary. Current instructions,
 the latest user request, unresolved tool calls, denied/uncertain effects and
 provider continuation stay visible. Large completed read-only tool output may
 be excerpted in the request while keeping the call ID and result state. Its

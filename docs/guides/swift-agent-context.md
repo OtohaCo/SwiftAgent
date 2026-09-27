@@ -70,8 +70,8 @@ and a content digest. An `AgentContextSummary` also supplies a generator
 version. Every request checks the IDs and exact range again. Appending an
 unrelated message does not invalidate it; changing covered content does.
 Summary ranges cannot include current input, tool calls/results or provider
-continuation. The Host chooses eligible history and protects earlier
-corrections or constraints by keeping them outside summarized ranges. The
+continuation. The Host pins earlier corrections or constraints using
+`protectedMessageIDs` on the projector; their IDs cannot be summarized. The
 summary is marked as Host-derived data in the model view, never formal user
 history.
 

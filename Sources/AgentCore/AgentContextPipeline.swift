@@ -206,15 +206,19 @@ public struct AgentCompositeContextProjector: AgentContextProjector {
     public let materials: [AgentContextMaterial]
     public let summaries: [AgentContextSummary]
     public let excerpts: [AgentContextToolExcerpt]
+    /// Host-pinned corrections and constraints that no summary may replace.
+    public let protectedMessageIDs: Set<UUID>
     public let limits: AgentContextAssemblyLimits
     public let policyVersion: String
 
     public init(materials: [AgentContextMaterial] = [], summaries: [AgentContextSummary] = [],
-                excerpts: [AgentContextToolExcerpt] = [], limits: AgentContextAssemblyLimits = .init(),
+                excerpts: [AgentContextToolExcerpt] = [], protectedMessageIDs: Set<UUID> = [],
+                limits: AgentContextAssemblyLimits = .init(),
                 policyVersion: String = "1") {
         self.materials = materials
         self.summaries = summaries
         self.excerpts = excerpts
+        self.protectedMessageIDs = protectedMessageIDs
         self.limits = limits
         self.policyVersion = policyVersion
     }
@@ -280,6 +284,7 @@ public struct AgentCompositeContextProjector: AgentContextProjector {
             let end = span.start.addingReportingOverflow(span.messageIDs.count)
             guard span.start >= 0, !end.overflow, !span.messageIDs.isEmpty,
                   end.partialValue <= formal.count, end.partialValue <= newestUser,
+                  protectedMessageIDs.isDisjoint(with: span.messageIDs),
                   !summary.text.isEmpty, Self.safeLabel(summary.generatorVersion) else {
                 throw AgentContextPipelineError.unsafeSummary
             }
