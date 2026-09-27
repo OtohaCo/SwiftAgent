@@ -7,6 +7,12 @@ symbol graphs and describes the package products, not package-internal or test
 symbols. The published rc.1 anchor remains
 `d2347f11c6a78f421708e897dae42a51a98d37ea`.
 
+This table is historical release evidence, not the current unreleased API
+inventory. The segmented Journal replacement intentionally breaks source and
+file compatibility; see [versioning](swift-agent-versioning.md) and the
+[Journal guide](swift-agent-journal.md). Regenerate the symbol graph for the
+candidate SHA before a later release is proposed.
+
 ## Reproduction
 
 From the repository root:

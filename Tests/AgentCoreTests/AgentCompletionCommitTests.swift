@@ -93,7 +93,7 @@ struct AgentCompletionCommitTests {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let sessionID = UUID()
         let runID = UUID()
         let operationID = "completion-reservation-operation"
@@ -119,19 +119,19 @@ struct AgentCompletionCommitTests {
         let prepared = try registry.prepare(call, context: context)
         let result = try await prepared.invoke()
         #expect(await probe.count == 1)
-        #expect(await journal.pendingMutations(sessionID: sessionID).map(\.state) == [.intent])
+        #expect(try await journal.pendingMutations(sessionID: sessionID).map(\.state) == [.intent])
 
         let channel = AsyncStream<AgentEvent>.makeStream()
         let emitter = AgentEventEmitter(channel.continuation, requiresConsumer: false)
         try await emitter.send(.toolStarted(call))
-        let compactor = CompletionCompactorGate()
+        let gate = CompletionCommitGate()
         let lifecycle = AgentLoopLifecycle(
             control: AgentRunControl(),
             evidenceLedger: EvidenceLedger(),
             mutationAdmission: journal,
             checkpoint: { messages, _ in messages },
             commitMutation: { callID, receipt, output, messages, steering in
-                _ = try await compactor.summarize(droppedConversation: messages)
+                await gate.waitForRelease()
                 try await journal.commitMutation(
                     sessionID: sessionID,
                     runID: runID,
@@ -156,40 +156,28 @@ struct AgentCompletionCommitTests {
         let progress = AgentToolBatchProgress(prefix: [], response: response, budget: budget,
                                               lifecycle: lifecycle, emitter: emitter)
         let recording = Task { try await progress.record(index: 0, call: prepared, result: result) }
-        await compactor.waitUntilBlocked()
+        await gate.waitUntilBlocked()
 
         let finishing = await emitter.beginFinishing(.cancelled)
-        await compactor.open()
-        await compactor.waitUntilResumed()
+        await gate.open()
+        await gate.waitUntilResumed()
         try await recording.value
         await finishing.value
 
         #expect(await probe.count == 1)
-        #expect(await journal.pendingMutations(sessionID: sessionID).isEmpty)
-        let durable = try AgentJournal.load(from: url)
-        #expect(await durable.pendingMutations(sessionID: sessionID).isEmpty)
-        let records = await durable.snapshot()
-        #expect(records.contains { record in
-            if case .mutationSettled(let callID, let receipt, .executor) = record.event {
-                return callID == call.id && receipt == result.receipt
-            }
-            return false
-        })
-        #expect(records.contains { record in
-            if case .mutationOutput(let callID, let output) = record.event {
-                return callID == call.id && output == result.output
-            }
-            return false
-        })
-        #expect(!records.contains { record in
-            if case .mutationNeedsReconciliation(let callID) = record.event { return callID == call.id }
-            return false
-        })
+        #expect(try await journal.pendingMutations(sessionID: sessionID).isEmpty)
+        try await journal.close()
+        let durable = try openTestJournal(at: url)
+        #expect(try await durable.pendingMutations(sessionID: sessionID).isEmpty)
+        let status = try #require(try await durable.mutationStatus(identity: operationID))
+        #expect(status.state == .settled)
+        #expect(status.receipt == result.receipt)
+        #expect(status.replayOutput == result.output)
         let expectedHistory: [ModelMessage] = [
             .assistant(content: [], toolCalls: [call]),
             .tool(.init(callID: call.id, content: [.json(result.output)], isError: false)),
         ]
-        #expect(await durable.latestCheckpoint(sessionID: sessionID)?.history == expectedHistory)
+        #expect(try await durable.latestCheckpoint(sessionID: sessionID)?.history == expectedHistory)
 
         let events = await collectEvents(channel.stream)
         #expect(events == [
@@ -199,6 +187,7 @@ struct AgentCompletionCommitTests {
             .toolCompleted(.init(callID: call.id, content: [.json(result.output)], isError: false)),
             .runFinished(.cancelled),
         ])
+        try await durable.close()
     }
 }
 
@@ -225,14 +214,14 @@ private actor CompletionHistory {
     func record(_ messages: [ModelMessage]) { self.messages = messages }
 }
 
-private actor CompletionCompactorGate: AgentContextCompactor {
+private actor CompletionCommitGate {
     private var continuation: CheckedContinuation<Void, Never>?
     private var blocked = false
     private var resumed = false
     private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
     private var resumedWaiters: [CheckedContinuation<Void, Never>] = []
 
-    func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
+    func waitForRelease() async {
         blocked = true
         let observers = blockedWaiters
         blockedWaiters.removeAll()
@@ -242,7 +231,6 @@ private actor CompletionCompactorGate: AgentContextCompactor {
         let resumedObservers = resumedWaiters
         resumedWaiters.removeAll()
         for observer in resumedObservers { observer.resume() }
-        return AgentCompactionSummary(goal: "Preserve the completed mutation")
     }
 
     func waitUntilBlocked() async {

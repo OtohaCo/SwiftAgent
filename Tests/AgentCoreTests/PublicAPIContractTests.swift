@@ -16,9 +16,7 @@ struct PublicAPIContractTests {
         #expect(configuration.maxToolCalls == 16)
         #expect(configuration.runTimeout == .seconds(30))
         #expect(configuration.contextPolicy.maxInputUTF8Bytes == 8 * 1024 * 1024)
-        #expect(configuration.contextPolicy.maxActiveHistoryUTF8Bytes == 12 * 1024 * 1024)
-        #expect(configuration.contextPolicy.retainedRecentTurnCount == 6)
-        #expect(configuration.contextPolicy.compactor == nil)
+        #expect(configuration.contextPolicy.maxModelContextUTF8Bytes == 12 * 1024 * 1024)
     }
 
     @Test func readOnlyAgentAcceptsNilMemoryAndDurableJournals() async throws {
@@ -33,10 +31,13 @@ struct PublicAPIContractTests {
 
         let url = PublicAPIJournal.makeURL("read-only-durable")
         defer { PublicAPIJournal.cleanup(url) }
-        let durable = try AgentJournal(persistenceURL: url)
+        let durable = try makeTestJournal(at: url)
         #expect(durable.storage == .durable)
         let durableSession = try agent.makeSession(journal: durable)
-        #expect(try await durableSession.run("hello").wait().outcome == .completed)
+        let durableRun = try await durableSession.run("hello")
+        #expect(try await durableRun.wait().outcome == .completed)
+        try await durableRun.waitForDrain()
+        try await durable.close()
     }
 
     @Test func mutationToolsFailFastWhenTheSessionHasNoJournal() throws {
@@ -57,24 +58,16 @@ struct PublicAPIContractTests {
         }
         #expect(probe.modelStarts == 0)
         #expect(probe.toolExecutions == 0)
-        #expect(await journal.snapshot().isEmpty)
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
     }
 
-    @Test func mutationToolsAcceptADurableJournalAndAPersistedMemoryJournal() async throws {
+    @Test func mutationToolsAcceptADurableJournal() async throws {
         let url = PublicAPIJournal.makeURL("mutation-durable")
         defer { PublicAPIJournal.cleanup(url) }
-        let durable = try AgentJournal(persistenceURL: url)
+        let durable = try makeTestJournal(at: url)
         #expect(durable.storage == .durable)
         _ = try PublicAPIMutationClient.makeSession(journal: durable)
-
-        let upgradedURL = PublicAPIJournal.makeURL("mutation-persisted")
-        defer { PublicAPIJournal.cleanup(upgradedURL) }
-        let upgraded = AgentJournal()
-        #expect(upgraded.storage == .memory)
-        try await upgraded.persist(to: upgradedURL)
-        #expect(upgraded.storage == .durable)
-        _ = try PublicAPIMutationClient.makeSession(journal: upgraded)
+        try await durable.close()
     }
 
     @Test func agentInitializerFreezeKeepsInstructionsConvenienceOnly() throws {
@@ -96,13 +89,13 @@ struct PublicAPIContractTests {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let run = try await PublicAPIMutationClient.makeSession(journal: journal).run("Update the listing")
         let result = try await run.wait()
         try await run.waitForDrain()
         #expect(result.toolCalls == 1)
         #expect(result.receipts.count == 1)
-        #expect(await journal.pendingMutations().isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
         var sawTerminal = false
         for await event in run.events {
             if case .runFinished(.result) = event { sawTerminal = true }
@@ -127,13 +120,16 @@ struct PublicAPIContractTests {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
-        let journal = try AgentJournal(persistenceURL: url)
-        _ = try await PublicAPIMutationClient.makeSession(journal: journal).run("Update the listing").wait()
-        let restarted = try AgentJournal.load(from: url)
-        #expect(await restarted.pendingMutations().isEmpty)
-        #expect(await restarted.recovery == .clean)
+        let journal = try makeTestJournal(at: url)
+        let run = try await PublicAPIMutationClient.makeSession(journal: journal).run("Update the listing")
+        _ = try await run.wait()
+        try await run.waitForDrain()
+        try await journal.close()
+        let restarted = try openTestJournal(at: url)
+        #expect(try await restarted.pendingMutations().isEmpty)
         let session = try PublicAPIMutationClient.makeSession(id: UUID(), journal: restarted)
         #expect(await session.activeRunID == nil)
+        try await restarted.close()
     }
 
     @Test func failureTaxonomyIsTypedWithoutStringMatching() {

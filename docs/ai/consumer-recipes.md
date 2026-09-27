@@ -64,7 +64,7 @@ state. Do not retry an executor directly, downgrade the tool to read-only, or
 remove receipt validation to make the UI continue.
 
 For attempts of one logical mutation, retain the same non-empty `operationID`
-and shared journal. Deduplication also binds the tool and semantic arguments;
+and the same open store handle. Deduplication also binds the tool and semantic arguments;
 changing them changes the operation's meaning. An idempotent replay still needs
 current policy/evidence. See [Sessions](../guides/swift-agent-sessions.md),
 [Receipts](../guides/swift-agent-receipts.md) and
@@ -79,8 +79,8 @@ Evidence is not reconstructed from that prose; rediscover when required.
 
 Reconciliation is a trusted host procedure: query the authoritative external
 system, establish whether the admitted effect occurred, and bind the verified
-Receipt and, when replay is required, canonical tool output to that operation.
-Use the applicable public reconciliation overload.
+Receipt and canonical replay output to that operation. Use
+`reconcileMutation(_:receipt:output:)`.
 
 Only abort after confirming that no external side effect occurred. An unknown
 outcome, Cancel button, timeout, lost network response or convenient empty receipt

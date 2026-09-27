@@ -119,7 +119,7 @@ public struct HostModelRoutingInput: Sendable {
     public let turnsSinceLastSwitch: Int?
     public let decisionDeadline: ContinuousClock.Instant?
     public let decisionProvider: (any DecisionProvider)?
-    public let revisionReader: @Sendable () async -> HostRoutingRevision
+    public let revisionReader: @Sendable () async throws -> HostRoutingRevision
 
     public init(
         conversation: AgentConversationSnapshot,
@@ -133,7 +133,7 @@ public struct HostModelRoutingInput: Sendable {
         turnsSinceLastSwitch: Int? = nil,
         decisionDeadline: ContinuousClock.Instant? = nil,
         decisionProvider: (any DecisionProvider)? = nil,
-        revisionReader: @escaping @Sendable () async -> HostRoutingRevision
+        revisionReader: @escaping @Sendable () async throws -> HostRoutingRevision
     ) {
         self.conversation = conversation
         self.catalogRevision = catalogRevision
@@ -343,7 +343,7 @@ public struct HostModelRouter: Sendable {
     }
 
     private func validateRevision(_ input: HostModelRoutingInput) async throws {
-        let current = await input.revisionReader()
+        let current = try await input.revisionReader()
         guard current.conversation == input.conversation.revision,
               current.catalog == input.catalogRevision else {
             throw HostModelRoutingError.staleInput

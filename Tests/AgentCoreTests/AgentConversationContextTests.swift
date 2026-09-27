@@ -89,7 +89,7 @@ struct AgentConversationContextTests {
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
         let sessionID = UUID()
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let firstProvider = ScriptedProvider { request, _ in
             try await catalogResponse(request, committed: nil)
         }
@@ -104,7 +104,8 @@ struct AgentConversationContextTests {
         try await firstRun.waitForDrain()
         ConversationTranscript.requireCanonicalSearchRound(first.history, instructions: CatalogPrompt.instructions)
 
-        let restoredJournal = try AgentJournal.load(from: url)
+        try await journal.close()
+        let restoredJournal = try openTestJournal(at: url)
         let committed = CommittedTranscript()
         await committed.store(
             AgentContextWindow.applyingCurrentInstructions(first.history, instructions: CatalogPrompt.instructions)
@@ -136,7 +137,7 @@ struct AgentConversationContextTests {
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
         let sessionID = UUID()
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let firstProvider = ScriptedProvider { request, _ in
             try await catalogResponse(request, committed: nil)
         }
@@ -149,6 +150,7 @@ struct AgentConversationContextTests {
         let firstRun = try await original.run(CatalogPrompt.find)
         let first = try await firstRun.wait()
         try await firstRun.waitForDrain()
+        try await journal.close()
 
         let expected = AgentContextWindow.applyingCurrentInstructions(first.history, instructions: "Version two.")
         let committed = CommittedTranscript()
@@ -161,7 +163,7 @@ struct AgentConversationContextTests {
             provider: restoredProvider,
             tools: [SearchResourceTool(), UseResourceTool()],
             configuration: AgentConfiguration(instructions: "Version two.")
-        ).makeSession(id: sessionID, journal: try AgentJournal.load(from: url))
+        ).makeSession(id: sessionID, journal: try openTestJournal(at: url))
         _ = try await restored.run(CatalogPrompt.useFirst).wait()
         let request = try #require(await restoredProvider.log.requests.first)
         #expect(request.messages.first == .system("Version two."))
@@ -360,8 +362,7 @@ struct AgentConversationContextTests {
     @Test func defaultPolicyFailsClosedInsteadOfInventingASemanticSummary() async throws {
         let policy = AgentContextPolicy(
             maxInputUTF8Bytes: 2_000,
-            maxActiveHistoryUTF8Bytes: 900,
-            retainedRecentTurnCount: 1
+            maxModelContextUTF8Bytes: 900
         )
         let provider = ScriptedProvider { request, _ in textResponse(request, "ack") }
         let session = try Agent(
@@ -391,76 +392,6 @@ struct AgentConversationContextTests {
         })
     }
 
-    @Test func lossyCompactorDoesNotPreserveDroppedResourceReferences() async throws {
-        let committed = CommittedTranscript()
-        let used = EffectLog()
-        let policy = AgentContextPolicy.lossyRetainedTurns(
-            maxInputUTF8Bytes: 2_000,
-            maxActiveHistoryUTF8Bytes: 900,
-            retainedRecentTurnCount: 1
-        )
-        let provider = ScriptedProvider { request, _ in
-            try await catalogOrFillerResponse(request, committed: committed)
-        }
-        let session = try Agent(
-            model: fixtureModel,
-            provider: provider,
-            tools: [SearchResourceTool(), UseResourceTool(log: used)],
-            configuration: AgentConfiguration(instructions: CatalogPrompt.instructions, contextPolicy: policy)
-        ).makeSession()
-        let first = try await session.run(CatalogPrompt.find).wait()
-        await committed.store(first.history)
-        for index in 1...8 {
-            _ = try await session.run(String(repeating: "padding-\(index)-", count: 8)).wait()
-        }
-        _ = try await session.run(CatalogPrompt.useFirst).wait()
-        #expect(await used.names.isEmpty)
-        let followUp = try #require(await provider.log.requests.first { $0.messages.last == .user([.text(CatalogPrompt.useFirst)]) })
-        try ConversationTranscript.requirePairedToolHistory(followUp.messages)
-        #expect(followUp.messages.first == .system(CatalogPrompt.instructions))
-        #expect(followUp.messages.contains { message in
-            if case .user(let content) = message, case .text(let text)? = content.first {
-                return text.hasPrefix("Conversation summary:")
-            }
-            return false
-        })
-        #expect(!ConversationTranscript.containsSearchHits(followUp.messages))
-        #expect(!followUp.messages.contains { message in
-            if case .user(let content) = message, case .text(let text)? = content.first {
-                return text.contains("resource-1") || text.contains("Alpha")
-            }
-            return false
-        })
-    }
-
-    @Test func syntheticSummaryUsesUserRoleAndDoesNotMintEvidence() async throws {
-        let spy = RecordingCompactor()
-        let policy = AgentContextPolicy(
-            maxInputUTF8Bytes: 2_000,
-            maxActiveHistoryUTF8Bytes: 900,
-            retainedRecentTurnCount: 1,
-            compactor: spy
-        )
-        let provider = ScriptedProvider { request, _ in textResponse(request, "ack") }
-        let session = try Agent(
-            model: fixtureModel,
-            provider: provider,
-            configuration: AgentConfiguration(instructions: "Stay in role.", contextPolicy: policy)
-        ).makeSession()
-        for index in 1...8 {
-            _ = try await session.run(String(repeating: "turn-\(index)-payload-", count: 8)).wait()
-        }
-        #expect(await spy.count >= 1)
-        let last = try #require(await provider.log.requests.last)
-        let summaries = last.messages.compactMap { message -> String? in
-            guard case .user(let content) = message, case .text(let text)? = content.first,
-                  text.hasPrefix("Conversation summary:") else { return nil }
-            return text
-        }
-        #expect(!summaries.isEmpty)
-        #expect(last.messages.filter { $0.role == .system } == [.system("Stay in role.")])
-        #expect(!last.messages.contains { $0.role == .developer })
-    }
 }
 
 private enum CatalogPrompt {
@@ -707,14 +638,5 @@ private struct UseResourceTool: AgentTool {
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
         if let log { await log.record(Self.name, context) }
         return ToolResult(output: "used \(input.id)")
-    }
-}
-
-private actor RecordingCompactor: AgentContextCompactor {
-    private(set) var count = 0
-
-    func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
-        count += 1
-        return AgentCompactionSummary(goal: "Continue.", decisions: ["Keep recent turns"])
     }
 }

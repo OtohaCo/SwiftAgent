@@ -102,7 +102,7 @@ remote job cancellation. Expose those meanings accurately. Neither cancelling
 a Swift Task nor draining an Agent Run proves a remote job stopped or a charge
 was reversed. When the effect remains uncertain, retain that state.
 
-Use `abortMutation()` only after trusted confirmation of **no external effect**
+Use `abortMutation(_:confirmedNoEffect:)` only after trusted confirmation of **no external effect**
 for the admitted operation. A user pressing Cancel is not such confirmation.
 Do not clear pending state to allow a new request through.
 

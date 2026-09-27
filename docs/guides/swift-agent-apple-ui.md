@@ -143,7 +143,7 @@ Choose and document one policy per conversation:
 Do not accidentally cancel an app-owned conversation because one window closed.
 Do not start a second consumer of `run.events` in another window. Broadcast
 app-owned snapshots instead. A disconnected SDK event observer cannot request
-replay of missed events; journal checkpoints restore canonical conversation, not
+replay of missed events; indexed Journal messages restore formal conversation, not
 the live event outlet.
 
 AppleChatApp feeds usage into the optional `AgentUsage` product from that same
@@ -173,7 +173,7 @@ promise to keep an arbitrary SSE connection alive indefinitely. See Apple's
 Process death requires a restore path: retain the intended Session identity and
 journal location, recreate current configuration, inspect pending mutations, and
 reconcile through a trusted host procedure. Do not automatically resubmit the
-last prompt or call `abortMutation()` merely to clear the UI. Journal recovery
+last prompt or call `abortMutation(_:confirmedNoEffect:)` merely to clear the UI. Journal recovery
 does not recover in-memory Evidence or resume a network connection.
 
 `waitForDrain()` covers the SDK's run-resource lifecycle and any participating

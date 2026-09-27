@@ -22,12 +22,12 @@ Action values: `Covered` · `Add test` · `Existing backlog` · `New backlog` ·
 | Level | Scope | Status |
 | --- | --- | --- |
 | 1 Core Loop | single turn, tool loop, failure, cancel, events | Covered |
-| 2 Stateful Agent | multi-run, steering, context, continuation, compaction | Covered |
+| 2 Stateful Agent | multi-run, steering, request projection, continuation | Covered |
 | 3 Durable Agent | journal, restart, mutation, receipt, reconciliation | Covered |
 | 4 Provider | streaming, encoding, tool calls, reasoning, usage, errors | Covered for declared adapters |
 | 5 Host Integration | ExternalClient, WorkspaceAgent, Otoha adapter | Partial |
 
-Level 2 is Covered for the declared contract: next `session.run` after `wait()`, in-run `steer`, fail-closed default compaction. Pi's first-class follow-up *queue* is Host responsibility (SAI-045), not a silent gap in the current API.
+Level 2 is Covered for the declared contract: next `session.run` after `wait()`, in-run `steer`, fail-closed model-request budget and request-only projection. Pi's first-class follow-up *queue* is Host responsibility (SAI-045), not a silent gap in the current API.
 
 Level 3 is Covered for the declared contract. SAI-040 adds journal-wide durable
 deduplication, typed pending/reconciliation failures, receipt-backed settled
@@ -84,7 +84,7 @@ SAI-043 owns the `search_resource → Use the first one` contract. This round ad
 | During model turn / tool batch | inject after tools complete | Yes | correction during model turn; during tool batch | — | Yes | P0 | Covered |
 | Exactly once / late after finish | — | Yes | empty + finished errors; cancel races | — | Yes | P1 | Covered |
 | Budget exhaustion | — | Yes | `exhaustedBudgetRetainsAcceptedCorrectionsInOrder` | — | Yes | P2 | Covered |
-| Steering + compaction | coding-agent compact during response | Yes | `steeringAfterMidRunCompactionIsAppliedExactlyOnce` | — | Yes | P2 | Covered |
+| Steering + projected request | coding-agent context management | Yes | steering and projection tests | — | Yes | P2 | Covered |
 | Retry/fallback + steering | retry-events | Partial | fallback tests do not mix steer | Low | Yes | P3 | Not applicable |
 
 ---
@@ -222,22 +222,19 @@ Do not normalize IDs in a way that breaks Receipt / Journal identity.
 
 ---
 
-## Q–R. Context overflow / synthetic summary
+## Q–R. Context overflow / request projection
 
 | Scenario | Existing test | Action |
 | --- | --- | --- |
-| inputTooLarge / historyTooLarge / default no compactor | SAI-038/043 context tests | Covered |
-| Exactly at encoded limit / one byte over | **SAI-044** `historyExactlyAtTheEncodedLimit…`, `oneByteOverTheEncodedLimit…` | Covered |
-| Compactor throws, Session does not hang | **SAI-044** `throwingCompactorFailsTheRunWithoutHangingTheSession` | Covered |
-| Unresolved tool span kept | `contextWindowKeepsUnresolvedToolPairs` | Covered |
-| Mid-run compaction writeback / journal file rollover | SAI-042 context/journal tests | Covered |
-| Synthetic `.user` + `Conversation summary:` | conversation tests 13–14 | Covered |
-| Anthropic encoder: summary + follow-up (adjacent users merge to two text blocks) | **SAI-044** `AnthropicSyntheticSummaryTests` | Covered |
-| Apple prompt JSON: summary stays its own user row | **SAI-044** `ApplePromptEncodingTests` | Covered |
-| Generic/OpenAI-style: `ModelMessage` JSON round-trip | **SAI-044** `ModelMessageTests.testSyntheticSummaryRoundTripsAsAUserMessageBetweenTurns` | Covered |
-| Lossy retain counts synthetic summary as a user turn | `syntheticSummaryDoesNotCountAsARecentUserTurn` | Covered |
+| Oversized input fails before admission | `oversizedInputLeavesTheSessionUsableAndStorageEmpty` | Covered |
+| Projected request over budget fails without rewriting formal messages | `limitDoesNotSilentlySummarizeOrEraseConversation` | Covered |
+| Lossy request view with full formal history retained | `requestProjectionCanBoundModelInputWhileFormalHistoryKeepsEveryTurn` | Covered |
+| Unresolved tool calls remain paired in canonical history | tool batch and continuation tests | Covered |
+| Automatic segment maintenance | `SegmentedJournalStoreTests` | Covered for local single-writer store |
 
-Anthropic merging adjacent user messages is protocol-correct and is why a synthetic summary must not be `.system`.
+Provider encoder fixtures may still contain an explicitly constructed
+synthetic user summary; there is no SDK path that rewrites formal history
+with that summary.
 
 ---
 
@@ -247,10 +244,10 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 
 | Scenario | Existing test | Action |
 | --- | --- | --- |
-| Clean / truncated / corrupt tail / middle corruption / concurrent writer | `AgentJournalTests` | SwiftAgent stronger |
+| Unpublished tail, committed corruption, single writer and unknown root | `SegmentedJournalStoreTests` | Covered for process-crash model |
 | Durable intent, crash windows, receipt, reconcile, abort, lease | `AgentMutationRecoveryTests` | SwiftAgent stronger |
 | F1 hang: settlement + quarantine both fail | `AgentSessionHangTests` | Covered |
-| Unicode checkpoint round-trip | **SAI-044** `AgentJournalUnicodeTests` | Covered |
+| Unicode messages survive segment reclamation | `unicodeMessagesKeepIdentityAfterReclamation` | Covered |
 | Identity scope: stable operation ID + tool + canonical semantic JSON args; excludes call/session/run | `AgentMutationIdempotencyTests`, recovery cross-session test | Covered |
 | Nil operation ID is per-call only, with no cross-run deduplication | loop idempotency-key contract | Covered |
 | `intent` retry fails closed with typed `mutationPending` | `intentRetryReturnsTypedPendingWithoutCreatingAnotherIntent` | Covered |
@@ -259,8 +256,8 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 | Settled replay emits the original schema-valid output and uses the current tool call ID | `settledRetryReturnsExistingReceiptWithoutExecutingAgain` | Covered |
 | Abort permits a new lifecycle only after trusted Host confirmation of no side effect | `confirmedAbortedMutationCanCreateANewDurableIntent` | Covered |
 | Authorization and Evidence are checked before replay admission | mutation authorization/evidence ordering tests | Covered |
-| Legacy settlement without durable output fails closed | `legacySettlementWithoutDurableOutputFailsClosed` | Covered |
-| Terminal identities retained indefinitely; schema v3 reads v1/v2 | journal recovery and rollover contract | Covered |
+| Reconciliation requires durable replay output | `testRecoveryQuarantinesIntentAndNeverAutomaticallyExecutes` | Covered |
+| Terminal identities retained; old framed files rejected | `AgentMutationIdempotencyTests`, `oldFileIsNotOpenedOrOverwritten` | Covered |
 
 ---
 
@@ -305,7 +302,7 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 | --- | --- | --- |
 | Combining marks / opaque IDs | `ModelIdentityTests`, schema tests | Covered |
 | SSE chunk boundaries including CJK/emoji | **SAI-044** ProviderSSEDecoder | Covered |
-| Journal checkpoint CJK/emoji | **SAI-044** AgentJournalUnicodeTests | Covered |
+| Indexed formal CJK/emoji messages and stable IDs survive GC | `unicodeMessagesKeepIdentityAfterReclamation` | Covered |
 
 ---
 
@@ -331,7 +328,7 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 | P Malformed args | Covered |
 | Q Context overflow | Covered (mid-run → SAI-042) |
 | R Synthetic summary | Covered |
-| S Journal | SwiftAgent stronger (rollover → SAI-042) |
+| S Journal | Segmented durable store with automatic reclamation |
 | T Mutation | SwiftAgent stronger |
 | U Idempotency | Covered (SAI-040) |
 | V Evidence | Covered |
@@ -345,7 +342,7 @@ SwiftAgent-specific. Pi has no equivalent durable mutation/receipt model.
 ## Pi has, SwiftAgent does not (applicable)
 
 1. First-class follow-up queue while a Run is in progress — SAI-045.
-2. Semantic compaction that preserves dropped tool results — **rejected**. Default is fail-closed (`historyTooLarge`). Lossy opt-in is explicit.
+2. Automatic semantic summarization of formal conversation — **not provided**. Hosts can project a source-marked request view; formal messages remain stored.
 3. Additional vendor catalog entries such as Gemini or Bedrock — product scope,
    not a conformance gap in the declared provider set.
 4. Tool `terminate` / beforeToolCall hooks — Host wrapper, not Core.

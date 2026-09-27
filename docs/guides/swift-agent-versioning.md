@@ -1,6 +1,6 @@
 # SwiftAgent Semantic Versioning
 
-last-verified: 2026-09-21
+last-verified: 2026-09-27
 
 SwiftAgent follows Swift Package Manager rules, not a promise of ABI stability.
 A major version is required when a change can fail a client that compiled
@@ -29,14 +29,26 @@ is a new classified case.
 These source breaks happen before the first tagged 1.0:
 
 - Mutation Sessions require `journal.storage == .durable`. `AgentJournal()` is
-  not durable. `persist(to:)` can upgrade a memory journal before `makeSession`.
-  `.durable` is configured persistence mode, not a guarantee that every later
-  write succeeds.
+  not durable. The new `AgentIncrementalJournal.create/open` entry points
+  provide the local durable store. `.durable` is configured persistence mode,
+  not a guarantee that every later write succeeds.
 - `Agent(model:provider:tools:configuration:)` is the advanced constructor.
   The only extra convenience is `instructions:`. Do not reintroduce a parallel
   list of limit parameters on `Agent`.
 - `AnyAgentTool`, `ToolRegistry`, and `PreparedToolCall` are package-only.
   `ToolRegistryError` remains public.
+
+## Journal replacement in unreleased work
+
+The segmented file Journal intentionally breaks the old framed file format and
+public `AgentJournal(persistenceURL:)`, `load(from:)`, `persist(to:)`,
+`snapshot()`, and manual file compaction surface. `pendingMutations`,
+`latestCheckpoint`, and `conversationSnapshot` now throw to report storage
+failures honestly. The lossy canonical-history compactor has been removed;
+`maxModelContextUTF8Bytes` applies to a request projection. A previously
+published RC client must adopt the new API and cannot directly open its old
+Journal. This change requires a version boundary before publication. See
+[Journal](swift-agent-journal.md) for the new contract.
 
 ## Non-breaking
 

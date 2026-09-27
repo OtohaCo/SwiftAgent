@@ -43,7 +43,7 @@ struct AgentMultiRunContextTests {
             try? FileManager.default.removeItem(at: url)
             try? FileManager.default.removeItem(atPath: url.path + ".lock")
         }
-        let journal = try AgentJournal(persistenceURL: url)
+        let journal = try makeTestJournal(at: url)
         let sessionID = UUID()
         let first = try Agent(
             model: ModelID(provider: "provider-a", name: "one"),
@@ -55,6 +55,7 @@ struct AgentMultiRunContextTests {
         let run = try await original.run("remember portable state")
         _ = try await run.wait()
         try await run.waitForDrain()
+        try await journal.close()
 
         let secondProvider = ScriptedProvider(
             descriptor: .init(id: "provider-b", capabilities: [.streaming, .multiTurn, .tools, .structuredOutput])
@@ -74,7 +75,7 @@ struct AgentMultiRunContextTests {
         let restored = try Agent(
             model: ModelID(provider: "provider-b", name: "two"),
             provider: secondProvider
-        ).makeSession(id: sessionID, journal: try AgentJournal.load(from: url))
+        ).makeSession(id: sessionID, journal: try openTestJournal(at: url))
         let follow = try await restored.run("continue elsewhere")
         #expect(try await follow.wait().outcome == .completed)
         let request = try #require(await secondProvider.log.requests.first)

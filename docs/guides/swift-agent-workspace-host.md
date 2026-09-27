@@ -1,6 +1,6 @@
 # SwiftAgent Workspace Host
 
-last-verified: 2026-09-19
+last-verified: 2026-09-27
 
 `WorkspaceAgent` is a second Reference Host. It proves SwiftAgent can run a
 sandbox file agent without product-domain types or AgentCore changes.
@@ -17,11 +17,14 @@ provider yet.
 
 ```swift
 import AgentCore
+import AgentJournalFileStore
 import AgentModels
 import AgentProviders
 import WorkspaceAgent
 
-let journal = try AgentJournal(persistenceURL: journalURL)
+let journal = try AgentIncrementalJournal.create(
+    at: journalDirectory, operationDomain: "workspace:account-123"
+)
 let host = try WorkspaceAgentHost(
     root: sandboxRoot,
     provider: AnthropicProvider(apiKey: apiKey),
@@ -31,6 +34,8 @@ let host = try WorkspaceAgentHost(
 let session = try host.makeSession()
 let run = try await session.run("List the notes directory, then update todo.txt.")
 _ = try await run.wait()
+try await run.waitForDrain()
+try await journal.close()
 ```
 
 `WorkspaceAgentHost.makeTools(store:)` does not import a provider. Substitute

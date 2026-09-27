@@ -8,74 +8,23 @@ public enum AgentContextError: Error, Equatable, Sendable {
     case historyTooLarge(bytes: Int, limit: Int)
 }
 
-/// Host-neutral summarizer. Core chooses the retain window; the host decides
-/// summary wording. Core never invents host-domain content.
-public protocol AgentContextCompactor: Sendable {
-    func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary
-}
-
-/// Mechanical, lossy summarizer. Hosts must opt in through
-/// `AgentContextPolicy.lossyRetainedTurns`. It records that earlier turns were
-/// dropped; it does not preserve domain references from dropped tool results.
-public struct AgentRetainedTurnCompactor: AgentContextCompactor {
-    public init() {}
-
-    public func summarize(droppedConversation: [ModelMessage]) async throws -> AgentCompactionSummary {
-        let droppedTurns = droppedConversation.reduce(into: 0) { count, message in
-            if case .user = message,
-               !AgentContextWindow.isSyntheticConversationSummary(message) { count += 1 }
-        }
-        return AgentCompactionSummary(
-            goal: "Continue the existing conversation.",
-            constraints: [],
-            decisions: [],
-            openWork: droppedTurns == 0 ? [] : ["\(droppedTurns) earlier user turn(s) were compacted."]
-        )
-    }
-}
-
-/// Bounds active Session history. A single input above `maxInputUTF8Bytes`
-/// fails immediately. Accumulated history above `maxActiveHistoryUTF8Bytes`
-/// is compacted only when a host supplies a compactor; the default is to fail
-/// closed with `historyTooLarge` rather than invent a semantic summary.
+/// Bounds the model-facing active history. A single oversized input and an
+/// accumulated history over the limit fail explicitly. Request projectors can
+/// shorten a model view without erasing formal conversation messages.
 public struct AgentContextPolicy: Sendable {
     public var maxInputUTF8Bytes: Int
-    public var maxActiveHistoryUTF8Bytes: Int
-    public var retainedRecentTurnCount: Int
-    public var compactor: (any AgentContextCompactor)?
-
+    public var maxModelContextUTF8Bytes: Int
     public static let `default` = AgentContextPolicy(
         maxInputUTF8Bytes: 8 * 1024 * 1024,
-        maxActiveHistoryUTF8Bytes: 12 * 1024 * 1024,
-        retainedRecentTurnCount: 6,
-        compactor: nil
+        maxModelContextUTF8Bytes: 12 * 1024 * 1024
     )
-
-    /// Opt-in lossy compaction. Dropped turns are replaced with a mechanical
-    /// summary that does not preserve tool results or resource identifiers.
-    public static func lossyRetainedTurns(
-        maxInputUTF8Bytes: Int = AgentContextPolicy.default.maxInputUTF8Bytes,
-        maxActiveHistoryUTF8Bytes: Int = AgentContextPolicy.default.maxActiveHistoryUTF8Bytes,
-        retainedRecentTurnCount: Int = AgentContextPolicy.default.retainedRecentTurnCount
-    ) -> AgentContextPolicy {
-        AgentContextPolicy(
-            maxInputUTF8Bytes: maxInputUTF8Bytes,
-            maxActiveHistoryUTF8Bytes: maxActiveHistoryUTF8Bytes,
-            retainedRecentTurnCount: retainedRecentTurnCount,
-            compactor: AgentRetainedTurnCompactor()
-        )
-    }
 
     public init(
         maxInputUTF8Bytes: Int = AgentContextPolicy.default.maxInputUTF8Bytes,
-        maxActiveHistoryUTF8Bytes: Int = AgentContextPolicy.default.maxActiveHistoryUTF8Bytes,
-        retainedRecentTurnCount: Int = AgentContextPolicy.default.retainedRecentTurnCount,
-        compactor: (any AgentContextCompactor)? = nil
+        maxModelContextUTF8Bytes: Int = AgentContextPolicy.default.maxModelContextUTF8Bytes
     ) {
         self.maxInputUTF8Bytes = maxInputUTF8Bytes
-        self.maxActiveHistoryUTF8Bytes = maxActiveHistoryUTF8Bytes
-        self.retainedRecentTurnCount = retainedRecentTurnCount
-        self.compactor = compactor
+        self.maxModelContextUTF8Bytes = maxModelContextUTF8Bytes
     }
 
     func checkInput(_ text: String) throws {
@@ -87,14 +36,6 @@ public struct AgentContextPolicy: Sendable {
 }
 
 enum AgentContextWindow {
-    static let conversationSummaryPrefix = "Conversation summary:"
-
-    struct Split {
-        var runtime: [ModelMessage]
-        var dropped: [ModelMessage]
-        var retained: [ModelMessage]
-    }
-
     static func applyingCurrentInstructions(_ history: [ModelMessage], instructions: String) -> [ModelMessage] {
         let conversation = history.filter { message in
             switch message {
@@ -112,87 +53,5 @@ enum AgentContextWindow {
 
     static func encodedByteCount(_ messages: [ModelMessage]) throws -> Int {
         try JSONEncoder().encode(messages).count
-    }
-
-    /// Synthetic note stored as a user message so restore will not strip it
-    /// with runtime system/developer configuration. This is not a real user
-    /// utterance; the prefix identifies it across providers.
-    static func summaryMessage(_ summary: AgentCompactionSummary) -> ModelMessage {
-        var lines = [conversationSummaryPrefix]
-        if !summary.goal.isEmpty { lines.append("Goal: \(summary.goal)") }
-        if !summary.constraints.isEmpty {
-            lines.append("Constraints: \(summary.constraints.joined(separator: "; "))")
-        }
-        if !summary.decisions.isEmpty {
-            lines.append("Decisions: \(summary.decisions.joined(separator: "; "))")
-        }
-        if !summary.openWork.isEmpty {
-            lines.append("Open work: \(summary.openWork.joined(separator: "; "))")
-        }
-        return .user([.text(lines.joined(separator: "\n"))])
-    }
-
-    static func isSyntheticConversationSummary(_ message: ModelMessage) -> Bool {
-        guard case .user(let content) = message,
-              case .text(let text)? = content.first else { return false }
-        return text.hasPrefix(conversationSummaryPrefix)
-    }
-
-    static func split(_ history: [ModelMessage], retainingRecentTurns: Int) -> Split {
-        var runtime: [ModelMessage] = []
-        var conversation: [ModelMessage] = []
-        var seenConversation = false
-        for message in history {
-            switch message {
-            case .system, .developer:
-                if seenConversation {
-                    conversation.append(message)
-                } else {
-                    runtime.append(message)
-                }
-            default:
-                seenConversation = true
-                conversation.append(message)
-            }
-        }
-        let recentFrom = indexRetainingRecentTurns(conversation, count: retainingRecentTurns)
-        let unresolvedFrom = indexOfUnresolvedToolSpan(conversation) ?? conversation.count
-        let retainFrom = min(recentFrom, unresolvedFrom)
-        return Split(
-            runtime: runtime,
-            dropped: Array(conversation[..<retainFrom]),
-            retained: Array(conversation[retainFrom...])
-        )
-    }
-
-    private static func indexRetainingRecentTurns(_ conversation: [ModelMessage], count: Int) -> Int {
-        guard count > 0 else { return conversation.count }
-        var seen = 0
-        for index in conversation.indices.reversed() {
-            if conversation[index].role == .user,
-               !isSyntheticConversationSummary(conversation[index]) {
-                seen += 1
-                if seen == count { return index }
-            }
-        }
-        return 0
-    }
-
-    private static func indexOfUnresolvedToolSpan(_ conversation: [ModelMessage]) -> Int? {
-        var openFrom: Int?
-        var pending = Set<ToolCallID>()
-        for (index, message) in conversation.enumerated() {
-            switch message {
-            case .assistant(_, let calls) where !calls.isEmpty:
-                if pending.isEmpty { openFrom = index }
-                pending.formUnion(calls.map(\.id))
-            case .tool(let result):
-                pending.remove(result.callID)
-                if pending.isEmpty { openFrom = nil }
-            default:
-                break
-            }
-        }
-        return openFrom
     }
 }

@@ -1,6 +1,6 @@
 # SwiftAgent Swift 6.4 Concurrency Audit
 
-last-verified: 2026-09-19
+last-verified: 2026-09-27
 
 Audited against the workspace Swift 6.4 toolchain (`swiftLanguageModes: [.v6]`).
 AgentModels, AgentTools, and AgentCore do not import or isolate to MainActor.
@@ -31,33 +31,26 @@ use `ModelEventStream.make`, which cancels the producer on termination. After
 a thrown `ModelProviderError` there is no terminal model event; AgentCore still
 publishes exactly one `runFinished`.
 
-## Workarounds
+## I/O isolation and checked ownership
 
-No `@preconcurrency` and no `nonisolated(unsafe)` in SwiftAgent sources.
+No `@preconcurrency` or `nonisolated(unsafe)` is used in Core. The immutable
+`AgentJournal.storage` value is `nonisolated` so synchronous `makeSession`
+can check the configured capability. There is no memory-to-durable upgrade.
 
-Two `@unchecked Sendable` types exist. Neither is a warning-suppression shortcut.
+`AgentJournal` runs isolated work on its own `JournalIOExecutor` serial Dispatch
+queue, including synchronous store calls. This avoids blocking `MainActor` or
+the cooperative global executor when the actor commits. The separate file-store
+maintenance queue builds immutable candidates without holding the foreground
+store coordinator lock; publication and GC hold it for one bounded segment's
+index updates and deletes. The actor
+retains the maintenance Task, and `close()` waits for it and refuses active
+Session leases before unlocking. Async create/open use an owned utility queue.
+They check a monotonic deadline before and after blocking I/O, so they do not
+promise a hard interrupt of an OS call. The synchronous create/open variants
+are for callers already off UI executors.
 
-### ProviderHTTPSessionDelegate
-
-Lives in AgentProviders. `URLSession` callbacks and stream termination can race.
-Mutable lifecycle state is behind `NSLock`. Terminal paths nil out the
-continuation, session, and task before invoking callbacks. The annotation is
-required because `URLSessionDataDelegate` is not Sendable.
-
-### AgentJournalStorageBox
-
-Lives in AgentCore. `Agent.makeSession()` is synchronous and must read the
-journal's persistence mode without awaiting the `AgentJournal` actor.
-`storage` is therefore `nonisolated` and backed by this box.
-
-`value` is only read or written under `NSLock`. The actor's isolated methods
-set `.memory` in `init()`, `.durable` in `init(persistenceURL:)` / `load(from:)`,
-and upgrade `.memory` to `.durable` after a successful `persist(to:)` snapshot
-bind. Publishing `.durable` does not mean a later append cannot fail; it only
-changes the advertised mode that `makeSession` consults.
-
-Do not collapse these two annotations to keep a count of one. They protect
-different seams.
-
-A UI host may isolate its adapter to `MainActor`; that isolation stays in the
-host. Core types remain usable off the main actor.
+`SegmentedJournalStore`, `MetricsBox` and `JournalIOExecutor` use
+`@unchecked Sendable` where OS descriptors, file coordination or a queue sit
+behind explicit locks/serial execution. Provider HTTP delegates use their own
+`NSLock` to coordinate callbacks and stream termination. A UI Host can isolate
+its adapter to `MainActor`; durable file I/O does not run there.

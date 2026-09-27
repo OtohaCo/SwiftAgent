@@ -177,9 +177,9 @@ an unlimited queue. Removing one subscriber must not cancel unrelated viewers.
 Keep durable journals and host records on storage with verified permissions,
 retention and durability semantics; an ephemeral container layer is not a recovery
 plan. Exercise actual filesystem and lock behavior in the target deployment.
-Avoid concurrent independent writers to a shared journal unless the supported
-ownership/locking contract has been verified there. Backups must be consistent,
-not casual copies of an active append stream. Protect logs and restored history
+One process owns the store writer handle; share that handle among Sessions and
+close it only after drain. Other processes receive `storeInUse`. Backups require
+a safe close and a whole-directory copy. Protect logs and restored history
 as user data. See [Journal](swift-agent-journal.md).
 
 At shutdown, stop admission, choose finish/cancel policy for active Runs, and give

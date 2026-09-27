@@ -1,4 +1,5 @@
 import AgentCore
+import AgentJournalFileStore
 import AgentModels
 import AgentProviders
 import AgentTools
@@ -96,7 +97,7 @@ final class WorkspaceAgentTests: XCTestCase {
         XCTAssertEqual(result.receipts[0].receipt.revision, originalHash)
         XCTAssertEqual(result.receipts[1].receipt.revision, updatedHash)
         XCTAssertNotEqual(result.receipts[1].receipt.revision, originalHash)
-        let pending = await env.journal.pendingMutations()
+        let pending = try await env.journal.pendingMutations()
         XCTAssertTrue(pending.isEmpty)
         XCTAssertFalse(pending.contains { $0.state == .needsReconciliation })
         XCTAssertEqual(
@@ -137,7 +138,7 @@ final class WorkspaceAgentTests: XCTestCase {
         XCTAssertEqual(result.receipts[1].receipt.revision, WorkspaceContentHash.hex("buy oat milk"))
         XCTAssertEqual(try String(contentsOf: env.root.appendingPathComponent("notes/errands.txt"), encoding: .utf8), "buy oat milk")
         XCTAssertFalse(FileManager.default.fileExists(atPath: env.root.appendingPathComponent("notes/todo.txt").path))
-        let pending = await env.journal.pendingMutations()
+        let pending = try await env.journal.pendingMutations()
         XCTAssertTrue(pending.isEmpty)
     }
 
@@ -273,7 +274,7 @@ final class WorkspaceAgentTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? ToolReceiptError, .operationMismatch)
         }
-        let pending = await journal.pendingMutations()
+        let pending = try await journal.pendingMutations()
         XCTAssertEqual(pending.count, 1)
         XCTAssertEqual(pending[0].state, .needsReconciliation)
         try? FileManager.default.removeItem(at: root)
@@ -335,15 +336,15 @@ final class WorkspaceAgentTests: XCTestCase {
                 ])])
         }
         await env.store.setPreMutationFault {
-            let events = await env.journal.snapshot().map(\.event)
-            XCTAssertTrue(events.contains { if case .pendingMutation = $0 { true } else { false } })
+            let pending = try await env.journal.pendingMutations()
+            XCTAssertTrue(pending.contains { $0.state == .intent })
             throw SimulatedCrash.beforeMutation
         }
         await assertRunThrows(env, provider: provider, prompt: "Update the note") { error in
             XCTAssertTrue(error is SimulatedCrash)
         }
         assertEquals(await env.store.mutationCount, 0)
-        let pending = await env.journal.pendingMutations()
+        let pending = try await env.journal.pendingMutations()
         XCTAssertEqual(pending.count, 1)
     }
 
@@ -377,7 +378,8 @@ final class WorkspaceAgentTests: XCTestCase {
             "buy oat milk"
         )
 
-        let restarted = try AgentJournal.load(from: env.journalURL)
+        try await env.journal.close()
+        let restarted = try AgentIncrementalJournal.open(at: env.journalURL)
         let recovered = try await restarted.recoverPendingMutations(sessionID: sessionID)
         XCTAssertEqual(recovered.count, 1)
         XCTAssertEqual(recovered[0].state, .needsReconciliation)
@@ -433,7 +435,8 @@ final class WorkspaceAgentTests: XCTestCase {
         do { _ = try await run.wait() } catch { XCTAssertTrue(error is SimulatedCrash) }
         await session.waitForRunToDrain(runID: run.id)
 
-        let restarted = try AgentJournal.load(from: env.journalURL)
+        try await env.journal.close()
+        let restarted = try AgentIncrementalJournal.open(at: env.journalURL)
         let recovered = try await restarted.recoverPendingMutations(sessionID: sessionID)
         let pending = try XCTUnwrap(recovered.first)
         try await restarted.reconcileMutation(
@@ -443,9 +446,14 @@ final class WorkspaceAgentTests: XCTestCase {
                 status: .succeeded,
                 confirmedTargets: [.init(namespace: "workspace.file", id: "notes/todo.txt")],
                 revision: WorkspaceContentHash.hex("buy oat milk")
-            )
+            ),
+            output: .object([
+                "path": .string("notes/todo.txt"),
+                "hash": .string(WorkspaceContentHash.hex("buy oat milk")),
+                "created": .bool(false),
+            ])
         )
-        assertTrue(await restarted.pendingMutations().isEmpty)
+        assertTrue(try await restarted.pendingMutations().isEmpty)
         assertEquals(await env.store.mutationCount, 1)
     }
 

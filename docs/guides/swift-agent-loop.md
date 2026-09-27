@@ -55,7 +55,7 @@ a mutation receipt.
 ## Startup, Budgets and Cancellation
 
 `AgentSession.run` starts the absolute Run budget before asynchronous restore,
-compaction, projection, token estimation or Provider request preparation. A
+projection, token estimation or Provider request preparation. A
 preflight that reaches the deadline fails with `AgentLoopError.deadlineExceeded`
 before the new user message is journaled or appended to canonical history. A
 preflight result that arrives after the deadline is discarded. If a projector or

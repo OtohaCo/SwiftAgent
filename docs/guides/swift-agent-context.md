@@ -1,13 +1,13 @@
 # SwiftAgent Context Policy
 
-last-verified: 2026-09-20
+last-verified: 2026-09-27
 
 SwiftAgent keeps three layers of context. They are not interchangeable.
 
 | Layer | What it is | Lifetime |
 | --- | --- | --- |
 | Runtime configuration | Current system instructions, developer instructions if the model supports them, model, tools, structured output, limits, `AgentContextPolicy` | The `Agent` that opens the Session |
-| Conversation context | Canonical transcript the model may see: user, assistant, assistant tool calls, tool results, committed provider continuation, accepted steering | The Session, restored from the journal checkpoint |
+| Formal conversation | Committed user, assistant and tool messages with stable IDs; provider continuation and applied steering remain part of recovery | The Session, indexed by the Journal |
 | Trusted runtime state | Evidence, mutation intents, receipts, reconciliation, scheduler/resource ownership | In-process runtime. Not reconstructed from transcript |
 
 ## Run-specific model selection
@@ -31,7 +31,7 @@ fabricates a native continuation or tool result.
 `AgentContextProjector` receives a canonical snapshot and produces the messages
 for one provider request. Its plan records source revision, source digest,
 context epoch, version, and whether the result is lossy. The result is not
-written back as Session history. Canonical checkpoints, tool identity checks,
+written back as Session history. Formal messages, tool identity checks,
 budget accounting, Evidence, and mutation settlement continue to use formal
 runtime state.
 
@@ -46,12 +46,10 @@ The model remembering Resource A in the transcript is not permission to operate 
 
 ## Restore
 
-A checkpoint may still contain the system message that was sent on an earlier
-run. That record is a historical snapshot of runtime configuration, not the
-active configuration. On restore, Core strips checkpoint `system` /
-`developer` messages and prepends the instructions of the Agent that is
-opening the Session. Conversation user / assistant / tool turns are kept.
-The provider request therefore has exactly one current system message.
+The Journal restores committed user / assistant / tool messages for the
+requested Session. The Agent that opens it supplies the current system
+instructions. Earlier runtime instructions are not replayed as current
+authority; the provider request has one current system message.
 
 `EvidenceLedger` is in-memory on the Session. A process restart restores
 conversation from the journal and does not restore Evidence. The host must
@@ -73,60 +71,25 @@ Committed provider continuation may sit on the assistant message that owns
 the completed tool batch. Discarded proposals drop their continuation.
 Continuation is opaque provider state, not conversation meaning.
 
-## Bounds
+## Bounds and retention
 
-`AgentContextPolicy` distinguishes two failures:
+`AgentContextPolicy` limits one input with `maxInputUTF8Bytes` before Run
+admission. `maxModelContextUTF8Bytes` applies to the projected **request**
+just before each provider call. It can fail with `historyTooLarge` if the
+identity projection is too long. A Host may supply a source-marked projector
+that produces a smaller valid request; the policy checks that resulting view.
+Neither budget failure nor projection deletes formal messages or a mutation
+identity. The default does not invent a summary. The optional model token
+budget remains a separate check on the projected request.
 
-- `AgentContextError.inputTooLarge` — one user input exceeds `maxInputUTF8Bytes`.
-  Fail fast. The Session is unchanged.
-- `AgentContextError.historyTooLarge` — accumulated history exceeds
-  `maxActiveHistoryUTF8Bytes` (and never the journal's 16 MiB frame cap) and
-  either there is no compactor or compaction cannot shrink the retained window.
-  Typed failure, not a silent truncate.
+The earlier `AgentContextCompactor` and `lossyRetainedTurns` path replaced
+canonical history with a synthetic user summary. That path and its public
+entry points are removed. Existing stores in the old format are rejected;
+previously deleted text cannot be recovered by the new format. A Host can
+project a lossy request view with `AgentContextProjector` without turning the
+summary into a historical user utterance or Evidence.
 
-Defaults: 8 MiB per input, 12 MiB encoded active history, 6 recent user turns
-retained, **no compactor**. Raising `AgentJournal.maximumFrameSize` is not a
-substitute for this policy.
-
-## Compaction
-
-The default policy is not automatic context management. Crossing the bound
-without a host-supplied `AgentContextCompactor` fails closed. A mechanical
-summary that only says earlier turns were dropped cannot resolve “use the
-first one” after a search, so Core will not pretend that it can.
-
-Hosts that accept lossy history opt in with
-`AgentContextPolicy.lossyRetainedTurns(...)` or another `AgentContextCompactor`.
-Then Core:
-
-1. Keeps current runtime instructions.
-2. Keeps the recent turn window unioned with any unresolved tool pair.
-3. Asks the compactor to summarize only the dropped conversation.
-4. Stores that summary as a **synthetic user** message so restore will not
-   strip it with runtime system/developer configuration.
-5. Writes a durable checkpoint and continues the Session.
-
-The summary is not a real user utterance. It is stored as `.user` because:
-
-- `.system` / `.developer` are stripped on restore and replaced by the current
-  Agent instructions.
-- Anthropic takes system as a top-level request field and rejects extra
-  instruction messages after conversation has started.
-- Apple Foundation Models keep system/developer out of the prompt transcript.
-- OpenAI can carry extra system messages, but that is not portable.
-- A new `ModelMessage` role would be a public API change for every encoder.
-
-The stable prefix is `Conversation summary:`. Hosts that need domain memory
-must supply a semantic compactor; Core will not add last-search or last-
-selected resource fields.
-
-Compaction never mints Evidence, receipts, or mutation settlement.
-Unresolved mutation intents live in the journal mutation index. Compaction
-must not split an assistant/tool pair that still has an open call ID.
-
-## Journal growth
-
-Each durable checkpoint still appends a frame. Compaction bounds the payload
-of later frames, so growth is not a full-history copy every turn. Physical
-file rollover / journal compaction is a separate follow-up (SAI-042); after a
-`corruptTail` recovery, durable appends require `discardCorruptTail()`.
+Formal messages and the indexed mutation ledger remain subject to their
+separate retention rules. Physical segment packing only copies necessary
+facts to new managed files before deleting unreferenced old segments. See
+[Journal](swift-agent-journal.md) and [ADR 0004](../adr/0004-journal-storage.md).

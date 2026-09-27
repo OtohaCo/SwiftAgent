@@ -13,7 +13,7 @@ struct DynamicModelRoutingExample {
         let model = ModelID(provider: "fixture", name: "balanced")
         let agent = try Agent(model: model, provider: provider)
         let session = try agent.makeSession()
-        let snapshot = await session.conversationSnapshot()
+        let snapshot = try await session.conversationSnapshot()
         let scope = try ModelServiceScope(
             provider: "fixture",
             serviceInstanceID: "example",
@@ -57,7 +57,7 @@ struct DynamicModelRoutingExample {
             requirements: .init(allowsRemoteExecution: false),
             decisionProvider: decisionProvider,
             revisionReader: {
-                let current = await session.conversationSnapshot()
+                let current = try await session.conversationSnapshot()
                 return .init(conversation: current.revision, catalog: catalogRevision)
             }
         ))

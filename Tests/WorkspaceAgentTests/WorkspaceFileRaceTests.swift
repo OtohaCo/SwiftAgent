@@ -269,11 +269,13 @@ final class WorkspaceFileRaceTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? WorkspaceFileError, .rejectedPath(env.root.path))
         }
-        let pending = await env.journal.pendingMutations()
+        let pending = try await env.journal.pendingMutations()
         XCTAssertFalse(pending.contains { $0.state == .settled })
-        let events = await env.journal.snapshot().map(\.event)
-        XCTAssertFalse(events.contains { if case .mutationSettled = $0 { true } else { false } })
-        XCTAssertFalse(events.contains { if case .toolReceipt = $0 { true } else { false } })
+        for item in pending {
+            let status = try await env.journal.mutationStatus(identity: item.intent.idempotencyKey)
+            XCTAssertNil(status?.receipt)
+            XCTAssertNotEqual(status?.state, .settled)
+        }
         XCTAssertEqual(
             try String(contentsOf: outside.appendingPathComponent("notes/todo.txt"), encoding: .utf8),
             "buy milk"
@@ -309,11 +311,11 @@ final class WorkspaceFileRaceTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? WorkspaceFileError, .staleEvidence("notes/todo.txt"))
         }
-        let pending = await env.journal.pendingMutations()
+        let pending = try await env.journal.pendingMutations()
         XCTAssertEqual(pending.count, 1)
         XCTAssertEqual(pending[0].state, .needsReconciliation)
-        let events = await env.journal.snapshot().map(\.event)
-        XCTAssertFalse(events.contains { if case .mutationSettled = $0 { true } else { false } })
+        let status = try await env.journal.mutationStatus(identity: pending[0].intent.idempotencyKey)
+        XCTAssertNil(status?.receipt)
         XCTAssertEqual(
             try String(contentsOf: env.root.appendingPathComponent("notes/todo.txt"), encoding: .utf8),
             "stolen-by-process"

@@ -1,4 +1,5 @@
 import AgentCore
+import AgentJournalFileStore
 import AgentModels
 import AgentProviders
 import AgentTools
@@ -73,7 +74,7 @@ func makeSandbox(_ files: [String: String] = [:]) throws -> URL {
 
 func makeJournal() throws -> (AgentJournal, URL) {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("WorkspaceJournal-\(UUID().uuidString).log")
-    return (try AgentJournal(persistenceURL: url), url)
+    return (try AgentIncrementalJournal.create(at: url, operationDomain: "workspace-tests"), url)
 }
 
 actor ManualGate {

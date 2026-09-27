@@ -18,6 +18,7 @@ let package = Package(
             name: "HeadlessExecutionHost",
             dependencies: [
                 .product(name: "AgentCore", package: "SwiftAgent"),
+                .product(name: "AgentJournalFileStore", package: "SwiftAgent"),
                 .product(name: "AgentModels", package: "SwiftAgent"),
                 .product(name: "AgentTools", package: "SwiftAgent"),
                 .product(name: "ExecutionReportingSupport", package: "SwiftAgentExecutionReportingSupport"),

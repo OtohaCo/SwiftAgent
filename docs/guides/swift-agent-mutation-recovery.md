@@ -1,59 +1,62 @@
 # SwiftAgent Mutation Recovery
 
-last-verified: 2026-09-19
+last-verified: 2026-09-27
 
-Mutations have two durable phases: an intent before the host executor is called,
-and a validated receipt after it returns. The model can propose a call, but it
-cannot create either phase.
+An operation is admitted before its executor runs. The durable intent binds
+its final identity to the tool, semantic arguments, resource targets and
+receipt expectation. A successful executor return is not settlement: Core
+validates the trusted receipt, then publishes the terminal ledger state,
+replayable output and formal assistant/tool conversation in one local batch.
+The external effect itself cannot be included in that local transaction.
 
-## Execution Order
+For a stable nonempty `operationID`, the current final identity combines that
+ID, tool name and canonical semantic JSON arguments. It does not use the
+Session ID, Run ID or model-generated call ID. Hosts must scope an operation
+ID to the intended account/resource authority; Core also checks the saved
+resources and expectation before replay. A blank ID is per-call and gives no
+cross-run deduplication. If one workflow needs two separately intended effects
+with the same tool and arguments, give those steps distinct operation IDs.
 
-For a mutation in an `AgentSession` backed by `AgentJournal`, the scheduler
-serializes mutation/exclusive work while allowing independent read-only parallel
-work. The order is:
+After restart, inspect and quarantine without invoking a tool:
 
-1. Decode and validate the typed input and JSON Schema.
-2. Revalidate evidence and authorization.
-3. Acquire the scheduler's exclusive resource lease.
-4. Append the complete intent durably, including raw arguments and receipt expectation.
-5. Call the host executor.
-6. Validate the returned receipt against the durable operation and targets.
-7. Settle the intent durably, then commit the tool result to canonical history.
+```swift
+let journal = try AgentIncrementalJournal.open(at: storeDirectory)
+let pending = try await journal.recoverPendingMutations(sessionID: sessionID)
+for item in pending {
+    // Check the external system using trusted Host evidence. Do not replay.
+    if let confirmedReceipt = await host.confirmedReceipt(for: item) {
+        try await journal.reconcileMutation(
+            item, receipt: confirmedReceipt, output: host.canonicalOutput(for: item)
+        )
+    } else if await host.confirmedNoExternalEffect(for: item) {
+        let proof = try AgentNoEffectConfirmation(basis: "verified rejection in external transaction log")
+        try await journal.abortMutation(item, confirmedNoEffect: proof)
+    } else {
+        // Keep needsReconciliation and surface it to the operator.
+    }
+}
+```
 
-If any step after admission cannot establish a matching receipt, the scheduler
-reports failure and the intent is marked `needsReconciliation`. Its operation
-deadline has a drain callback, so timeout or cancellation returns control to the
-caller without pretending that an uncooperative host executor has already
-stopped. The late executor cannot publish a successful tool result after
-cancellation or timeout. A cancelled waiter that never acquired a lease does
-not admit a mutation intent and does not call the executor. A run that cannot
-persist its opening user message never reaches the model. If authorization has
-already succeeded and the durable intent write then fails, the executor is not
-called. If the executor already produced a side effect, restart recovery still
-does not replay it.
+The Host example above is pseudocode for its own trusted checks; it is not an
+SDK API or permission to infer success from model text. A reconciliation
+receipt must match the persisted identity, exact targets and expectation.
+Reconciliation commits replay output and a paired assistant/tool result with
+the settled ledger entry. It does not restore Evidence or authorize a future
+operation. Confirmed no-effect abort keeps the identity and its basis. A
+matching retry can create a new intent; a semantically different request with
+that same final identity remains a conflict.
 
-## Restart
+An `intent` is an uncertain candidate after process death. `needsReconciliation`
+blocks another mutation in that Session and blocks replay of the same identity
+across the operation domain. The ledger retains terminal identity, receipt
+and promised output without a TTL while that domain exists. The SDK provides
+local durable admission, deduplication and settlement, not exactly-once
+execution in every external service.
 
-On startup, call `recoverPendingMutations()`. Unsettled `intent` records become
-`needsReconciliation`; no provider request or tool executor is replayed. New
-mutations in that session are rejected until an operator or trusted host service
-supplies a receipt through `reconcileMutation`, or closes the intent with
-`abortMutation`. A reconciliation receipt must satisfy the
-original `ToolReceiptExpectation`, including exact operation identity and target
-set. Abort does not invoke the original tool.
-
-Read-only tools do not require this mutation journal path. A different Session
-can continue independently when one Session has a quarantined mutation.
-
-For a host process that recreates its Engine objects after a crash, the owner must
-reopen the same durable journal and provide the same stable Session identity per
-logical workflow. A random replacement Session ID would hide an outstanding intent
-from the recovery gate. Stable identity does not authorize replay: the pending
-intent still requires an explicit trusted receipt, reconciliation, or abort.
-
-The host boundary also records a conservative in-process signal when a mutation
-tool reaches the Engine execution path. If the run then fails without a trusted
-receipt, the host must surface reconciliation rather than invoke a local fallback
-that could repeat the same mutation. A cancelled, deadline-exceeded or failed
-conversation action follows the same rule; it does not silently degrade into a
-second local mutation attempt.
+Cancellation is not rollback. Before admission, no executor runs. After a
+local commit begins, an error or deadline can have an unknown result; a
+startup Run is still owned through drain, and mutation admission uncertainty
+never enters the executor. An effect followed by an unconfirmed settlement is
+quarantined. Wait for physical drain even when `run.wait()` or its event stream
+has ended. An unknown root or damaged published data must be investigated,
+not reset to an older snapshot and used to run another mutation.
