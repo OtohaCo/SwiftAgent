@@ -94,6 +94,39 @@ struct ExternalClientTests {
         try await journal.close()
     }
 
+    @Test func blockedHostObserverDoesNotBlockSettlementButRemainsOwnedUntilExit() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-observer-drain-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("effect.txt")
+        try Data().write(to: file)
+        let journal = try AgentIncrementalJournal.create(at: directory.appendingPathComponent("store"),
+                                                         operationDomain: "observer-drain")
+        let probe = SideEffectProbe(), provider = MutationProvider(probe: probe)
+        let tool = try ListingUpdateTool(probe: probe, file: file)
+        let session = try Agent(model: .init(provider: "external-client", name: "echo"),
+                                provider: provider, tools: [tool]).makeSession(journal: journal)
+        _ = try await session.enqueueFollowUp(.init(inputID: "one", text: "Update",
+            operationID: "observer-drain-write", configurationRef: "approved"))
+        let gate = PublicQueueObserverGate()
+        let dispatcher = try await session.startFollowUpDispatch(
+            policy: .init(maxModelTurns: 3, maxToolCalls: 2, runTimeout: .seconds(10)),
+            resolver: PublicQueueResolver(session: session, provider: provider, tool: tool),
+            onRun: { _, run in await gate.observe(run) })
+        let run = await gate.waitForRun()
+        #expect(try await run.wait().receipts.count == 1)
+        try await run.waitForDrain()
+        #expect(probe.toolExecutions == 1)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "effect\n")
+        #expect(try await journal.pendingMutations().isEmpty)
+        await dispatcher.stop()
+        #expect(!(await dispatcher.status().physicallyDrained))
+        await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
+        await gate.release()
+        try await dispatcher.waitForDrain()
+        try await journal.close()
+    }
+
     @Test func readOnlyAgentRunsWithoutAJournal() async throws {
         let session = try makeReadOnlyAgent().makeSession()
         let result = try await session.run("hello").wait()
@@ -395,6 +428,31 @@ private actor PublicQueueObserverExit {
     func wait() async {
         if finished { return }
         await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
+private actor PublicQueueObserverGate {
+    private var run: AgentRun?
+    private var runWaiters: [CheckedContinuation<AgentRun, Never>] = []
+    private var released = false
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    func observe(_ run: AgentRun) async {
+        self.run = run
+        let pending = runWaiters
+        runWaiters.removeAll()
+        pending.forEach { $0.resume(returning: run) }
+        if !released { await withCheckedContinuation { releaseWaiters.append($0) } }
+        for await _ in run.events { /* single Host consumer */ }
+    }
+    func waitForRun() async -> AgentRun {
+        if let run { return run }
+        return await withCheckedContinuation { runWaiters.append($0) }
+    }
+    func release() {
+        released = true
+        let pending = releaseWaiters
+        releaseWaiters.removeAll()
+        pending.forEach { $0.resume() }
     }
 }
 

@@ -20,7 +20,9 @@ uses synthetic Providers and a temporary-file mutation. The external client
 test `queuedRunIsDeliveredToTheSinglePublicEventObserverAndExecutionReport`
 observes a real queued Run through its public handle, reduces one event stream,
 and keeps its validated receipt and tool completion distinct from a deliberately
-malformed final presentation. The queue, Journal, Context, Capability and
+malformed final presentation. A separate blocked Host observer test confirms
+settlement can complete while observation waits, but dispatcher drain and the
+sole-user store close wait for that observer's actual exit. The queue, Journal, Context, Capability and
 ModelBinding regressions establish the local SDK boundary; none substitutes
 for live Provider, OS sandbox, power-loss or production Host qualification.
 
