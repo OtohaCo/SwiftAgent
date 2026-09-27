@@ -204,7 +204,10 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let gate = ManualGate()
         let entered = expectation(description: "external effect completed")
         let tool = try BlockingRecoveryFileTool(file: effect, gate: gate, entered: entered,
-                                                timeout: .milliseconds(50))
+                                                // Permit a loaded CI filesystem to fsync the
+                                                // effect before the deliberately blocked tool
+                                                // reaches its timeout boundary.
+                                                timeout: .seconds(1))
         let call = ToolCall(id: .init(rawValue: "timeout-file"), name: BlockingRecoveryFileTool.name,
                             argumentsJSON: #"{"id":"listing-1"}"#, completeness: .complete)
         let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
@@ -212,7 +215,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let sessionID = UUID()
         let run = try await agent.makeSession(id: sessionID, journal: journal)
             .run("Write once", operationID: "timed-file-effect")
-        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 2)
+        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 3)
         XCTAssertEqual(enteredResult, .completed)
         await #expect(throws: AgentLoopError.toolTimedOut(call.id)) { _ = try await run.wait() }
         #expect(try await journal.pendingMutations(sessionID: sessionID).map(\.state) == [.needsReconciliation])

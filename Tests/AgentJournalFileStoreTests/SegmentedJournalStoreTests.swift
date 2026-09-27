@@ -699,8 +699,13 @@ import Glibc
                                                sessionID: session, runID: UUID(), durability: .durable)
         let current = directory.appendingPathComponent("CURRENT")
         let saved = try Data(contentsOf: current)
-        var altered = saved
-        altered[altered.count - 3] ^= 0x01
+        var pointer = try #require(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        var digest = try #require(pointer["digest"] as? String)
+        let firstDigit = digest.removeFirst()
+        pointer["digest"] = (firstDigit == "0" ? "1" : "0") + digest
+        // Keep a valid CURRENT pointer so this tests the active owner's
+        // fencing path, not a random JSON-decoding failure.
+        let altered = try JSONSerialization.data(withJSONObject: pointer, options: [.sortedKeys])
         try altered.write(to: current)
         await #expect(throws: AgentJournalError.concurrentWriter) { _ = try await journal.storeStatus() }
         await #expect(throws: AgentJournalError.concurrentWriter) {

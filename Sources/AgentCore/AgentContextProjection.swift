@@ -9,6 +9,11 @@ public struct AgentContextProjectionInput: Hashable, Sendable, Codable {
     public let conversationRevision: UInt64
     public let contextEpoch: UInt64
     public let modelTurn: Int
+    /// Formal-message ordinal (excluding current runtime instructions) to Journal ID.
+    /// Only source ranges requested by a source-bound projector need entries.
+    public let formalMessageIDs: [Int: UUID]
+    /// Core supplies these only for previously committed read-only results.
+    public let verifiedReadOnlyResults: [ToolCallID: AgentContextVerifiedReadOnlyResult]
 
     public init(
         canonicalMessages: [ModelMessage],
@@ -17,7 +22,9 @@ public struct AgentContextProjectionInput: Hashable, Sendable, Codable {
         runID: UUID,
         conversationRevision: UInt64,
         contextEpoch: UInt64,
-        modelTurn: Int
+        modelTurn: Int,
+        formalMessageIDs: [Int: UUID] = [:],
+        verifiedReadOnlyResults: [ToolCallID: AgentContextVerifiedReadOnlyResult] = [:]
     ) {
         self.canonicalMessages = canonicalMessages
         self.model = model
@@ -26,6 +33,8 @@ public struct AgentContextProjectionInput: Hashable, Sendable, Codable {
         self.conversationRevision = conversationRevision
         self.contextEpoch = contextEpoch
         self.modelTurn = modelTurn
+        self.formalMessageIDs = formalMessageIDs
+        self.verifiedReadOnlyResults = verifiedReadOnlyResults
     }
 }
 
@@ -76,15 +85,26 @@ public enum AgentContextProjectionSource {
 public struct AgentContextProjection: Hashable, Sendable, Codable {
     public let messages: [ModelMessage]
     public let plan: AgentContextProjectionPlan
+    public let report: AgentContextAssemblyReport?
 
-    public init(messages: [ModelMessage], plan: AgentContextProjectionPlan) {
+    public init(messages: [ModelMessage], plan: AgentContextProjectionPlan,
+                report: AgentContextAssemblyReport? = nil) {
         self.messages = messages
         self.plan = plan
+        self.report = report
     }
 }
 
 public protocol AgentContextProjector: Sendable {
     func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection
+}
+
+/// An explicit read-only request for indexed provenance. A forwarding
+/// projector must forward these requirements to compose a source-bound view.
+/// This grants no Journal write, executor, or mutation settlement capability.
+public protocol AgentContextSourceReferencing: AgentContextProjector {
+    var historySpans: [AgentContextHistorySpan] { get }
+    var toolResultCallIDs: [ToolCallID] { get }
 }
 
 public enum AgentContextProjectionError: Error, Equatable, Sendable {

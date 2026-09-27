@@ -6,6 +6,26 @@ All notable changes to SwiftAgent are recorded here.
 
 Development after `1.0.0-rc.3` is not part of the RC3 release scope.
 
+### RC4 context pipeline
+
+- Add source-scoped, deterministically ordered Host materials and Journal-ID-bound
+  request summaries. Closed historical text groups can be summarized without
+  changing formal conversation; successful read-only tool results can be
+  excerpted while preserving the complete Journal result and call pairing.
+- Apply the existing per-request byte and token checks to the assembled request,
+  and expose a bounded report with redacted source decisions and estimates.
+  The credential-free ExternalClient fixture covers two Sessions and recovery.
+- Add public `AgentSession.contextHistorySpan`, `contextToolExcerpt`,
+  `AgentCompositeContextProjector`, material/summary/excerpt types and an
+  optional `AgentModelBinding.contextReports` buffer. No Journal format or
+  mutation execution contract changes.
+- Review hardening lets forwarding projectors declare indexed source needs,
+  ties read-only excerpts to committed same-Session effect evidence instead of
+  current tool names, requires complete text groups for summaries, reserves
+  material bytes for required sources and binds reports to all derived inputs.
+  Old read-only results without process-local effect proof fail closed after
+  restart; the Journal disk format is unchanged.
+
 ### Breaking: Journal storage
 
 - Replace the framed single-file durable Journal with the optional

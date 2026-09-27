@@ -14,6 +14,12 @@ let package = Package(
             .product(name: "AgentModels", package: "SwiftAgent"),
             .product(name: "AgentTools", package: "SwiftAgent"),
         ]),
+        .executableTarget(name: "ContextPipelineFixture", dependencies: [
+            .product(name: "AgentCore", package: "SwiftAgent"),
+            .product(name: "AgentJournalFileStore", package: "SwiftAgent"),
+            .product(name: "AgentModels", package: "SwiftAgent"),
+            .product(name: "AgentTools", package: "SwiftAgent"),
+        ]),
         .testTarget(
             name: "ExternalClientTests",
             dependencies: [

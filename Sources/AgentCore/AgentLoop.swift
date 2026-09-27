@@ -15,16 +15,23 @@ package struct AgentLoop: Sendable {
     private let tools: ToolRegistry
     private let scheduler: ToolScheduler
     private let modelContextByteLimit: Int?
+    private let journal: AgentJournal?
+    private let contextEffects: AgentContextEffectLedger
+    private let projectionDrain = AgentProjectionDrain()
 
     private var model: ModelID { binding.model }
     private var provider: any ModelProvider { binding.provider }
 
     package init(binding: AgentModelBinding, tools: ToolRegistry,
-                 scheduler: ToolScheduler = .init(), modelContextByteLimit: Int? = nil) {
+                 scheduler: ToolScheduler = .init(), modelContextByteLimit: Int? = nil,
+                 journal: AgentJournal? = nil,
+                 contextEffects: AgentContextEffectLedger = .init()) {
         self.binding = binding
         self.tools = tools
         self.scheduler = scheduler
         self.modelContextByteLimit = modelContextByteLimit
+        self.journal = journal
+        self.contextEffects = contextEffects
     }
 
     package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
@@ -78,8 +85,10 @@ package struct AgentLoop: Sendable {
     package func waitForRunToDrain(sessionID: UUID, runID: UUID) async {
         async let providerDrain = waitForProviderToDrain(sessionID: sessionID, runID: runID)
         async let toolDrain = scheduler.waitForRunToDrain(sessionID: sessionID, runID: runID)
+        async let contextDrain = projectionDrain.wait()
         await providerDrain
         await toolDrain
+        await contextDrain
     }
 
     private func waitForProviderToDrain(sessionID: UUID, runID: UUID) async {
@@ -174,6 +183,7 @@ package struct AgentLoop: Sendable {
                 )
             }
             let request = preparedRequest.request
+            try budget.checkActive()
             var accumulator = ModelEventAccumulator()
             for try await rawEvent in provider.stream(request: request) {
                 try budget.checkActive()
@@ -303,6 +313,33 @@ package struct AgentLoop: Sendable {
         structuredOutput: StructuredOutputSchema?,
         allowUnresolvedToolTail: Bool = false
     ) async throws -> AgentPreparedModelRequest {
+        try Task.checkCancellation()
+        await projectionDrain.begin()
+        do {
+            try Task.checkCancellation()
+            let prepared = try await buildRequest(
+                messages: messages, sessionID: sessionID, runID: runID,
+                conversationRevision: conversationRevision, contextEpoch: contextEpoch,
+                modelTurn: modelTurn, structuredOutput: structuredOutput,
+                allowUnresolvedToolTail: allowUnresolvedToolTail)
+            await projectionDrain.finish()
+            return prepared
+        } catch {
+            await projectionDrain.finish()
+            throw error
+        }
+    }
+
+    private func buildRequest(
+        messages: [ModelMessage],
+        sessionID: UUID,
+        runID: UUID,
+        conversationRevision: UInt64,
+        contextEpoch: UInt64,
+        modelTurn: Int,
+        structuredOutput: StructuredOutputSchema?,
+        allowUnresolvedToolTail: Bool
+    ) async throws -> AgentPreparedModelRequest {
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else {
             throw AgentLoopError.providerMismatch
         }
@@ -313,6 +350,43 @@ package struct AgentLoop: Sendable {
         let missing = required.subtracting(provider.descriptor.capabilities)
         guard missing.isEmpty else { throw AgentLoopError.unsupportedCapabilities(missing) }
 
+        var formalMessageIDs: [Int: UUID] = [:]
+        var verifiedReadOnlyResults: [ToolCallID: AgentContextVerifiedReadOnlyResult] = [:]
+        if let requirements = binding.projector as? any AgentContextSourceReferencing {
+            let prefix = messages.prefix { $0.role == .system || $0.role == .developer }.count
+            let formal = Array(messages.dropFirst(prefix))
+            guard requirements.historySpans.count + requirements.toolResultCallIDs.count <= 256 else {
+                throw AgentContextPipelineError.tooManyMaterials
+            }
+            for span in requirements.historySpans {
+                guard span.sessionID == sessionID, span.start >= 0,
+                      !span.messageIDs.isEmpty, span.messageIDs.count <= 256,
+                      span.start <= formal.count,
+                      span.messageIDs.count <= formal.count - span.start,
+                      let journal else { throw AgentContextPipelineError.staleSummary }
+                let page = try await journal.readMessages(sessionID: sessionID,
+                                                          after: UInt64(span.start), limit: span.messageIDs.count)
+                guard page.count == span.messageIDs.count,
+                      page.map(\.message) == Array(formal[span.start..<(span.start + page.count)]) else {
+                    throw AgentContextPipelineError.staleSummary
+                }
+                for (offset, entry) in page.enumerated() { formalMessageIDs[span.start + offset] = entry.id }
+            }
+            for callID in requirements.toolResultCallIDs {
+                guard let index = formal.firstIndex(where: {
+                    if case .tool(let result) = $0 { return result.callID == callID }
+                    return false
+                }), let journal else { throw AgentContextPipelineError.staleToolExcerpt }
+                let page = try await journal.readMessages(sessionID: sessionID, after: UInt64(index), limit: 1)
+                guard page.count == 1, page[0].message == formal[index] else {
+                    throw AgentContextPipelineError.staleToolExcerpt
+                }
+                formalMessageIDs[index] = page[0].id
+                if let proof = await contextEffects.proof(for: callID) {
+                    verifiedReadOnlyResults[callID] = proof
+                }
+            }
+        }
         let projection = try await binding.projector.project(.init(
             canonicalMessages: messages,
             model: model,
@@ -320,7 +394,9 @@ package struct AgentLoop: Sendable {
             runID: runID,
             conversationRevision: conversationRevision,
             contextEpoch: contextEpoch,
-            modelTurn: modelTurn
+            modelTurn: modelTurn,
+            formalMessageIDs: formalMessageIDs,
+            verifiedReadOnlyResults: verifiedReadOnlyResults
         ))
         let sourceDigest = try AgentContextProjectionSource.digest(messages: messages)
         guard projection.plan.sourceRevision == conversationRevision,
@@ -330,21 +406,39 @@ package struct AgentLoop: Sendable {
             throw AgentModelBindingError.invalidProjection
         }
         try validateContinuations(projection.messages)
+        let requestBytes = try AgentContextWindow.encodedByteCount(projection.messages)
         if let modelContextByteLimit {
-            let bytes = try AgentContextWindow.encodedByteCount(projection.messages)
+            let bytes = requestBytes
             guard bytes <= modelContextByteLimit else {
+                if let report = projection.report, let sink = binding.contextReports {
+                    await sink.append(report.withBudget(requestBytes: bytes, estimate: nil,
+                                                        failureCode: "request_bytes_exceeded"))
+                }
                 throw AgentContextError.historyTooLarge(bytes: bytes, limit: modelContextByteLimit)
             }
         }
+        var tokenEstimate: AgentContextTokenEstimate?
         if let budget = binding.tokenBudget {
-            let estimate = try await budget.estimator.estimate(.init(
-                model: model,
-                messages: projection.messages,
-                tools: tools.definitions,
-                structuredOutput: structuredOutput
-            ))
+            let estimate: AgentContextTokenEstimate
+            do {
+                estimate = try await budget.estimator.estimate(.init(
+                    model: model, messages: projection.messages,
+                    tools: tools.definitions, structuredOutput: structuredOutput
+                ))
+            } catch {
+                if let report = projection.report, let sink = binding.contextReports {
+                    await sink.append(report.withBudget(requestBytes: requestBytes, estimate: nil,
+                                                        failureCode: "estimation_failed"))
+                }
+                throw error
+            }
             guard estimate.inputTokens >= 0 else { throw AgentModelBindingError.invalidTokenEstimate }
+            tokenEstimate = estimate
             guard estimate.inputTokens <= budget.availableInputTokens else {
+                if let report = projection.report, let sink = binding.contextReports {
+                    await sink.append(report.withBudget(requestBytes: requestBytes, estimate: estimate,
+                                                        failureCode: "input_tokens_exceeded"))
+                }
                 throw AgentModelBindingError.contextBudgetExceeded(
                     estimatedInputTokens: estimate.inputTokens,
                     availableInputTokens: budget.availableInputTokens
@@ -360,6 +454,9 @@ package struct AgentLoop: Sendable {
             runID: runID
         )
         try (provider as? any ModelProviderRequestValidator)?.validate(request: request)
+        if let report = projection.report, let sink = binding.contextReports {
+            await sink.append(report.withBudget(requestBytes: requestBytes, estimate: tokenEstimate))
+        }
         return .init(request: request, projection: projection, canonicalMessages: messages)
     }
 
@@ -474,6 +571,28 @@ package struct AgentLoop: Sendable {
             arguments = call.argumentsJSON
         }
         return "\(operationID)/\(call.name)/\(arguments)"
+    }
+}
+
+/// A timed-out noncooperative projector/estimator may still be physically
+/// running. Session drain must retain the Run and store lease until it exits.
+private actor AgentProjectionDrain {
+    private var active = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func begin() { active += 1 }
+
+    func finish() {
+        active -= 1
+        guard active == 0 else { return }
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    func wait() async {
+        guard active > 0 else { return }
+        await withCheckedContinuation { waiters.append($0) }
     }
 }
 

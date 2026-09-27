@@ -112,6 +112,52 @@ struct ExternalClientTests {
         try await reopened.close()
     }
 
+    @Test func restartedMutationCannotBecomeReadOnlyExcerptThroughToolNameReuse() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("historical-effect-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = directory.appendingPathComponent("store")
+        let effect = directory.appendingPathComponent("effect.txt")
+        try Data().write(to: effect)
+        let original = try AgentIncrementalJournal.create(at: store, operationDomain: "historical-effect")
+        let sessionID = UUID()
+        let run = try await makeMutationAgent(file: effect).makeSession(id: sessionID, journal: original)
+            .run("Update", operationID: "historical-write")
+        let completed = try await run.wait()
+        try await run.waitForDrain()
+        #expect(completed.receipts.count == 1)
+        try await original.close()
+        #expect(try String(contentsOf: effect, encoding: .utf8) == "effect\n")
+
+        let reopened = try AgentIncrementalJournal.open(at: store)
+        let reusedName = try Agent(model: .init(provider: "external-client", name: "echo"),
+                                    provider: EchoProvider(), tools: [try ReadOnlyListingTool()])
+        let restored = try reusedName.makeSession(id: sessionID, journal: reopened)
+        await #expect(throws: AgentContextPipelineError.unsafeToolExcerpt) {
+            try await restored.contextToolExcerpt(callID: .init(rawValue: "listing-1"), text: "shortened")
+        }
+        let messages = try await reopened.readMessages(sessionID: sessionID)
+        let historical = try #require(messages.first(where: {
+            if case .tool(let result) = $0.message { return result.callID.rawValue == "listing-1" }
+            return false
+        }))
+        let forged = AgentContextToolExcerpt(callID: .init(rawValue: "listing-1"),
+            messageID: historical.id,
+            sourceDigest: try AgentContextProjectionSource.digest(messages: [historical.message]),
+            text: "shortened")
+        let binding = try AgentModelBinding(profileID: "reused-name", profileRevision: "1",
+            model: .init(provider: "external-client", name: "echo"), provider: EchoProvider(),
+            deployment: .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture"),
+            projector: AgentCompositeContextProjector(excerpts: [forged]))
+        await #expect(throws: AgentContextPipelineError.unsafeToolExcerpt) {
+            try await restored.run("next", using: binding)
+        }
+        #expect(try String(contentsOf: effect, encoding: .utf8) == "effect\n")
+        #expect(try await reopened.mutationStatus(identity: #"historical-write/update_listing/{"id":"listing-1"}"#)?.state == .settled)
+        #expect(try await restored.conversationSnapshot().messages.count == messages.count)
+        try await reopened.close()
+    }
+
     @Test func publicRecoverableToolErrorSurfaceCompilesForAReadOnlyTool() throws {
         let policy = try ToolPolicy.readOnly(
             authorization: .notRequired,
@@ -433,5 +479,21 @@ private struct ListingUpdateTool: AgentTool {
             revision: "v2"
         )
         return ToolResult(output: .init(updated: true), receipt: receipt)
+    }
+}
+
+private struct ReadOnlyListingTool: AgentTool {
+    struct Input: Codable, Sendable { let id: String }
+    struct Output: Codable, Sendable { let updated: Bool }
+    static let name = ListingUpdateTool.name
+    static let description = "Read a listing without changing it"
+    static let inputSchema = ListingUpdateTool.inputSchema
+    static let outputSchema = ListingUpdateTool.outputSchema
+    let policy: ToolPolicy
+
+    init() throws { policy = try .readOnly(authorization: .notRequired) }
+
+    func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
+        .init(output: .init(updated: false))
     }
 }

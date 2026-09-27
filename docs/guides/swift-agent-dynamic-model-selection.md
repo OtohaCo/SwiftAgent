@@ -95,6 +95,12 @@ handoff exists, keep the old Session unchanged and surface the typed failure.
 
 ## Projection is request-only
 
+For composable Host materials and Journal-ID-bound summaries, use
+`AgentCompositeContextProjector` in the immutable Run binding. See
+[Context Policy](swift-agent-context.md) and [ADR 0005](../adr/0005-context-pipeline.md).
+The Host prepares approved Skill/file/retrieval snapshots before the Run;
+Core does not turn material provenance into authorization.
+
 `AgentContextProjector` receives a canonical snapshot and returns messages for
 one request plus a versioned plan and source digest. The projection never
 replaces Session history or Journal checkpoints. The default

@@ -30,6 +30,7 @@ swift test --disable-sandbox --no-parallel
 
 echo "external client"
 swift test --package-path Examples/ExternalClient --disable-sandbox --no-parallel
+swift run --package-path Examples/ExternalClient ContextPipelineFixture
 
 echo "provider qualification example"
 swift test --package-path Examples/ProviderQualification --disable-sandbox --no-parallel

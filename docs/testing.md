@@ -18,8 +18,26 @@ swift test --package-path Examples/ExecutionReportingSupport --disable-sandbox -
 swift test --package-path Examples/HeadlessExecutionHost --disable-sandbox --no-parallel
 swift run --package-path Examples/HeadlessExecutionHost HeadlessExecutionHostCLI failure-after-write
 swift test --filter UsageLedgerTests
+swift test --filter AgentContextPipelineTests --disable-sandbox --no-parallel
+swift test --filter ContextPipelineProviderMappingTests --disable-sandbox --no-parallel
+swift run --package-path Examples/ExternalClient ContextPipelineFixture
 bash Scripts/ci-execution-reporting.sh
 ```
+
+The Context Pipeline fixture prints assembly nanoseconds, indexed Journal
+bytes read during its budgeted Run and the projected request size. It uses
+deterministic model/summary fixtures and a real temporary file store with a
+large read-only tool result. The byte counter includes indexed Journal I/O
+during the Run, not only material acquisition; OS page cache is uncontrolled.
+This is a reproducible functional measurement, not a cold-disk benchmark or
+live Provider qualification. The model-facing view can be bounded while
+restoring a full active Session still costs work proportional to that Session.
+`AgentContextPipelineTests` also exercises forwarding projectors, mixed-effect
+call groups, protected ranges and deterministic budget selection. The
+`ExternalClientTests.restartedMutationCannotBecomeReadOnlyExcerptThroughToolNameReuse`
+case writes a real temporary file and checks that a restarted Session cannot
+reclassify its settled mutation through a same-name read-only tool. No live
+model is involved.
 
 Do not treat skipped live tests as passes. Anthropic, OpenAI, Local Responses, and Apple live
 tests are env-gated. OpenAI live coverage requires
