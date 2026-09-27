@@ -953,14 +953,18 @@ struct AgentFollowUpQueueTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-concurrent-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "queue-concurrent")
-        let provider = QueueFixtureProvider()
+        let gate = QueueResolverPhaseGate()
+        let provider = QueueFixtureProvider(responseGate: gate)
         let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"), provider: provider)
         let session = try agent.makeSession(journal: journal)
         let run = try await session.run("live")
+        await gate.waitUntilEntered()
         let before = try await session.conversationSnapshot()
         _ = try await session.enqueueFollowUp(.init(inputID: "next", text: "later",
             operationID: "logical-later", configurationRef: "current"))
         #expect(try await session.conversationSnapshot().revision == before.revision)
+        #expect(await provider.requests().count == 1)
+        await gate.release()
         #expect(try await run.wait().outcome == .completed)
         try await run.waitForDrain()
         #expect(await session.history.contains(.user([.text("live")])))
@@ -1220,12 +1224,14 @@ private actor QueueFixtureRequests {
 private struct QueueFixtureProvider: ModelProvider {
     let descriptor = ModelProviderDescriptor(id: "queue-fixture", capabilities: [.streaming, .multiTurn])
     var firstStop: StopReason? = nil
+    var responseGate: QueueResolverPhaseGate? = nil
     private let log = QueueFixtureRequests()
     func requests() async -> [ModelRequest] { await log.values }
     func waitForRequestCount(_ count: Int) async { await log.waitForCount(count) }
     func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         ModelEventStream.make { emit in
             await log.append(request)
+            await responseGate?.wait()
             let info = ResponseInfo(id: "fixed", model: request.model)
             try emit(.responseStarted(info))
             try emit(.textDelta("done"))
