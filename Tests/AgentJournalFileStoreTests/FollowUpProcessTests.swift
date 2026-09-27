@@ -33,7 +33,20 @@ struct FollowUpProcessTests {
         process.standardOutput = output; process.standardError = errors
         try process.run()
         defer { if process.isRunning { _ = kill(process.processIdentifier, SIGKILL); process.waitUntilExit() } }
+        // A failed child must not leave the test blocked forever waiting for
+        // a marker it never wrote. This watchdog is not the ordering signal:
+        // only the child's post-sync marker establishes the effect boundary.
+        let watchdog = Task {
+            do {
+                try await Task.sleep(for: .seconds(10))
+                if !Task.isCancelled && process.isRunning {
+                    _ = kill(process.processIdentifier, SIGKILL)
+                }
+            } catch { /* The observed effect marker cancelled the watchdog. */ }
+        }
         let marker = String(decoding: output.fileHandleForReading.availableData, as: UTF8.self)
+        watchdog.cancel()
+        await watchdog.value
         #expect(marker.contains("EFFECT-WRITTEN"))
         #expect(try String(contentsOf: file, encoding: .utf8) == "effect\n")
         _ = kill(process.processIdentifier, SIGKILL)

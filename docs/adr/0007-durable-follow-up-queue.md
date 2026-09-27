@@ -1,6 +1,6 @@
 # ADR 0007: Durable FIFO follow-up queue
 
-Status: Implemented on `codex/rc4-follow-up-queue`; final qualification pending
+Status: Implemented on `codex/rc4-follow-up-queue`; exact-head qualification is recorded in PR #22
 Date: 2026-09-27
 
 ## Integrated baseline and scope
