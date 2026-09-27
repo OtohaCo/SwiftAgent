@@ -16,6 +16,7 @@ package struct AgentLoop: Sendable {
     private let scheduler: ToolScheduler
     private let modelContextByteLimit: Int?
     private let journal: AgentJournal?
+    private let contextEffects: AgentContextEffectLedger
     private let projectionDrain = AgentProjectionDrain()
 
     private var model: ModelID { binding.model }
@@ -23,12 +24,14 @@ package struct AgentLoop: Sendable {
 
     package init(binding: AgentModelBinding, tools: ToolRegistry,
                  scheduler: ToolScheduler = .init(), modelContextByteLimit: Int? = nil,
-                 journal: AgentJournal? = nil) {
+                 journal: AgentJournal? = nil,
+                 contextEffects: AgentContextEffectLedger = .init()) {
         self.binding = binding
         self.tools = tools
         self.scheduler = scheduler
         self.modelContextByteLimit = modelContextByteLimit
         self.journal = journal
+        self.contextEffects = contextEffects
     }
 
     package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
@@ -348,10 +351,14 @@ package struct AgentLoop: Sendable {
         guard missing.isEmpty else { throw AgentLoopError.unsupportedCapabilities(missing) }
 
         var formalMessageIDs: [Int: UUID] = [:]
-        if let composite = binding.projector as? AgentCompositeContextProjector {
+        var verifiedReadOnlyResults: [ToolCallID: AgentContextVerifiedReadOnlyResult] = [:]
+        if let requirements = binding.projector as? any AgentContextSourceReferencing {
             let prefix = messages.prefix { $0.role == .system || $0.role == .developer }.count
             let formal = Array(messages.dropFirst(prefix))
-            for span in composite.summaries.map(\.span) {
+            guard requirements.historySpans.count + requirements.toolResultCallIDs.count <= 256 else {
+                throw AgentContextPipelineError.tooManyMaterials
+            }
+            for span in requirements.historySpans {
                 guard span.sessionID == sessionID, span.start >= 0,
                       !span.messageIDs.isEmpty, span.messageIDs.count <= 256,
                       span.start <= formal.count,
@@ -365,9 +372,9 @@ package struct AgentLoop: Sendable {
                 }
                 for (offset, entry) in page.enumerated() { formalMessageIDs[span.start + offset] = entry.id }
             }
-            for excerpt in composite.excerpts {
+            for callID in requirements.toolResultCallIDs {
                 guard let index = formal.firstIndex(where: {
-                    if case .tool(let result) = $0 { return result.callID == excerpt.callID }
+                    if case .tool(let result) = $0 { return result.callID == callID }
                     return false
                 }), let journal else { throw AgentContextPipelineError.staleToolExcerpt }
                 let page = try await journal.readMessages(sessionID: sessionID, after: UInt64(index), limit: 1)
@@ -375,6 +382,9 @@ package struct AgentLoop: Sendable {
                     throw AgentContextPipelineError.staleToolExcerpt
                 }
                 formalMessageIDs[index] = page[0].id
+                if let proof = await contextEffects.proof(for: callID) {
+                    verifiedReadOnlyResults[callID] = proof
+                }
             }
         }
         let projection = try await binding.projector.project(.init(
@@ -386,7 +396,7 @@ package struct AgentLoop: Sendable {
             contextEpoch: contextEpoch,
             modelTurn: modelTurn,
             formalMessageIDs: formalMessageIDs,
-            readOnlyToolNames: tools.readOnlyNames
+            verifiedReadOnlyResults: verifiedReadOnlyResults
         ))
         let sourceDigest = try AgentContextProjectionSource.digest(messages: messages)
         guard projection.plan.sourceRevision == conversationRevision,

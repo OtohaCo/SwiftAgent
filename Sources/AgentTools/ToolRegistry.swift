@@ -33,10 +33,6 @@ package struct ToolRegistry: Sendable {
         tools.values.map(\.tool.definition).sorted { $0.name < $1.name }
     }
 
-    package var readOnlyNames: Set<String> {
-        Set(tools.compactMap { $0.value.tool.policy.effect == .readOnly ? $0.key : nil })
-    }
-
     package func prepare(_ call: ToolCall, context: ToolContext) throws -> PreparedToolCall {
         try context.checkActive()
         guard call.completeness == .complete else { throw ToolRegistryError.truncatedCall }

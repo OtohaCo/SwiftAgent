@@ -60,6 +60,11 @@ gain defaulted source-ID and report parameters. Rebuild downstream clients
 against the eventual release candidate and regenerate its symbol graph; this
 entry is an API change notice, not a release qualification.
 
+Source-bound wrappers now declare `AgentContextSourceReferencing` requirements;
+`AgentContextProjectionInput` carries committed read-only result evidence
+instead of a current tool-name allowlist. There is no durable read-only effect
+history in the v1 Journal, so excerpts of pre-restart results fail closed.
+
 Treat as non-breaking when existing clients still compile and keep the same
 runtime meaning:
 

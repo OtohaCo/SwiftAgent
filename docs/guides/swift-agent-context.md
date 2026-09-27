@@ -58,7 +58,11 @@ optional material is omitted with a recorded budget reason.
 
 The projector sorts by priority, kind and ID. Duplicate identities must have
 identical version, text and policy; a conflict fails. The defaults bound 64
-entries, 256 KiB per material and 1 MiB of accepted material text. The final
+entries, 256 KiB per material and 1 MiB of accepted material text. It reserves
+text bytes for all required materials before selecting optional ones. Source
+notices, summaries and excerpts are checked by the separate final-request
+byte and token budgets; the material allowance counts only accepted material
+text. The final
 request still passes Core's byte check and the existing token estimator for
 messages, tools and structured output, with output/reasoning/protocol reserve.
 An estimate is not actual Provider usage. If no safe view fits, the request
@@ -72,17 +76,30 @@ For older, closed text-only groups, the Host asks
 and a content digest. An `AgentContextSummary` also supplies a generator
 version. Every request checks the IDs and exact range again. Appending an
 unrelated message does not invalidate it; changing covered content does.
-Summary ranges cannot include current input, tool calls/results or provider
+Summary ranges contain complete, closed user-to-assistant text groups. They
+cannot include current input, tool calls/results or provider
 continuation. The Host pins earlier corrections or constraints using
 `protectedMessageIDs` on the projector; their IDs cannot be summarized. The
 summary is marked as Host-derived data in the model view, never formal user
 history.
 
 `session.contextToolExcerpt(callID:text:)` selects a committed successful
-result of a registered read-only tool. The projector checks its Journal ID,
-digest, read-only registration and complete call/result group, replacing only
+result whose historical read-only effect was observed by this Session. The
+projector checks its Journal ID, digest, trusted effect evidence and complete
+call/result group, replacing only
 that result's model-facing content. Call ID and result status remain paired;
 the full output stays in the Journal. Mutation and error results are ineligible.
+The current registry's tool name does not prove an old call's effect. Because
+the existing Journal format does not persist read-only effect metadata, a
+reopened Session rejects historical excerpts when their classification cannot
+be proved, including old results from a now-missing tool. It does not reinterpret
+them using a newly registered same-name tool.
+
+If a Host wraps a source-bound projector, the wrapper must implement
+`AgentContextSourceReferencing` and forward `historySpans` and
+`toolResultCallIDs`. Core only reads those indexed ranges; no full-history
+provenance scan is added. A wrapper that omits the requirements fails closed
+when its inner projector checks the missing IDs or effect evidence.
 
 ```swift
 let span = try await session.contextHistorySpan(start: 0, count: 2)
@@ -103,7 +120,8 @@ try await run.waitForDrain()
 ```
 
 The bounded report records Session/Run/turn, revision/epoch, policy version,
-source snapshot digest, accepted/omitted fingerprints and reasons,
+source snapshot digest (including summary, excerpt and policy revisions),
+accepted/omitted fingerprints and reasons,
 material/request bytes, assembly time and token estimate when available. The
 buffer holds at most 256 entries. It contains no raw source IDs, paths, prompt
 text or opaque continuation. Fingerprints and digests are correlation hints,

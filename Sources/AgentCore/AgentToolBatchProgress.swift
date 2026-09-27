@@ -57,6 +57,7 @@ actor AgentToolBatchProgress {
                 if let lifecycle {
                     let canonical = try await lifecycle.checkpoint(committedHistory, [])
                     updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+                    await lifecycle.recordReadOnlyResult(call.call, message)
                 }
             }
             results = proposed

@@ -146,6 +146,176 @@ struct AgentContextPipelineTests {
         try await reopened.close()
     }
 
+    @Test func forwardingProjectorPreservesVerifiedSummaryAndReadOnlyExcerpt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("context-wrapper-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "wrapper")
+        let provider = ScriptedProvider { request, _ in
+            if request.messages.last == .user([.text("lookup")]) {
+                return toolResponse(request, [addition(request.sessionID!.uuidString)])
+            }
+            return textResponse(request, "done")
+        }
+        let agent = try Agent(model: fixtureModel, provider: provider, tools: [try AddTool(log: EffectLog())])
+        for wrapped in [false, true] {
+            let session = try agent.makeSession(journal: journal)
+            let first = try await session.run("old")
+            _ = try await first.wait(); try await first.waitForDrain()
+            let second = try await session.run("lookup")
+            _ = try await second.wait(); try await second.waitForDrain()
+            let span = try await session.contextHistorySpan(start: 0, count: 2)
+            let excerpt = try await session.contextToolExcerpt(
+                callID: .init(rawValue: session.id.uuidString), text: "five")
+            let composite = AgentCompositeContextProjector(
+                summaries: [.init(span: span, generatorVersion: "v1", text: "old answered")],
+                excerpts: [excerpt])
+            let projector: any AgentContextProjector = wrapped
+                ? ForwardingContextProjector(inner: composite) : composite
+            let binding = try AgentModelBinding(profileID: "wrapper", profileRevision: "1",
+                model: fixtureModel, provider: provider,
+                deployment: .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture"),
+                projector: projector)
+            let run = try await session.run("next", using: binding)
+            _ = try await run.wait(); try await run.waitForDrain()
+            let sent = try #require(await provider.log.requests.last)
+            #expect(String(describing: sent.messages).contains("Host-derived lossy summary"))
+            #expect(String(describing: sent.messages).contains("read-only result excerpt"))
+        }
+        try await journal.close()
+    }
+
+    @Test func reopenedReadOnlyHistoryWithoutEffectProofFailsClosed() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("context-old-read-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "old-read")
+        let id = UUID()
+        let callID = ToolCallID(rawValue: "old-read")
+        let provider = ScriptedProvider { request, _ in
+            request.messages.last == .user([.text("lookup")])
+                ? toolResponse(request, [addition(callID.rawValue)]) : textResponse(request, "done")
+        }
+        let originalAgent = try Agent(model: fixtureModel, provider: provider,
+                                      tools: [try AddTool(log: EffectLog())])
+        let original = try originalAgent.makeSession(id: id, journal: journal)
+        let run = try await original.run("lookup")
+        _ = try await run.wait(); try await run.waitForDrain()
+        _ = try await original.contextToolExcerpt(callID: callID, text: "five")
+        try await journal.close()
+
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let withoutTool = try Agent(model: fixtureModel, provider: provider).makeSession(id: id, journal: reopened)
+        await #expect(throws: AgentContextPipelineError.unsafeToolExcerpt) {
+            try await withoutTool.contextToolExcerpt(callID: callID, text: "five")
+        }
+        try await reopened.close()
+    }
+
+    @Test func summaryRequiresWholeClosedTextGroupAndProtectedExcerptCannotBeShortened() async throws {
+        let old: [ModelMessage] = [.user([.text("old")]), .assistant(content: [.text("answer")], toolCalls: [])]
+        let id = UUID()
+        let half = AgentContextSummary(span: .init(sessionID: session, start: 1, messageIDs: [id],
+            sourceDigest: try AgentContextProjectionSource.digest(messages: [old[1]])),
+            generatorVersion: "v1", text: "only an answer")
+        await #expect(throws: AgentContextPipelineError.unsafeSummary) {
+            try await AgentCompositeContextProjector(summaries: [half]).project(
+                input(old + [.user([.text("latest")])], ids: [1: id]))
+        }
+        let call = ToolCall(id: .init(rawValue: "protected"), name: "lookup", argumentsJSON: "{}", completeness: .complete)
+        let result = ModelMessage.tool(.init(callID: call.id, content: [.text("complete")], isError: false))
+        let excerpt = AgentContextToolExcerpt(callID: call.id, messageID: id,
+            sourceDigest: try AgentContextProjectionSource.digest(messages: [result]), text: "partial")
+        let messages: [ModelMessage] = [.user([.text("read")]), .assistant(content: [], toolCalls: [call]),
+                                        result, .user([.text("latest")])]
+        await #expect(throws: AgentContextPipelineError.unsafeToolExcerpt) {
+            try await AgentCompositeContextProjector(excerpts: [excerpt], protectedMessageIDs: [id]).project(
+                .init(canonicalMessages: messages, model: model, sessionID: session, runID: UUID(),
+                      conversationRevision: 1, contextEpoch: 1, modelTurn: 1,
+                      formalMessageIDs: [2: id], verifiedReadOnlyResults: [
+                          call.id: .init(toolName: "lookup", sourceDigest: excerpt.sourceDigest)]))
+        }
+    }
+
+    @Test func optionalMaterialCannotDisplaceLaterRequiredMaterial() async throws {
+        let optional = AgentContextMaterial(id: "a", version: "v1", kind: .file,
+            sessionID: session, text: String(repeating: "o", count: 80), required: false, priority: 0)
+        let required = AgentContextMaterial(id: "z", version: "v1", kind: .skill,
+            sessionID: session, text: String(repeating: "r", count: 30), required: true, priority: 10)
+        let result = try await AgentCompositeContextProjector(
+            materials: [optional, required], limits: .init(maxMaterialBytes: 100))
+            .project(input([.user([.text("latest")])]))
+        #expect(result.report?.acceptedCount == 1)
+        #expect(result.report?.omittedCount == 1)
+        #expect(String(describing: result.messages).contains(String(repeating: "r", count: 30)))
+    }
+
+    @Test func sourceSnapshotChangesWithSummaryExcerptAndPolicy() async throws {
+        let old: [ModelMessage] = [.user([.text("old")]), .assistant(content: [.text("answer")], toolCalls: [])]
+        let ids = [UUID(), UUID()]
+        let span = AgentContextHistorySpan(sessionID: session, start: 0, messageIDs: ids,
+            sourceDigest: try AgentContextProjectionSource.digest(messages: old))
+        let source = input(old + [.user([.text("latest")])], ids: [0: ids[0], 1: ids[1]])
+        let one = try #require(await AgentCompositeContextProjector(summaries: [
+            .init(span: span, generatorVersion: "v1", text: "summary one")
+        ]).project(source).report?.sourceSnapshot)
+        for changed in [AgentCompositeContextProjector(summaries: [
+                            .init(span: span, generatorVersion: "v2", text: "summary one")]),
+                        AgentCompositeContextProjector(summaries: [
+                            .init(span: span, generatorVersion: "v1", text: "summary two")]),
+                        AgentCompositeContextProjector(summaries: [
+                            .init(span: span, generatorVersion: "v1", text: "summary one")], policyVersion: "2")] {
+            let snapshot = try #require(await changed.project(source).report?.sourceSnapshot)
+            #expect(snapshot != one)
+        }
+        let call = ToolCall(id: .init(rawValue: "read"), name: "lookup", argumentsJSON: "{}", completeness: .complete)
+        let result = ModelMessage.tool(.init(callID: call.id, content: [.text("full")], isError: false))
+        let resultID = UUID()
+        let complete: [ModelMessage] = [.user([.text("read")]), .assistant(content: [], toolCalls: [call]),
+                                        result, .user([.text("latest")])]
+        let digest = try AgentContextProjectionSource.digest(messages: [result])
+        let excerptInput = AgentContextProjectionInput(canonicalMessages: complete, model: model,
+            sessionID: session, runID: UUID(), conversationRevision: 1, contextEpoch: 1,
+            modelTurn: 1, formalMessageIDs: [2: resultID], verifiedReadOnlyResults: [
+                call.id: .init(toolName: "lookup", sourceDigest: digest)])
+        let excerptOne = try #require(await AgentCompositeContextProjector(excerpts: [
+            .init(callID: call.id, messageID: resultID, sourceDigest: digest, text: "excerpt one")
+        ]).project(excerptInput).report?.sourceSnapshot)
+        let excerptTwo = try #require(await AgentCompositeContextProjector(excerpts: [
+            .init(callID: call.id, messageID: resultID, sourceDigest: digest, text: "excerpt two")
+        ]).project(excerptInput).report?.sourceSnapshot)
+        #expect(excerptOne != excerptTwo)
+        let protected = try #require(await AgentCompositeContextProjector(summaries: [
+            .init(span: span, generatorVersion: "v1", text: "summary one")
+        ], protectedMessageIDs: [resultID])
+            .project(source).report?.sourceSnapshot)
+        #expect(protected != one)
+    }
+
+    @Test func mixedToolBatchExcerptsOnlyTheHistoricallyVerifiedReadOnlyResult() async throws {
+        let read = ToolCall(id: .init(rawValue: "read"), name: "lookup", argumentsJSON: "{}", completeness: .complete)
+        let write = ToolCall(id: .init(rawValue: "write"), name: "update", argumentsJSON: "{}", completeness: .complete)
+        let readResult = ModelMessage.tool(.init(callID: read.id, content: [.text("read output")], isError: false))
+        let writeResult = ModelMessage.tool(.init(callID: write.id, content: [.text("mutation output")], isError: false))
+        let ids = [UUID(), UUID()]
+        let canonical: [ModelMessage] = [.user([.text("work")]), .assistant(content: [], toolCalls: [read, write]),
+                                          writeResult, readResult, .user([.text("next")])]
+        let readDigest = try AgentContextProjectionSource.digest(messages: [readResult])
+        let writeDigest = try AgentContextProjectionSource.digest(messages: [writeResult])
+        let input = AgentContextProjectionInput(canonicalMessages: canonical, model: model,
+            sessionID: session, runID: UUID(), conversationRevision: 1, contextEpoch: 1,
+            modelTurn: 1, formalMessageIDs: [2: ids[0], 3: ids[1]], verifiedReadOnlyResults: [
+                read.id: .init(toolName: read.name, sourceDigest: readDigest)])
+        let readExcerpt = AgentContextToolExcerpt(callID: read.id, messageID: ids[1],
+                                                   sourceDigest: readDigest, text: "read excerpt")
+        let projected = try await AgentCompositeContextProjector(excerpts: [readExcerpt]).project(input)
+        #expect(projected.messages[2] == writeResult)
+        #expect(projected.messages[1] == canonical[1])
+        await #expect(throws: AgentContextPipelineError.unsafeToolExcerpt) {
+            try await AgentCompositeContextProjector(excerpts: [
+                .init(callID: write.id, messageID: ids[0], sourceDigest: writeDigest, text: "hide effect")
+            ]).project(input)
+        }
+    }
+
     @Test func excerptKeepsCallPairAndRejectsMutationOrError() async throws {
         let id = UUID()
         let call = ToolCall(id: .init(rawValue: "read-1"), name: "lookup", argumentsJSON: "{}", completeness: .complete)
@@ -159,7 +329,8 @@ struct AgentContextPipelineTests {
         let projector = AgentCompositeContextProjector(excerpts: [excerpt])
         let source = AgentContextProjectionInput(canonicalMessages: messages, model: model,
             sessionID: session, runID: UUID(), conversationRevision: 1, contextEpoch: 1,
-            modelTurn: 1, formalMessageIDs: [2: id], readOnlyToolNames: ["lookup"])
+            modelTurn: 1, formalMessageIDs: [2: id], verifiedReadOnlyResults: [
+                call.id: .init(toolName: "lookup", sourceDigest: excerpt.sourceDigest)])
         let projected = try await projector.project(source)
         #expect(projected.messages.count == messages.count)
         guard case .tool(let visible) = projected.messages[2] else {
@@ -178,7 +349,8 @@ struct AgentContextPipelineTests {
         await #expect(throws: AgentContextPipelineError.staleToolExcerpt) {
             try await projector.project(.init(canonicalMessages: errorMessages, model: model,
                 sessionID: session, runID: UUID(), conversationRevision: 1, contextEpoch: 1,
-                modelTurn: 1, formalMessageIDs: [2: id], readOnlyToolNames: ["lookup"]))
+                modelTurn: 1, formalMessageIDs: [2: id], verifiedReadOnlyResults: [
+                    call.id: .init(toolName: "lookup", sourceDigest: excerpt.sourceDigest)]))
         }
     }
 
@@ -199,7 +371,8 @@ struct AgentContextPipelineTests {
                                               .assistant(content: [], toolCalls: calls)] + results + [.user([.text("next")])]
             let input = AgentContextProjectionInput(canonicalMessages: canonical, model: model,
                 sessionID: session, runID: UUID(), conversationRevision: 1, contextEpoch: 1,
-                modelTurn: 1, formalMessageIDs: [2: ids[0], 3: ids[1]], readOnlyToolNames: ["lookup"])
+                modelTurn: 1, formalMessageIDs: [2: ids[0], 3: ids[1]], verifiedReadOnlyResults: [
+                    firstResult.callID: .init(toolName: "lookup", sourceDigest: excerpt.sourceDigest)])
             let output = try await AgentCompositeContextProjector(excerpts: [excerpt]).project(input)
             #expect(output.messages.count == canonical.count)
             #expect(output.messages[3] == canonical[3])
@@ -254,5 +427,15 @@ private struct HighEstimate: AgentContextTokenEstimator {
         #expect(input.messages.contains(where: { String(describing: $0).contains("necessary") }) == false)
         #expect(input.messages.count == 2)
         return .init(inputTokens: 100, accuracy: .estimated)
+    }
+}
+
+private struct ForwardingContextProjector: AgentContextSourceReferencing {
+    let inner: AgentCompositeContextProjector
+    var historySpans: [AgentContextHistorySpan] { inner.historySpans }
+    var toolResultCallIDs: [ToolCallID] { inner.toolResultCallIDs }
+
+    func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
+        try await inner.project(input)
     }
 }

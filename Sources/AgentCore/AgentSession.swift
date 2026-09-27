@@ -17,6 +17,7 @@ public actor AgentSession {
     private let tools: ToolRegistry
     private let scheduler: ToolScheduler
     private let evidenceLedger = EvidenceLedger()
+    private let contextEffects = AgentContextEffectLedger()
     private let structuredOutput: StructuredOutputSchema?
     private let maxModelTurns: Int
     private let maxToolCalls: Int
@@ -228,15 +229,19 @@ public actor AgentSession {
               let assistant = formal[..<index].lastIndex(where: { $0.role == .assistant }),
               case .assistant(_, let calls) = formal[assistant],
               let call = calls.first(where: { $0.id == callID }),
-              tools.readOnlyNames.contains(call.name), let journal else {
+              let journal else {
             throw AgentContextPipelineError.unsafeToolExcerpt
         }
         let page = try await journal.readMessages(sessionID: id, after: UInt64(index), limit: 1)
         guard page.count == 1, page[0].message == formal[index] else {
             throw AgentContextPipelineError.staleToolExcerpt
         }
+        let digest = try AgentContextProjectionSource.digest(messages: [formal[index]])
+        guard await contextEffects.proof(for: callID) == .init(toolName: call.name, sourceDigest: digest) else {
+            throw AgentContextPipelineError.unsafeToolExcerpt
+        }
         return .init(callID: callID, messageID: page[0].id,
-                     sourceDigest: try AgentContextProjectionSource.digest(messages: [formal[index]]), text: text)
+                     sourceDigest: digest, text: text)
     }
 
     /// Waits until provider/tool work for `runID` has exited and this Session
@@ -301,7 +306,7 @@ public actor AgentSession {
         let runID = UUID()
         let loop = AgentLoop(binding: binding, tools: tools, scheduler: scheduler,
                              modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes,
-                             journal: journal)
+                             journal: journal, contextEffects: contextEffects)
         let candidateMessages = prepared + [.user([.text(text)])]
         let preparedRequest: AgentPreparedModelRequest
         preparedRequest = try await withStartupDeadline(budget.deadline, startupID: startupID) { [weak self] in
@@ -432,6 +437,10 @@ public actor AgentSession {
             markMutationNeedsReconciliation: { callID in
                 await self.mutationQuarantineDidBegin?(runID, callID)
                 try await journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
+            },
+            recordReadOnlyResult: { call, result in
+                guard await self.activeRunID == runID else { return }
+                await self.contextEffects.record(call: call, result: result)
             },
             beforeFinish: {
                 let pending = await control.beginFinish()

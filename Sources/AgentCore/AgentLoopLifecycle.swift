@@ -9,6 +9,7 @@ struct AgentLoopLifecycle: Sendable {
     let recordMutationReceipt: @Sendable (ToolCallID, ToolReceipt, JSONValue) async throws -> Void
     let commitMutation: (@Sendable (ToolCallID, ToolReceipt, JSONValue, [ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage])?
     let markMutationNeedsReconciliation: @Sendable (ToolCallID) async throws -> Void
+    let recordReadOnlyResult: @Sendable (ToolCall, ToolResultMessage) async -> Void
     let beforeFinish: @Sendable () async -> Void
 
     init(
@@ -19,6 +20,7 @@ struct AgentLoopLifecycle: Sendable {
         recordMutationReceipt: @escaping @Sendable (ToolCallID, ToolReceipt, JSONValue) async throws -> Void = { _, _, _ in },
         commitMutation: (@Sendable (ToolCallID, ToolReceipt, JSONValue, [ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage])? = nil,
         markMutationNeedsReconciliation: @escaping @Sendable (ToolCallID) async throws -> Void = { _ in },
+        recordReadOnlyResult: @escaping @Sendable (ToolCall, ToolResultMessage) async -> Void = { _, _ in },
         beforeFinish: @escaping @Sendable () async -> Void = {}
     ) {
         self.control = control
@@ -28,6 +30,7 @@ struct AgentLoopLifecycle: Sendable {
         self.recordMutationReceipt = recordMutationReceipt
         self.commitMutation = commitMutation
         self.markMutationNeedsReconciliation = markMutationNeedsReconciliation
+        self.recordReadOnlyResult = recordReadOnlyResult
         self.beforeFinish = beforeFinish
     }
 }

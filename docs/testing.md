@@ -32,6 +32,12 @@ during the Run, not only material acquisition; OS page cache is uncontrolled.
 This is a reproducible functional measurement, not a cold-disk benchmark or
 live Provider qualification. The model-facing view can be bounded while
 restoring a full active Session still costs work proportional to that Session.
+`AgentContextPipelineTests` also exercises forwarding projectors, mixed-effect
+call groups, protected ranges and deterministic budget selection. The
+`ExternalClientTests.restartedMutationCannotBecomeReadOnlyExcerptThroughToolNameReuse`
+case writes a real temporary file and checks that a restarted Session cannot
+reclassify its settled mutation through a same-name read-only tool. No live
+model is involved.
 
 Do not treat skipped live tests as passes. Anthropic, OpenAI, Local Responses, and Apple live
 tests are env-gated. OpenAI live coverage requires

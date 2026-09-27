@@ -1,4 +1,5 @@
 import AgentCore
+import AgentJournalFileStore
 import AgentModels
 import AgentTools
 import Foundation
@@ -502,6 +503,45 @@ struct AgentModelBindingTests {
         #expect(await provider.log.requests.count == 1)
     }
 
+    @Test func cancelledInRunEstimatorAndCancelledDrainWaiterRetainStoreOwner() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("context-estimator-drain-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "estimator-drain")
+        let sessionID = UUID()
+        let gate = NonCooperativeEstimatorGate()
+        let provider = ScriptedProvider { request, turn in
+            turn == 1 ? toolResponse(request, [addition("estimator-drain")]) : textResponse(request, "unexpected")
+        }
+        let agent = try Agent(model: fixtureModel, provider: provider,
+                              tools: [try AddTool(log: EffectLog())])
+        let session = try agent.makeSession(id: sessionID, journal: journal)
+        let binding = try AgentModelBinding(
+            profileID: "slow-estimator", profileRevision: "1", model: fixtureModel,
+            provider: provider, deployment: deployment("slow-estimator"),
+            tokenBudget: .init(maximumContextTokens: 1_000, reservedOutputTokens: 100,
+                               estimator: SecondTurnBlockingEstimator(gate: gate)))
+        let run = try await session.run("calculate", using: binding)
+        await gate.waitUntilBlocked()
+        await run.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await run.wait() }
+        let registration = AsyncStream<Bool>.makeStream()
+        let waiter = Task {
+            try await run.waitForDrain(waiterDidRegister: { registration.continuation.yield($0) })
+        }
+        var iterator = registration.stream.makeAsyncIterator()
+        #expect(await iterator.next() == true)
+        waiter.cancel()
+        await #expect(throws: CancellationError.self) { try await waiter.value }
+        #expect(await run.isDrainComplete() == false)
+        await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
+        let replacement = try agent.makeSession(id: sessionID, journal: journal)
+        await #expect(throws: AgentSessionError.runInProgress) { try await replacement.run("next") }
+        await gate.release()
+        try await run.waitForDrain()
+        #expect(await provider.log.requests.count == 1)
+        try await journal.close()
+    }
+
     @Test func projectorExceedingRunDeadlineDoesNotCommitInput() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("swift-agent-preflight-projector-\(UUID().uuidString).log")
@@ -968,6 +1008,18 @@ private struct NonCooperativeTokenEstimator: AgentContextTokenEstimator {
         await gate.wait()
         await gate.finished()
         return .init(inputTokens: 1, accuracy: .exact)
+    }
+}
+
+private struct SecondTurnBlockingEstimator: AgentContextTokenEstimator {
+    let gate: NonCooperativeEstimatorGate
+
+    func estimate(_ input: AgentContextTokenEstimationInput) async throws -> AgentContextTokenEstimate {
+        if input.messages.contains(where: { $0.role == .tool }) {
+            await gate.wait()
+            await gate.finished()
+        }
+        return .init(inputTokens: 1, accuracy: .estimated)
     }
 }
 
