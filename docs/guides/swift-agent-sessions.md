@@ -47,6 +47,48 @@ Share the Agent's `ToolScheduler` whenever another Session can mutate the same
 host resources. Two Agents that control one account or one file store must be
 constructed with the same scheduler value.
 
+## Run-scoped capability binding (RC4)
+
+An Agent may have no default tools and bind an immutable tool set for one
+Session Run. The Session creates the binding, tying it to that Session
+instance rather than only a reusable UUID. The Host supplies tool and backend
+versions plus exact `ToolResource` identities. The model's tool definitions,
+token estimator, typed preparation and actual executors use the bound registry.
+A newer binding affects only a later Run.
+
+```swift
+let scope = try await session.bindCapabilities(
+    identity: "project-B", version: "v1",
+    backendInstanceID: "local-workspace", backendVersion: "v1",
+    allowedResources: [.named(.init(namespace: "workspace", id: "project-B"))],
+    tools: [.init(id: "write", version: "v1", tool: writeTool)]
+)
+let run = try await session.run("Update the project", capabilities: scope,
+                                operationID: "stable-logical-update")
+await scope.revoke()
+_ = try? await run.wait()
+try await run.waitForDrain()
+try await scope.waitForDrain()
+```
+
+`revoke()` stops **new final execution admissions** and requests cancellation;
+it does not assert an in-flight external effect was rolled back. A call that
+obtained admission first keeps its cleanup and settlement owner until drain;
+a call waiting for resources, Host authorization or durable intent cannot
+enter the executor after revoke. `waitForDrain()` separately observes the
+actual exit. Cancelling one waiter cannot release the Journal lease. Scope
+status counts Run reservations and admissions; admission does not prove
+executor entry or a file write. Diagnostic `AgentCapabilityInfo` is not a
+recoverable permission credential.
+
+Explicitly bound mutation tools recheck durable Journal availability before
+candidate input is committed, even when the Agent has no default mutations.
+The Session shares its scheduler and Journal across scopes. New scope versions
+do not alter operation identity; two scopes touching one file or account must
+declare the same real resource identity. The Host closes shared backends only
+after all users drain. See [ADR 0006](../adr/0006-run-scoped-capability-binding.md)
+and the no-network [ExternalClient fixture](../../Examples/ExternalClient/Sources/ScopedCapabilityFixture).
+
 ## Operation Identity and Mutation Retries
 
 `session.run(_:budget:operationID:)` accepts a logical operation identity. Reuse

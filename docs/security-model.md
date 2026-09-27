@@ -47,6 +47,21 @@ conversation loop or become a second orchestration authority.
 
 ## A tool call is a proposal
 
+A Session may bind an immutable tool registry and exact resource set to one
+Run. Its process-local scope owner checks generation at final execution
+admission, after resource waiting, Evidence, Host authorization and durable
+mutation intent. Revoking the whole scope first prevents executor admission;
+admission first creates in-flight work that retains cancellation and physical
+drain ownership. Revocation never proves that an external effect was undone,
+does not authorize an unrelated result replay and cannot erase a pending
+mutation. Scope/version/Run IDs do not enter the logical idempotency key.
+
+The SDK does not authenticate arbitrary Host backend code or enforce OS
+isolation. The Host must use stable shared scheduler/resource identities,
+approve the underlying account/workspace/backend version and avoid mutable
+backend swaps inside a captured tool value. Neither model text, Context Skill
+data nor a serializable scope diagnostic can mint a new execution binding.
+
 Every complete tool call still passes:
 
 1. Schema validation for input

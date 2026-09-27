@@ -52,6 +52,14 @@ Journal. This change requires a version boundary before publication. See
 
 ## Non-breaking
 
+RC4 adds opt-in Session-created `AgentCapabilityBinding` and a
+`session.run(_:capabilities:using:...)` overload. Bound Runs expose a
+non-authorizing `AgentRun.capabilities` diagnostic snapshot; `revoke()` and
+`waitForDrain()` are distinct. Existing Runs without an explicit binding
+retain their current tool behavior. Dynamic mutation tools require durable
+Journal storage before candidate input admission. This is unreleased API
+development, not a claim of runtime permission recovery after restart.
+
 RC4 adds opt-in `AgentCompositeContextProjector`, source materials, bounded
 reports and indexed `AgentSession` source-range queries. The existing binding
 initializer gains an optional report buffer with a default of `nil`; identity

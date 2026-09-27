@@ -46,6 +46,11 @@ The model remembering Resource A in the transcript is not permission to operate 
 
 ## Source-bound composition (RC4)
 
+Source materials and Skill text cannot enable a tool. An optional Run-scoped
+capability binding supplies the exact tool definitions used by projection,
+token estimation and the eventual Provider request; the same captured
+registry handles any proposed call. See [Sessions](swift-agent-sessions.md).
+
 `AgentCompositeContextProjector` accepts an immutable Run snapshot of
 `AgentContextMaterial` values. The Host loads and approves Skill, file and
 retrieval text before building the binding. Each material names its Session,

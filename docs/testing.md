@@ -21,6 +21,8 @@ swift test --filter UsageLedgerTests
 swift test --filter AgentContextPipelineTests --disable-sandbox --no-parallel
 swift test --filter ContextPipelineProviderMappingTests --disable-sandbox --no-parallel
 swift run --package-path Examples/ExternalClient ContextPipelineFixture
+swift test --filter AgentCapabilityScopeTests --disable-sandbox --no-parallel
+swift run --package-path Examples/ExternalClient ScopedCapabilityFixture
 bash Scripts/ci-execution-reporting.sh
 ```
 

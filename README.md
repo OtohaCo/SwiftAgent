@@ -244,6 +244,10 @@ The [Context Pipeline fixture](Examples/ExternalClient/Sources/ContextPipelineFi
 shows source-bound Host materials, a verified summary, a read-only tool excerpt
 and two isolated Sessions without a network request.
 
+The [Scoped Capability fixture](Examples/ExternalClient/Sources/ScopedCapabilityFixture)
+demonstrates Run-bound tools and resources, revocation and durable mutation
+replay using a temporary file and deterministic Provider.
+
 Model Codable data is not a vendor wire format or a frozen journal format.
 Usage is cumulative; unreported is not zero, and cache/reasoning subsets must not
 be added to totals. Match typed errors instead of `localizedDescription` strings.
