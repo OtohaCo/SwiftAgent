@@ -31,11 +31,11 @@ enum BoundedReplanningProbe {
                     else if !observed.linkedFeedbackIsRelevant { reason = "rejection feedback lacks relevant reference" }
                     else if observed.error != nil { reason = "feedback visible but script protocol/admission failed: \(observed.error!)" }
                     else { reason = "continuation or lifecycle did not meet target assertions" }
-                    fputs("FAIL \(scenario.rawValue): \(reason)\n", stderr)
+                    print("FAIL \(scenario.rawValue): \(reason)")
                 }
             } catch {
                 failed = true
-                fputs("FAIL \(scenario.rawValue): fixture/environment failure: \(error)\n", stderr)
+                print("FAIL \(scenario.rawValue): fixture/environment failure: \(error)")
             }
         }
         if failed { exit(1) }
