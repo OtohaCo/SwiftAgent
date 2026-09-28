@@ -93,6 +93,22 @@ class ReplanningEvaluationTests(unittest.TestCase):
             self.assertEqual(summary["groups"]["natural/disabled"]["successRate"] +
                              summary["groups"]["natural/enabled"]["successRate"], 1.0)
 
+    def test_token_and_cost_reservations_each_stop_before_an_extra_trial(self):
+        task = next(t for t in evaluation.load_tasks(evaluation.TASKS)[0] if t["id"] == "natural_commit_A")
+        for limit in ("tokens", "cost"):
+            with tempfile.TemporaryDirectory(prefix="swiftagent-eval-reserve-") as root:
+                parent = Path(root)
+                task_file = parent / "tasks.json"
+                task_file.write_text(json.dumps([task]))
+                flags = (["--max-total-tokens", "98304"] if limit == "tokens"
+                         else ["--max-total-usd", "0.06"])
+                args = evaluation.options(["--mode", "dry-run", "--tasks", str(task_file),
+                    "--output", str(parent / "evaluation"), *flags])
+                _, summary, infra = evaluation.execute(args)
+                self.assertFalse(infra)
+                self.assertEqual(sum(group["attempted"] for group in summary["groups"].values()), 1)
+                self.assertEqual(sum(group["notRun"] for group in summary["groups"].values()), 1)
+
     def test_live_requires_explicit_authorization_and_every_limit(self):
         output = io.StringIO()
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "SHOULD_NEVER_APPEAR"}), contextlib.redirect_stderr(output):
