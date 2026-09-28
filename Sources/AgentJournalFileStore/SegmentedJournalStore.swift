@@ -67,11 +67,13 @@ public enum AgentIncrementalJournal {
     /// still waits for the owned file operation to finish before returning.
     public static func createAsync(at directory: URL, operationDomain: String,
                                    policy: JournalMaintenancePolicy = .default,
+                                   supportsAdmissionRejections: Bool = false,
                                    deadline: ContinuousClock.Instant? = nil) async throws -> AgentJournal {
         try Task.checkCancellation()
         if let deadline, ContinuousClock.now >= deadline { throw AgentJournalError.deadlineExceeded }
         let journal = try await openOwned(deadline: deadline) {
-            try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy)
+            try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy,
+                                             supportsAdmissionRejections: supportsAdmissionRejections)
         }
         try Task.checkCancellation()
         return journal
@@ -114,9 +116,11 @@ public enum AgentIncrementalJournal {
     }
 
     public static func create(at directory: URL, operationDomain: String,
-                              policy: JournalMaintenancePolicy = .default) throws -> AgentJournal {
+                              policy: JournalMaintenancePolicy = .default,
+                              supportsAdmissionRejections: Bool = false) throws -> AgentJournal {
         do {
-            return AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy))
+            return AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
+                policy: policy, supportsAdmissionRejections: supportsAdmissionRejections))
         } catch { throw normalized(error) }
     }
 
@@ -128,9 +132,12 @@ public enum AgentIncrementalJournal {
 
     package static func createForTesting(at directory: URL, operationDomain: String,
                                          policy: JournalMaintenancePolicy = .default,
+                                         supportsAdmissionRejections: Bool = false,
                                          fault: @escaping @Sendable (JournalFileFaultStage) throws -> Void) throws -> AgentJournal {
         AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
-                                                              policy: policy, fault: fault))
+                                                              policy: policy,
+                                                              supportsAdmissionRejections: supportsAdmissionRejections,
+                                                              fault: fault))
     }
 }
 
@@ -251,7 +258,8 @@ private struct Current: Codable, Equatable {
 }
 
 // Format schema 3 keeps the bounded BatchV2 payload and adds index witnesses
-// plus stable position commit IDs. Old schema-2 readers reject format.json.
+// plus stable position commit IDs. Schema 4 reserves the optional rejection
+// payload and operation-pending index; RC4 readers reject format.json.
 private struct BatchV2: Codable {
     let schema: Int
     let commitID: UUID
@@ -261,10 +269,29 @@ private struct BatchV2: Codable {
     let messageStart: UInt64
     let messages: [DiskMessageV1]
     let mutation: DiskMutationV1?
+    let admissionRejection: DiskAdmissionRejectionV1?
     let queueHead: DiskFollowUpHeadV2?
     let queueChanges: [DiskFollowUpV2]
     let queueLinks: [DiskFollowUpLinkV2]
     let recordCount: UInt32
+}
+
+private struct DiskAdmissionRejectionV1: Codable {
+    let runID: UUID
+    let callID: String
+    let toolName: String
+
+    init(_ value: JournalAdmissionRejection) {
+        runID = value.runID
+        callID = value.callID.rawValue
+        toolName = value.toolName
+    }
+
+    func value(sessionID: UUID) throws -> JournalAdmissionRejection {
+        guard !callID.isEmpty, !toolName.isEmpty else { throw AgentJournalError.invalidRecord }
+        return .init(sessionID: sessionID, runID: runID,
+                     callID: .init(rawValue: callID), toolName: toolName)
+    }
 }
 
 private struct Frame: Codable {
@@ -309,6 +336,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     let directoryURL: URL
     let storeID: UUID
     let operationDomain: String
+    let supportsAdmissionRejections: Bool
     private let policy: JournalMaintenancePolicy
     private let lock = NSLock()
     private var descriptor: Int32
@@ -334,6 +362,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         self.directoryURL = directoryURL
         storeID = format.storeID
         operationDomain = format.domain
+        supportsAdmissionRejections = format.schema == 4
         expectedFormatDigest = formatDigest
         self.descriptor = descriptor
         self.policy = policy
@@ -343,6 +372,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     deinit { if descriptor >= 0 { _ = flock(descriptor, LOCK_UN); _ = DarwinOrGlibcClose(descriptor) } }
 
     static func create(at url: URL, domain: String, policy: JournalMaintenancePolicy,
+                       supportsAdmissionRejections: Bool = false,
                        fault: (@Sendable (JournalFileFaultStage) throws -> Void)? = nil) throws -> SegmentedJournalStore {
         guard !domain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentJournalError.invalidRecord
@@ -352,11 +382,11 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             throw AgentJournalError.persistenceUnavailable("create requires a new directory")
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for name in Self.managedDirectories {
+        for name in Self.managedDirectories + (supportsAdmissionRejections ? ["rejections", "pending-operations"] : []) {
             try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
         }
         let descriptor = try lockStore(directory)
-        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: 3,
+        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsAdmissionRejections ? 4 : 3,
                             storeID: UUID(), domain: domain)
         let formatBytes = try JSONEncoder().encode(format)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -422,7 +452,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard format.magic == "SWIFTAGENT-SEGMENTED-JOURNAL", !format.domain.isEmpty else {
             throw AgentJournalError.invalidHeader
         }
-        guard format.schema == 3 else { throw AgentJournalError.unsupportedFormat }
+        guard format.schema == 3 || format.schema == 4 else { throw AgentJournalError.unsupportedFormat }
         let descriptor = try lockStore(directory)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
                                           descriptor: descriptor, formatDigest: Self.digest(formatBytes),
@@ -568,7 +598,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     ]
 
     private func validateManagedDirectories() throws {
-        for name in Self.managedDirectories {
+        for name in Self.managedDirectories + (supportsAdmissionRejections ? ["rejections", "pending-operations"] : []) {
             try validateManagedDirectory(directoryURL.appendingPathComponent(name))
         }
     }
@@ -609,7 +639,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private static let witnessedIndexes: Set<String> = [
-        "sessions", "queue-heads", "queue-ids", "operations",
+        "sessions", "queue-heads", "queue-ids", "operations", "rejections", "pending-operations",
     ]
 
     private func witnessURL(_ kind: String, _ key: String) -> URL {
@@ -671,6 +701,32 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     private static func followUpKey(_ sessionID: UUID, _ inputID: String) -> String {
         "\(sessionID.uuidString)/\(Data(inputID.utf8).base64EncodedString())"
+    }
+
+    /// Stable operation identity is the key prefix before the exact tool name
+    /// and canonical JSON arguments, so '/' inside an operation ID is legal.
+    private static func operationID(_ intent: PendingMutationIntent) -> String? {
+        guard let arguments = try? JSONValue.decodeToolArguments(intent.call.argumentsJSON) else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(arguments) else { return nil }
+        let suffix = "/\(intent.call.name)/\(String(decoding: data, as: UTF8.self))"
+        guard intent.idempotencyKey.hasSuffix(suffix) else { return nil }
+        let prefix = intent.idempotencyKey.dropLast(suffix.count)
+        return prefix.isEmpty ? nil : String(prefix)
+    }
+
+    private static func pendingOperationKey(_ operationID: String) -> String {
+        "operation/\(Data(operationID.utf8).base64EncodedString())"
+    }
+
+    private static let untypedPendingKey = "untyped"
+
+    private static func pendingOperationKey(_ intent: PendingMutationIntent, runID: UUID) -> String? {
+        // The Run/call fallback is known not to represent a logical operation.
+        // A malformed or otherwise unrecognized key is unknown and blocks safely.
+        if intent.idempotencyKey == "\(runID.uuidString)/\(intent.call.id.rawValue)" { return nil }
+        return operationID(intent).map(pendingOperationKey) ?? untypedPendingKey
     }
 
     private static func followUpOrdinalKey(_ sessionID: UUID, _ ordinal: UInt64) -> String {
@@ -947,6 +1003,17 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             let key = "\(mutation.sessionID.uuidString)/\(mutation.runID.uuidString)/\(mutation.intent.call.id)"
             callHead = try pointer("calls", key: key, root: root)
         } else { callHead = nil }
+        if let rejection = batch.admissionRejection {
+            let key = "\(batch.sessionID.uuidString)/\(rejection.runID.uuidString)/\(rejection.callID)"
+            let rejectionHead: UInt64? = try pointer("rejections", key: key, root: root)
+            if rejectionHead == batch.sequence { return true }
+        }
+        if let mutation = batch.mutation, supportsAdmissionRejections {
+            if let key = Self.pendingOperationKey(try mutation.intent.value(), runID: mutation.runID) {
+                let head: UInt64? = try pointer("pending-operations", key: key, root: root)
+                if head == batch.sequence { return true }
+            }
+        }
         if batch.queueHead != nil {
             let head: UInt64? = try pointer("queue-heads", key: batch.sessionID.uuidString, root: root)
             if head == batch.sequence { return true }
@@ -1487,6 +1554,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let shard = String(format: "%02x", garbageIndexShard)
         let kinds = ["sessions", "operations", "calls", "messages", "positions", "blob-index",
                      "queue-heads", "queue-ids", "queue-order", "queue-links"]
+            + (supportsAdmissionRejections ? ["rejections", "pending-operations"] : [])
         for kind in kinds {
             if finishedIndexKinds.contains(kind) { continue }
             let directory = directoryURL.appendingPathComponent("\(kind)/\(shard)")
@@ -1580,6 +1648,20 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             try indexedMutation("calls", key: Self.callKey(sessionID, runID, callID))
         }
 
+        func admissionRejection(sessionID: UUID, runID: UUID,
+                                callID: ToolCallID) throws -> JournalAdmissionRejection? {
+            guard store.supportsAdmissionRejections else { return nil }
+            let key = Self.callKey(sessionID, runID, callID)
+            guard let sequence: UInt64 = try store.pointer("rejections", key: key, root: root) else { return nil }
+            let found = try batch(sequence)
+            guard found.sessionID == sessionID,
+                  let value = try found.admissionRejection?.value(sessionID: sessionID),
+                  value.runID == runID, value.callID == callID else {
+                throw AgentJournalError.invalidRecord
+            }
+            return value
+        }
+
         private static func callKey(_ sessionID: UUID, _ runID: UUID, _ callID: ToolCallID) -> String {
             "\(sessionID.uuidString)/\(runID.uuidString)/\(callID.rawValue)"
         }
@@ -1619,6 +1701,29 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 }
             }
             return result.sorted { $0.sequence < $1.sequence }
+        }
+
+        func hasPending(operationID: String) throws -> Bool {
+            guard store.supportsAdmissionRejections else { throw AgentJournalError.unsupportedFormat }
+            for key in [SegmentedJournalStore.pendingOperationKey(operationID),
+                        SegmentedJournalStore.untypedPendingKey] {
+                guard let sessions: [UUID] = try store.pointer("pending-operations", key: key, root: root) else {
+                    continue
+                }
+                for sessionID in sessions {
+                    guard let pendingIdentity = try header(sessionID)?.pendingIdentity,
+                          let mutation = try identity(pendingIdentity),
+                          mutation.sessionID == sessionID,
+                          mutation.state == .intent || mutation.state == .needsReconciliation else {
+                        throw AgentJournalError.invalidRecord
+                    }
+                    let actual = SegmentedJournalStore.pendingOperationKey(mutation.intent,
+                                                                          runID: mutation.runID)
+                    guard actual == key else { throw AgentJournalError.invalidRecord }
+                    return true
+                }
+            }
+            return false
         }
 
         func nextRecordSequence() throws -> UInt64 { root.nextRecordSequence }
@@ -1731,6 +1836,32 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             }
             let hasCheckpoint = change.records.contains { if case .checkpoint = $0.event { return true }; return false }
             guard hasCheckpoint || change.messages.isEmpty else { throw AgentJournalError.invalidRecord }
+            let rejections = change.records.compactMap { record -> JournalAdmissionRejection? in
+                guard case .toolAdmissionRejected(let callID, let name) = record.event,
+                      let runID = record.runID else { return nil }
+                return .init(sessionID: record.sessionID, runID: runID,
+                             callID: callID, toolName: name)
+            }
+            guard rejections.count <= 1,
+                  rejections.isEmpty || store.supportsAdmissionRejections else {
+                throw AgentJournalError.unsupportedFormat
+            }
+            if let rejection = rejections.first {
+                guard !rejection.callID.rawValue.isEmpty, !rejection.toolName.isEmpty,
+                      hasCheckpoint,
+                      change.messages.contains(where: { message in
+                          if case .assistant(_, let calls) = message.value {
+                              return calls.contains { $0.id == rejection.callID && $0.name == rejection.toolName }
+                          }
+                          return false
+                      }),
+                      change.messages.contains(where: { message in
+                          if case .tool(let result) = message.value {
+                              return result.callID == rejection.callID && result.isError
+                          }
+                          return false
+                      }) else { throw AgentJournalError.invalidRecord }
+            }
             let next = root.sequence + 1
             let oldHistoryHead = try header(change.sessionID)?.historyHead
             var finalHeader = change.header
@@ -1778,6 +1909,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                 messageStart: change.messageStart,
                                 messages: change.messages.map(DiskMessageV1.init),
                                 mutation: try change.mutation.map(DiskMutationV1.init),
+                                admissionRejection: rejections.first.map(DiskAdmissionRejectionV1.init),
                                 queueHead: queueHead.map(DiskFollowUpHeadV2.init),
                                 queueChanges: queueChanges.map(DiskFollowUpV2.init),
                                 queueLinks: queueLinks.map(DiskFollowUpLinkV2.init),
@@ -1804,7 +1936,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             }
             let batch = BatchV2(schema: 2, commitID: UUID(), sequence: root.sequence + 1,
                                 sessionID: change.sessionID, header: nil, messageStart: 0,
-                                messages: [], mutation: nil,
+                                messages: [], mutation: nil, admissionRejection: nil,
                                 queueHead: DiskFollowUpHeadV2(change.head),
                                 queueChanges: change.records.map(DiskFollowUpV2.init),
                                 queueLinks: change.links.map(DiskFollowUpLinkV2.init), recordCount: 0)
@@ -1841,6 +1973,28 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 try store.updateIndex("calls", key: Self.callKey(mutation.sessionID, mutation.runID,
                     .init(rawValue: mutation.intent.call.id)),
                                       value: next, version: next, root: root)
+            }
+            if let rejection = batch.admissionRejection {
+                try store.updateIndex("rejections",
+                    key: Self.callKey(batch.sessionID, rejection.runID,
+                                      .init(rawValue: rejection.callID)),
+                    value: next, version: next, root: root, commitID: batch.commitID)
+            }
+            if let mutation = batch.mutation, store.supportsAdmissionRejections {
+                if let key = SegmentedJournalStore.pendingOperationKey(try mutation.intent.value(),
+                                                                       runID: mutation.runID) {
+                    let existing: [UUID] = try store.pointer("pending-operations", key: key, root: root) ?? []
+                    var sessions = Set(existing)
+                    if mutation.state == AgentMutationState.intent.rawValue ||
+                       mutation.state == AgentMutationState.needsReconciliation.rawValue {
+                        sessions.insert(mutation.sessionID)
+                    } else {
+                        sessions.remove(mutation.sessionID)
+                    }
+                    try store.updateIndex("pending-operations", key: key,
+                        value: sessions.sorted { $0.uuidString < $1.uuidString },
+                        version: next, root: root, commitID: batch.commitID)
+                }
             }
             if batch.queueHead != nil {
                 try store.updateIndex("queue-heads", key: batch.sessionID.uuidString,

@@ -37,6 +37,12 @@ package struct ToolRegistry: Sendable {
         tools.values.contains { $0.tool.policy.effect == .mutation }
     }
 
+    package func hasMutation(named names: Set<String>) -> Bool {
+        tools.contains { name, registration in
+            names.contains(name) && registration.tool.policy.effect == .mutation
+        }
+    }
+
     package func prepare(_ call: ToolCall, context: ToolContext) throws -> PreparedToolCall {
         try context.checkActive()
         guard call.completeness == .complete else { throw ToolRegistryError.truncatedCall }

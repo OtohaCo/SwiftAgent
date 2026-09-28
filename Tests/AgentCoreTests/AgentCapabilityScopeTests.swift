@@ -235,7 +235,8 @@ struct AgentCapabilityScopeTests {
         try Data().write(to: effect)
         let gate = ScopeIntentCommitGate()
         let journal = try AgentIncrementalJournal.createForTesting(at: directory.appendingPathComponent("journal"),
-            operationDomain: "intent-race", fault: { gate.check($0) })
+            operationDomain: "intent-race", supportsAdmissionRejections: true,
+            fault: { gate.check($0) })
         let counts = ScopeCounts()
         let call = ToolCall(id: .init(rawValue: "intent-race"), name: ScopeFileMutationTool.name,
                             argumentsJSON: #"{"id":"B"}"#, completeness: .complete)
@@ -521,7 +522,8 @@ struct AgentCapabilityScopeTests {
         let effect = directory.appendingPathComponent("effect.txt")
         try Data().write(to: effect)
         let journal = try AgentIncrementalJournal.create(at: directory.appendingPathComponent("journal"),
-                                                          operationDomain: "shared-scope-ledger")
+                                                          operationDomain: "shared-scope-ledger",
+                                                          supportsAdmissionRejections: true)
         let gate = ScopeGate()
         let counts = ScopeCounts()
         let call = ToolCall(id: .init(rawValue: "file-write"), name: ScopeFileMutationTool.name,

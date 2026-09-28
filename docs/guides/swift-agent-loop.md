@@ -9,6 +9,7 @@ registry. Neither owns another agent loop.
 
 ```swift
 import AgentCore
+import AgentJournalFileStore
 import AgentModels
 import AgentTools
 
@@ -56,6 +57,11 @@ let config = AgentConfiguration(
     preAdmissionReplanning: .evidenceRejection(toolNames: ["commit_resource"])
 )
 let agent = try Agent(model: model, provider: provider, tools: tools, configuration: config)
+let durableJournal = try AgentIncrementalJournal.create(
+    at: newStoreURL,
+    operationDomain: "example-domain",
+    supportsAdmissionRejections: true
+)
 let session = try agent.makeSession(journal: durableJournal)
 let result = try await session.run("Commit a discovered resource", operationID: "operation-1").wait()
 ```
@@ -71,6 +77,10 @@ trusted replays and unresolved mutation state close the route. A later valid
 mutation still passes authorization, durable intent, final admission, Receipt
 validation and atomic settlement. See [ADR 0008](../adr/0008-bounded-pre-admission-replanning.md)
 for the exact boundary.
+
+The capable store must be created explicitly; configuring an opt-in tool on an
+existing schema-3 Journal fails the Run before provider contact. Ordinary
+stores remain schema 3 by default. There is no in-place format migration.
 
 `AgentLoopResult.outcome` distinguishes normal completion, refusal and incomplete
 responses. Model cancellation throws CancellationError. Inspect the outcome rather

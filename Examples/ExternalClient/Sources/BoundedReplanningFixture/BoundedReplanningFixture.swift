@@ -98,13 +98,15 @@ public enum BoundedFixture {
         let effectFile = directory.appendingPathComponent("effects.txt")
         try Data().write(to: effectFile)
         let operationID = "bounded-operation"
+        let optIn = ![BoundedScenario.valid, .rejected, .spoofedApproval,
+                       .modelFailureAfterSettlement].contains(scenario)
         let journal = try AgentIncrementalJournal.create(at: directory.appendingPathComponent("journal"),
-                                                          operationDomain: "bounded-fixture")
+                                                          operationDomain: "bounded-fixture",
+                                                          supportsAdmissionRejections: optIn)
         let counters = FixtureCounters()
         let provider = BoundedProvider(scenario: scenario)
-        let replanning: AgentPreAdmissionReplanning =
-            [.valid, .rejected, .spoofedApproval, .modelFailureAfterSettlement].contains(scenario)
-                ? .disabled : .evidenceRejection(toolNames: [CommitResource.name])
+        let replanning: AgentPreAdmissionReplanning = optIn
+            ? .evidenceRejection(toolNames: [CommitResource.name]) : .disabled
         let agent = try Agent(model: .init(provider: "bounded-fixture", name: "script"), provider: provider,
                               tools: [try CandidateSearch(counters: counters),
                                       try CommitResource(counters: counters, file: effectFile, journal: journal,

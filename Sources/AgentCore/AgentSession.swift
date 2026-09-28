@@ -464,6 +464,11 @@ public actor AgentSession {
         if selectedTools.hasMutation, journal?.storage != .durable {
             throw AgentSessionError.durableJournalRequired
         }
+        if case .evidenceRejection(let names) = preAdmissionReplanning,
+           selectedTools.hasMutation(named: names),
+           journal?.supportsAdmissionRejections != true {
+            throw AgentSessionError.admissionRejectionJournalRequired
+        }
         if let capabilities {
             try await capabilities.scope.register(runID: runID, sessionID: id,
                                                    sessionInstanceID: instanceID,
@@ -600,10 +605,7 @@ public actor AgentSession {
             checkpoint: { messages, steering in try await self.record(messages, steering: steering, runID: runID, budget: budget) },
             checkReplanningSafety: { operationID in
                 guard let journal, journal.storage == .durable else { return false }
-                let operation = operationID?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return try await !journal.pendingMutations().contains { pending in
-                    pending.sessionID == self.id || (operation.map { !$0.isEmpty && pending.intent.idempotencyKey.hasPrefix($0 + "/") } ?? false)
-                }
+                return try await !journal.hasRelatedPendingMutation(sessionID: self.id, operationID: operationID)
             },
             recordAdmissionRejection: { rejection, messages in
                 try await self.record(messages, steering: [], runID: runID, budget: budget,
@@ -838,4 +840,5 @@ public enum AgentSessionError: Error, Equatable, Sendable {
     case emptyInput
     case runInProgress
     case durableJournalRequired
+    case admissionRejectionJournalRequired
 }

@@ -15,6 +15,26 @@ import Foundation
             case "probe":
                 try await journal.close()
                 exit(0)
+            case "read-admission-rejection":
+                guard CommandLine.arguments.count == 6,
+                      let sessionID = UUID(uuidString: CommandLine.arguments[3]),
+                      let runID = UUID(uuidString: CommandLine.arguments[4]) else { exit(64) }
+                let callID = ToolCallID(rawValue: CommandLine.arguments[5])
+                let marker = try await journal.admissionRejection(
+                    sessionID: sessionID, runID: runID, callID: callID)
+                let messages = try await journal.readMessages(sessionID: sessionID)
+                let pairs = messages.contains {
+                    if case .assistant(_, let calls) = $0.message { return calls.contains { $0.id == callID } }
+                    return false
+                } && messages.contains {
+                    if case .tool(let result) = $0.message { return result.callID == callID && result.isError }
+                    return false
+                }
+                let line = "marker=\(marker?.toolName ?? "none") paired=\(pairs) messages=\(messages.count) "
+                    + "pending=\(try await journal.pendingMutations(sessionID: sessionID).count)\n"
+                FileHandle.standardOutput.write(Data(line.utf8))
+                try await journal.close()
+                exit(0)
             case "hold":
                 FileHandle.standardOutput.write(Data("READY\n".utf8))
                 while true { try await Task.sleep(for: .seconds(1)) }

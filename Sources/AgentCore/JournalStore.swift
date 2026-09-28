@@ -31,6 +31,7 @@ package protocol JournalStore: Sendable {
     var directoryURL: URL { get }
     var storeID: UUID { get }
     var operationDomain: String { get }
+    var supportsAdmissionRejections: Bool { get }
     func read<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
     func write<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
     func close() throws
@@ -97,6 +98,8 @@ package protocol JournalStoreView: AnyObject {
     func identity(_ key: String) throws -> JournalStoredMutation?
     func mutation(sessionID: UUID, runID: UUID, callID: ToolCallID) throws -> JournalStoredMutation?
     func pending(sessionID: UUID?) throws -> [JournalStoredMutation]
+    func hasPending(operationID: String) throws -> Bool
+    func admissionRejection(sessionID: UUID, runID: UUID, callID: ToolCallID) throws -> JournalAdmissionRejection?
     func nextRecordSequence() throws -> UInt64
     func publish(_ change: JournalStoreChange) throws
     func messages(sessionID: UUID, after ordinal: UInt64, limit: Int) throws -> [JournalMessage]
@@ -104,6 +107,17 @@ package protocol JournalStoreView: AnyObject {
     func followUp(sessionID: UUID, inputID: String) throws -> JournalStoredFollowUp?
     func followUps(sessionID: UUID, after ordinal: UInt64, limit: Int) throws -> [JournalStoredFollowUp]
     func publishFollowUp(_ change: JournalFollowUpChange) throws
+}
+
+package struct JournalAdmissionRejection: Equatable, Sendable {
+    package let sessionID: UUID
+    package let runID: UUID
+    package let callID: ToolCallID
+    package let toolName: String
+    package init(sessionID: UUID, runID: UUID, callID: ToolCallID, toolName: String) {
+        self.sessionID = sessionID; self.runID = runID
+        self.callID = callID; self.toolName = toolName
+    }
 }
 
 package struct JournalSessionHeader: Codable, Equatable, Sendable {

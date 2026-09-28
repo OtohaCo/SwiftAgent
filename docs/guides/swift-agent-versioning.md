@@ -25,13 +25,17 @@ Adding `AgentFailure.session` is breaking for exhaustive switches even though it
 is a new classified case.
 
 The unreleased bounded pre-admission replanning candidate adds
-`AgentEvent.toolAdmissionRejected` and a new `AgentJournalEvent` variant.
-Exhaustive event switches must be updated. An older RC4 reader does not
-understand Journal records containing the new rejection variant; rolling back
-to an older binary after the first opted-in rejection requires an explicit
-store compatibility decision. The opt-in does not change the stable mutation
-operation identity, Evidence authority or Receipt settlement. Existing
-`AgentConfiguration` construction defaults to `.disabled`.
+`AgentEvent.toolAdmissionRejected`, `AgentJournalEvent.toolAdmissionRejected`
+and `AgentSessionError.admissionRejectionJournalRequired`. Exhaustive public
+enum switches must be updated even when the policy remains disabled. A new
+rejection-capable store opts in at creation and uses format schema 4; the
+unmodified RC4 reader rejects its `format.json` at open, even if no rejection
+has occurred. The default new store remains schema 3 and the old reader can
+open, append and maintain it. The new reader opens ordinary RC4 schema-3
+stores, but rejects an opt-in Run there before contacting the provider.
+Neither direction automatically migrates or downgrades the store. The opt-in
+does not change stable mutation identities, Evidence authority or Receipt
+settlement. Existing `AgentConfiguration` construction defaults to `.disabled`.
 
 ## 1.0 freeze decisions (SAI-026B)
 

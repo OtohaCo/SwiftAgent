@@ -8,11 +8,28 @@ import Testing
 struct AgentPreAdmissionReplanningTests {
     private let policy = AgentPreAdmissionReplanning.evidenceRejection(toolNames: [BoundedTestMutation.name])
 
+    @Test func optInRequiresARejectionCapableStoreBeforeProviderOrInputCommit() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-legacy-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "replan-legacy")
+        let provider = rejectionProvider()
+        let session = try Agent(model: fixtureModel, provider: provider,
+            tools: [try ResourceDiscovery(), try BoundedTestMutation()],
+            configuration: .init(preAdmissionReplanning: policy)).makeSession(journal: journal)
+        await #expect(throws: AgentSessionError.admissionRejectionJournalRequired) {
+            try await session.run("start")
+        }
+        #expect(await provider.log.requests.isEmpty)
+        #expect(try await journal.readMessages(sessionID: session.id).isEmpty)
+        try await journal.close()
+    }
+
     @Test func unrelatedPendingDoesNotBlockButSameOperationPendingClosesFeedback() async throws {
         for (related, reconciled) in [(false, false), (true, false), (true, true)] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-pending-\(UUID())")
             defer { try? FileManager.default.removeItem(at: directory) }
-            let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "replan-pending")
+            let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "replan-pending",
+                supportsAdmissionRejections: true)
             let prior = try ToolMutationAdmissionRequest(sessionID: UUID(), runID: UUID(),
                 callID: .init(rawValue: "prior"), name: "other_mutation", argumentsJSON: "{}",
                 resources: [.global], idempotencyKey: related ? "same-operation/other_mutation/{}" : "unrelated/other_mutation/{}",
@@ -45,10 +62,194 @@ struct AgentPreAdmissionReplanningTests {
         }
     }
 
+    @Test func operationIdentityDoesNotConfuseNestedOrOverlappingIDs() async throws {
+        let cases: [(operation: String?, priorIdentity: String, shouldContinue: Bool)] = [
+            ("team/a", "team/a/other_mutation/{}", false),
+            ("team/a", "team/a-long/other_mutation/{}", true),
+            ("team/a", "team/a/child/other_mutation/{}", true),
+            ("team/a/child", "team/a/child/other_mutation/{}", false),
+            (nil, "team/a/other_mutation/{}", true),
+            ("", "team/a/other_mutation/{}", true),
+        ]
+        for (operation, identity, shouldContinue) in cases {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-identity-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let journal = try AgentIncrementalJournal.create(at: directory,
+                operationDomain: "replan-identity", supportsAdmissionRejections: true)
+            let prior = try ToolMutationAdmissionRequest(sessionID: UUID(), runID: UUID(),
+                callID: .init(rawValue: "prior"), name: "other_mutation", argumentsJSON: "{}",
+                resources: [.global], idempotencyKey: identity,
+                receiptExpectation: .init(targets: [.init(namespace: "resource", id: "prior")]))
+            guard case .admitted = try await journal.admit(prior) else { Issue.record("Fixture intent missing"); return }
+            let provider = rejectionProvider()
+            let session = try Agent(model: fixtureModel, provider: provider,
+                tools: [try ResourceDiscovery(), try BoundedTestMutation()],
+                configuration: .init(preAdmissionReplanning: policy)).makeSession(journal: journal)
+            let run = try await session.run("start", operationID: operation)
+            if shouldContinue {
+                #expect(try await run.wait().outcome == .completed, "\(identity)")
+                #expect(await provider.log.requests.count == 3, "\(identity)")
+            } else {
+                await #expect(throws: EvidenceError.self) { try await run.wait() }
+                #expect(await provider.log.requests.count == 2, "\(identity)")
+            }
+            try await run.waitForDrain()
+            try await journal.close()
+        }
+    }
+
+    @Test func measurePendingLookupAcrossUnrelatedSessions() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-query-cost-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory,
+            operationDomain: "replan-query-cost", supportsAdmissionRejections: true)
+        for sessionCount in [0, 120] {
+            if sessionCount > 0 {
+                for index in 0..<sessionCount {
+                    let request = try ToolMutationAdmissionRequest(sessionID: UUID(), runID: UUID(),
+                        callID: .init(rawValue: "pending-\(index)"), name: "fixture_mutation",
+                        argumentsJSON: "{}", resources: [.global],
+                        idempotencyKey: "unrelated-\(index)/fixture_mutation/{}",
+                        receiptExpectation: .init(targets: [.init(namespace: "fixture", id: "\(index)")]))
+                    guard case .admitted = try await journal.admit(request) else {
+                        Issue.record("Failed to seed unrelated pending"); return
+                    }
+                }
+            }
+            let prior = try #require(await journal.storageMetrics())
+            let priorStart = DispatchTime.now().uptimeNanoseconds
+            for _ in 0..<3 { #expect(try await journal.pendingMutations().count == sessionCount) }
+            let priorElapsed = DispatchTime.now().uptimeNanoseconds - priorStart
+            let priorAfter = try #require(await journal.storageMetrics())
+            print("replan-query-cost-original sessions=\(sessionCount) queries=3 bytesRead=\(priorAfter.bytesRead - prior.bytesRead) decodedBatches=\(priorAfter.decodedBatches - prior.decodedBatches) elapsedNs=\(priorElapsed)")
+            let before = try #require(await journal.storageMetrics())
+            let start = DispatchTime.now().uptimeNanoseconds
+            for _ in 0..<3 {
+                #expect(try await !journal.hasRelatedPendingMutation(sessionID: UUID(),
+                    operationID: "target/with-slash"))
+            }
+            let elapsed = DispatchTime.now().uptimeNanoseconds - start
+            let after = try #require(await journal.storageMetrics())
+            print("replan-query-cost-indexed sessions=\(sessionCount) queries=3 bytesRead=\(after.bytesRead - before.bytesRead) decodedBatches=\(after.decodedBatches - before.decodedBatches) elapsedNs=\(elapsed)")
+        }
+        try await journal.close()
+    }
+
+    @Test func indexedOperationTracksMultipleSessionsUntilEachIntentSettles() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-multi-operation-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var journal = try AgentIncrementalJournal.create(at: directory,
+            operationDomain: "replan-multi-operation", supportsAdmissionRejections: true)
+        var requests: [ToolMutationAdmissionRequest] = []
+        for id in ["A", "B"] {
+            let request = try ToolMutationAdmissionRequest(sessionID: UUID(), runID: UUID(),
+                callID: .init(rawValue: "call-\(id)"), name: "fixture_mutation",
+                argumentsJSON: #"{"id":"\#(id)"}"#, resources: [.global],
+                idempotencyKey: #"shared/fixture_mutation/{"id":"\#(id)"}"#,
+                receiptExpectation: .init(targets: [.init(namespace: "fixture", id: id)], revision: .present))
+            guard case .admitted = try await journal.admit(request) else {
+                Issue.record("Expected two independent durable intents"); return
+            }
+            requests.append(request)
+        }
+        let observer = UUID()
+        #expect(try await journal.hasRelatedPendingMutation(sessionID: observer, operationID: "shared"))
+        try await journal.close()
+        journal = try AgentIncrementalJournal.open(at: directory)
+        #expect(try await journal.hasRelatedPendingMutation(sessionID: observer, operationID: "shared"))
+        for (index, request) in requests.enumerated() {
+            let id = index == 0 ? "A" : "B"
+            try await journal.commitMutation(sessionID: request.sessionID, runID: request.runID,
+                callID: request.callID,
+                receipt: .init(operationID: request.idempotencyKey, status: .succeeded,
+                               confirmedTargets: [.init(namespace: "fixture", id: id)], revision: "1"),
+                output: .object(["id": .string(id)]), history: [], steeringIDs: [])
+            #expect(try await journal.hasRelatedPendingMutation(sessionID: observer,
+                operationID: "shared") == (index == 0))
+        }
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        #expect(try await !reopened.hasRelatedPendingMutation(sessionID: observer, operationID: "shared"))
+        try await reopened.close()
+    }
+
+    @Test func unparseableCrossSessionPendingIdentityFailsClosed() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-unknown-key-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory,
+            operationDomain: "replan-unknown-key", supportsAdmissionRejections: true)
+        let request = try ToolMutationAdmissionRequest(sessionID: UUID(), runID: UUID(),
+            callID: .init(rawValue: "unknown"), name: "fixture_mutation", argumentsJSON: "{}",
+            resources: [.global], idempotencyKey: "unparseable",
+            receiptExpectation: .init(targets: [.init(namespace: "fixture", id: "unknown")]))
+        guard case .admitted = try await journal.admit(request) else { Issue.record("Missing intent"); return }
+        let provider = rejectionProvider()
+        let session = try Agent(model: fixtureModel, provider: provider,
+            tools: [try ResourceDiscovery(), try BoundedTestMutation()],
+            configuration: .init(preAdmissionReplanning: policy)).makeSession(journal: journal)
+        let run = try await session.run("start", operationID: "different-operation")
+        await #expect(throws: EvidenceError.self) { try await run.wait() }
+        try await run.waitForDrain()
+        #expect(await provider.log.requests.count == 2)
+        try await journal.close()
+    }
+
+    @Test func pendingWithoutLogicalOperationDoesNotBlockUnrelatedExplicitOperation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-no-op-id-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory,
+            operationDomain: "replan-no-op-id", supportsAdmissionRejections: true)
+        let priorRun = UUID(), priorCall = ToolCallID(rawValue: "prior")
+        let request = try ToolMutationAdmissionRequest(sessionID: UUID(), runID: priorRun,
+            callID: priorCall, name: "fixture_mutation", argumentsJSON: "{}",
+            resources: [.global], idempotencyKey: "\(priorRun.uuidString)/\(priorCall.rawValue)",
+            receiptExpectation: .init(targets: [.init(namespace: "fixture", id: "prior")]))
+        guard case .admitted = try await journal.admit(request) else { Issue.record("Missing intent"); return }
+        let provider = rejectionProvider()
+        let session = try Agent(model: fixtureModel, provider: provider,
+            tools: [try ResourceDiscovery(), try BoundedTestMutation()],
+            configuration: .init(preAdmissionReplanning: policy)).makeSession(journal: journal)
+        let run = try await session.run("start", operationID: "unrelated")
+        #expect(try await run.wait().outcome == .completed)
+        try await run.waitForDrain()
+        #expect(await provider.log.requests.count == 3)
+        try await journal.close()
+    }
+
+    @Test func operationIndexFollowsTheRootAfterFailedOrUnknownIntentPublication() async throws {
+        for afterPublication in [false, true] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-operation-fault-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let fault = ReplanningJournalFault(afterPublication: afterPublication)
+            let journal = try AgentIncrementalJournal.createForTesting(at: directory,
+                operationDomain: "replan-operation-fault", supportsAdmissionRejections: true,
+                fault: { try fault.check($0) })
+            let request = try ToolMutationAdmissionRequest(sessionID: UUID(), runID: UUID(),
+                callID: .init(rawValue: "prior"), name: "fixture_mutation", argumentsJSON: "{}",
+                resources: [.global], idempotencyKey: "logical/fixture_mutation/{}",
+                receiptExpectation: .init(targets: [.init(namespace: "fixture", id: "prior")]))
+            fault.arm()
+            if afterPublication {
+                await #expect(throws: AgentJournalError.commitUnknown) { try await journal.admit(request) }
+            } else {
+                await #expect(throws: AgentJournalError.persistenceUnavailable("rejection fixture fault")) {
+                    try await journal.admit(request)
+                }
+            }
+            try await journal.close()
+            let reopened = try AgentIncrementalJournal.open(at: directory)
+            #expect(try await reopened.hasRelatedPendingMutation(sessionID: UUID(),
+                operationID: "logical") == afterPublication)
+            #expect(try await reopened.pendingMutations().count == (afterPublication ? 1 : 0))
+            try await reopened.close()
+        }
+    }
+
     @Test func resourceOutsideScopeStillFailsBeforeReplanning() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-scope-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "replan-scope")
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "replan-scope",
+            supportsAdmissionRejections: true)
         let provider = rejectionProvider()
         let session = try Agent(model: fixtureModel, provider: provider,
             configuration: .init(preAdmissionReplanning: policy)).makeSession(journal: journal)
@@ -68,7 +269,8 @@ struct AgentPreAdmissionReplanningTests {
     @Test func rejectedMutationInMultiCallBatchDoesNotDiscardCompletedSibling() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-batch-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "replan-batch")
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "replan-batch",
+            supportsAdmissionRejections: true)
         let provider = rejectionProvider(multiCall: true)
         let session = try Agent(model: fixtureModel, provider: provider,
             tools: [try ResourceDiscovery(), try BoundedTestMutation()],
@@ -117,7 +319,8 @@ struct AgentPreAdmissionReplanningTests {
             defer { try? FileManager.default.removeItem(at: directory) }
             let fault = ReplanningJournalFault(afterPublication: afterPublication)
             let journal = try AgentIncrementalJournal.createForTesting(at: directory,
-                operationDomain: "replan-commit-fault", fault: { try fault.check($0) })
+                operationDomain: "replan-commit-fault", supportsAdmissionRejections: true,
+                fault: { try fault.check($0) })
             let provider = rejectionProvider(beforeInvalid: { fault.arm() })
             let session = try Agent(model: fixtureModel, provider: provider,
                 tools: [try ResourceDiscovery(), try BoundedTestMutation()],
