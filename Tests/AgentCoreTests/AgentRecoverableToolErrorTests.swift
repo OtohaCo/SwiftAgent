@@ -6,6 +6,49 @@ import Testing
 import XCTest
 
 struct AgentRecoverableToolErrorTests {
+    @Test func visibleReadOnlyFailureLetsModelCorrectTheQueryInTheSameRun() async throws {
+        let failed = recoverableCall(id: "missing-call", query: "missing")
+        let corrected = recoverableCall(id: "corrected-call", query: "available")
+        let provider = ScriptedProvider { request, _ in
+            switch request.messages.last {
+            case .user:
+                return toolResponse(request, [failed])
+            case .tool(let error) where error.callID == failed.id:
+                guard error.isError,
+                      request.messages.contains(where: {
+                          if case .assistant(_, let calls) = $0 { return calls.contains(failed) }
+                          return false
+                      }),
+                      error.content == [.json(.object([
+                          "code": .string("not_found"),
+                          "message": .string("No matching resource was found."),
+                          "details": .object(["query": .string("missing")]),
+                      ]))] else { throw ModelProviderError(kind: .invalidRequest, message: "missing linked error") }
+                return toolResponse(request, [corrected])
+            case .tool(let success) where success.callID == corrected.id:
+                guard !success.isError,
+                      request.messages.contains(where: {
+                          if case .assistant(_, let calls) = $0 { return calls.contains(corrected) }
+                          return false
+                      }) else { throw ModelProviderError(kind: .invalidRequest, message: "missing corrected result") }
+                return textResponse(request, "Found available")
+            default:
+                throw ModelProviderError(kind: .invalidRequest, message: "unexpected request")
+            }
+        }
+        let probe = RecoverableProbe()
+        let run = try await Agent(model: fixtureModel, provider: provider,
+                                  tools: [try RecoverableSearchTool(probe: probe)])
+            .makeSession().run("Find a resource", budget: testBudget(turns: 3, calls: 2))
+        let result = try await run.wait()
+        try await run.waitForDrain()
+        #expect(result.outcome == .completed)
+        #expect(result.modelTurns == 3 && result.toolCalls == 2)
+        #expect(result.receipts.isEmpty)
+        #expect(await probe.executions == 2)
+        #expect(await provider.log.requests.count == 3)
+    }
+
     @Test func declaredRecoverableReadOnlyErrorBecomesModelVisibleAndContinues() async throws {
         let call = recoverableCall(id: "missing-call", query: "missing")
         let provider = ScriptedProvider { request, turn in
