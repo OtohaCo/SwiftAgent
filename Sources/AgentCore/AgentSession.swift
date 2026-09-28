@@ -25,6 +25,7 @@ public actor AgentSession {
     private let runTimeout: Duration
     private let instructions: String
     private let contextPolicy: AgentContextPolicy
+    private let preAdmissionReplanning: AgentPreAdmissionReplanning
     private let journal: AgentJournal?
     private let checkpointDidExit: (@Sendable (UUID) -> Void)?
     private let drainWaitDidBegin: (@Sendable (UUID) -> Void)?
@@ -61,6 +62,7 @@ public actor AgentSession {
     init(id: UUID = UUID(), defaultBinding: AgentModelBinding, tools: ToolRegistry, scheduler: ToolScheduler,
          instructions: String, structuredOutput: StructuredOutputSchema?, maxModelTurns: Int,
          maxToolCalls: Int, runTimeout: Duration, contextPolicy: AgentContextPolicy, journal: AgentJournal? = nil,
+         preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled,
          checkpointDidExit: (@Sendable (UUID) -> Void)? = nil,
          drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil,
          drainReleaseDidBegin: (@Sendable (UUID) async -> Void)? = nil,
@@ -76,6 +78,7 @@ public actor AgentSession {
         self.structuredOutput = structuredOutput
         self.instructions = instructions
         self.contextPolicy = contextPolicy
+        self.preAdmissionReplanning = preAdmissionReplanning
         history = AgentContextWindow.applyingCurrentInstructions([], instructions: instructions)
         self.maxModelTurns = maxModelTurns
         self.maxToolCalls = maxToolCalls
@@ -472,7 +475,8 @@ public actor AgentSession {
                              modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes,
                              journal: journal, contextEffects: contextEffects,
                              capabilityScope: capabilities?.scope,
-                             allowedResources: capabilities?.allowedResources)
+                             allowedResources: capabilities?.allowedResources,
+                             preAdmissionReplanning: preAdmissionReplanning)
         let candidateMessages = prepared + [.user([.text(text)])]
         let preparedRequest: AgentPreparedModelRequest
         preparedRequest = try await withStartupDeadline(budget.deadline, startupID: startupID,
@@ -594,6 +598,17 @@ public actor AgentSession {
             evidenceLedger: evidenceLedger,
             mutationAdmission: journal,
             checkpoint: { messages, steering in try await self.record(messages, steering: steering, runID: runID, budget: budget) },
+            checkReplanningSafety: { operationID in
+                guard let journal, journal.storage == .durable else { return false }
+                let operation = operationID?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return try await !journal.pendingMutations().contains { pending in
+                    pending.sessionID == self.id || (operation.map { !$0.isEmpty && pending.intent.idempotencyKey.hasPrefix($0 + "/") } ?? false)
+                }
+            },
+            recordAdmissionRejection: { rejection, messages in
+                try await self.record(messages, steering: [], runID: runID, budget: budget,
+                                      rejection: rejection)
+            },
             recordMutationReceipt: { _, _, _ in
                 throw AgentJournalError.mutationSettlementRequiresReconciliation
             },
@@ -638,7 +653,8 @@ public actor AgentSession {
         }
     }
 
-    private func record(_ messages: [ModelMessage], steering: [AgentSteeringInput], runID: UUID, budget: AgentBudget) async throws -> [ModelMessage] {
+    private func record(_ messages: [ModelMessage], steering: [AgentSteeringInput], runID: UUID,
+                        budget: AgentBudget, rejection: ToolPreAdmissionRejection? = nil) async throws -> [ModelMessage] {
         do {
             try budget.checkActive()
             guard activeRunID == runID else { throw CancellationError() }
@@ -646,8 +662,15 @@ public actor AgentSession {
             try budget.checkActive()
             guard activeRunID == runID else { throw CancellationError() }
             if let journal {
+                var events: [AgentJournalEvent] = []
+                if let rejection {
+                    guard rejection.sessionID == id, rejection.runID == runID else { throw CancellationError() }
+                    events.append(.toolAdmissionRejected(callID: rejection.callID,
+                        name: rejection.toolName))
+                }
+                events.append(.checkpoint(history: prepared, steeringIDs: steering.map(\.id)))
                 try await journal.appendCheckpointForCurrentRun(
-                    [.checkpoint(history: prepared, steeringIDs: steering.map(\.id))],
+                    events,
                     sessionID: id,
                     runID: runID,
                     durability: journal.storage == .durable ? .durable : .memory

@@ -10,15 +10,19 @@ enum BoundedReplanningProbe {
                 let observed = try await BoundedFixture.run(scenario)
                 print(observed.trace)
                 let expectedSearches = scenario == .searchAgain ? 2 : 1
+                let expectedRequests = scenario == .searchAgain ? 5 : 4
                 let rejectionIsSafe = observed.evidenceError == false
                     && observed.invalidAttempts == 1
                     && observed.invalidMutationState == nil
                     && observed.pendingStates.isEmpty
                 let correctionCompleted = observed.linkedFeedbackIsRelevant
+                    && observed.requests.count == expectedRequests
                     && observed.requests.allSatisfy { $0.runID == observed.runID && $0.sessionID == observed.sessionID }
                     && observed.searchCalls == expectedSearches
                     && observed.executorEntered == 1 && observed.externalEffects == 1
+                    && observed.authorizationEntered == 1
                     && observed.validMutationState == .settled && observed.receiptCount == 1
+                    && observed.reopenedHistoryAndMessageIDsMatch && observed.reopenedRejectionPaired
                     && observed.outcome == "completed" && observed.error == nil
                     && observed.physicalDrainNanoseconds >= observed.logicalEndNanoseconds
                 if rejectionIsSafe && correctionCompleted {

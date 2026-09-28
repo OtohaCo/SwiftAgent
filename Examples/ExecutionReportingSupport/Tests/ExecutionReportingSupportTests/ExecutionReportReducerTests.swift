@@ -105,6 +105,20 @@ struct ExecutionReportReducerTests {
         #expect(reducer.report.toolObservations.first?.status == .completed(isError: true))
     }
 
+    @Test func runtimeAdmissionDenialIsNeitherCompletionNorUnknownEffect() throws {
+        let ids = IdentityFixture()
+        var reducer = ExecutionReportReducer(sessionID: ids.sessionID, runID: ids.runID)
+        reducer.consume(.runStarted(ids.info))
+        reducer.consume(.model(.toolCallCompleted(ids.call)))
+        reducer.consume(.toolAdmissionRejected(ids.call.id))
+
+        let tool = try #require(reducer.report.toolObservations.first)
+        #expect(tool.status == .rejectedBeforeAdmission)
+        #expect(tool.executorEntered == false)
+        #expect(tool.receipt == nil && reducer.report.receipts.isEmpty)
+        #expect(!reducer.report.diagnostics.contains(.missingReceipt(callID: ids.call.id)))
+    }
+
     @Test func failedToolDoesNotEraseEarlierCommittedTools() throws {
         let ids = IdentityFixture()
         let first = try ids.receipt(callID: ids.firstCall.id)

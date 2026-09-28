@@ -19,6 +19,7 @@ public enum ToolExecutionStatus: Equatable, Sendable {
     case proposed
     case admitted
     case completed(isError: Bool)
+    case rejectedBeforeAdmission
     case failed(AgentFailure)
     case unknown
 }
@@ -84,6 +85,11 @@ public struct ToolExecutionObservation: Equatable, Sendable {
         if case .toolInvocation(.authorizationDenied) = failure {
             executorEntered = false
         }
+    }
+
+    mutating func reject() {
+        status = .rejectedBeforeAdmission
+        executorEntered = false
     }
 
     mutating func attach(_ receipt: AgentToolReceipt) {
@@ -312,6 +318,10 @@ public struct ExecutionReportReducer: Sendable {
             if receiptsByCallID[callID] == nil {
                 addDiagnostic(.missingReceipt(callID: callID))
             }
+        case .toolAdmissionRejected(let callID):
+            var observation = observation(for: callID)
+            observation.reject()
+            toolsByID[callID] = observation
         case .steeringApplied:
             break
         case .runFinished(let termination):

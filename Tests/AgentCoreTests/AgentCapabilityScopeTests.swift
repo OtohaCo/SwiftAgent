@@ -243,7 +243,8 @@ struct AgentCapabilityScopeTests {
             gate.arm()
             return toolResponse(request, [call])
         }
-        let agent = try Agent(model: fixtureModel, provider: provider)
+        let agent = try Agent(model: fixtureModel, provider: provider,
+            configuration: .init(preAdmissionReplanning: .evidenceRejection(toolNames: [ScopeFileMutationTool.name])))
         let session = try agent.makeSession(journal: journal)
         let scope = try await session.bindCapabilities(identity: "write", version: "1",
             backendInstanceID: "fixture", backendVersion: "1",
@@ -528,7 +529,8 @@ struct AgentCapabilityScopeTests {
         let provider = ScriptedProvider { request, _ in
             request.messages.last?.role == .tool ? textResponse(request, "done") : toolResponse(request, [call])
         }
-        let agent = try Agent(model: fixtureModel, provider: provider)
+        let agent = try Agent(model: fixtureModel, provider: provider,
+            configuration: .init(preAdmissionReplanning: .evidenceRejection(toolNames: [ScopeFileMutationTool.name])))
         let session = try agent.makeSession(journal: journal)
         let binding = try await session.bindCapabilities(identity: "B", version: "1", scopeID: "B-first",
             backendInstanceID: "local-file", backendVersion: "1",

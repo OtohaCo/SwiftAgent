@@ -24,6 +24,15 @@ Treat as breaking:
 Adding `AgentFailure.session` is breaking for exhaustive switches even though it
 is a new classified case.
 
+The unreleased bounded pre-admission replanning candidate adds
+`AgentEvent.toolAdmissionRejected` and a new `AgentJournalEvent` variant.
+Exhaustive event switches must be updated. An older RC4 reader does not
+understand Journal records containing the new rejection variant; rolling back
+to an older binary after the first opted-in rejection requires an explicit
+store compatibility decision. The opt-in does not change the stable mutation
+operation identity, Evidence authority or Receipt settlement. Existing
+`AgentConfiguration` construction defaults to `.disabled`.
+
 ## 1.0 freeze decisions (SAI-026B)
 
 These source breaks happen before the first tagged 1.0:

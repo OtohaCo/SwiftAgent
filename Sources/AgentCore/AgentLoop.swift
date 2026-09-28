@@ -19,6 +19,7 @@ package struct AgentLoop: Sendable {
     private let contextEffects: AgentContextEffectLedger
     private let capabilityScope: AgentCapabilityScope?
     private let allowedResources: Set<ToolResource>?
+    private let preAdmissionReplanning: AgentPreAdmissionReplanning
     private let projectionDrain = AgentProjectionDrain()
 
     private var model: ModelID { binding.model }
@@ -29,7 +30,8 @@ package struct AgentLoop: Sendable {
                  journal: AgentJournal? = nil,
                  contextEffects: AgentContextEffectLedger = .init(),
                  capabilityScope: AgentCapabilityScope? = nil,
-                 allowedResources: Set<ToolResource>? = nil) {
+                 allowedResources: Set<ToolResource>? = nil,
+                 preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled) {
         self.binding = binding
         self.tools = tools
         self.scheduler = scheduler
@@ -38,6 +40,7 @@ package struct AgentLoop: Sendable {
         self.contextEffects = contextEffects
         self.capabilityScope = capabilityScope
         self.allowedResources = allowedResources
+        self.preAdmissionReplanning = preAdmissionReplanning
     }
 
     package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
@@ -141,6 +144,8 @@ package struct AgentLoop: Sendable {
         var history = messages
         var modelTurns = 0
         var toolCalls = 0
+        var admissionFeedbackUsed = false
+        var mutationObserved = false
         var receipts: [AgentToolReceipt] = []
         var projectionRevision = initialRequest?.projection.plan.sourceRevision ?? 0
         var contextEpoch = initialRequest?.projection.plan.contextEpoch ?? 0
@@ -246,6 +251,52 @@ package struct AgentLoop: Sendable {
                 }
                 return prepared
             }
+            if let call = preparedCalls.first, preparedCalls.count == 1,
+               !admissionFeedbackUsed, !mutationObserved,
+               call.policy.effect == .mutation,
+               preAdmissionReplanning.includes(call.call.name),
+               let lifecycle {
+                // This probe belongs to the prepared runtime invocation, before authorization,
+                // durable intent and final admission. Invocation repeats the check on success.
+                if let rejection = try await call.preAdmissionEvidenceRejection() {
+                    try budget.checkActive()
+                    try await capabilityScope?.check(runID: runID, resources: call.resources)
+                    guard try await lifecycle.checkReplanningSafety(operationID) else {
+                        throw EvidenceError.unavailable(rejection.reference)
+                    }
+                    let reference = Self.modelSubmittedReference(rejection.reference,
+                        argumentsJSON: call.call.argumentsJSON)
+                    let detail = reference.map { "Evidence for reference \($0) is unavailable" }
+                        ?? "Required Evidence for this submitted reference is unavailable"
+                    let message = ToolResultMessage(callID: rejection.callID, content: [.json(.object([
+                        "code": .string("evidence_unavailable"),
+                        "message": .string("\(detail); this call was denied before execution."),
+                    ]))], isError: true)
+                    let proposed = history + [
+                        .assistant(content: checkpointContent(response, retainingToolCalls: 1), toolCalls: [call.call]),
+                        .tool(message),
+                    ]
+                    try budget.checkActive()
+                    try await capabilityScope?.check(runID: runID, resources: call.resources)
+                    guard try await lifecycle.checkReplanningSafety(operationID) else {
+                        throw EvidenceError.unavailable(rejection.reference)
+                    }
+                    history = try await lifecycle.recordAdmissionRejection(rejection, proposed)
+                    // A committed rejection remains formal history. Cancellation/revoke can
+                    // still stop the next request; it must never erase the committed pair.
+                    try await emitter?.send(.toolAdmissionRejected(rejection.callID))
+                    try budget.checkActive()
+                    try await capabilityScope?.check(runID: runID, resources: call.resources)
+                    guard try await lifecycle.checkReplanningSafety(operationID) else {
+                        throw EvidenceError.unavailable(rejection.reference)
+                    }
+                    (projectionRevision, contextEpoch) = try advancedProjectionCoordinates(
+                        revision: projectionRevision, contextEpoch: contextEpoch)
+                    toolCalls += 1
+                    admissionFeedbackUsed = true
+                    continue
+                }
+            }
             let progress = AgentToolBatchProgress(prefix: history, response: response, budget: budget,
                                                   lifecycle: lifecycle, emitter: emitter)
             do {
@@ -280,6 +331,8 @@ package struct AgentLoop: Sendable {
                 contextEpoch: contextEpoch
             )
             receipts.append(contentsOf: completed.receipts)
+            mutationObserved = mutationObserved || completed.executedMutation
+                || completed.receipts.contains { $0.effect == .mutation }
             toolCalls += completed.count
         }
     }
@@ -549,6 +602,25 @@ package struct AgentLoop: Sendable {
         case .deadlineExceeded: return AgentLoopError.deadlineExceeded
         case .toolTimedOut(let id): return AgentLoopError.toolTimedOut(id)
         }
+    }
+
+    private static func modelSubmittedReference(_ reference: EvidenceReference,
+                                                argumentsJSON: String) -> String? {
+        guard reference.id.utf8.count <= 80,
+              reference.id.utf8.allSatisfy({ byte in
+                  (48...57).contains(byte) || (65...90).contains(byte)
+                      || (97...122).contains(byte) || byte == 45 || byte == 46 || byte == 95
+              }),
+              let arguments = try? JSONValue.decodeToolArguments(argumentsJSON) else { return nil }
+        func contains(_ value: JSONValue) -> Bool {
+            switch value {
+            case .string(let text): return text == reference.id
+            case .array(let values): return values.contains(where: contains)
+            case .object(let values): return values.values.contains(where: contains)
+            default: return false
+            }
+        }
+        return contains(arguments) ? reference.id : nil
     }
 
     private func checkpointContent(_ response: ModelResponse, retainingToolCalls count: Int) -> [ModelContent] {

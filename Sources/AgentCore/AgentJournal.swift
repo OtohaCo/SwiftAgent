@@ -58,6 +58,8 @@ public enum AgentJournalEvent: Codable, Equatable, Sendable {
     case toolAuthorized(callID: ToolCallID)
     case toolStarted(callID: ToolCallID)
     case toolCompleted(ToolResultMessage)
+    /// A runtime Evidence denial before mutation intent or executor admission.
+    case toolAdmissionRejected(callID: ToolCallID, name: String)
     case toolReceipt(AgentToolReceipt)
     case pendingMutation(PendingMutationIntent)
     case mutationNeedsReconciliation(callID: ToolCallID)

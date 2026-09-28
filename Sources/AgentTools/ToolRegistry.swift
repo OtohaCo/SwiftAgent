@@ -56,6 +56,7 @@ package struct ToolRegistry: Sendable {
         let invocation = try registration.tool.prepare(arguments: arguments)
         try context.checkActive()
         return PreparedToolCall(call: call, policy: registration.tool.policy, resources: invocation.resources,
+                                evidenceRequirements: invocation.evidenceRequirements,
                                 receiptExpectation: invocation.receiptExpectation, context: context) { executionContext in
             let result = try await invocation.invoke(executionContext)
             if !result.isModelVisibleError {
@@ -78,19 +79,36 @@ package struct PreparedToolCall: Sendable {
     package let call: ToolCall
     package let policy: ToolPolicy
     package let resources: [ToolResource]
+    private let evidenceRequirements: [EvidenceRequirement]
     package var contextSessionID: UUID { context.sessionID }
     package var contextRunID: UUID { context.runID }
     package let receiptExpectation: ToolReceiptExpectation?
     private let context: ToolContext
     private let operation: AnyAgentTool.Invocation
 
-    fileprivate init(call: ToolCall, policy: ToolPolicy, resources: [ToolResource], receiptExpectation: ToolReceiptExpectation?, context: ToolContext, operation: @escaping AnyAgentTool.Invocation) {
+    fileprivate init(call: ToolCall, policy: ToolPolicy, resources: [ToolResource],
+                     evidenceRequirements: [EvidenceRequirement], receiptExpectation: ToolReceiptExpectation?,
+                     context: ToolContext, operation: @escaping AnyAgentTool.Invocation) {
         self.call = call
         self.policy = policy
         self.resources = resources
+        self.evidenceRequirements = evidenceRequirements
         self.receiptExpectation = receiptExpectation
         self.context = context
         self.operation = operation
+    }
+
+    /// Only this runtime-owned ledger resolution can return a trusted, pre-admission rejection.
+    /// Host callbacks and the executor have not been invoked. Invocation rechecks Evidence later.
+    package func preAdmissionEvidenceRejection() async throws -> ToolPreAdmissionRejection? {
+        guard !evidenceRequirements.isEmpty else { return nil }
+        do {
+            try await context.requireEvidence(evidenceRequirements)
+            return nil
+        } catch EvidenceError.unavailable(let reference) {
+            return ToolPreAdmissionRejection(sessionID: context.sessionID, runID: context.runID,
+                callID: call.id, toolName: call.name, reference: reference)
+        }
     }
 
     package func invoke(deadline: ContinuousClock.Instant? = nil) async throws -> ToolResult<JSONValue> {
@@ -103,6 +121,14 @@ package struct PreparedToolCall: Sendable {
             executionAdmission: context.executionAdmission)
         return try await operation(executionContext)
     }
+}
+
+package struct ToolPreAdmissionRejection: Sendable {
+    package let sessionID: UUID
+    package let runID: UUID
+    package let callID: ToolCallID
+    package let toolName: String
+    package let reference: EvidenceReference
 }
 
 public enum ToolRegistryError: Error, Equatable, Sendable {
