@@ -33,6 +33,13 @@ let package = Package(
             .product(name: "AgentModels", package: "SwiftAgent"),
             .product(name: "AgentTools", package: "SwiftAgent"),
         ]),
+        .target(name: "BoundedReplanningFixture", dependencies: [
+            .product(name: "AgentCore", package: "SwiftAgent"),
+            .product(name: "AgentJournalFileStore", package: "SwiftAgent"),
+            .product(name: "AgentModels", package: "SwiftAgent"),
+            .product(name: "AgentTools", package: "SwiftAgent"),
+        ]),
+        .executableTarget(name: "BoundedReplanningProbe", dependencies: ["BoundedReplanningFixture"]),
         .testTarget(
             name: "ExternalClientTests",
             dependencies: [
@@ -47,6 +54,7 @@ let package = Package(
                 .product(name: "AgentUsage", package: "SwiftAgent"),
                 .product(name: "ExecutionReportingSupport", package: "SwiftAgentExecutionReportingSupport"),
                 "JournalReplayFixture",
+                "BoundedReplanningFixture",
             ]
         ),
     ],
