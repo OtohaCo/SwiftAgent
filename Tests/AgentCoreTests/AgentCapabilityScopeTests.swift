@@ -235,7 +235,8 @@ struct AgentCapabilityScopeTests {
         try Data().write(to: effect)
         let gate = ScopeIntentCommitGate()
         let journal = try AgentIncrementalJournal.createForTesting(at: directory.appendingPathComponent("journal"),
-            operationDomain: "intent-race", fault: { gate.check($0) })
+            operationDomain: "intent-race", supportsAdmissionRejections: true,
+            fault: { gate.check($0) })
         let counts = ScopeCounts()
         let call = ToolCall(id: .init(rawValue: "intent-race"), name: ScopeFileMutationTool.name,
                             argumentsJSON: #"{"id":"B"}"#, completeness: .complete)
@@ -243,7 +244,8 @@ struct AgentCapabilityScopeTests {
             gate.arm()
             return toolResponse(request, [call])
         }
-        let agent = try Agent(model: fixtureModel, provider: provider)
+        let agent = try Agent(model: fixtureModel, provider: provider,
+            configuration: .init(preAdmissionReplanning: .evidenceRejection(toolNames: [ScopeFileMutationTool.name])))
         let session = try agent.makeSession(journal: journal)
         let scope = try await session.bindCapabilities(identity: "write", version: "1",
             backendInstanceID: "fixture", backendVersion: "1",
@@ -520,7 +522,8 @@ struct AgentCapabilityScopeTests {
         let effect = directory.appendingPathComponent("effect.txt")
         try Data().write(to: effect)
         let journal = try AgentIncrementalJournal.create(at: directory.appendingPathComponent("journal"),
-                                                          operationDomain: "shared-scope-ledger")
+                                                          operationDomain: "shared-scope-ledger",
+                                                          supportsAdmissionRejections: true)
         let gate = ScopeGate()
         let counts = ScopeCounts()
         let call = ToolCall(id: .init(rawValue: "file-write"), name: ScopeFileMutationTool.name,
@@ -528,7 +531,8 @@ struct AgentCapabilityScopeTests {
         let provider = ScriptedProvider { request, _ in
             request.messages.last?.role == .tool ? textResponse(request, "done") : toolResponse(request, [call])
         }
-        let agent = try Agent(model: fixtureModel, provider: provider)
+        let agent = try Agent(model: fixtureModel, provider: provider,
+            configuration: .init(preAdmissionReplanning: .evidenceRejection(toolNames: [ScopeFileMutationTool.name])))
         let session = try agent.makeSession(journal: journal)
         let binding = try await session.bindCapabilities(identity: "B", version: "1", scopeID: "B-first",
             backendInstanceID: "local-file", backendVersion: "1",

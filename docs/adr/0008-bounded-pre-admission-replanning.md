@@ -1,0 +1,43 @@
+# ADR 0008: Bounded pre-admission Evidence replanning
+
+Status: proposed for the stacked implementation PR (#26 is the tests-only base)
+
+`AgentConfiguration.preAdmissionReplanning` defaults to `.disabled`. A Host can opt in with an explicit set of mutation tool names using `.evidenceRejection(toolNames:)`. The policy permits one feedback opportunity per Run. The rejected proposal consumes one tool-call attempt; its correction and any model-requested read-only search use the remaining original turn, call and absolute deadline budgets. It does not start another Run or change the bound capability scope.
+
+The trusted source is the runtime's first Evidence resolution on a prepared, typed single tool call, before Host authorization, durable mutation intent and final execution admission. A tool callback throwing `EvidenceError`, including its `authorize` or `execute` implementation, cannot create this internal rejection. Normal invocation still rechecks Evidence and all later gates. A multi-call response, unavailable resources, revoked scope, exhausted budget, earlier mutation effect or trusted replay, or unresolved mutation for the Session/logical operation closes this route. Failed status reads close it as well. A second missing reference is a normal failure.
+
+The runtime commits the original assistant call and a correlated error tool message through the Session's canonical checkpoint path. An explicit Journal rejection event in the same frame records that the *runtime denied admission*; the wire tool role alone is not trusted evidence of execution. The public rejection event and Journal marker carry the call identity, not the missing resource. Feedback repeats a short, safe reference only when the model supplied that exact string in its arguments; Host-derived references remain private. The runtime emits no mutation completion or Receipt, and no read-only effect attestation. A failed or uncertain checkpoint stops continuation. Reopening the Session restores the paired formal history but grants neither Evidence nor permission; a future Run has its own policy limit. The new event requires a reader that understands this Journal record variant; it does not change mutation identity or settlement rules.
+
+The marker is a typed `BatchV2` payload indexed by Session/Run/call. Its index
+points back to the committed batch; maintenance retains that batch while the
+marker is live. A plain `isError` result never creates this marker. The marker,
+paired messages and index are published by the same root transition. A failed
+or unknown publication must not send the next model request; reopening the
+store resolves the committed root.
+
+An opt-in Run requires a newly created rejection-capable segmented store
+(`AgentIncrementalJournal.create(..., supportsAdmissionRejections: true)`). That
+store has format schema 4 from creation, before the first rejection. The
+original RC4 reader checks `format.json` and rejects schema 4 at open; it
+cannot inspect, append or maintain that store. Ordinary stores still use
+schema 3 by default and remain readable by the RC4 reader. The new reader can
+open schema-3 stores for ordinary runs, but an opt-in Run on such a store fails
+before provider contact or input publication. There is no automatic migration
+or downgrade. This format boundary is deliberately wider than the first
+rejection event because a format change at that event could leave the old and
+new roots disagreeing with `format.json` after a crash.
+
+The operation safety check reads current-Session pending status and a typed
+operation index from one current-root snapshot. The index is a pointer to
+canonical mutation records, not an alternative mutation ledger. An operation
+ID may contain `/`; matching removes the exact `/<tool-name>/<canonical JSON>`
+suffix from the durable idempotency key. An unparseable pending identity is
+indexed as unknown and conservatively blocks cross-Session continuation.
+The known Run/call fallback for a mutation with no logical operation ID is
+unrelated to an explicit operation in another Session and does not enter the
+cross-Session index; the current-Session check still sees it.
+The repeated snapshots across the feedback path are not a global atomic
+no-effect proof. Durable mutation admission remains the authority against
+duplicate or uncertain effects.
+
+This is a single pre-admission correction seam, not a general retry framework. Authorization, scope, schema, Journal, intent, executor, Receipt and post-effect failures retain their existing fail-closed or reconciliation paths. Provider adapters must map the paired error message using their existing protocol rules; they must not synthesize a continuation or alter call identity.

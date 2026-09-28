@@ -254,7 +254,7 @@ private func executionReportMessage(_ report: RunExecutionReport?) -> String? {
     let uncertainTool = report.toolObservations.contains {
         switch $0.status {
         case .failed, .unknown, .admitted: return true
-        case .proposed, .completed: return false
+        case .proposed, .completed, .rejectedBeforeAdmission: return false
         }
     }
     switch report.presentation {
@@ -446,11 +446,12 @@ private struct ToolCallView: View {
         case .admitted: return "gearshape.2"
         case .completed: return "checkmark.circle.fill"
         case .failed: return "exclamationmark.triangle.fill"
+        case .rejected: return "hand.raised.fill"
         }
     }
 
     private var color: Color {
-        call.isError || call.state == .failed ? .orange : .blue
+        call.isError || call.state == .failed || call.state == .rejected ? .orange : .blue
     }
 
     private var status: String {
@@ -460,6 +461,7 @@ private struct ToolCallView: View {
         case .admitted: return "Running"
         case .completed: return "Completed"
         case .failed: return "Failed"
+        case .rejected: return "Denied before execution"
         }
     }
 }

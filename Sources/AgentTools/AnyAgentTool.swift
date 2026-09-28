@@ -9,6 +9,7 @@ package struct AnyAgentTool: Sendable {
     package typealias Invocation = @Sendable (ToolContext) async throws -> ToolResult<JSONValue>
     package struct PreparedInvocation: Sendable {
         let resources: [ToolResource]
+        let evidenceRequirements: [EvidenceRequirement]
         let receiptExpectation: ToolReceiptExpectation?
         let invoke: Invocation
     }
@@ -40,7 +41,8 @@ package struct AnyAgentTool: Sendable {
             if policy.effect == .readOnly && requiresReceipt && receiptExpectation == nil {
                 throw ToolInvocationError.receiptValidationUnavailable
             }
-            return PreparedInvocation(resources: resources, receiptExpectation: receiptExpectation) { context in
+            return PreparedInvocation(resources: resources, evidenceRequirements: requirements,
+                                      receiptExpectation: receiptExpectation) { context in
                 try context.checkActive()
                 if policy.effect == .mutation {
                     guard context.mutationAdmission != nil, context.argumentsJSON != nil else {

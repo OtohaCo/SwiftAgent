@@ -1,10 +1,10 @@
 # SwiftAgent Journal
 
-last-verified: 2026-09-27
+last-verified: 2026-09-28
 
 `AgentJournal` owns trusted mutation transitions and Session restoration. The
 optional `AgentJournalFileStore` product supplies the local durable format.
-New stores use segmented format schema 3 with the bounded `BatchV2` payload
+Default new stores use segmented format schema 3 with the bounded `BatchV2` payload
 and committed index witnesses. Schema-1 and unreleased schema-2 directories
 are rejected intact, with no implicit migration or reset. A queue
 admission, Run ID and formal user input share one `CURRENT` root publication;
@@ -12,6 +12,12 @@ queue-only writes do not advance conversation revision. See the
 [follow-up guide](swift-agent-follow-up-queue.md) and [ADR 0007](../adr/0007-durable-follow-up-queue.md).
 Read-only Agents can omit a Journal or use `AgentJournal()` in memory. An Agent
 with mutation tools requires a durable Journal at `makeSession`.
+For bounded pre-admission Evidence feedback, create a **new** store with
+`supportsAdmissionRejections: true`; it reserves schema 4, a typed rejection
+marker and a bounded operation-pending index. An opt-in Run on schema 3 fails
+before the Provider request. The RC4 reader rejects schema 4 even before a
+rejection occurs; schema 3 remains compatible with RC4. No store is migrated
+or silently reset. See [ADR 0008](../adr/0008-bounded-pre-admission-replanning.md).
 
 ```swift
 import AgentCore

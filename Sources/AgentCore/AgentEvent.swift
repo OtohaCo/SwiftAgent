@@ -34,6 +34,8 @@ public enum AgentEvent: Equatable, Sendable {
     case toolCompleted(ToolResultMessage)
     case toolReceiptValidated(AgentToolReceipt)
     case toolFailed(ToolCallID, AgentFailure)
+    /// The runtime denied a prepared tool call before admission; it did not execute the tool.
+    case toolAdmissionRejected(ToolCallID)
     case steeringApplied(id: UUID, text: String)
     case runFinished(AgentRunTermination)
 }

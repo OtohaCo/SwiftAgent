@@ -1,6 +1,6 @@
 # SwiftAgent Agent Loop
 
-last-verified: 2026-09-20
+last-verified: 2026-09-28
 
 The package-internal loop owns the single model-to-tool-to-model cycle. Public
 clients do not construct it. Use `Agent`, `AgentSession` and `AgentRun`. Providers
@@ -9,6 +9,7 @@ registry. Neither owns another agent loop.
 
 ```swift
 import AgentCore
+import AgentJournalFileStore
 import AgentModels
 import AgentTools
 
@@ -43,6 +44,43 @@ tool results become the next request's messages in original call order, regardle
 of completion order. Every result retains its call ID. A failure stops later groups
 and model turns after already-started reads settle; no automatic retry, provider
 fallback or fabricated success message is introduced.
+
+An explicitly opted-in Host can allow one **pre-admission Evidence denial** to
+be returned to the model in the same Run. The default remains fail-closed. The
+tool must be named in `AgentConfiguration.preAdmissionReplanning`, and the
+rejected response must contain exactly one mutation call. For example:
+
+```swift
+let config = AgentConfiguration(
+    maxModelTurns: 6,
+    maxToolCalls: 5,
+    preAdmissionReplanning: .evidenceRejection(toolNames: ["commit_resource"])
+)
+let agent = try Agent(model: model, provider: provider, tools: tools, configuration: config)
+let durableJournal = try AgentIncrementalJournal.create(
+    at: newStoreURL,
+    operationDomain: "example-domain",
+    supportsAdmissionRejections: true
+)
+let session = try agent.makeSession(journal: durableJournal)
+let result = try await session.run("Commit a discovered resource", operationID: "operation-1").wait()
+```
+
+Only the runtime's first Evidence resolution can produce this rejection. The
+feedback names the submitted reference and says admission was denied; it does
+not assert authorization. The model may choose an existing evidenced candidate
+or request another read-only search. A rejected call consumes one tool-call
+attempt and one of the original model turns is needed for continuation. The
+original absolute deadline, scope and operation ID remain in force. After one
+such feedback, another invalid call fails closed. Prior mutation effects or
+trusted replays and unresolved mutation state close the route. A later valid
+mutation still passes authorization, durable intent, final admission, Receipt
+validation and atomic settlement. See [ADR 0008](../adr/0008-bounded-pre-admission-replanning.md)
+for the exact boundary.
+
+The capable store must be created explicitly; configuring an opt-in tool on an
+existing schema-3 Journal fails the Run before provider contact. Ordinary
+stores remain schema 3 by default. There is no in-place format migration.
 
 `AgentLoopResult.outcome` distinguishes normal completion, refusal and incomplete
 responses. Model cancellation throws CancellationError. Inspect the outcome rather

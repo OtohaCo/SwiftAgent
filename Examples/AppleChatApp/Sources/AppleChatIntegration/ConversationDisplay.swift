@@ -85,6 +85,7 @@ public enum DisplayToolState: String, Equatable, Sendable {
     case admitted
     case completed
     case failed
+    case rejected
 }
 
 public struct DisplayToolCall: Identifiable, Equatable, Sendable {
@@ -238,6 +239,8 @@ public struct ConversationProjection: Sendable {
             updateTool(receipt.callID) { $0.receiptValidated = true }
         case .toolFailed(let callID, _):
             updateTool(callID) { $0.state = .failed }
+        case .toolAdmissionRejected(let callID):
+            updateTool(callID) { $0.state = .rejected }
         case .steeringApplied(_, let text):
             append(.user(.init(text: text)))
         case .runFinished(let termination):

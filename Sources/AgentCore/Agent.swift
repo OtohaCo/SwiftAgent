@@ -2,6 +2,17 @@ import AgentModels
 import Foundation
 import AgentTools
 
+/// One explicitly selected Evidence correction opportunity per Run.
+public enum AgentPreAdmissionReplanning: Sendable, Equatable {
+    case disabled
+    case evidenceRejection(toolNames: Set<String>)
+
+    func includes(_ name: String) -> Bool {
+        if case .evidenceRejection(let names) = self { return names.contains(name) }
+        return false
+    }
+}
+
 /// Long-lived defaults for every Session created from an Agent.
 ///
 /// `scheduler` is a resource coordinator, not a per-session queue. Share one
@@ -14,6 +25,7 @@ public struct AgentConfiguration: Sendable {
     public var runTimeout: Duration
     public var scheduler: ToolScheduler
     public var contextPolicy: AgentContextPolicy
+    public var preAdmissionReplanning: AgentPreAdmissionReplanning
 
     public init(
         instructions: String = "",
@@ -22,7 +34,8 @@ public struct AgentConfiguration: Sendable {
         maxToolCalls: Int = 16,
         runTimeout: Duration = .seconds(30),
         scheduler: ToolScheduler = .init(),
-        contextPolicy: AgentContextPolicy = .default
+        contextPolicy: AgentContextPolicy = .default,
+        preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled
     ) {
         self.instructions = instructions
         self.structuredOutput = structuredOutput
@@ -31,6 +44,7 @@ public struct AgentConfiguration: Sendable {
         self.runTimeout = runTimeout
         self.scheduler = scheduler
         self.contextPolicy = contextPolicy
+        self.preAdmissionReplanning = preAdmissionReplanning
     }
 }
 
@@ -120,6 +134,7 @@ public struct Agent: Sendable {
             structuredOutput: configuration.structuredOutput, maxModelTurns: configuration.maxModelTurns,
             maxToolCalls: configuration.maxToolCalls, runTimeout: configuration.runTimeout,
             contextPolicy: configuration.contextPolicy, journal: journal,
+            preAdmissionReplanning: configuration.preAdmissionReplanning,
             checkpointDidExit: checkpointDidExit, drainWaitDidBegin: drainWaitDidBegin,
             drainReleaseDidBegin: drainReleaseDidBegin,
             scopeReleaseDidFinish: scopeReleaseDidFinish,

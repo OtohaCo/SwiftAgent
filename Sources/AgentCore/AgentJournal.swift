@@ -58,6 +58,8 @@ public enum AgentJournalEvent: Codable, Equatable, Sendable {
     case toolAuthorized(callID: ToolCallID)
     case toolStarted(callID: ToolCallID)
     case toolCompleted(ToolResultMessage)
+    /// A runtime Evidence denial before mutation intent or executor admission.
+    case toolAdmissionRejected(callID: ToolCallID, name: String)
     case toolReceipt(AgentToolReceipt)
     case pendingMutation(PendingMutationIntent)
     case mutationNeedsReconciliation(callID: ToolCallID)
@@ -230,6 +232,7 @@ public actor AgentJournal {
     private var dispatcherLeases: [UUID: (owner: UUID, notify: @Sendable () async -> Void)] = [:]
     /// Immutable configured capability. A durable commit can still fail.
     public nonisolated let storage: AgentJournalStorage
+    package nonisolated let supportsAdmissionRejections: Bool
 
     private struct MutationKey: Hashable {
         let sessionID: UUID
@@ -255,6 +258,7 @@ public actor AgentJournal {
         maintenanceID = nil
         sessionLeases = []
         storage = .memory
+        supportsAdmissionRejections = false
     }
 
     package init(store: any JournalStore) {
@@ -265,6 +269,7 @@ public actor AgentJournal {
         maintenanceID = nil
         sessionLeases = []
         storage = .durable
+        supportsAdmissionRejections = store.supportsAdmissionRejections
     }
 
     package func acquireSessionLease(sessionID: UUID, dispatcherID: UUID? = nil) throws {
@@ -452,6 +457,24 @@ public actor AgentJournal {
             }
         }
         return []
+    }
+
+    /// One current-root snapshot. The on-disk operation index points to the
+    /// canonical mutation ledger; it is not another source of effect truth.
+    package func hasRelatedPendingMutation(sessionID: UUID, operationID: String?) throws -> Bool {
+        guard let store else { return false }
+        let operation = operationID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try store.read { view in
+            if try !view.pending(sessionID: sessionID).isEmpty { return true }
+            guard let operation, !operation.isEmpty else { return false }
+            return try view.hasPending(operationID: operation)
+        }
+    }
+
+    package func admissionRejection(sessionID: UUID, runID: UUID,
+                                    callID: ToolCallID) throws -> JournalAdmissionRejection? {
+        guard let store else { return nil }
+        return try store.read { try $0.admissionRejection(sessionID: sessionID, runID: runID, callID: callID) }
     }
 
     /// Converts an admitted but unsettled intent into a quarantine state. Recovery never invokes the tool.

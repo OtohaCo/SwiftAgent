@@ -30,6 +30,7 @@ swift test --disable-sandbox --no-parallel
 
 echo "external client"
 swift test --package-path Examples/ExternalClient --disable-sandbox --no-parallel
+swift run --package-path Examples/ExternalClient BoundedReplanningProbe
 swift run --package-path Examples/ExternalClient ContextPipelineFixture
 swift run --package-path Examples/ExternalClient ScopedCapabilityFixture
 swift run --package-path Examples/ExternalClient FollowUpQueueFixture

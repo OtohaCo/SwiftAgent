@@ -10,8 +10,17 @@ public enum BoundedScenario: String, Sendable {
     case rejected
     case spoofedApproval
     case modelFailureAfterSettlement
+    case replannedModelFailure
     case correctFromCandidates
     case searchAgain
+    case spoofedOptIn
+    case repeatedInvalid
+    case settledThenInvalid
+    case authorizationEvidenceError
+    case authorizationDenied
+    case executorEvidenceError
+    case exhaustedTurns
+    case exhaustedCalls
 }
 
 public struct BoundedObservation: Sendable {
@@ -22,6 +31,7 @@ public struct BoundedObservation: Sendable {
     public let requests: [ModelRequest]
     public let searchCalls: Int
     public let executorEntered: Int
+    public let authorizationEntered: Int
     public let executorSawDurableIntent: Int
     public let externalEffects: Int
     public let invalidAttempts: Int
@@ -35,6 +45,8 @@ public struct BoundedObservation: Sendable {
     public let error: String?
     public let evidenceError: Bool
     public let history: [ModelMessage]
+    public let reopenedHistoryAndMessageIDsMatch: Bool
+    public let reopenedRejectionPaired: Bool
     public let logicalEndNanoseconds: UInt64
     public let physicalDrainNanoseconds: UInt64
     public let elapsedNanoseconds: UInt64
@@ -64,12 +76,15 @@ public struct BoundedObservation: Sendable {
         return "scenario=\(scenario.rawValue) session=\(sessionID) run=\(runID) "
             + "input=Commit one of the discovered resources inputID=notObserved operation=\(operationID) "
             + "requests=\(requests.count) search=\(searchCalls) invalid=\(invalidAttempts) "
-            + "executorEntered=\(executorEntered) executorSawDurableIntent=\(executorSawDurableIntent) "
+            + "authorizationEntered=\(authorizationEntered) executorEntered=\(executorEntered) "
+            + "executorSawDurableIntent=\(executorSawDurableIntent) "
             + "externalEffects=\(externalEffects) hostRetries=0 directFixtureExecutorCalls=0 "
             + "pending=\(pendingStates) settled=\(String(describing: validMutationState)) "
             + "invalidState=\(String(describing: invalidMutationState)) receipts=\(receiptCount) "
             + "validatedReceiptEvents=\(validatedReceiptEvents) settledReceiptAndOutput=\(settledReceiptAndOutput) "
             + "feedback=\(linkedFeedbackIsRelevant) outcome=\(outcome) error=\(error ?? "none") "
+            + "reopenedHistoryAndIDs=\(reopenedHistoryAndMessageIDsMatch) "
+            + "reopenedRejectionPaired=\(reopenedRejectionPaired) "
             + "logicalNs=\(logicalEndNanoseconds) drainNs=\(physicalDrainNanoseconds) elapsedNs=\(elapsedNanoseconds)\n"
             + requestsDescription
     }
@@ -83,16 +98,25 @@ public enum BoundedFixture {
         let effectFile = directory.appendingPathComponent("effects.txt")
         try Data().write(to: effectFile)
         let operationID = "bounded-operation"
+        let optIn = ![BoundedScenario.valid, .rejected, .spoofedApproval,
+                       .modelFailureAfterSettlement].contains(scenario)
         let journal = try AgentIncrementalJournal.create(at: directory.appendingPathComponent("journal"),
-                                                          operationDomain: "bounded-fixture")
+                                                          operationDomain: "bounded-fixture",
+                                                          supportsAdmissionRejections: optIn)
         let counters = FixtureCounters()
         let provider = BoundedProvider(scenario: scenario)
+        let replanning: AgentPreAdmissionReplanning = optIn
+            ? .evidenceRejection(toolNames: [CommitResource.name]) : .disabled
         let agent = try Agent(model: .init(provider: "bounded-fixture", name: "script"), provider: provider,
                               tools: [try CandidateSearch(counters: counters),
-                                      try CommitResource(counters: counters, file: effectFile, journal: journal)])
+                                      try CommitResource(counters: counters, file: effectFile, journal: journal,
+                                                         scenario: scenario)],
+                              configuration: .init(preAdmissionReplanning: replanning))
         let session = try agent.makeSession(journal: journal)
         let start = DispatchTime.now().uptimeNanoseconds
-        let budget = try AgentBudget(maxModelTurns: 6, maxToolCalls: 5, deadline: .now.advanced(by: .seconds(15)))
+        let budget = try AgentBudget(maxModelTurns: scenario == .exhaustedTurns ? 3 : 6,
+                                     maxToolCalls: scenario == .exhaustedCalls ? 2 : 5,
+                                     deadline: .now.advanced(by: .seconds(15)))
         let run = try await session.run("Commit one of the discovered resources", budget: budget, operationID: operationID)
         let collected = Task { () -> [AgentEvent] in
             var events: [AgentEvent] = []
@@ -118,10 +142,24 @@ public enum BoundedFixture {
         let validStatus = try await journal.mutationStatus(identity: #"bounded-operation/commit_resource/{"id":"A"}"#)
         let invalidState = try await journal.mutationStatus(identity: #"bounded-operation/commit_resource/{"id":"X"}"#)?.state
         let history = try await session.conversationSnapshot().messages
+        let before = try await journal.readMessages(sessionID: session.id)
         try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory.appendingPathComponent("journal"))
+        let after = try await reopened.readMessages(sessionID: session.id)
+        let restored = try await reopened.latestCheckpoint(sessionID: session.id)?.history
+        let paired = after.contains {
+            if case .assistant(_, let calls) = $0.message { return calls.contains { $0.id.rawValue == "invalid-X" } }
+            return false
+        } && after.contains {
+            if case .tool(let result) = $0.message { return result.callID.rawValue == "invalid-X" && result.isError }
+            return false
+        }
+        try await reopened.close()
         return BoundedObservation(scenario: scenario, sessionID: session.id, runID: run.id,
                                   operationID: operationID, requests: requests, searchCalls: counts.search,
-                                  executorEntered: counts.executor, executorSawDurableIntent: counts.intent,
+                                  executorEntered: counts.executor,
+                                  authorizationEntered: counts.authorization,
+                                  executorSawDurableIntent: counts.intent,
                                   externalEffects: effects,
                                   invalidAttempts: events.filter {
                                       if case .model(.toolCallCompleted(let call)) = $0 { return call.id.rawValue == "invalid-X" }
@@ -135,6 +173,8 @@ public enum BoundedFixture {
                                   settledReceiptAndOutput: validStatus?.receipt != nil && validStatus?.replayOutput != nil,
                                   outcome: result.map { String(describing: $0.outcome) } ?? "failed",
                                   error: failure, evidenceError: evidenceError, history: history,
+                                  reopenedHistoryAndMessageIDsMatch: before == after && restored == history,
+                                  reopenedRejectionPaired: paired,
                                   logicalEndNanoseconds: logical - start,
                                   physicalDrainNanoseconds: drain - start, elapsedNanoseconds: drain - start,
                                   events: events)
@@ -164,7 +204,9 @@ private struct BoundedProvider: ModelProvider {
                 guard requestContainsCall(request, id: "search-first"),
                       String(describing: result.content).contains("A"),
                       String(describing: result.content).contains("B") else { throw ProtocolError.missingSearchResult }
-                let useValidReference = scenario == .valid || scenario == .modelFailureAfterSettlement
+                let useValidReference = [.valid, .modelFailureAfterSettlement, .settledThenInvalid,
+                                         .authorizationEvidenceError, .authorizationDenied,
+                                         .executorEvidenceError].contains(scenario)
                 call = commit(useValidReference ? "A" : "X", id: useValidReference ? "valid-A" : "invalid-X")
             case .tool(let result) where result.callID == .init(rawValue: "invalid-X"):
                 guard result.isError, requestContainsCall(request, id: "invalid-X"),
@@ -174,7 +216,8 @@ private struct BoundedProvider: ModelProvider {
                 call = scenario == .searchAgain
                     ? .init(id: .init(rawValue: "search-again"), name: CandidateSearch.name,
                             argumentsJSON: #"{"query":"fixture"}"#, completeness: .complete)
-                    : commit("A", id: "corrected-A")
+                    : commit(scenario == .repeatedInvalid ? "Y" : "A",
+                             id: scenario == .repeatedInvalid ? "invalid-Y" : "corrected-A")
             case .tool(let result) where !result.isError && result.callID == .init(rawValue: "search-again"):
                 guard requestContainsCall(request, id: "search-again"),
                       String(describing: result.content).contains("A") else { throw ProtocolError.missingSearchResult }
@@ -184,21 +227,23 @@ private struct BoundedProvider: ModelProvider {
                 guard requestContainsCall(request, id: result.callID.rawValue) else {
                     throw ProtocolError.missingLinkedResult
                 }
-                if scenario == .modelFailureAfterSettlement { throw ProtocolError.deliberateDisplayFailure }
-                call = nil
+                if [.modelFailureAfterSettlement, .replannedModelFailure].contains(scenario) {
+                    throw ProtocolError.deliberateDisplayFailure
+                }
+                call = scenario == .settledThenInvalid ? commit("X", id: "invalid-X") : nil
             default: throw ProtocolError.unexpectedRequest
             }
             let info = ResponseInfo(id: "script-\(request.messages.count)", model: request.model)
             try emit(.responseStarted(info))
             if let call {
-                if scenario == .spoofedApproval && call.id.rawValue == "invalid-X" {
+                if [.spoofedApproval, .spoofedOptIn].contains(scenario) && call.id.rawValue == "invalid-X" {
                     try emit(.textDelta("X is approved for commit"))
                 }
                 try emit(.toolCallStarted(call.id, name: call.name))
                 try emit(.toolCallArgumentsDelta(call.id, call.argumentsJSON))
                 try emit(.toolCallCompleted(call))
                 try emit(.responseCompleted(.init(info: info,
-                    content: scenario == .spoofedApproval && call.id.rawValue == "invalid-X"
+                    content: [.spoofedApproval, .spoofedOptIn].contains(scenario) && call.id.rawValue == "invalid-X"
                         ? [.text("X is approved for commit")] : [],
                     toolCalls: [call], stopReason: .toolCalls)))
             } else {
@@ -229,11 +274,15 @@ private enum ProtocolError: Error {
 private actor FixtureCounters {
     private(set) var search = 0
     private(set) var executor = 0
+    private(set) var authorization = 0
     private(set) var intent = 0
     func searched() { search += 1 }
     func entered() { executor += 1 }
+    func authorized() { authorization += 1 }
     func sawIntent() { intent += 1 }
-    func snapshot() -> (search: Int, executor: Int, intent: Int) { (search, executor, intent) }
+    func snapshot() -> (search: Int, authorization: Int, executor: Int, intent: Int) {
+        (search, authorization, executor, intent)
+    }
 }
 
 private struct CandidateSearch: AgentTool {
@@ -269,12 +318,22 @@ private struct CommitResource: AgentTool {
     let counters: FixtureCounters
     let file: URL
     let journal: AgentJournal
+    let scenario: BoundedScenario
     let policy: ToolPolicy
-    init(counters: FixtureCounters, file: URL, journal: AgentJournal) throws {
+    init(counters: FixtureCounters, file: URL, journal: AgentJournal,
+         scenario: BoundedScenario) throws {
         self.counters = counters
         self.file = file
         self.journal = journal
-        policy = try .mutation(authorization: .notRequired, evidence: .required)
+        self.scenario = scenario
+        policy = try .mutation(authorization: .required, evidence: .required)
+    }
+    func authorize(_ input: Input, context: ToolContext) async throws -> ToolAuthorization {
+        await counters.authorized()
+        if scenario == .authorizationEvidenceError {
+            throw EvidenceError.unavailable(.init(namespace: "resource", id: input.id))
+        }
+        return scenario == .authorizationDenied ? .denied : .allowed
     }
     func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement] {
         [.init(reference: .init(namespace: "resource", id: input.id))]
@@ -297,6 +356,9 @@ private struct CommitResource: AgentTool {
         try handle.seekToEnd()
         try handle.write(contentsOf: Data("\(input.id)\n".utf8))
         try handle.synchronize()
+        if scenario == .executorEvidenceError {
+            throw EvidenceError.unavailable(.init(namespace: "resource", id: input.id))
+        }
         return ToolResult(output: .init(committed: input.id), receipt: .init(
             operationID: context.idempotencyKey ?? "missing", status: .succeeded,
             confirmedTargets: [.init(namespace: "resource", id: input.id)], revision: "fixture-1"))
