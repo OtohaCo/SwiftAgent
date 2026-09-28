@@ -70,6 +70,9 @@ class ReplanningEvaluationTests(unittest.TestCase):
             self.assertIsNone(summary["groups"]["controlled_error/enabled"]["reportedUsage"]["inputTokens"])
             self.assertEqual(summary["groups"]["controlled_error/disabled"]["failed"], 1)
             self.assertEqual(summary["groups"]["controlled_error/disabled"]["planned"], 1)
+            self.assertEqual(summary["groups"]["controlled_error/disabled"]["failureRate"], 1.0)
+            self.assertEqual(summary["groups"]["controlled_error/disabled"]["timeoutRate"], 0.0)
+            self.assertEqual(summary["groups"]["controlled_error/disabled"]["cancellationRate"], 0.0)
             forbidden = next(t for t in evaluation.load_tasks(evaluation.TASKS)[0]
                              if t["id"] == "natural_list_only")
             wrong_effect = dict(controlled["enabled"]["facts"], effectIDs=["A"])
@@ -140,6 +143,7 @@ class ReplanningEvaluationTests(unittest.TestCase):
             self.assertFalse(records[1].get("attempted", False))
             self.assertEqual(summary["stoppedReason"], "process_timeout")
             self.assertEqual(sum(group["timedOut"] for group in summary["groups"].values()), 1)
+            self.assertEqual(sum(group["timeoutRate"] for group in summary["groups"].values()), 1.0)
             self.assertEqual(sum(group["planned"] for group in summary["groups"].values()), 2)
             self.assertEqual(len(list((parent / "evaluation/trials").iterdir())), 1)
 

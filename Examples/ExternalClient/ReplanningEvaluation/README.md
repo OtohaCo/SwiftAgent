@@ -97,7 +97,9 @@ denial remain `not_exercised`, not a recovery success. Timed-out attempted
 trials count in the planned success denominator, with unknown recovery marked
 `not_observed`; stopped trials remain visible as `not_run`.
 
-Each trial records monotonic task start, candidate, rejection, linked feedback
+Each group reports success, failure, timeout and cancellation rates against
+all planned trials, alongside attempted and not-run counts. Each trial records
+monotonic task start, candidate, rejection, linked feedback
 request, file effect, trusted settlement, logical end and physical drain.
 The summary keeps all raw durations and reports successful-sample p50/p95 with
 `n`; `tailUnstable` is true below 20 successful samples. Failures, timeouts

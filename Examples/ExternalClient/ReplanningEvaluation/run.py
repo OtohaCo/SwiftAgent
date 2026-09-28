@@ -232,12 +232,15 @@ def summarize(records):
         def total_or_unknown(key):
             values = [value.get(key) for value in usage]
             return sum(values) if values and all(item is not None for item in values) else None
+        failures = sum(x["facts"]["outcome"] == "failed" for x in observed)
+        timeouts = sum("deadlineExceeded" in (x["facts"].get("failure") or "") for x in observed)
+        timeouts += sum(x.get("failureKind") == "process_timeout" for x in attempted)
+        cancellations = sum(x["facts"]["outcome"] == "cancelled" for x in observed)
         output[key] = dict(planned=len(entries), attempted=len(attempted),
-            succeeded=len(successful), failed=sum(x["facts"]["outcome"] == "failed" for x in observed),
+            succeeded=len(successful), failed=failures, failureRate=failures / len(entries),
             infrastructureFailures=sum(x.get("failureKind") == "fixture_or_environment" for x in attempted),
-            timedOut=sum("deadlineExceeded" in (x["facts"].get("failure") or "") for x in observed)
-                + sum(x.get("failureKind") == "process_timeout" for x in attempted),
-            cancelled=sum(x["facts"]["outcome"] == "cancelled" for x in observed),
+            timedOut=timeouts, timeoutRate=timeouts / len(entries),
+            cancelled=cancellations, cancellationRate=cancellations / len(entries),
             notRun=len(entries) - len(attempted), successRate=len(successful) / len(entries),
             rejectionTrials=len(recovery), recoverySuccess=sum(x["score"]["recovery"] == "success" for x in recovery),
             recoveryFailed=sum(x["score"]["recovery"] == "failed" for x in recovery),
