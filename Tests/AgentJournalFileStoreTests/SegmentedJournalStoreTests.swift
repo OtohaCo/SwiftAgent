@@ -1117,6 +1117,46 @@ import Glibc
         try await reopened.close()
     }
 
+    /// Reopening with a budget smaller than the segments and packs the store already keeps is an
+    /// explicit incompatibility, not a store that opens and then never finishes maintenance.
+    @Test func reopeningWithABudgetTooSmallForRetainedDataIsRefused() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-budget-reopen-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let large = try JournalMaintenancePolicy(segmentBytes: 64 * 1024, maxWorkBytes: 1 << 20, maxUnreclaimedBytes: 1 << 24)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "reopen", policy: large,
+            fault: { stage in
+                if stage == .afterMaintenanceSnapshot { throw AgentJournalError.persistenceUnavailable("defer maintenance") }
+            })
+        let operation = try await admitOperation("kept", in: journal)
+        try await settle(operation, in: journal)
+        for index in 0..<400 {
+            _ = try await journal.appendCheckpoint(
+                [.checkpoint(history: [.user([.text("turn \(index) " + String(repeating: "z", count: 300))])], steeringIDs: [])],
+                sessionID: UUID(), runID: UUID(), durability: .durable)
+        }
+        #expect(try await (journal.maintenanceStatus()?.sealedSegments ?? 0) > 0)
+        try await journal.close()
+        let before = try storeFiles(directory)
+
+        let small = try JournalMaintenancePolicy(segmentBytes: 1024,
+            maxWorkBytes: try #require(try JournalMaintenancePolicy.minimumWorkBytes(segmentBytes: 1024)), maxUnreclaimedBytes: 1 << 24)
+        do {
+            _ = try AgentIncrementalJournal.open(at: directory, policy: small)
+            Issue.record("a budget smaller than the retained segments must be refused")
+        } catch AgentJournalError.maintenanceBudgetTooSmall(let required) {
+            #expect(required > UInt64(small.maxWorkBytes))
+            #expect(required <= UInt64(large.maxWorkBytes))
+            let sufficient = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: Int(required),
+                                                          maxUnreclaimedBytes: 1 << 24)
+            #expect(try storeFiles(directory) == before, "a refused open changes nothing")
+            let reopened = try AgentIncrementalJournal.open(at: directory, policy: sufficient)
+            try await expectSettledReplay(operation, in: reopened)
+            for _ in 0..<64 { if try await reopened.requestMaintenance()?.sealedSegments == 0 { break } }
+            #expect(try await reopened.maintenanceStatus()?.sealedSegments == 0)
+            try await reopened.close()
+        }
+    }
+
     private func expectSettledReplay(_ operation: AdmittedOperation, in journal: AgentJournal) async throws {
         let status = try #require(try await journal.mutationStatus(identity: operation.identity))
         #expect(status.state == .settled)
@@ -1135,6 +1175,16 @@ import Glibc
         }
         #expect(calls.map(\.id) == [operation.callID])
         #expect(result.callID == operation.callID)
+    }
+
+    private func storeFiles(_ directory: URL) throws -> [String: Data] {
+        var files: [String: Data] = [:]
+        let enumerator = try #require(FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]))
+        for case let url as URL in enumerator where (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true
+            && url.lastPathComponent != ".writer.lock" {
+            files[url.path.replacingOccurrences(of: directory.path, with: "")] = try Data(contentsOf: url)
+        }
+        return files
     }
 
     private func launch(_ mode: String, directory: URL) throws -> Process {

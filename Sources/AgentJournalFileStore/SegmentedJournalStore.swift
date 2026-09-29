@@ -553,7 +553,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         do {
             try store.validateManagedDirectories()
             let (root, _) = try store.currentRoot()
-            _ = try store.layout(root)
+            try store.requireWorkBudget(root: root, layout: try store.layout(root))
             if let location = root.lastFrame {
                 let batch = try store.load(location)
                 guard batch.sequence == root.sequence,
@@ -684,6 +684,17 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         return root.activeEnd >= UInt64(policy.segmentBytes)
     }
 
+    /// Maintenance reads a whole sealed segment or state pack, and the active segment is sealed as
+    /// it is. A budget smaller than what the store already keeps would stall maintenance for good.
+    private func requireWorkBudget(root: Root, layout: Layout) throws {
+        var largest = max(root.activeEnd, layout.sealed.map(\.end).max() ?? 0)
+        for pack in layout.packs {
+            if let size = try? Self.fileSize(stateURL(pack)) { largest = max(largest, size) }
+        }
+        guard largest <= UInt64(policy.maxWorkBytes) else {
+            throw AgentJournalError.maintenanceBudgetTooSmall(requiredWorkBytes: largest)
+        }
+    }
 
     private func readData(_ url: URL) throws -> Data {
         let handle = try openRegularFile(url)

@@ -109,7 +109,10 @@ policy can be configured with `JournalMaintenancePolicy`. A segment rotates
 after the append that reaches `segmentBytes`, so it can end one inline frame
 past it. `maxWorkBytes` must cover such a segment: `segmentBytes` plus at most
 about 4/3 of it, or about 683 KiB once `segmentBytes` reaches 512 KiB. The
-initializer rejects a smaller budget. `storeStatus()`, `maintenanceStatus()`,
+initializer rejects a smaller budget. Opening a store whose sealed segments,
+packs or active segment exceed the handle's `maxWorkBytes` fails with
+`maintenanceBudgetTooSmall(requiredWorkBytes:)` and leaves the store unchanged;
+a budget of at least that size opens it. `storeStatus()`, `maintenanceStatus()`,
 `storageMetrics()`, and `requestMaintenance()` support
 observation and explicit low-load work. Normal operation schedules maintenance
 without a Host pre-turn compaction call. If maintenance cannot keep up, new

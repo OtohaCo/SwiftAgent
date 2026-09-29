@@ -164,6 +164,9 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     case storeClosed
     case commitUnknown
     case maintenanceRequired
+    /// The store keeps a segment or pack larger than this handle's `maxWorkBytes`; open it with a
+    /// budget of at least `requiredWorkBytes`.
+    case maintenanceBudgetTooSmall(requiredWorkBytes: UInt64)
     case deadlineExceeded
 
     public var errorDescription: String? {
@@ -190,6 +193,7 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
         case .storeClosed: "The Journal store is closed."
         case .commitUnknown: "The Journal commit result is uncertain. Stop this execution and inspect the store before retrying."
         case .maintenanceRequired: "Journal maintenance is behind the configured storage budget; retry admission after it progresses."
+        case .maintenanceBudgetTooSmall(let required): "The Journal keeps data larger than the maintenance work budget; open it with maxWorkBytes of at least \(required)."
         case .deadlineExceeded: "The Journal operation exceeded the caller's cooperative deadline."
         }
     }

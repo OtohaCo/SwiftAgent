@@ -27,6 +27,9 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
   input, mutation admission and follow-up enqueue fail with
   `maintenanceRequired`, admitted work settles within the remaining room, and
   maintenance retries the rotation.
+- Opening a store with a `maxWorkBytes` smaller than its retained segments or
+  packs fails with `maintenanceBudgetTooSmall(requiredWorkBytes:)` instead of
+  opening and then failing every maintenance pass.
 - Schema-4 stores read the `pending-operations` index as the Session set it
   stores. Maintenance previously decoded it as a batch sequence, so packing a
   sealed mutation batch and index cleanup failed on every pass, until mutation
@@ -43,6 +46,7 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
 
 ### Breaking
 
+- `AgentJournalError` adds `maintenanceBudgetTooSmall(requiredWorkBytes:)`.
 - `AgentFailure` adds `modelBinding`, `capability`, `contextPipeline` and
   `contextProjection` for Core errors that were reported as `unclassified`.
 

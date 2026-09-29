@@ -41,6 +41,11 @@ Also unreleased: while a failed segment rotation leaves the active segment past
 `segmentBytes`, Run startup, mutation admission and follow-up enqueue fail with
 `maintenanceRequired` until maintenance rotates it.
 
+Also unreleased: opening a store with a `maxWorkBytes` smaller than its retained
+segments or packs fails with the new
+`AgentJournalError.maintenanceBudgetTooSmall(requiredWorkBytes:)`; exhaustive
+switches must add it.
+
 Also unreleased: `AgentFailure` adds `modelBinding`, `capability`,
 `contextPipeline` and `contextProjection`. These Core errors previously reached
 the event stream as `unclassified`; exhaustive switches must add the cases.
