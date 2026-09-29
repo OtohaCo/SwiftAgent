@@ -163,6 +163,15 @@ Once a mutation boundary is crossed, switching provider candidates for that
 run is blocked. A later model must not retry an effect whose outcome is
 unknown.
 
+## Provider fallback cannot hand one candidate's state to another
+
+Route candidates are separate service instances. Opaque continuation state
+(for example encrypted reasoning) is recorded with the candidate that produced
+it and is sent back only to that candidate. A request carrying it is served by
+its owner or refused with `fallbackBlocked`; so is state whose candidate the
+Route cannot identify. Declare `ModelProviderRoute.Candidate` IDs so this holds
+across restarts and candidate reordering.
+
 ## Evidence does not equal authorization
 
 Evidence is a trusted observation recorded by a tool or host. It answers

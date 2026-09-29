@@ -37,6 +37,13 @@ Neither direction automatically migrates or downgrades the store. The opt-in
 does not change stable mutation identities, Evidence authority or Receipt
 settlement. Existing `AgentConfiguration` construction defaults to `.disabled`.
 
+Also unreleased: `ModelProviderRoute` returns opaque continuation state only
+to the candidate that produced it, recorded in a Route-owned continuation
+format. A request whose state the Route cannot attribute to one of its current
+candidates, including state from candidates without declared IDs after a
+restart, now fails with `fallbackBlocked` instead of reaching a candidate.
+`ModelProviderFallbackPolicyError` adds `invalidCandidateIdentity`.
+
 Also unreleased: a cancelled or failed Run whose retained steering cannot be
 committed now reports that Journal error (for example `commitUnknown`) from
 `wait()` and its terminal event instead of `CancellationError` or its own failure.

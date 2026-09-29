@@ -18,6 +18,12 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
 
 ### Fixed
 
+- `ModelProviderRoute` no longer forwards one candidate's opaque continuation
+  state (such as encrypted reasoning) to another candidate on fallback. State
+  is recorded with its producing candidate and returned only to it; if that
+  candidate fails or is unknown, the request fails with `fallbackBlocked`
+  before any other candidate is contacted. New `ModelProviderRoute.Candidate`
+  declares stable candidate IDs that survive restarts and reordering.
 - Corrections accepted by `run.steer` but not delivered before a Run is cancelled
   or fails are committed to the Journal with their IDs before the Run ends. They
   were kept only in Session memory and lost on reopen. A failed commit is
@@ -43,6 +49,9 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
 
 ### Breaking
 
+- `ModelProviderFallbackPolicyError` adds `invalidCandidateIdentity`. A Route
+  refuses continuation state it cannot attribute to a current candidate,
+  including state from candidates without declared IDs after a restart.
 - `AgentFailure` adds `modelBinding`, `capability`, `contextPipeline` and
   `contextProjection` for Core errors that were reported as `unclassified`.
 
