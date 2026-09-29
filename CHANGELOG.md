@@ -18,6 +18,10 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
 
 ### Fixed
 
+- The Journal store's writer lock descriptor is opened close-on-exec. A child
+  process the Host started with `posix_spawn` or fork/exec while the store was
+  open inherited the lock and kept a closed store locked (`storeInUse`) until
+  that child exited. Foundation's `Process` was not affected.
 - `ModelProviderRoute` no longer forwards one candidate's opaque continuation
   state (such as encrypted reasoning) to another candidate on fallback. State
   is recorded with its producing candidate and returned only to it; if that

@@ -62,7 +62,9 @@ Once every Run, resolver, observer and accepted I/O has drained, `close()` may
 release its OS lock without publishing or rolling back anything. Keep the old
 Session and Journal objects from starting further work; reopen the same
 directory to inspect its verified root. A failed close retains ownership for
-a retry of close, never for another mutation.
+a retry of close, never for another mutation. The lock descriptor is
+close-on-exec, so a child process started while the store is open does not keep
+it locked after close.
 
 ## Committed state and queries
 
