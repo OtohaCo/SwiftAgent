@@ -72,6 +72,7 @@ long-term map so a later bug does not require moving files.
 | Store creation under a symlinked Host parent must succeed while managed symlinks stay rejected | `createThroughASymlinkedParentPublishesAUsableStore` | `Tests/AgentJournalFileStoreTests/SegmentedJournalStoreTests.swift` |
 | A checkpoint committed while the Run hits its deadline or is cancelled must be adopted by Session history | `checkpointCommittedAsTheRunEndsIsAdoptedBySessionHistory(_:)` | `Tests/AgentCoreTests/AgentCompletionCommitTests.swift` |
 | Core binding, capability and context errors must stay typed on the event stream | `coreRuntimeErrorsKeepATypedFailure`, `outOfScopeFailureIsTypedOnTheEventStream` | `Tests/AgentCoreTests/AgentEventFailureTests.swift`, `Tests/AgentCoreTests/AgentCapabilityScopeTests.swift` |
+| A rotation with an uncertain `CURRENT` replacement must poison the handle without failing the committed batch | `rotationWithUnknownPublicationPoisonsTheHandleButKeepsTheCommittedBatch` | `Tests/AgentJournalFileStoreTests/SegmentedJournalStoreTests.swift` |
 | Tools defined at runtime must be bound by their own definitions, schema-checked, revocable, and settle a real mutation once across reopen, through the public API | `oneRuntimeTypeServesSeveralBoundToolsCheckedAgainstTheirOwnSchemas`, `revokingARuntimeBindingStopsItsTools`, `runtimeMutationSettlesWithItsReceiptAndIsNotReplayedAfterReopen` | `Examples/ExternalClient/Tests/ExternalClientTests/RuntimeToolPublicAPITests.swift` |
 
 When a new production bug lands, add a row here and a focused test next to the

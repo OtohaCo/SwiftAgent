@@ -116,6 +116,10 @@ without a Host pre-turn compaction call. If maintenance cannot keep up, new
 mutation admission can fail with `maintenanceRequired`; an in-flight
 settlement still has its ordinary persistence path.
 
+A segment rotation whose `CURRENT` replacement may or may not be durable
+poisons the handle like any other uncertain publication; the batch it followed
+stays committed.
+
 Only one same-host writer is supported. Do not copy an open directory as a
 backup or run an external compactor against it. Close it, then copy the whole
 directory including format, roots, segments, indexes and managed blobs. The

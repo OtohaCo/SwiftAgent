@@ -661,6 +661,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard !closed else { throw AgentJournalError.storeClosed }
+        guard !poisoned else { throw AgentJournalError.commitUnknown }
         do {
             let (root, _) = try currentRoot()
             let current = try layout(root)
@@ -1183,7 +1184,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                             layoutGeneration: nextLayout.generation,
                             lastFrame: root.lastFrame, lastDigest: root.lastDigest)
         let (_, oldRootID) = try currentRoot()
+        // Once CURRENT may have changed, only a reopen can tell which root is current.
+        poisoned = true
         try publishRoot(nextRoot, id: UUID())
+        poisoned = false
         try? FileManager.default.removeItem(at: rootURL(oldRootID))
         try? FileManager.default.removeItem(at: layoutURL(root.layout))
     }
@@ -1226,9 +1230,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let snapshot: (Root, Segment)?
         lock.lock()
         do {
-            guard !closed, !poisoned else {
-                throw AgentJournalError.persistenceUnavailable("store is closed or requires recovery")
-            }
+            guard !closed else { throw AgentJournalError.storeClosed }
+            guard !poisoned else { throw AgentJournalError.commitUnknown }
             let (root, _) = try currentRoot()
             let currentLayout = try layout(root)
             if let segment = currentLayout.sealed.first {

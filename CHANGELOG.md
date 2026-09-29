@@ -18,6 +18,10 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
 
 ### Fixed
 
+- A segment rotation whose `CURRENT` replacement is uncertain poisons the Journal
+  handle, so later reads, writes and maintenance report `commitUnknown`. They
+  reported `concurrentWriter` although no other writer existed. The batch that
+  triggered the rotation stays committed.
 - Schema-4 stores read the `pending-operations` index as the Session set it
   stores. Maintenance previously decoded it as a batch sequence, so packing a
   sealed mutation batch and index cleanup failed on every pass, until mutation

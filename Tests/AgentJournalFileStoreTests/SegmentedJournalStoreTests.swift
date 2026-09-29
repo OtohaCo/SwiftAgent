@@ -1014,6 +1014,70 @@ import Glibc
         }.filter { $0.pathExtension == "json" }
     }
 
+    /// A rotation whose CURRENT publication is unknown poisons the handle: every later read,
+    /// write and maintenance pass reports commitUnknown. The batch that triggered the rotation was
+    /// committed and stays committed; reopening recovers a usable store.
+    @Test func rotationWithUnknownPublicationPoisonsTheHandleButKeepsTheCommittedBatch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-rotation-unknown-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = RotationFault()
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: 8192,
+                                                  maxUnreclaimedBytes: 65536, maxSegmentBatches: 4)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "rotation",
+            policy: policy, fault: { try fault.check($0) })
+        let operation = try await admitOperation("settled", in: journal)
+        try await settle(operation, in: journal)
+        let session = UUID()
+        var history: [ModelMessage] = [.user([.text("first")])]
+        _ = try await journal.appendCheckpoint([.checkpoint(history: history, steeringIDs: [])],
+                                               sessionID: session, runID: UUID(), durability: .durable)
+        fault.failPublicationDuringNextRotation()
+        history.append(.user([.text("triggers rotation")]))
+        _ = try await journal.appendCheckpoint([.checkpoint(history: history, steeringIDs: [])],
+                                               sessionID: session, runID: UUID(), durability: .durable)
+        #expect(fault.fired)
+
+        await #expect(throws: AgentJournalError.commitUnknown) {
+            _ = try await journal.appendCheckpoint([.checkpoint(history: history + [.user([.text("after")])], steeringIDs: [])],
+                                                   sessionID: session, runID: UUID(), durability: .durable)
+        }
+        await #expect(throws: AgentJournalError.commitUnknown) { _ = try await journal.latestCheckpoint(sessionID: session) }
+        await #expect(throws: AgentJournalError.commitUnknown) { _ = try await journal.storeStatus() }
+        await #expect(throws: AgentJournalError.commitUnknown) { _ = try await journal.requestMaintenance() }
+        try await journal.close()
+
+        let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
+        #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == history)
+        try await expectSettledReplay(operation, in: reopened)
+        history.append(.user([.text("continues")]))
+        _ = try await reopened.appendCheckpoint([.checkpoint(history: history, steeringIDs: [])],
+                                                sessionID: session, runID: UUID(), durability: .durable)
+        try await maintainAcrossEveryIndexShard(reopened)
+        #expect(try await reopened.maintenanceStatus()?.sealedSegments == 0)
+        #expect(try await reopened.readMessages(sessionID: session).map(\.message) == history)
+        try await reopened.close()
+    }
+
+    private func expectSettledReplay(_ operation: AdmittedOperation, in journal: AgentJournal) async throws {
+        let status = try #require(try await journal.mutationStatus(identity: operation.identity))
+        #expect(status.state == .settled)
+        #expect(status.receipt?.operationID == operation.identity)
+        let retry = ToolMutationAdmissionRequest(sessionID: UUID(), runID: UUID(), callID: .init(rawValue: "retry"),
+            name: "write", argumentsJSON: "{}", resources: [.named(operation.target)], idempotencyKey: operation.identity,
+            receiptExpectation: try .init(targets: [operation.target], revision: .present))
+        guard case .settled(let receipt, let output) = try await journal.admit(retry) else {
+            Issue.record("a settled operation must replay its Receipt"); return
+        }
+        #expect(receipt == status.receipt)
+        #expect(output == .string("written"))
+        let history = try #require(try await journal.latestCheckpoint(sessionID: operation.sessionID)).history
+        guard case .assistant(_, let calls)? = history.dropLast().last, case .tool(let result)? = history.last else {
+            Issue.record("the settled result must follow its assistant call"); return
+        }
+        #expect(calls.map(\.id) == [operation.callID])
+        #expect(result.callID == operation.callID)
+    }
+
     private func launch(_ mode: String, directory: URL) throws -> Process {
         let process = Process()
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -1094,5 +1158,31 @@ private struct FixtureModel: ModelProvider {
             try emit(.responseStarted(info))
             try emit(.responseCompleted(.init(info: info, content: [.text("unused")], stopReason: .endTurn)))
         }
+    }
+}
+
+/// Fails rotation: the CURRENT publication of the next rotation, or every rotation before it publishes.
+private final class RotationFault: @unchecked Sendable {
+    private let lock = NSLock()
+    private var publicationArmed = false
+    private var rotating = false
+    private var failAll = false
+    private var didFire = false
+    var fired: Bool { lock.withLock { didFire } }
+    func failPublicationDuringNextRotation() { lock.withLock { publicationArmed = true } }
+    func failEveryRotation(_ enabled: Bool) { lock.withLock { failAll = enabled } }
+    func check(_ stage: JournalFileFaultStage) throws {
+        let failure = lock.withLock { () -> String? in
+            if stage == .beforeRotation {
+                if failAll { didFire = true; return "rotation failed" }
+                if publicationArmed { rotating = true }
+            }
+            if stage == .afterCurrentReplace, rotating {
+                rotating = false; publicationArmed = false; didFire = true
+                return "directory sync after CURRENT replacement failed"
+            }
+            return nil
+        }
+        if let failure { throw AgentJournalError.persistenceUnavailable("injected: \(failure)") }
     }
 }
