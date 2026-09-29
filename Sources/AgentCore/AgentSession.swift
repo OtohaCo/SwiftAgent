@@ -52,6 +52,8 @@ public actor AgentSession {
     private var startupReservations: [UUID: StartupReservation] = [:]
     private var scopesByRunID: [UUID: AgentCapabilityScope] = [:]
     private var conversationRevision: UInt64 = 0
+    private var committedWrites: [UUID: Int] = [:]
+    private var committedWriteWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
 
     private struct StartupReservation {
         let journalLeaseAcquired: Bool
@@ -615,21 +617,8 @@ public actor AgentSession {
                 throw AgentJournalError.mutationSettlementRequiresReconciliation
             },
             commitMutation: { callID, receipt, output, messages, steering in
-                guard let journal else {
-                    throw AgentJournalError.persistenceUnavailable("mutation history cannot be committed without a journal")
-                }
-                let prepared = try await self.prepareCheckpoint(messages)
-                try await journal.commitMutation(
-                    sessionID: self.id,
-                    runID: runID,
-                    callID: callID,
-                    receipt: receipt,
-                    output: output,
-                    history: prepared,
-                    steeringIDs: steering.map(\.id)
-                )
-                await self.applyCommittedHistory(prepared, steering: steering, runID: runID)
-                return prepared
+                try await self.commitMutation(callID, receipt: receipt, output: output,
+                                              history: messages, steering: steering, runID: runID)
             },
             markMutationNeedsReconciliation: { callID in
                 await self.mutationQuarantineDidBegin?(runID, callID)
@@ -671,18 +660,19 @@ public actor AgentSession {
                         name: rejection.toolName))
                 }
                 events.append(.checkpoint(history: prepared, steeringIDs: steering.map(\.id)))
+                beginCommittedWrite(runID)
+                defer { endCommittedWrite(runID) }
                 try await journal.appendCheckpointForCurrentRun(
                     events,
                     sessionID: id,
                     runID: runID,
                     durability: journal.storage == .durable ? .durable : .memory
                 )
+                // Committed. Cancellation or the deadline arriving during the append cannot undo it.
+                applyCommittedHistory(prepared, steering: steering, runID: runID)
+            } else {
+                applyCommittedHistory(prepared, steering: steering, runID: runID)
             }
-            try budget.checkActive()
-            guard activeRunID == runID else { throw CancellationError() }
-            if history != prepared { advanceConversationRevision() }
-            history = prepared
-            appliedSteeringIDs.formUnion(steering.map(\.id))
             checkpointDidExit?(runID)
             return prepared
         } catch {
@@ -691,14 +681,59 @@ public actor AgentSession {
         }
     }
 
+    private func commitMutation(_ callID: ToolCallID, receipt: ToolReceipt, output: JSONValue,
+                                history messages: [ModelMessage], steering: [AgentSteeringInput],
+                                runID: UUID) async throws -> [ModelMessage] {
+        guard let journal else {
+            throw AgentJournalError.persistenceUnavailable("mutation history cannot be committed without a journal")
+        }
+        let prepared = try await prepareCheckpoint(messages)
+        beginCommittedWrite(runID)
+        defer { endCommittedWrite(runID) }
+        try await journal.commitMutation(
+            sessionID: id,
+            runID: runID,
+            callID: callID,
+            receipt: receipt,
+            output: output,
+            history: prepared,
+            steeringIDs: steering.map(\.id)
+        )
+        applyCommittedHistory(prepared, steering: steering, runID: runID)
+        return prepared
+    }
+
+    /// Adopts history the Journal committed for `runID`. A finished Run still draining owns the
+    /// conversation too: a mutation settlement it commits then is durable and must not be dropped.
     private func applyCommittedHistory(_ messages: [ModelMessage], steering: [AgentSteeringInput], runID: UUID) {
-        guard activeRunID == runID else { return }
+        guard activeRunID == runID || drainingRunID == runID else { return }
         if history != messages { advanceConversationRevision() }
         history = messages
-        appliedSteeringIDs.formUnion(steering.map(\.id))
+        if activeRunID == runID { appliedSteeringIDs.formUnion(steering.map(\.id)) }
+    }
+
+    /// Once a Journal write for a Run begins, its outcome is committed or unknown; it cannot be
+    /// rolled back. `finish` waits for these writes so their history is adopted first.
+    private func beginCommittedWrite(_ runID: UUID) {
+        committedWrites[runID, default: 0] += 1
+    }
+
+    private func endCommittedWrite(_ runID: UUID) {
+        guard let count = committedWrites[runID] else { return }
+        guard count == 1 else { committedWrites[runID] = count - 1; return }
+        committedWrites.removeValue(forKey: runID)
+        committedWriteWaiters.removeValue(forKey: runID)?.forEach { $0.resume() }
+    }
+
+    private func waitForCommittedWrites(_ runID: UUID) async {
+        while committedWrites[runID] != nil {
+            await withCheckedContinuation { committedWriteWaiters[runID, default: []].append($0) }
+        }
     }
 
     private func finish(runID: UUID, pending: [AgentSteeringInput], control: AgentRunControl) async {
+        guard activeRunID == runID else { return }
+        await waitForCommittedWrites(runID)
         guard activeRunID == runID else { return }
         for input in pending where !appliedSteeringIDs.contains(input.id) {
             history.append(.user([.text(input.text)]))

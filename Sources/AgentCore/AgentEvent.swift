@@ -90,6 +90,10 @@ public enum AgentFailure: Error, Equatable, Sendable {
     case journal(AgentJournalError)
     indirect case mutationPersistence(AgentMutationPersistenceError)
     case context(AgentContextError)
+    case modelBinding(AgentModelBindingError)
+    case capability(AgentCapabilityError)
+    case contextPipeline(AgentContextPipelineError)
+    case contextProjection(AgentContextProjectionError)
     case cancelled
     case unclassified
 
@@ -109,6 +113,10 @@ public enum AgentFailure: Error, Equatable, Sendable {
         case let error as AgentJournalError: self = .journal(error)
         case let error as AgentMutationPersistenceError: self = .mutationPersistence(error)
         case let error as AgentContextError: self = .context(error)
+        case let error as AgentModelBindingError: self = .modelBinding(error)
+        case let error as AgentCapabilityError: self = .capability(error)
+        case let error as AgentContextPipelineError: self = .contextPipeline(error)
+        case let error as AgentContextProjectionError: self = .contextProjection(error)
         default: self = .unclassified
         }
     }

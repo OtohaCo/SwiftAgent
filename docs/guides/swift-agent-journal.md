@@ -105,9 +105,12 @@ and replay outputs; it drops obsolete process records and deletes an old
 segment only after the replacement root is reliable. Physical maintenance
 never changes a logical operation identity or Session message ID. It does not
 promise fixed disk use while actual conversation and operations grow. The
-policy can be configured with `JournalMaintenancePolicy`, while
-`storeStatus()`, `maintenanceStatus()`, `storageMetrics()`, and
-`requestMaintenance()` support
+policy can be configured with `JournalMaintenancePolicy`. A segment rotates
+after the append that reaches `segmentBytes`, so it can end one inline frame
+past it. `maxWorkBytes` must cover such a segment: `segmentBytes` plus at most
+about 4/3 of it, or about 683 KiB once `segmentBytes` reaches 512 KiB. The
+initializer rejects a smaller budget. `storeStatus()`, `maintenanceStatus()`,
+`storageMetrics()`, and `requestMaintenance()` support
 observation and explicit low-load work. Normal operation schedules maintenance
 without a Host pre-turn compaction call. If maintenance cannot keep up, new
 mutation admission can fail with `maintenanceRequired`; an in-flight

@@ -338,6 +338,26 @@ struct AgentCapabilityScopeTests {
         #expect(await session.history == [])
     }
 
+    /// The capability error that ends a Run reaches Hosts typed, not as `unclassified`.
+    @Test func outOfScopeFailureIsTypedOnTheEventStream() async throws {
+        let provider = ScriptedProvider { request, _ in
+            toolResponse(request, [.init(id: .init(rawValue: "read"), name: ScopeReadTool.name,
+                                         argumentsJSON: #"{"id":"B"}"#, completeness: .complete)])
+        }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let binding = try await session.bindCapabilities(identity: "A", version: "1",
+            backendInstanceID: "fixture", backendVersion: "1",
+            allowedResources: [.named(.init(namespace: "fixture.scope", id: "A"))],
+            tools: [.init(id: "read", version: "1", tool: try ScopeReadTool(log: EffectLog()))])
+        let run = try await session.run("read B", capabilities: binding)
+        let events = await collectEvents(run.events)
+        try await run.waitForDrain()
+        guard case .runFinished(.failed(let failure)) = try #require(events.last) else {
+            Issue.record("expected a failed terminal event, got \(String(describing: events.last))"); return
+        }
+        #expect(failure == .capability(.resourceOutsideScope))
+    }
+
     @Test func outOfScopeResourceAndGuessedToolNeverEnterExecutors() async throws {
         let log = EffectLog()
         let provider = ScriptedProvider { request, _ in

@@ -412,6 +412,10 @@ public struct ExecutionReportReducer: Sendable {
         case let error as AgentJournalError: .journal(error)
         case let error as AgentMutationPersistenceError: .mutationPersistence(error)
         case let error as AgentContextError: .context(error)
+        case let error as AgentModelBindingError: .modelBinding(error)
+        case let error as AgentCapabilityError: .capability(error)
+        case let error as AgentContextPipelineError: .contextPipeline(error)
+        case let error as AgentContextProjectionError: .contextProjection(error)
         default: .unclassified
         }
     }
