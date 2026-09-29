@@ -28,6 +28,9 @@ switch on them rather than wrapping arbitrary errors themselves.
 | Uncertain commit | `AgentJournalError.commitUnknown` | The Run owns the startup outcome through drain; reopen and inspect before retry |
 | Maintenance pressure | `AgentJournalError.maintenanceRequired` | New mutation admission pauses until maintenance progresses |
 | Settlement and quarantine both failed | `AgentMutationPersistenceError` | `AgentFailure.mutationPersistence`; both sides stay typed |
+| Model binding / projected token budget | `AgentModelBindingError` | `AgentFailure.modelBinding`; for example `staleConversationRevision` or `contextBudgetExceeded` |
+| Run capability scope | `AgentCapabilityError` | `AgentFailure.capability`; for example `revoked` or `resourceOutsideScope` |
+| Context pipeline or projection | `AgentContextPipelineError`, `AgentContextProjectionError` | `AgentFailure.contextPipeline` / `.contextProjection`; for example `staleSummary` |
 | Oversized input / projected request | `AgentContextError` | `inputTooLarge` vs `historyTooLarge`. No canonical-history compactor runs. An over-budget projected request fails before provider execution. |
 | Programmer / configuration | `AgentLoopError.invalidBudget`, `ToolPolicyError`, `ModelProviderError.invalidRequest` | Construction |
 

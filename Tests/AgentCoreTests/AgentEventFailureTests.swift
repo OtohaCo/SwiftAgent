@@ -1,4 +1,4 @@
-import AgentCore
+@testable import AgentCore
 import AgentModels
 import AgentTools
 import Foundation
@@ -18,6 +18,16 @@ struct AgentEventFailureTests {
         #expect(Array(events.suffix(3)) == [.toolStarted(call), .toolFailed(call.id, failure), .runFinished(.failed(failure))])
         #expect(await log.names.isEmpty)
         #expect(events.filter { if case .runFinished = $0 { true } else { false } }.count == 1)
+    }
+
+    /// Binding, capability and context errors are raised by Core during a Run; none is a foreign error.
+    @Test func coreRuntimeErrorsKeepATypedFailure() {
+        let budget = AgentModelBindingError.contextBudgetExceeded(estimatedInputTokens: 9, availableInputTokens: 4)
+        let span = AgentContextProjectionError.unresolvedReadOnlySpan(.init(rawValue: "call"))
+        #expect(AgentFailure(budget) == .modelBinding(budget))
+        #expect(AgentFailure(AgentCapabilityError.revoked) == .capability(.revoked))
+        #expect(AgentFailure(AgentContextPipelineError.staleSummary) == .contextPipeline(.staleSummary))
+        #expect(AgentFailure(span) == .contextProjection(span))
     }
 
     @Test func unknownToolFailsWithoutPublishingToolStart() async throws {

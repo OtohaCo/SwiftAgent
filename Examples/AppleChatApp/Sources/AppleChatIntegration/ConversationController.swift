@@ -389,6 +389,10 @@ public actor ConversationController {
         case let value as AgentJournalError: .journal(value)
         case let value as AgentMutationPersistenceError: .mutationPersistence(value)
         case let value as AgentContextError: .context(value)
+        case let value as AgentModelBindingError: .modelBinding(value)
+        case let value as AgentCapabilityError: .capability(value)
+        case let value as AgentContextPipelineError: .contextPipeline(value)
+        case let value as AgentContextProjectionError: .contextProjection(value)
         default: .unclassified
         }
     }

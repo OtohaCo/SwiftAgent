@@ -32,6 +32,11 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
   through a symlink. It previously failed after writing a complete store.
   Managed paths inside the store still refuse symlinks.
 
+### Breaking
+
+- `AgentFailure` adds `modelBinding`, `capability`, `contextPipeline` and
+  `contextProjection` for Core errors that were reported as `unclassified`.
+
 ## [1.0.0-rc.4] - 2026-09-28
 
 RC4 is a breaking SDK prerelease, not a stable 1.0 release or production Host
