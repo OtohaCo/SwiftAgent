@@ -16,11 +16,11 @@ package struct AnyAgentTool: Sendable {
     private let decode: @Sendable (JSONValue) throws -> PreparedInvocation
 
     package init<T: AgentTool>(_ tool: T) throws {
-        guard !T.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let definition = tool.definition
+        guard !definition.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ToolInvocationError.invalidDefinition
         }
-        definition = ModelToolDefinition(name: T.name, description: T.description,
-                                         inputSchema: T.inputSchema.json, outputSchema: T.outputSchema.json)
+        self.definition = definition
         let policy = tool.policy
         self.policy = policy
         decode = { arguments in
@@ -71,7 +71,7 @@ package struct AnyAgentTool: Sendable {
                         sessionID: context.sessionID,
                         runID: context.runID,
                         callID: context.callID,
-                        name: T.name,
+                        name: definition.name,
                         argumentsJSON: argumentsJSON,
                         resources: resources,
                         idempotencyKey: context.idempotencyKey ?? "",

@@ -1,6 +1,6 @@
 # SwiftAgent Typed Tools
 
-last-verified: 2026-09-18
+last-verified: 2026-09-29
 
 Implement [AgentTool](../../Sources/AgentTools/AgentTool.swift) with
 Codable, Sendable input and output types. Declare the JSON field names explicitly
@@ -54,6 +54,19 @@ preserves constraints; it does not certify that a validator supports them.
 Schema declarations must agree with Codable behavior, including CodingKeys and
 custom encoding. No reflection or sample-value inference generates a schema for
 arbitrary Codable types. Schema validation is a separate runtime boundary.
+
+## Tools Defined at Runtime
+
+A tool whose name, description and schemas are known only at runtime (declared by
+a Host's configuration, or offered by an external server) conforms to
+`RuntimeAgentTool`. Its input and output are `JSONValue`, and it supplies
+`runtimeDefinition`; the type's static name, description and schemas are not
+used, so one type can serve many tools. Every tool's `definition` is what the
+model sees and what the registry validates arguments and output against; for an
+ordinary `AgentTool` it defaults to the type's static values. Authorization,
+Evidence, Receipts and mutation admission are unchanged and use the
+definition's name. A definition without a name is rejected at registration, and
+its output schema is required like any other tool's.
 
 ## Registry Validation
 
