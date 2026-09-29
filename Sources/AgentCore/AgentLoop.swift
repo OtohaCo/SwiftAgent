@@ -114,21 +114,28 @@ package struct AgentLoop: Sendable {
     ) async throws -> AgentLoopResult {
         await emitter?.start(.init(sessionID: sessionID, runID: runID, model: model))
         let evidenceLedger = lifecycle?.evidenceLedger ?? EvidenceLedger()
+        let outcome: Result<AgentLoopResult, any Error>
         do {
             if cancelledAtCreation { throw CancellationError() }
-            let result = try await withAgentDeadline(budget.deadline) {
+            outcome = .success(try await withAgentDeadline(budget.deadline) {
                 try await runBody(messages: messages, sessionID: sessionID, runID: runID,
                                   budget: budget, structuredOutput: structuredOutput, operationID: operationID,
                                   emitter: emitter, lifecycle: lifecycle, evidenceLedger: evidenceLedger,
                                   initialRequest: initialRequest)
-            }
-            await lifecycle?.beforeFinish()
-            await clearMutationBoundary(sessionID: sessionID, runID: runID)
+            })
+        } catch {
+            outcome = .failure(error)
+        }
+        let finishFailure = await lifecycle?.beforeFinish()
+        await clearMutationBoundary(sessionID: sessionID, runID: runID)
+        switch (outcome, finishFailure) {
+        case (_, let failure?):
+            await emitter?.finish(.failed(AgentFailure(failure)))
+            throw failure
+        case (.success(let result), nil):
             await emitter?.finish(.result(result))
             return result
-        } catch {
-            await lifecycle?.beforeFinish()
-            await clearMutationBoundary(sessionID: sessionID, runID: runID)
+        case (.failure(let error), nil):
             await emitter?.finish(error is CancellationError ? .cancelled : .failed(AgentFailure(error)))
             throw error
         }

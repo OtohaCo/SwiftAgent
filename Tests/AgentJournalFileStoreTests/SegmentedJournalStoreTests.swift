@@ -481,6 +481,49 @@ import Glibc
         try await reopened.close()
     }
 
+    /// Once close begins it accepts no new queue input or withdrawal, while the maintenance it
+    /// already owns still completes before the store closes.
+    @Test func closingRefusesNewFollowUpWorkButFinishesOwnedMaintenance() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-closing-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pause = ClosingMaintenancePause()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "closing",
+            fault: { stage in if stage == .afterMaintenanceSnapshot { pause.holdOnce() } })
+        let session = UUID()
+        func input(_ id: String) -> AgentFollowUpInput {
+            AgentFollowUpInput(inputID: id, text: "text \(id)", operationID: "operation-\(id)", configurationRef: "cfg")
+        }
+        _ = try await journal.enqueueFollowUp(input("queued"), sessionID: session)
+        let maintenance = Task { try await journal.requestMaintenance() }
+        await pause.waitUntilHeld()
+        let closing = Task { try await journal.close() }
+        // close() marks closing before it waits for maintenance; checkpoint appends refuse from then on.
+        var closingObserved = false
+        for _ in 0..<500 where !closingObserved {
+            do {
+                _ = try await journal.appendCheckpoint([.checkpoint(history: [.user([.text("probe")])], steeringIDs: [])],
+                                                       sessionID: UUID(), runID: UUID(), durability: .durable)
+                try await Task.sleep(for: .milliseconds(2))
+            } catch AgentJournalError.storeClosed { closingObserved = true }
+        }
+        try #require(closingObserved)
+
+        await #expect(throws: AgentJournalError.storeClosed) {
+            _ = try await journal.enqueueFollowUp(input("late"), sessionID: session)
+        }
+        await #expect(throws: AgentJournalError.storeClosed) {
+            _ = try await journal.withdrawFollowUp(sessionID: session, inputID: "queued")
+        }
+        pause.release()
+        _ = try await maintenance.value
+        try await closing.value
+
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        #expect(try await reopened.followUp(sessionID: session, inputID: "late") == nil)
+        #expect(try await reopened.followUp(sessionID: session, inputID: "queued")?.state == .queued)
+        try await reopened.close()
+    }
+
     @Test func failedCloseRetainsOwnershipUntilRetrySucceeds() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-close-fault-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1268,6 +1311,22 @@ private struct FixtureModel: ModelProvider {
             try emit(.responseCompleted(.init(info: info, content: [.text("unused")], stopReason: .endTurn)))
         }
     }
+}
+
+private final class ClosingMaintenancePause: @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate = DispatchSemaphore(value: 0)
+    private var used = false
+    private let (held, heldSignal) = AsyncStream<Void>.makeStream()
+
+    func holdOnce() {
+        guard lock.withLock({ () -> Bool in defer { used = true }; return !used }) else { return }
+        heldSignal.yield()
+        gate.wait()
+    }
+
+    func waitUntilHeld() async { for await _ in held { return } }
+    func release() { gate.signal() }
 }
 
 /// Fails rotation: the CURRENT publication of the next rotation, or every rotation before it publishes.

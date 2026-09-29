@@ -213,7 +213,14 @@ uses the same budgets and never resets model-turn limits.
 
 `steeringApplied(id:text:)` reports application to the run context, not a promise
 that a later provider request will succeed. Corrections accepted before cancellation
-or failure are retained in Session history even if they could not be delivered.
-Stable IDs prevent duplication across the checkpoint/acknowledgment boundary.
-Such retained inputs need not have a steeringApplied event. Full follow-up queues
+or failure but never delivered are committed to the Journal with their IDs before
+the Run ends, so the Session and a reopened Journal agree. Stable IDs prevent
+duplication across the checkpoint/acknowledgment boundary. Such retained inputs
+need not have a steeringApplied event.
+
+If that commit fails, the Run reports the Journal error instead of its own outcome.
+After a definite failure the corrections stay owed and join the next Run's admitted
+input ahead of its text. After `commitUnknown`, only the Journal can say whether
+they became history: the Session refuses `conversationSnapshot()`, context
+provenance and new Runs until the Journal is closed, reopened and inspected. Full follow-up queues
 and configurable drain policies remain separate from this Run control API.

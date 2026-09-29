@@ -54,7 +54,9 @@ active `CURRENT` root is rejected as `concurrentWriter`; it cannot be accepted
 as equivalent maintenance. The owner can run multiple
 Sessions and provider/tool calls concurrently; only short commits are
 serialized. `close()` rejects an active Session lease, waits for accepted
-maintenance, then unlocks. Wait for `run.waitForDrain()` before closing.
+maintenance, then unlocks. From the moment it starts, new work (Session leases,
+checkpoints, mutation admission, follow-up enqueue or withdrawal) fails with
+`storeClosed`; work already accepted still completes. Wait for `run.waitForDrain()` before closing.
 After `commitUnknown`, the handle remains poisoned for all reads and writes.
 Once every Run, resolver, observer and accepted I/O has drained, `close()` may
 release its OS lock without publishing or rolling back anything. Keep the old
