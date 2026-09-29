@@ -37,6 +37,10 @@ Neither direction automatically migrates or downgrades the store. The opt-in
 does not change stable mutation identities, Evidence authority or Receipt
 settlement. Existing `AgentConfiguration` construction defaults to `.disabled`.
 
+Also unreleased: a cancelled or failed Run whose retained steering cannot be
+committed now reports that Journal error (for example `commitUnknown`) from
+`wait()` and its terminal event instead of `CancellationError` or its own failure.
+
 Also unreleased: `AgentFailure` adds `modelBinding`, `capability`,
 `contextPipeline` and `contextProjection`. These Core errors previously reached
 the event stream as `unclassified`; exhaustive switches must add the cases.

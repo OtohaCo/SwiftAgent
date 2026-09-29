@@ -12,7 +12,9 @@ struct AgentLoopLifecycle: Sendable {
     let commitMutation: (@Sendable (ToolCallID, ToolReceipt, JSONValue, [ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage])?
     let markMutationNeedsReconciliation: @Sendable (ToolCallID) async throws -> Void
     let recordReadOnlyResult: @Sendable (ToolCall, ToolResultMessage) async -> Void
-    let beforeFinish: @Sendable () async -> Void
+    /// Ends the Run's ownership of the Session. A returned error is a persistence outcome the Run
+    /// must report instead of its own, such as an unknown commit of retained steering.
+    let beforeFinish: @Sendable () async -> (any Error)?
 
     init(
         control: AgentRunControl,
@@ -25,7 +27,7 @@ struct AgentLoopLifecycle: Sendable {
         commitMutation: (@Sendable (ToolCallID, ToolReceipt, JSONValue, [ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage])? = nil,
         markMutationNeedsReconciliation: @escaping @Sendable (ToolCallID) async throws -> Void = { _ in },
         recordReadOnlyResult: @escaping @Sendable (ToolCall, ToolResultMessage) async -> Void = { _, _ in },
-        beforeFinish: @escaping @Sendable () async -> Void = {}
+        beforeFinish: @escaping @Sendable () async -> (any Error)? = { nil }
     ) {
         self.control = control
         self.evidenceLedger = evidenceLedger

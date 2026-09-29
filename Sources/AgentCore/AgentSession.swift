@@ -52,6 +52,11 @@ public actor AgentSession {
     private var startupReservations: [UUID: StartupReservation] = [:]
     private var scopesByRunID: [UUID: AgentCapabilityScope] = [:]
     private var conversationRevision: UInt64 = 0
+    /// Retained corrections a definite Journal failure kept out of history; the next Run admits them.
+    private var owedSteering: [AgentSteeringInput] = []
+    /// Retained corrections whose commit outcome is unknown. Only a reopened Journal can say whether
+    /// they are history, so this Session neither presents nor extends history any more.
+    private var steeringCommitUnknown = false
     private var committedWrites: [UUID: Int] = [:]
     private var committedWriteWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
 
@@ -164,6 +169,7 @@ public actor AgentSession {
         followUpInputID: String? = nil
     ) async throws -> AgentRun {
         try Task.checkCancellation()
+        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentSessionError.emptyInput }
         try contextPolicy.checkInput(text)
         let runBudget = try budget ?? AgentBudget(
@@ -269,6 +275,7 @@ public actor AgentSession {
     }
 
     public func conversationSnapshot() async throws -> AgentConversationSnapshot {
+        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
         try await restoreJournalStateIfNeeded()
         return .init(revision: conversationRevision, messages: history)
     }
@@ -358,6 +365,7 @@ public actor AgentSession {
     /// Anchors a closed range to actual Journal message IDs. The caller can
     /// derive a request-only summary; no conversation or ledger write occurs.
     public func contextHistorySpan(start: Int, count: Int) async throws -> AgentContextHistorySpan {
+        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
         try await restoreJournalStateIfNeeded()
         guard let journal, start >= 0, count > 0, count <= 256,
               start <= Int.max - count else { throw AgentContextPipelineError.unsafeSummary }
@@ -375,6 +383,7 @@ public actor AgentSession {
     /// Selects a committed successful result from a registered read-only tool.
     /// A projection may shorten its model view; the Journal result stays whole.
     public func contextToolExcerpt(callID: ToolCallID, text: String) async throws -> AgentContextToolExcerpt {
+        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
         try await restoreJournalStateIfNeeded()
         let formal = history.filter { $0.role != .system && $0.role != .developer }
         guard let index = formal.firstIndex(where: {
@@ -484,7 +493,8 @@ public actor AgentSession {
                              capabilityScope: capabilities?.scope,
                              allowedResources: capabilities?.allowedResources,
                              preAdmissionReplanning: preAdmissionReplanning)
-        let candidateMessages = prepared + [.user([.text(text)])]
+        let owed = owedSteering
+        let candidateMessages = prepared + owed.map { .user([.text($0.text)]) } + [.user([.text(text)])]
         let preparedRequest: AgentPreparedModelRequest
         preparedRequest = try await withStartupDeadline(budget.deadline, startupID: startupID,
                                                          control: control) { [weak self] in
@@ -517,7 +527,7 @@ public actor AgentSession {
             // replacement Session must still recover the committed input.
             lifecycleEvents.append(.checkpoint(
                 history: candidateMessages,
-                steeringIDs: Array(appliedSteeringIDs)
+                steeringIDs: Array(appliedSteeringIDs) + owed.map(\.id)
             ))
             lifecycleEvents.append(.userMessage(text))
             await startupCommitWillBegin?(runID)
@@ -553,7 +563,9 @@ public actor AgentSession {
             followUpInputID == nil ? .unbounded : .bufferingNewest(256))
         let emitter = AgentEventEmitter(channel.continuation, requiresConsumer: false)
         if history != prepared { history = prepared }
+        history.append(contentsOf: owed.map { .user([.text($0.text)]) })
         history.append(.user([.text(text)]))
+        owedSteering.removeAll()
         conversationRevision = candidateRevision
         activeRunID = runID
         appliedSteeringIDs.removeAll()
@@ -568,7 +580,7 @@ public actor AgentSession {
             await control.start {
                 if startupIsUncertain {
                     await emitter.start(.init(sessionID: self.id, runID: runID, model: binding.model))
-                    await self.finish(runID: runID, pending: [], control: control)
+                    _ = await self.finish(runID: runID, pending: [], control: control)
                     await emitter.finish(.failed(.journal(.commitUnknown)))
                     return .failure(AgentJournalError.commitUnknown)
                 }
@@ -630,7 +642,7 @@ public actor AgentSession {
             },
             beforeFinish: {
                 let pending = await control.beginFinish()
-                await self.finish(runID: runID, pending: pending, control: control)
+                return await self.finish(runID: runID, pending: pending, control: control)
             }
         )
         do {
@@ -731,14 +743,13 @@ public actor AgentSession {
         }
     }
 
-    private func finish(runID: UUID, pending: [AgentSteeringInput], control: AgentRunControl) async {
-        guard activeRunID == runID else { return }
+    /// Returns a failure the Run must report instead of its own outcome.
+    private func finish(runID: UUID, pending: [AgentSteeringInput], control: AgentRunControl) async -> (any Error)? {
+        guard activeRunID == runID else { return nil }
         await waitForCommittedWrites(runID)
-        guard activeRunID == runID else { return }
-        for input in pending where !appliedSteeringIDs.contains(input.id) {
-            history.append(.user([.text(input.text)]))
-            advanceConversationRevision()
-        }
+        guard activeRunID == runID else { return nil }
+        let retained = pending.filter { !appliedSteeringIDs.contains($0.id) }
+        let failure = retained.isEmpty ? nil : await retain(retained, runID: runID)
         activeRunID = nil
         appliedSteeringIDs.removeAll()
         drainingRunID = runID
@@ -764,6 +775,37 @@ public actor AgentSession {
                 await scope?.releaseRun(runID)
                 if scope != nil { await scopeReleaseDidFinish?(runID) }
             }
+        }
+        return failure
+    }
+
+    /// Commits corrections accepted but never delivered, with their IDs, while this Run still owns
+    /// the Session: no later Run starts and drain does not begin until the outcome is known. The
+    /// Journal write checks no cancellation, so a cancelled Run still completes it.
+    private func retain(_ inputs: [AgentSteeringInput], runID: UUID) async -> (any Error)? {
+        let messages = history + inputs.map { ModelMessage.user([.text($0.text)]) }
+        guard let journal else {
+            history = messages
+            advanceConversationRevision()
+            return nil
+        }
+        do {
+            let prepared = try await prepareCheckpoint(messages)
+            try await journal.appendCheckpointForCurrentRun(
+                [.checkpoint(history: prepared, steeringIDs: inputs.map(\.id))],
+                sessionID: id,
+                runID: runID,
+                durability: journal.storage == .durable ? .durable : .memory
+            )
+            if history != prepared { advanceConversationRevision() }
+            history = prepared
+            return nil
+        } catch AgentJournalError.commitUnknown {
+            steeringCommitUnknown = true
+            return AgentJournalError.commitUnknown
+        } catch {
+            owedSteering.append(contentsOf: inputs)
+            return error
         }
     }
 

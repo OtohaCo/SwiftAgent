@@ -1,4 +1,5 @@
 import AgentCore
+import AgentJournalFileStore
 import AgentModels
 import AgentTools
 import Foundation
@@ -176,6 +177,146 @@ struct AgentSteeringTests {
             let followUp = await provider.log.requests.first { $0.messages.last == .user([.text("next")]) }
             #expect(followUp?.messages == expected + [.user([.text("next")])])
         }
+    }
+}
+
+/// A correction accepted but not delivered when a Run is cancelled is part of the conversation:
+/// it is committed with its stable ID before the Run ends, or its failure is reported.
+struct AgentSteeringDurabilityTests {
+    private func directory() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("steering-durability-\(UUID().uuidString)")
+    }
+
+    @Test func retainedCorrectionIsCommittedWhenTheRunIsCancelled() async throws {
+        let url = directory()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let journal = try AgentIncrementalJournal.create(at: url, operationDomain: "steering")
+        let model = StalledModel()
+        let agent = try Agent(model: fixtureModel, provider: model.provider)
+        let session = try agent.makeSession(journal: journal)
+        let run = try await session.run("original")
+        await model.waitUntilStalled()
+        let correctionID = try await run.steer("correction")
+        await run.cancel()
+        await #expect(throws: CancellationError.self) { try await run.wait() }
+        try await run.waitForDrain()
+
+        let expected: [ModelMessage] = [.user([.text("original")]), .user([.text("correction")])]
+        #expect(try await session.conversationSnapshot().messages == expected)
+        let committed = try #require(try await journal.latestCheckpoint(sessionID: session.id))
+        #expect(committed.history == expected)
+        #expect(committed.steeringIDs == [correctionID])
+
+        let next = try await session.run("next")
+        _ = try await next.wait()
+        try await next.waitForDrain()
+        #expect(await model.lastRequest?.messages == expected + [.user([.text("next")])])
+        try await journal.close()
+
+        let reopened = try AgentIncrementalJournal.open(at: url)
+        let restored = try await agent.makeSession(id: session.id, journal: reopened).conversationSnapshot()
+        #expect(restored.messages.filter { $0 == .user([.text("correction")]) }.count == 1)
+        try await reopened.close()
+    }
+
+    /// An unknown outcome is neither adopted nor dropped: the Run reports it and the Session
+    /// refuses to present or extend history until the Journal is reopened and inspected.
+    @Test(arguments: [JournalFileFaultStage.afterIndexSync, .afterCurrentReplace])
+    func uncertainCorrectionCommitIsReportedNotAssumed(_ stage: JournalFileFaultStage) async throws {
+        let url = directory()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let fault = SteeringJournalFault()
+        let journal = try AgentIncrementalJournal.createForTesting(at: url, operationDomain: "steering",
+                                                                   fault: { try fault.check($0) })
+        let model = StalledModel()
+        let agent = try Agent(model: fixtureModel, provider: model.provider)
+        let session = try agent.makeSession(journal: journal)
+        let run = try await session.run("original")
+        await model.waitUntilStalled()
+        _ = try await run.steer("correction")
+        fault.arm(stage)
+        await run.cancel()
+        await #expect(throws: AgentJournalError.commitUnknown) { try await run.wait() }
+        try await run.waitForDrain()
+        #expect(fault.fired)
+        await #expect(throws: AgentJournalError.commitUnknown) { try await session.conversationSnapshot() }
+        await #expect(throws: AgentJournalError.commitUnknown) { try await session.run("next") }
+        try await journal.close()
+
+        let reopened = try AgentIncrementalJournal.open(at: url)
+        let restored = try await agent.makeSession(id: session.id, journal: reopened).conversationSnapshot()
+        let published = stage == .afterCurrentReplace
+        #expect(restored.messages == [.user([.text("original")])] + (published ? [.user([.text("correction")])] : []))
+        try await reopened.close()
+    }
+
+    /// A definite failure is reported; the correction stays owed and joins the next Run's
+    /// admitted input, once.
+    @Test func correctionThatCouldNotBeCommittedJoinsTheNextRun() async throws {
+        let url = directory()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let fault = SteeringJournalFault()
+        let journal = try AgentIncrementalJournal.createForTesting(at: url, operationDomain: "steering",
+                                                                   fault: { try fault.check($0) })
+        let model = StalledModel()
+        let session = try Agent(model: fixtureModel, provider: model.provider).makeSession(journal: journal)
+        let run = try await session.run("original")
+        await model.waitUntilStalled()
+        _ = try await run.steer("correction")
+        fault.arm(.beforeAppend)
+        await run.cancel()
+        await #expect(throws: AgentJournalError.self) { try await run.wait() }
+        try await run.waitForDrain()
+        #expect(fault.fired)
+        #expect(try await session.conversationSnapshot().messages == [.user([.text("original")])])
+        #expect(try await journal.latestCheckpoint(sessionID: session.id)?.history == [.user([.text("original")])])
+
+        let next = try await session.run("next")
+        _ = try await next.wait()
+        try await next.waitForDrain()
+        let expected: [ModelMessage] = [.user([.text("original")]), .user([.text("correction")]), .user([.text("next")])]
+        #expect(await model.lastRequest?.messages == expected)
+        #expect(try await journal.latestCheckpoint(sessionID: session.id)?.history.prefix(3).elementsEqual(expected) == true)
+        try await journal.close()
+    }
+}
+
+/// The first model turn stalls until cancelled; later turns answer at once.
+private struct StalledModel {
+    let provider: ScriptedProvider
+    private let stalled: AsyncStream<Void>
+
+    init() {
+        let (stalled, signal) = AsyncStream<Void>.makeStream()
+        self.stalled = stalled
+        provider = ScriptedProvider { request, turn in
+            if turn == 1 {
+                signal.yield()
+                try await Task.sleep(for: .seconds(30))
+            }
+            return textResponse(request, "answer \(turn)")
+        }
+    }
+
+    func waitUntilStalled() async { for await _ in stalled { return } }
+    var lastRequest: ModelRequest? { get async { await provider.log.requests.last } }
+}
+
+/// Throws once at an armed Journal stage.
+private final class SteeringJournalFault: @unchecked Sendable {
+    private let lock = NSLock()
+    private var armed: JournalFileFaultStage?
+    private var didFire = false
+    var fired: Bool { lock.withLock { didFire } }
+    func arm(_ stage: JournalFileFaultStage) { lock.withLock { armed = stage } }
+    func check(_ stage: JournalFileFaultStage) throws {
+        let fire = lock.withLock { () -> Bool in
+            guard armed == stage else { return false }
+            armed = nil
+            didFire = true
+            return true
+        }
+        if fire { throw AgentJournalError.persistenceUnavailable("injected \(stage)") }
     }
 }
 
