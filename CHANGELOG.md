@@ -24,6 +24,9 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
   admission stopped with `maintenanceRequired`. The index pins no batch.
 - `JournalMaintenancePolicy` rejects a work budget smaller than the largest
   segment rotation can seal, which previously stalled maintenance.
+- `AgentIncrementalJournal.create` succeeds under a parent directory reached
+  through a symlink. It previously failed after writing a complete store.
+  Managed paths inside the store still refuse symlinks.
 
 ## [1.0.0-rc.4] - 2026-09-28
 

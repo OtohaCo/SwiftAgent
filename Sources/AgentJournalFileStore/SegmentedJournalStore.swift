@@ -499,7 +499,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                             layoutDigest: Self.digest(layoutBytes), layoutGeneration: 0,
                             lastFrame: nil, lastDigest: nil)
             try store.publishRoot(root, id: rootID)
-            try Self.syncDirectory(directory.deletingLastPathComponent())
+            try Self.syncParentDirectory(of: directory)
             return store
         } catch {
             try? store.close()
@@ -918,6 +918,16 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             }
         }
         counters.add(written: data.count)
+    }
+
+    /// The Host owns the store's parent and may reach it through a symlink, which the path keeps while
+    /// the store does not exist yet. Sync the parent's real directory; managed paths keep `O_NOFOLLOW`.
+    private static func syncParentDirectory(of directory: URL) throws {
+        guard let resolved = realpath(directory.deletingLastPathComponent().path, nil) else {
+            throw ioError("resolve store parent directory")
+        }
+        defer { free(resolved) }
+        try syncDirectory(URL(fileURLWithPath: String(cString: resolved)))
     }
 
     private static func syncDirectory(_ url: URL) throws {

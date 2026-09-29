@@ -930,6 +930,38 @@ import Glibc
         #expect(accepted > 0)
     }
 
+    /// The Host may reach the store's parent through a symlink. Creation syncs that parent,
+    /// while managed directories inside the store still refuse symlinks.
+    @Test func createThroughASymlinkedParentPublishesAUsableStore() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("journal-linked-parent-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let real = base.appendingPathComponent("real"), link = base.appendingPathComponent("link")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let message: ModelMessage = .user([.text("kept")])
+        let session = UUID()
+
+        let journal = try AgentIncrementalJournal.create(at: link.appendingPathComponent("store"), operationDomain: "linked")
+        _ = try await journal.appendCheckpoint([.checkpoint(history: [message], steeringIDs: [])],
+                                               sessionID: session, runID: UUID(), durability: .durable)
+        try await journal.close()
+        for path in [link.appendingPathComponent("store"), real.appendingPathComponent("store")] {
+            let reopened = try AgentIncrementalJournal.open(at: path)
+            #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == [message])
+            try await reopened.close()
+        }
+        #expect(throws: (any Error).self) {
+            _ = try AgentIncrementalJournal.create(at: link.appendingPathComponent("store"), operationDomain: "linked")
+        }
+
+        let segments = real.appendingPathComponent("store/segments"), moved = base.appendingPathComponent("segments")
+        try FileManager.default.moveItem(at: segments, to: moved)
+        try FileManager.default.createSymbolicLink(at: segments, withDestinationURL: moved)
+        #expect(throws: AgentJournalError.invalidHeader) {
+            _ = try AgentIncrementalJournal.open(at: link.appendingPathComponent("store"))
+        }
+    }
+
     private struct AdmittedOperation {
         let sessionID: UUID, runID: UUID, callID: ToolCallID
         let identity: String, target: EvidenceReference
