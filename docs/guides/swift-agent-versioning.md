@@ -37,6 +37,10 @@ Neither direction automatically migrates or downgrades the store. The opt-in
 does not change stable mutation identities, Evidence authority or Receipt
 settlement. Existing `AgentConfiguration` construction defaults to `.disabled`.
 
+Also unreleased: `JournalMaintenancePolicy` now rejects a `maxWorkBytes`
+smaller than the largest segment rotation can seal. Such a policy previously
+initialized, then stalled maintenance permanently.
+
 ## 1.0 freeze decisions (SAI-026B)
 
 These source breaks happen before the first tagged 1.0:

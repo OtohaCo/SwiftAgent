@@ -22,6 +22,8 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
   stores. Maintenance previously decoded it as a batch sequence, so packing a
   sealed mutation batch and index cleanup failed on every pass, until mutation
   admission stopped with `maintenanceRequired`. The index pins no batch.
+- `JournalMaintenancePolicy` rejects a work budget smaller than the largest
+  segment rotation can seal, which previously stalled maintenance.
 
 ## [1.0.0-rc.4] - 2026-09-28
 

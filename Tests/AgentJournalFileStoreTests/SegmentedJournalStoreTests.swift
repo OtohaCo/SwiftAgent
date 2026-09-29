@@ -903,6 +903,33 @@ import Glibc
         try await reopened.close()
     }
 
+    /// A segment rotates only after an append crosses `segmentBytes`, so the sealed segment can be
+    /// larger by one frame. Every policy the initializer accepts must still be able to pack it.
+    @Test func everyAcceptedPolicyCanPackTheSegmentsRotationSeals() async throws {
+        var accepted = 0
+        for workBytes in stride(from: 1024, through: 4096, by: 256) {
+            guard let policy = try? JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: workBytes,
+                                                             maxUnreclaimedBytes: 1 << 20) else { continue }
+            accepted += 1
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-budget-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "budget", policy: policy)
+            // Payload sizes sweep up to the inline limit, so some segments end just past a boundary.
+            for length in stride(from: 0, through: 320, by: 16) {
+                _ = try await journal.appendCheckpoint(
+                    [.checkpoint(history: [.user([.text(String(repeating: "/", count: length))])], steeringIDs: [])],
+                    sessionID: UUID(), runID: UUID(), durability: .durable)
+            }
+            #expect(try await (journal.storeStatus()?.layoutGeneration ?? 0) > 0, "rotation sealed a segment")
+            for _ in 0..<64 {
+                if try await journal.requestMaintenance()?.sealedSegments == 0 { break }
+            }
+            #expect(try await journal.maintenanceStatus()?.sealedSegments == 0, "maxWorkBytes \(workBytes)")
+            try await journal.close()
+        }
+        #expect(accepted > 0)
+    }
+
     private struct AdmittedOperation {
         let sessionID: UUID, runID: UUID, callID: ToolCallID
         let identity: String, target: EvidenceReference

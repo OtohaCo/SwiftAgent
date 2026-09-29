@@ -15,11 +15,13 @@ public struct JournalMaintenancePolicy: Sendable {
     public let maxUnreclaimedBytes: Int
     public let maxSegmentBatches: Int
 
+    /// `maxWorkBytes` must cover the largest segment rotation can seal; see `minimumWorkBytes`.
     public init(segmentBytes: Int = 2 * 1024 * 1024,
                 maxWorkBytes: Int = 4 * 1024 * 1024,
                 maxUnreclaimedBytes: Int = 64 * 1024 * 1024,
                 maxSegmentBatches: Int = 128) throws {
-        guard segmentBytes >= 1024, maxWorkBytes >= segmentBytes,
+        guard segmentBytes >= 1024, let minimumWorkBytes = try Self.minimumWorkBytes(segmentBytes: segmentBytes),
+              maxWorkBytes >= minimumWorkBytes,
               maxUnreclaimedBytes >= maxWorkBytes, (1...1024).contains(maxSegmentBatches) else {
             throw AgentJournalError.invalidRecord
         }
@@ -30,6 +32,15 @@ public struct JournalMaintenancePolicy: Sendable {
     }
 
     public static let `default` = try! JournalMaintenancePolicy()
+
+    /// A segment rotates after the append that reaches `segmentBytes`, so it can end one largest
+    /// inline frame past it. Maintenance reads a whole sealed segment within `maxWorkBytes`.
+    /// Returns nil when the sum does not fit in `Int`.
+    static func minimumWorkBytes(segmentBytes: Int) throws -> Int? {
+        let (minimum, overflow) = (segmentBytes - 1)
+            .addingReportingOverflow(try SegmentedJournalStore.largestInlineFrameBytes(segmentBytes: segmentBytes))
+        return overflow ? nil : minimum
+    }
 }
 
 package enum JournalFileFaultStage: Sendable {
@@ -916,11 +927,22 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard fsync(fd) == 0 else { throw ioError("sync managed directory") }
     }
 
+    /// A batch payload up to this size is stored inside its frame; a larger one goes to a blob.
+    static func inlinePayloadLimit(segmentBytes: Int) -> Int { min(segmentBytes / 2, 256 * 1024) }
+
+    /// The largest frame an append writes: the length prefix and the JSON wrapper around an inline
+    /// payload at the limit, whose base64 text is all slashes that the encoder escapes.
+    static func largestInlineFrameBytes(segmentBytes: Int) throws -> Int {
+        let payload = Data(repeating: 0xFF, count: inlinePayloadLimit(segmentBytes: segmentBytes))
+        return try 4 + JSONEncoder().encode(Frame(digest: String(repeating: "0", count: 64),
+                                                  payload: payload, blob: nil)).count
+    }
+
     private func frameBytes(_ batch: BatchV2) throws -> (Data, String, UUID?) {
         let payload = try JSONEncoder().encode(batch)
         let digest = Self.digest(payload)
         let frame: Frame
-        if payload.count > min(policy.segmentBytes / 2, 256 * 1024) {
+        if payload.count > Self.inlinePayloadLimit(segmentBytes: policy.segmentBytes) {
             let id = UUID()
             let shard = blobURL(id).deletingLastPathComponent()
             if !FileManager.default.fileExists(atPath: shard.path) {
