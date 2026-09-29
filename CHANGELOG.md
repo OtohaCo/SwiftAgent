@@ -12,8 +12,9 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
   description and schemas. New `RuntimeAgentTool` (JSON input and output)
   supplies `runtimeDefinition`, so one type can serve tools named at runtime,
   such as a Host's app connectors or an external server's tools. Registration,
-  schema validation, authorization and mutation admission use the instance
-  definition. Existing tools keep their behavior.
+  schema validation, capability bindings and mutation admission use the
+  instance definition, read once at registration. A name from the instance must
+  be 1 to 64 letters, digits, `_` or `-`. Existing tools keep their behavior.
 
 ## [1.0.0-rc.4] - 2026-09-28
 

@@ -101,7 +101,11 @@ history in the v1 Journal, so excerpts of pre-restart results fail closed.
 
 The unreleased `AgentTool.definition` requirement has a default that returns
 the type's static values, so existing tools compile and register unchanged.
-`RuntimeAgentTool` is a new protocol for tools named at runtime.
+`RuntimeAgentTool` is a new protocol for tools named at runtime. A conforming
+type that already declares its own `definition` is affected. If it is a
+`ModelToolDefinition` less accessible than the type, it no longer compiles. If
+it is an internal or public `ModelToolDefinition`, it becomes the tool's
+definition. A member of another type is unaffected.
 
 Treat as non-breaking when existing clients still compile and keep the same
 runtime meaning:

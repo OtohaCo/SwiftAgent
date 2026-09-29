@@ -42,7 +42,14 @@ struct RuntimeAgentToolTests {
         let registry = try ToolRegistry(tools: [AnyAgentTool(EchoTool(name: "app_echo", policy: try policy(), log: log))])
         for arguments in [#"{}"#, #"{"text":7}"#, #"{"text":"a","other":1}"#] {
             let call = ToolCall(id: context.callID, name: "app_echo", argumentsJSON: arguments, completeness: .complete)
-            await #expect(throws: (any Error).self, "\(arguments)") { try await registry.prepare(call, context: context).invoke() }
+            #expect(throws: ToolRegistryError.self, "\(arguments)") {
+                do {
+                    _ = try registry.prepare(call, context: context)
+                } catch let error as ToolRegistryError {
+                    guard case .invalidArguments = error else { throw TestFailure.wrongError("\(error)") }
+                    throw error
+                }
+            }
         }
         #expect(await log.names.isEmpty)
     }
@@ -56,8 +63,44 @@ struct RuntimeAgentToolTests {
         #expect(await log.names.isEmpty)
     }
 
-    @Test func aRuntimeToolWithoutANameIsRejected() throws {
-        #expect(throws: (any Error).self) { try AnyAgentTool(EchoTool(name: "  ", policy: try policy())) }
+    /// A name that comes from the instance is one every model API accepts: letters, digits, "_" and
+    /// "-", at most 64. Tools named in code keep whatever names they had.
+    @Test func aRuntimeNameMustBePortable() throws {
+        for name in ["", "  ", " app_echo", "app.echo", "app echo", "app\necho", "应用", String(repeating: "a", count: 65)] {
+            #expect(throws: ToolInvocationError.invalidDefinition, "\(name)") { try AnyAgentTool(EchoTool(name: name, policy: try policy())) }
+        }
+        for name in ["a", "app_echo-2", String(repeating: "a", count: 64)] {
+            #expect(try AnyAgentTool(EchoTool(name: name, policy: try policy())).definition.name == name)
+        }
+    }
+
+    @Test func twoRuntimeToolsCannotShareAName() throws {
+        let tool = try AnyAgentTool(EchoTool(name: "app_echo", policy: try policy()))
+        let twin = try AnyAgentTool(EchoTool(name: "app_echo", policy: try policy()))
+        #expect(throws: ToolRegistryError.duplicateName("app_echo")) { try ToolRegistry(tools: [tool, twin]) }
+    }
+
+    /// What a runtime tool answers is checked against its definition's output schema.
+    @Test func outputIsCheckedAgainstTheRuntimeSchema() async throws {
+        let registry = try ToolRegistry(tools: [AnyAgentTool(EchoTool(name: "app_echo", policy: try policy(), answer: .object(["other": .string("x")])))])
+        let call = ToolCall(id: context.callID, name: "app_echo", argumentsJSON: #"{"text":"hi"}"#, completeness: .complete)
+        do {
+            _ = try await registry.prepare(call, context: context).invoke()
+            Issue.record("an answer outside the schema was accepted")
+        } catch let error as ToolRegistryError {
+            guard case .invalidOutput = error else { Issue.record("\(error)"); return }
+        }
+    }
+
+    /// A definition without an output schema cannot be registered.
+    @Test func aRuntimeToolNeedsAnOutputSchema() throws {
+        let tool = try AnyAgentTool(EchoTool(name: "app_echo", policy: try policy(), outputSchema: nil))
+        do {
+            _ = try ToolRegistry(tools: [tool])
+            Issue.record("a tool without an output schema was registered")
+        } catch let error as ToolRegistryError {
+            guard case .invalidSchema(tool: "app_echo", _) = error else { Issue.record("\(error)"); return }
+        }
     }
 
     /// A tool declared in code keeps the definition of its type.
@@ -97,15 +140,21 @@ private struct EchoTool: RuntimeAgentTool {
     private let log: EchoLog?
     private let allow: Bool
 
-    init(name: String, policy: ToolPolicy, log: EchoLog? = nil, allow: Bool = true) {
+    private let answer: JSONValue?
+
+    init(
+        name: String, policy: ToolPolicy, log: EchoLog? = nil, allow: Bool = true, answer: JSONValue? = nil,
+        outputSchema: JSONValue? = ToolSchema.object(properties: ["echo": .string], required: ["echo"]).json
+    ) {
         runtimeDefinition = ModelToolDefinition(
             name: name, description: "Echo the text",
             inputSchema: ToolSchema.object(properties: ["text": .string], required: ["text"]).json,
-            outputSchema: ToolSchema.object(properties: ["echo": .string], required: ["echo"]).json
+            outputSchema: outputSchema
         )
         self.policy = policy
         self.log = log
         self.allow = allow
+        self.answer = answer
     }
 
     func authorize(_ input: JSONValue, context: ToolContext) async throws -> ToolAuthorization {
@@ -115,7 +164,7 @@ private struct EchoTool: RuntimeAgentTool {
     func execute(_ input: JSONValue, context: ToolContext) async throws -> ToolResult<JSONValue> {
         await log?.add(runtimeDefinition.name)
         guard case .object(let fields) = input, let text = fields["text"] else { throw ToolInvocationError.invalidArguments }
-        return ToolResult(output: .object(["echo": text]))
+        return ToolResult(output: answer ?? .object(["echo": text]))
     }
 }
 
@@ -126,4 +175,8 @@ private actor RecordingAdmission: ToolMutationAdmission {
         names.append(request.name)
         return .admitted
     }
+}
+
+private enum TestFailure: Error {
+    case wrongError(String)
 }

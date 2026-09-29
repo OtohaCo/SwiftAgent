@@ -20,6 +20,8 @@ package struct AnyAgentTool: Sendable {
         guard !definition.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ToolInvocationError.invalidDefinition
         }
+        // A name that comes from the instance, not the type, is one every model API accepts.
+        if definition.name != T.name, !Self.portable(definition.name) { throw ToolInvocationError.invalidDefinition }
         self.definition = definition
         let policy = tool.policy
         self.policy = policy
@@ -134,6 +136,12 @@ package struct AnyAgentTool: Sendable {
                 return ToolResult(output: output, evidence: result.evidence, receipt: result.receipt)
             }
         }
+    }
+
+    /// Letters, digits, "_" and "-", at most 64: accepted by every provider's tool names.
+    static func portable(_ name: String) -> Bool {
+        (1...64).contains(name.utf8.count)
+            && name.utf8.allSatisfy { ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x41 && $0 <= 0x5A) || ($0 >= 0x61 && $0 <= 0x7A) || $0 == 0x5F || $0 == 0x2D }
     }
 
     private static func validateEvidence(_ requirements: [EvidenceRequirement], context: ToolContext) async throws {
