@@ -11,6 +11,8 @@ swift test --disable-sandbox --no-parallel
 swift build --triple arm64-apple-ios16.0
 swift test --package-path Examples/ExternalClient --disable-sandbox --no-parallel
 swift run --package-path Examples/ExternalClient BoundedReplanningProbe
+swift build --package-path Examples/ExternalClient --product ReplanningEvalTrial
+python3 -m unittest discover Examples/ExternalClient/ReplanningEvaluation -p 'test_*.py'
 swift run --package-path Examples/ExternalClient ContextPipelineFixture
 swift run --package-path Examples/ExternalClient ScopedCapabilityFixture
 swift run --package-path Examples/ExternalClient FollowUpQueueFixture
