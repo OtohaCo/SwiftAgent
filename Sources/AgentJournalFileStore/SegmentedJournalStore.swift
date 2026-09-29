@@ -580,9 +580,11 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         url.standardizedFileURL.resolvingSymlinksInPath()
     }
 
+    /// The lock lives exactly as long as this handle's descriptor. O_CLOEXEC keeps a child the Host
+    /// spawns (posix_spawn, fork/exec) from inheriting it and holding the store after close.
     private static func lockStore(_ directory: URL) throws -> Int32 {
         let path = directory.appendingPathComponent(".writer.lock").path
-        let fd = DarwinOrGlibcOpen(path, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+        let fd = DarwinOrGlibcOpen(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw ioError("open writer lock") }
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
             _ = DarwinOrGlibcClose(fd)
