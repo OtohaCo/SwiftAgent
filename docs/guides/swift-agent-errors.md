@@ -26,7 +26,8 @@ switch on them rather than wrapping arbitrary errors themselves.
 | Unknown or unsupported store | `AgentJournalError.unsupportedLegacyFormat`, `unsupportedFormat`, `invalidHeader` | Open rejects old/unknown formats without creating a new ledger |
 | Damaged published state | `AgentJournalError.invalidFrame`, `checksumMismatch`, `invalidRecord` | Stop writes and investigate; never roll back then mutate |
 | Uncertain commit | `AgentJournalError.commitUnknown` | The Run owns the startup outcome through drain; reopen and inspect before retry |
-| Maintenance pressure | `AgentJournalError.maintenanceRequired` | New mutation admission pauses until maintenance progresses |
+| Maintenance pressure | `AgentJournalError.maintenanceRequired` | New mutation admission pauses until maintenance progresses; while a failed rotation is pending, new Run input and follow-up enqueue pause too |
+| Maintenance budget smaller than retained data | `AgentJournalError.maintenanceBudgetTooSmall(requiredWorkBytes:)` | Open refuses the store unchanged; reopen with at least that `maxWorkBytes` |
 | Settlement and quarantine both failed | `AgentMutationPersistenceError` | `AgentFailure.mutationPersistence`; both sides stay typed |
 | Model binding / projected token budget | `AgentModelBindingError` | `AgentFailure.modelBinding`; for example `staleConversationRevision` or `contextBudgetExceeded` |
 | Run capability scope | `AgentCapabilityError` | `AgentFailure.capability`; for example `revoked` or `resourceOutsideScope` |

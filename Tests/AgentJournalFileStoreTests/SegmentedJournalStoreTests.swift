@@ -1057,6 +1057,179 @@ import Glibc
         }.filter { $0.pathExtension == "json" }
     }
 
+    /// A rotation whose CURRENT publication is unknown poisons the handle: every later read,
+    /// write and maintenance pass reports commitUnknown. The batch that triggered the rotation was
+    /// committed and stays committed; reopening recovers a usable store.
+    @Test func rotationWithUnknownPublicationPoisonsTheHandleButKeepsTheCommittedBatch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-rotation-unknown-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = RotationFault()
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: 8192,
+                                                  maxUnreclaimedBytes: 65536, maxSegmentBatches: 4)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "rotation",
+            policy: policy, fault: { try fault.check($0) })
+        let operation = try await admitOperation("settled", in: journal)
+        try await settle(operation, in: journal)
+        let session = UUID()
+        var history: [ModelMessage] = [.user([.text("first")])]
+        _ = try await journal.appendCheckpoint([.checkpoint(history: history, steeringIDs: [])],
+                                               sessionID: session, runID: UUID(), durability: .durable)
+        fault.failPublicationDuringNextRotation()
+        history.append(.user([.text("triggers rotation")]))
+        _ = try await journal.appendCheckpoint([.checkpoint(history: history, steeringIDs: [])],
+                                               sessionID: session, runID: UUID(), durability: .durable)
+        #expect(fault.fired)
+
+        await #expect(throws: AgentJournalError.commitUnknown) {
+            _ = try await journal.appendCheckpoint([.checkpoint(history: history + [.user([.text("after")])], steeringIDs: [])],
+                                                   sessionID: session, runID: UUID(), durability: .durable)
+        }
+        await #expect(throws: AgentJournalError.commitUnknown) { _ = try await journal.latestCheckpoint(sessionID: session) }
+        await #expect(throws: AgentJournalError.commitUnknown) { _ = try await journal.storeStatus() }
+        await #expect(throws: AgentJournalError.commitUnknown) { _ = try await journal.requestMaintenance() }
+        try await journal.close()
+
+        let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
+        #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == history)
+        try await expectSettledReplay(operation, in: reopened)
+        history.append(.user([.text("continues")]))
+        _ = try await reopened.appendCheckpoint([.checkpoint(history: history, steeringIDs: [])],
+                                                sessionID: session, runID: UUID(), durability: .durable)
+        try await maintainAcrossEveryIndexShard(reopened)
+        #expect(try await reopened.maintenanceStatus()?.sealedSegments == 0)
+        #expect(try await reopened.readMessages(sessionID: session).map(\.message) == history)
+        try await reopened.close()
+    }
+
+    /// While rotation keeps failing the active segment never outgrows the work budget: new
+    /// admissions are refused, work already admitted still settles within the remaining room,
+    /// and maintenance retries rotation once the fault clears.
+    @Test func repeatedRotationFailureAppliesBackpressureWithinTheWorkBudget() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-rotation-budget-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = RotationFault()
+        let budget = try #require(try JournalMaintenancePolicy.minimumWorkBytes(segmentBytes: 1024))
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: budget,
+                                                  maxUnreclaimedBytes: 1 << 20, maxSegmentBatches: 1024)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "budget",
+            policy: policy, fault: { try fault.check($0) })
+        let inFlight = try await admitOperation("in-flight", in: journal)
+        fault.failEveryRotation(true)
+        let session = UUID()
+        var history: [ModelMessage] = []
+        var refusedProgress = false
+        for index in 0..<200 where !refusedProgress {
+            history.append(.user([.text("progress \(index) " + String(repeating: "p", count: 40))]))
+            do {
+                _ = try await journal.appendCheckpoint([.checkpoint(history: history, steeringIDs: [])],
+                                                       sessionID: session, runID: UUID(), durability: .durable)
+            } catch AgentJournalError.maintenanceRequired {
+                history.removeLast()
+                refusedProgress = true
+            }
+            let active = try #require(try await journal.storeStatus()).activeSegmentBytes
+            #expect(active <= UInt64(budget), "active segment \(active) exceeds the work budget \(budget)")
+            if active >= 1024, index.isMultiple(of: 2) {
+                await #expect(throws: AgentJournalError.maintenanceRequired) {
+                    _ = try await admitOperation("new-\(index)", in: journal)
+                }
+                await #expect(throws: AgentJournalError.maintenanceRequired) {
+                    _ = try await journal.appendStartupCheckpoint([.checkpoint(history: history, steeringIDs: [])],
+                        sessionID: UUID(), runID: UUID(), deadline: .now.advanced(by: .seconds(5)), durability: .durable)
+                }
+                await #expect(throws: AgentJournalError.maintenanceRequired) {
+                    _ = try await journal.enqueueFollowUp(.init(inputID: "q\(index)", text: "later",
+                        operationID: "op", configurationRef: "cfg"), sessionID: session)
+                }
+            }
+        }
+        #expect(refusedProgress, "progress writes reach the work budget and are refused, not appended past it")
+        #expect(try await journal.mutationStatus(identity: "new-0/write/{}") == nil, "a refused admission wrote nothing")
+
+        fault.failEveryRotation(false)
+        for _ in 0..<8 { _ = try await journal.requestMaintenance() }
+        try await settle(inFlight, in: journal)
+        try await expectSettledReplay(inFlight, in: journal)
+        _ = try await admitOperation("after-recovery", in: journal)
+        try await maintainAcrossEveryIndexShard(journal)
+        #expect(try await journal.maintenanceStatus()?.lastError == nil)
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
+        #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == history)
+        try await expectSettledReplay(inFlight, in: reopened)
+        try await reopened.close()
+    }
+
+    /// Reopening with a budget smaller than the segments and packs the store already keeps is an
+    /// explicit incompatibility, not a store that opens and then never finishes maintenance.
+    @Test func reopeningWithABudgetTooSmallForRetainedDataIsRefused() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-budget-reopen-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let large = try JournalMaintenancePolicy(segmentBytes: 64 * 1024, maxWorkBytes: 1 << 20, maxUnreclaimedBytes: 1 << 24)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "reopen", policy: large,
+            fault: { stage in
+                if stage == .afterMaintenanceSnapshot { throw AgentJournalError.persistenceUnavailable("defer maintenance") }
+            })
+        let operation = try await admitOperation("kept", in: journal)
+        try await settle(operation, in: journal)
+        for index in 0..<400 {
+            _ = try await journal.appendCheckpoint(
+                [.checkpoint(history: [.user([.text("turn \(index) " + String(repeating: "z", count: 300))])], steeringIDs: [])],
+                sessionID: UUID(), runID: UUID(), durability: .durable)
+        }
+        #expect(try await (journal.maintenanceStatus()?.sealedSegments ?? 0) > 0)
+        try await journal.close()
+        let before = try storeFiles(directory)
+
+        let small = try JournalMaintenancePolicy(segmentBytes: 1024,
+            maxWorkBytes: try #require(try JournalMaintenancePolicy.minimumWorkBytes(segmentBytes: 1024)), maxUnreclaimedBytes: 1 << 24)
+        do {
+            _ = try AgentIncrementalJournal.open(at: directory, policy: small)
+            Issue.record("a budget smaller than the retained segments must be refused")
+        } catch AgentJournalError.maintenanceBudgetTooSmall(let required) {
+            #expect(required > UInt64(small.maxWorkBytes))
+            #expect(required <= UInt64(large.maxWorkBytes))
+            let sufficient = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: Int(required),
+                                                          maxUnreclaimedBytes: 1 << 24)
+            #expect(try storeFiles(directory) == before, "a refused open changes nothing")
+            let reopened = try AgentIncrementalJournal.open(at: directory, policy: sufficient)
+            try await expectSettledReplay(operation, in: reopened)
+            for _ in 0..<64 { if try await reopened.requestMaintenance()?.sealedSegments == 0 { break } }
+            #expect(try await reopened.maintenanceStatus()?.sealedSegments == 0)
+            try await reopened.close()
+        }
+    }
+
+    private func expectSettledReplay(_ operation: AdmittedOperation, in journal: AgentJournal) async throws {
+        let status = try #require(try await journal.mutationStatus(identity: operation.identity))
+        #expect(status.state == .settled)
+        #expect(status.receipt?.operationID == operation.identity)
+        let retry = ToolMutationAdmissionRequest(sessionID: UUID(), runID: UUID(), callID: .init(rawValue: "retry"),
+            name: "write", argumentsJSON: "{}", resources: [.named(operation.target)], idempotencyKey: operation.identity,
+            receiptExpectation: try .init(targets: [operation.target], revision: .present))
+        guard case .settled(let receipt, let output) = try await journal.admit(retry) else {
+            Issue.record("a settled operation must replay its Receipt"); return
+        }
+        #expect(receipt == status.receipt)
+        #expect(output == .string("written"))
+        let history = try #require(try await journal.latestCheckpoint(sessionID: operation.sessionID)).history
+        guard case .assistant(_, let calls)? = history.dropLast().last, case .tool(let result)? = history.last else {
+            Issue.record("the settled result must follow its assistant call"); return
+        }
+        #expect(calls.map(\.id) == [operation.callID])
+        #expect(result.callID == operation.callID)
+    }
+
+    private func storeFiles(_ directory: URL) throws -> [String: Data] {
+        var files: [String: Data] = [:]
+        let enumerator = try #require(FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]))
+        for case let url as URL in enumerator where (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true
+            && url.lastPathComponent != ".writer.lock" {
+            files[url.path.replacingOccurrences(of: directory.path, with: "")] = try Data(contentsOf: url)
+        }
+        return files
+    }
+
     private func launch(_ mode: String, directory: URL) throws -> Process {
         let process = Process()
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -1154,4 +1327,30 @@ private final class ClosingMaintenancePause: @unchecked Sendable {
 
     func waitUntilHeld() async { for await _ in held { return } }
     func release() { gate.signal() }
+}
+
+/// Fails rotation: the CURRENT publication of the next rotation, or every rotation before it publishes.
+private final class RotationFault: @unchecked Sendable {
+    private let lock = NSLock()
+    private var publicationArmed = false
+    private var rotating = false
+    private var failAll = false
+    private var didFire = false
+    var fired: Bool { lock.withLock { didFire } }
+    func failPublicationDuringNextRotation() { lock.withLock { publicationArmed = true } }
+    func failEveryRotation(_ enabled: Bool) { lock.withLock { failAll = enabled } }
+    func check(_ stage: JournalFileFaultStage) throws {
+        let failure = lock.withLock { () -> String? in
+            if stage == .beforeRotation {
+                if failAll { didFire = true; return "rotation failed" }
+                if publicationArmed { rotating = true }
+            }
+            if stage == .afterCurrentReplace, rotating {
+                rotating = false; publicationArmed = false; didFire = true
+                return "directory sync after CURRENT replacement failed"
+            }
+            return nil
+        }
+        if let failure { throw AgentJournalError.persistenceUnavailable("injected: \(failure)") }
+    }
 }

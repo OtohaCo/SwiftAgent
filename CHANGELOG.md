@@ -33,6 +33,18 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
 - Once `AgentJournal.close()` starts, follow-up enqueue and withdrawal fail with
   `storeClosed`, like other new work. They were accepted while close waited
   for maintenance.
+- A segment rotation whose `CURRENT` replacement is uncertain poisons the Journal
+  handle, so later reads, writes and maintenance report `commitUnknown`. They
+  reported `concurrentWriter` although no other writer existed. The batch that
+  triggered the rotation stays committed.
+- A rotation that keeps failing no longer grows the active segment past
+  `maxWorkBytes`, which sealed a segment maintenance could never read. New Run
+  input, mutation admission and follow-up enqueue fail with
+  `maintenanceRequired`, admitted work settles within the remaining room, and
+  maintenance retries the rotation.
+- Opening a store with a `maxWorkBytes` smaller than its retained segments or
+  packs fails with `maintenanceBudgetTooSmall(requiredWorkBytes:)` instead of
+  opening and then failing every maintenance pass.
 - Schema-4 stores read the `pending-operations` index as the Session set it
   stores. Maintenance previously decoded it as a batch sequence, so packing a
   sealed mutation batch and index cleanup failed on every pass, until mutation
@@ -52,6 +64,7 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
 - `ModelProviderFallbackPolicyError` adds `invalidCandidateIdentity`. A Route
   refuses continuation state it cannot attribute to a current candidate,
   including state from candidates without declared IDs after a restart.
+- `AgentJournalError` adds `maintenanceBudgetTooSmall(requiredWorkBytes:)`.
 - `AgentFailure` adds `modelBinding`, `capability`, `contextPipeline` and
   `contextProjection` for Core errors that were reported as `unclassified`.
 

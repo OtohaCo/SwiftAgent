@@ -133,12 +133,16 @@ package struct JournalFollowUpChange: Sendable {
     package let head: JournalFollowUpHead
     package let records: [JournalStoredFollowUp]
     package let links: [JournalFollowUpLink]
+    /// Enqueues new input rather than updating inputs already accepted.
+    package let admitsNewWork: Bool
 
     package init(sessionID: UUID, expectedRevision: UInt64, head: JournalFollowUpHead,
-                 records: [JournalStoredFollowUp], links: [JournalFollowUpLink] = []) {
+                 records: [JournalStoredFollowUp], links: [JournalFollowUpLink] = [],
+                 admitsNewWork: Bool = false) {
         self.sessionID = sessionID; self.expectedRevision = expectedRevision
         self.head = head; self.records = records
         self.links = links
+        self.admitsNewWork = admitsNewWork
     }
 }
 

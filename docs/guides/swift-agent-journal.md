@@ -111,12 +111,23 @@ policy can be configured with `JournalMaintenancePolicy`. A segment rotates
 after the append that reaches `segmentBytes`, so it can end one inline frame
 past it. `maxWorkBytes` must cover such a segment: `segmentBytes` plus at most
 about 4/3 of it, or about 683 KiB once `segmentBytes` reaches 512 KiB. The
-initializer rejects a smaller budget. `storeStatus()`, `maintenanceStatus()`,
+initializer rejects a smaller budget. Opening a store whose sealed segments,
+packs or active segment exceed the handle's `maxWorkBytes` fails with
+`maintenanceBudgetTooSmall(requiredWorkBytes:)` and leaves the store unchanged;
+a budget of at least that size opens it. `storeStatus()`, `maintenanceStatus()`,
 `storageMetrics()`, and `requestMaintenance()` support
 observation and explicit low-load work. Normal operation schedules maintenance
 without a Host pre-turn compaction call. If maintenance cannot keep up, new
 mutation admission can fail with `maintenanceRequired`; an in-flight
 settlement still has its ordinary persistence path.
+
+A segment rotation that fails before publishing leaves the active segment past
+`segmentBytes`, but never past `maxWorkBytes`. Until a maintenance pass retries
+the rotation successfully, new Run input, mutation admission and follow-up
+enqueue fail with `maintenanceRequired`, and work already admitted settles
+within the remaining room. A rotation whose `CURRENT` replacement may or may
+not be durable poisons the handle like any other uncertain publication; the
+batch it followed stays committed.
 
 Only one same-host writer is supported. Do not copy an open directory as a
 backup or run an external compactor against it. Close it, then copy the whole
