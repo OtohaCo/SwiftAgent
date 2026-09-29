@@ -70,6 +70,7 @@ long-term map so a later bug does not require moving files.
 | Schema-4 `pending-operations` must be read as its Session set through rotation, packing, index cleanup and reopen | `pendingOperationIndexSurvivesRotationPackingIndexCleanupAndReopen`, `unpublishedPendingOperationIndexIsCollectedAndTheOperationIsAdmittedAgain` | `Tests/AgentJournalFileStoreTests/SegmentedJournalStoreTests.swift` |
 | Every accepted maintenance policy must be able to pack a segment sealed after crossing `segmentBytes` | `everyAcceptedPolicyCanPackTheSegmentsRotationSeals` | `Tests/AgentJournalFileStoreTests/SegmentedJournalStoreTests.swift` |
 | Store creation under a symlinked Host parent must succeed while managed symlinks stay rejected | `createThroughASymlinkedParentPublishesAUsableStore` | `Tests/AgentJournalFileStoreTests/SegmentedJournalStoreTests.swift` |
+| A checkpoint committed while the Run hits its deadline or is cancelled must be adopted by Session history | `checkpointCommittedAsTheRunEndsIsAdoptedBySessionHistory(_:)` | `Tests/AgentCoreTests/AgentCompletionCommitTests.swift` |
 
 When a new production bug lands, add a row here and a focused test next to the
 domain tests. Prefer a precise name over a `Regressions/` directory move.

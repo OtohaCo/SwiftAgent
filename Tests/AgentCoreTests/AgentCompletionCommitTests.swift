@@ -1,4 +1,5 @@
 @testable import AgentCore
+import AgentJournalFileStore
 import AgentModels
 import AgentTools
 import Foundation
@@ -189,6 +190,88 @@ struct AgentCompletionCommitTests {
         ])
         try await durable.close()
     }
+
+    enum CheckpointEnding: Sendable { case deadline, cancellation }
+
+    /// A checkpoint append that returns after the Run's deadline or cancellation was still committed.
+    /// The Session must adopt it before another Run reads history, so memory and the Journal agree.
+    @Test(arguments: [CheckpointEnding.deadline, .cancellation])
+    func checkpointCommittedAsTheRunEndsIsAdoptedBySessionHistory(_ ending: CheckpointEnding) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("checkpoint-commit-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hold = PublishedCheckpointHold()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "checkpoint-commit",
+                                                                   fault: { hold.check($0) })
+        let call = ToolCall(id: .init(rawValue: "sum"), name: AddTool.name, argumentsJSON: #"{"lhs":2,"rhs":3}"#,
+                            completeness: .complete)
+        let provider = ScriptedProvider { request, turn in
+            // The next publication is the tool result's checkpoint, which the Run has not finished.
+            if turn == 1 { hold.arm(); return toolResponse(request, [call]) }
+            return textResponse(request, "answer \(turn)")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [try AddTool(log: EffectLog())])
+            .makeSession(journal: journal)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        let run = try await session.run("first", budget: try AgentBudget(maxModelTurns: 3, maxToolCalls: 1, deadline: deadline))
+        #expect(await hold.waitUntilHeld(), "the tool result's checkpoint must reach publication")
+        switch ending {
+        case .deadline: try await Task.sleep(until: deadline.advanced(by: .milliseconds(50)), clock: .continuous)
+        case .cancellation: await run.cancel()
+        }
+        hold.release()
+        _ = try? await run.wait()
+        try await run.waitForDrain()
+
+        let result = ModelMessage.tool(.init(callID: call.id, content: [.json(.object(["sum": .number(5)]))], isError: false))
+        let committed = try #require(try await journal.latestCheckpoint(sessionID: session.id)).history
+        #expect(committed.last == result)
+        let snapshot = try await session.conversationSnapshot()
+        #expect(snapshot.messages == committed)
+        #expect(snapshot.revision == 2, "startup input, then the committed tool result")
+
+        let next = try await session.run("second")
+        _ = try await next.wait()
+        try await next.waitForDrain()
+        let continued = try #require(try await journal.latestCheckpoint(sessionID: session.id)).history
+        #expect(continued.contains(result))
+        #expect(await session.history == continued)
+        try await journal.close()
+    }
+}
+
+/// Blocks the first CURRENT publication after it is armed: the checkpoint is committed, but its
+/// append has not returned to the Session yet.
+private final class PublishedCheckpointHold: @unchecked Sendable {
+    private let lock = NSLock()
+    private let resume = DispatchSemaphore(value: 0)
+    private var armed = false
+    private let held: AsyncStream<Void>
+    private let heldContinuation: AsyncStream<Void>.Continuation
+
+    init() { (held, heldContinuation) = AsyncStream<Void>.makeStream() }
+
+    func arm() { lock.withLock { armed = true } }
+
+    func check(_ stage: JournalFileFaultStage) {
+        guard stage == .afterCurrentReplace, lock.withLock({ () -> Bool in
+            defer { armed = false }
+            return armed
+        }) else { return }
+        heldContinuation.yield()
+        resume.wait()
+    }
+
+    func waitUntilHeld(timeout: Duration = .seconds(10)) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { for await _ in self.held { return true }; return false }
+            group.addTask { try? await Task.sleep(for: timeout); return false }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+    }
+
+    func release() { resume.signal() }
 }
 
 private extension AgentEventEmitter {

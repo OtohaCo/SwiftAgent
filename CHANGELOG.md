@@ -22,6 +22,10 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
   stores. Maintenance previously decoded it as a batch sequence, so packing a
   sealed mutation batch and index cleanup failed on every pass, until mutation
   admission stopped with `maintenanceRequired`. The index pins no batch.
+- A checkpoint whose append returns after the Run's deadline or cancellation is
+  adopted by the Session. The Session previously kept its older history, so its
+  next Run failed with `concurrentWriter` until reopen. Finishing a Run waits for
+  its in-flight Journal write; a draining Run's mutation settlement is adopted.
 - `JournalMaintenancePolicy` rejects a work budget smaller than the largest
   segment rotation can seal, which previously stalled maintenance.
 - `AgentIncrementalJournal.create` succeeds under a parent directory reached
