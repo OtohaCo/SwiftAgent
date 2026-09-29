@@ -30,6 +30,16 @@ jobs:
         run: bash Scripts/require-toolchain.sh --apple
       - name: Build, test, iOS cross-build, external client
         run: bash Scripts/ci-macos.sh
+      - name: Upload execution reporting logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-reporting-macos-attempt-${{ github.run_attempt }}
+          path: |
+            .build/ci-logs/
+            .build/execution-reporting-acceptance.json
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Core concurrency seal
         run: bash Scripts/ci-concurrency-seal.sh
 
@@ -49,6 +59,16 @@ jobs:
         run: bash Scripts/require-toolchain.sh
       - name: Core --target build, tests, external client
         run: bash Scripts/ci-linux.sh
+      - name: Upload execution reporting logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-reporting-linux-attempt-${{ github.run_attempt }}
+          path: |
+            .build/ci-logs/
+            .build/execution-reporting-acceptance.json
+          if-no-files-found: ignore
+          retention-days: 30
 
   apple-provider:
     name: Apple provider compile
