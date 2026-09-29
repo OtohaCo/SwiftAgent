@@ -1146,6 +1146,16 @@ import Glibc
         #expect(refusedProgress, "progress writes reach the work budget and are refused, not appended past it")
         #expect(try await journal.mutationStatus(identity: "new-0/write/{}") == nil, "a refused admission wrote nothing")
 
+        // requestMaintenance joins an automatic pass already under way, so one that checked the fault
+        // can still report it after the fault clears. Wait for a pass to report it while it is armed.
+        var reportedFault = false
+        for _ in 0..<8 where !reportedFault {
+            do { _ = try await journal.requestMaintenance() } catch AgentJournalError.persistenceUnavailable(let reason) {
+                #expect(reason == "injected: rotation failed")
+                reportedFault = true
+            }
+        }
+        #expect(reportedFault, "maintenance retries the rotation and reports the fault while it is armed")
         fault.failEveryRotation(false)
         for _ in 0..<8 { _ = try await journal.requestMaintenance() }
         try await settle(inFlight, in: journal)
