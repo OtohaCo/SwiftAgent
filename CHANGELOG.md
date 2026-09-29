@@ -4,7 +4,26 @@ All notable changes to SwiftAgent are recorded here.
 
 ## [Unreleased]
 
-Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
+Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
+
+## [1.0.0-rc.5] - 2026-09-29
+
+RC5 is an SDK prerelease, not a stable 1.0 release or production Host
+approval. See [RC5 release notes](docs/releases/1.0.0-rc.5.md).
+
+### Added: bounded pre-admission replanning (opt-in)
+
+- `AgentConfiguration.preAdmissionReplanning` defaults to `.disabled`.
+  `.evidenceRejection(toolNames:)` lets named mutation tools receive one
+  correlated error result when the runtime's first Evidence check rejects a
+  single prepared call before authorization, durable intent or admission. The
+  correction continues in the original Run with its remaining turn, tool-call
+  and deadline budgets; no second Run starts. The denial is recorded as a
+  typed Journal fact, not as a Receipt, Evidence, authorization or execution.
+  See [ADR 0008](docs/adr/0008-bounded-pre-admission-replanning.md).
+- An opt-in Run needs a store created with
+  `AgentIncrementalJournal.create(..., supportsAdmissionRejections: true)`,
+  which is format schema 4. Default creation stays schema 3.
 
 ### Added: tools defined at runtime
 
@@ -13,7 +32,8 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
   supplies `runtimeDefinition`, so one type can serve tools named at runtime,
   such as a Host's app connectors or an external server's tools. Registration,
   schema validation, capability bindings and mutation admission use the
-  instance definition, read once at registration. A name from the instance must
+  instance definition, read once at registration. A capability binding keeps
+  the definition it read when it was created. A name from the instance must
   be 1 to 64 letters, digits, `_` or `-`. Existing tools keep their behavior.
 
 ### Fixed
@@ -65,12 +85,46 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
 
 ### Breaking
 
-- `ModelProviderFallbackPolicyError` adds `invalidCandidateIdentity`. A Route
-  refuses continuation state it cannot attribute to a current candidate,
-  including state from candidates without declared IDs after a restart.
+- A store created with `supportsAdmissionRejections: true` is schema 4 from
+  creation, and the RC4 reader rejects it at open. Default stores stay schema 3
+  and remain readable, appendable and maintainable by RC4. The RC5 reader opens
+  RC4 schema-3 stores; an opt-in Run on one fails before the Provider request.
+  No store is migrated, upgraded or downgraded, and a new store does not
+  inherit an old store's operation-deduplication facts.
+- `AgentEvent` and `AgentJournalEvent` add `toolAdmissionRejected`;
+  `AgentSessionError` adds `admissionRejectionJournalRequired`. Exhaustive
+  switches must add them even while replanning is disabled.
+- `ModelProviderFallbackPolicyError` adds `invalidCandidateIdentity`, thrown by
+  `ModelProviderRoute.init` for an invalid or duplicate candidate ID. A Route
+  refuses continuation state it cannot attribute to a current candidate with
+  `fallbackBlocked`. This includes state saved by RC4 through a Route and
+  state from candidates without declared IDs after the Route is re-created.
+- A cancelled or failed Run whose retained steering cannot be committed reports
+  that Journal error from `wait()` and its terminal event.
 - `AgentJournalError` adds `maintenanceBudgetTooSmall(requiredWorkBytes:)`.
+  `JournalMaintenancePolicy` throws for a work budget below the largest segment
+  rotation can seal, and a failed rotation now applies `maintenanceRequired`
+  backpressure to new Run input, mutation admission and follow-up enqueue.
 - `AgentFailure` adds `modelBinding`, `capability`, `contextPipeline` and
   `contextProjection` for Core errors that were reported as `unclassified`.
+
+### Tests and CI
+
+- `FollowUpProcessTests` bounds every child wait and fails with the child's
+  state instead of hanging. `Scripts/ci-execution-reporting.sh` keeps per-case
+  logs, bounds each case and collects stack or crash evidence; CI uploads them.
+- New regressions cover writer-lock inheritance by spawned children and make
+  the rotation backpressure test independent of automatic maintenance timing.
+
+### Known issues
+
+- Unattributed CI flakes: hosted macOS 30-minute timeouts
+  ([#45](https://github.com/OtohaCo/SwiftAgent/issues/45)) and one Linux
+  segfault ([#46](https://github.com/OtohaCo/SwiftAgent/issues/46)).
+- Reopening right after `close()` while the process spawns a child can briefly
+  get `storeInUse` ([#47](https://github.com/OtohaCo/SwiftAgent/issues/47)).
+- Tracked design and performance items: #39 to #44. The live real-model
+  replanning evaluation was not run.
 
 ## [1.0.0-rc.4] - 2026-09-28
 

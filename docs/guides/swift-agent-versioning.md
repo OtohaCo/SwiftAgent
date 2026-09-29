@@ -24,7 +24,7 @@ Treat as breaking:
 Adding `AgentFailure.session` is breaking for exhaustive switches even though it
 is a new classified case.
 
-The unreleased bounded pre-admission replanning candidate adds
+`1.0.0-rc.5` bounded pre-admission replanning adds
 `AgentEvent.toolAdmissionRejected`, `AgentJournalEvent.toolAdmissionRejected`
 and `AgentSessionError.admissionRejectionJournalRequired`. Exhaustive public
 enum switches must be updated even when the policy remains disabled. A new
@@ -32,37 +32,41 @@ rejection-capable store opts in at creation and uses format schema 4; the
 unmodified RC4 reader rejects its `format.json` at open, even if no rejection
 has occurred. The default new store remains schema 3 and the old reader can
 open, append and maintain it. The new reader opens ordinary RC4 schema-3
-stores, but rejects an opt-in Run there before contacting the provider.
-Neither direction automatically migrates or downgrades the store. The opt-in
-does not change stable mutation identities, Evidence authority or Receipt
-settlement. Existing `AgentConfiguration` construction defaults to `.disabled`.
+stores, but rejects an opt-in Run there before contacting the provider. Neither
+direction automatically migrates or downgrades the store, and a new store does
+not inherit an old store's operation-deduplication facts. The opt-in does not
+change stable mutation identities, Evidence authority or Receipt settlement.
+Existing `AgentConfiguration` construction defaults to `.disabled`.
 
-Also unreleased: `ModelProviderRoute` returns opaque continuation state only
-to the candidate that produced it, recorded in a Route-owned continuation
+Also in `1.0.0-rc.5`: `ModelProviderRoute` returns opaque continuation state
+only to the candidate that produced it, recorded in a Route-owned continuation
 format. A request whose state the Route cannot attribute to one of its current
-candidates, including state from candidates without declared IDs after a
-restart, now fails with `fallbackBlocked` instead of reaching a candidate.
-`ModelProviderFallbackPolicyError` adds `invalidCandidateIdentity`.
+candidates, including state saved by RC4 through a Route and state from
+candidates without declared IDs after a restart, now fails with
+`fallbackBlocked` instead of reaching a candidate.
+`ModelProviderFallbackPolicyError` adds `invalidCandidateIdentity`, thrown by
+`ModelProviderRoute.init` for an invalid or duplicate candidate ID.
 
-Also unreleased: a cancelled or failed Run whose retained steering cannot be
-committed now reports that Journal error (for example `commitUnknown`) from
-`wait()` and its terminal event instead of `CancellationError` or its own failure.
+Also in `1.0.0-rc.5`: a cancelled or failed Run whose retained steering cannot
+be committed now reports that Journal error (for example `commitUnknown`) from
+`wait()` and its terminal event instead of `CancellationError` or its own
+failure.
 
-Also unreleased: while a failed segment rotation leaves the active segment past
-`segmentBytes`, Run startup, mutation admission and follow-up enqueue fail with
-`maintenanceRequired` until maintenance rotates it.
+Also in `1.0.0-rc.5`: while a failed segment rotation leaves the active segment
+past `segmentBytes`, Run startup, mutation admission and follow-up enqueue fail
+with `maintenanceRequired` until maintenance rotates it.
 
-Also unreleased: opening a store with a `maxWorkBytes` smaller than its retained
-segments or packs fails with the new
+Also in `1.0.0-rc.5`: opening a store with a `maxWorkBytes` smaller than its
+retained segments or packs fails with the new
 `AgentJournalError.maintenanceBudgetTooSmall(requiredWorkBytes:)`; exhaustive
 switches must add it.
 
-Also unreleased: `AgentFailure` adds `modelBinding`, `capability`,
+Also in `1.0.0-rc.5`: `AgentFailure` adds `modelBinding`, `capability`,
 `contextPipeline` and `contextProjection`. These Core errors previously reached
 the event stream as `unclassified`; exhaustive switches must add the cases.
-`JournalMaintenancePolicy` now rejects a `maxWorkBytes` smaller than the largest
-segment rotation can seal. Such a policy previously initialized, then stalled
-maintenance permanently.
+`JournalMaintenancePolicy` now rejects a `maxWorkBytes` smaller than the
+largest segment rotation can seal. Such a policy previously initialized, then
+stalled maintenance permanently.
 
 ## 1.0 freeze decisions (SAI-026B)
 
@@ -126,7 +130,7 @@ Source-bound wrappers now declare `AgentContextSourceReferencing` requirements;
 instead of a current tool-name allowlist. There is no durable read-only effect
 history in the v1 Journal, so excerpts of pre-restart results fail closed.
 
-The unreleased `AgentTool.definition` requirement has a default that returns
+The `1.0.0-rc.5` `AgentTool.definition` requirement has a default that returns
 the type's static values, so existing tools compile and register unchanged.
 `RuntimeAgentTool` is a new protocol for tools named at runtime. A conforming
 type that already declares its own `definition` is affected. If it is a

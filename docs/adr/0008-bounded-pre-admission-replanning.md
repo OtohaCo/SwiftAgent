@@ -1,6 +1,6 @@
 # ADR 0008: Bounded pre-admission Evidence replanning
 
-Status: proposed for the stacked implementation PR (#26 is the tests-only base)
+Status: accepted; implemented in #27 on the tests-only base #26 and released in `1.0.0-rc.5`
 
 `AgentConfiguration.preAdmissionReplanning` defaults to `.disabled`. A Host can opt in with an explicit set of mutation tool names using `.evidenceRejection(toolNames:)`. The policy permits one feedback opportunity per Run. The rejected proposal consumes one tool-call attempt; its correction and any model-requested read-only search use the remaining original turn, call and absolute deadline budgets. It does not start another Run or change the bound capability scope.
 
