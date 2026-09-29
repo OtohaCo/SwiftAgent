@@ -207,6 +207,88 @@ private struct MessagePointer: Codable {
     let offset: Int
 }
 
+/// One family of on-disk indexes: its directory, the value its slots hold, and whether a witness
+/// guards its first publication. Reads, writes and cleanup name a kind rather than a string, so a
+/// slot is always decoded as the value its writer stored.
+private struct IndexKind<Value: Codable> {
+    let name: String
+    let witnessed: Bool
+    /// Only stores created with admission-rejection support (format schema 4) have this index.
+    let requiresAdmissionRejections: Bool
+
+    init(_ name: String, witnessed: Bool = false, requiresAdmissionRejections: Bool = false) {
+        self.name = name
+        self.witnessed = witnessed
+        self.requiresAdmissionRejections = requiresAdmissionRejections
+    }
+
+    func isPublished(_ slot: Slot<Value>, in root: Root) -> Bool {
+        slot.version <= root.sequence && Self.generation(of: slot.value) <= root.layoutGeneration
+    }
+
+    /// A position records the layout generation it was written for; other values hold in every layout.
+    static func generation(of value: Value) -> UInt64 { (value as? Location)?.generation ?? 0 }
+}
+
+/// Indexes whose value is the sequence of the batch holding the indexed record.
+extension IndexKind where Value == UInt64 {
+    static var sessions: Self { .init("sessions", witnessed: true) }
+    static var operations: Self { .init("operations", witnessed: true) }
+    static var calls: Self { .init("calls") }
+    static var blobIndex: Self { .init("blob-index") }
+    static var queueHeads: Self { .init("queue-heads", witnessed: true) }
+    static var queueIDs: Self { .init("queue-ids", witnessed: true) }
+    static var queueOrder: Self { .init("queue-order") }
+    static var queueLinks: Self { .init("queue-links") }
+    static var rejections: Self { .init("rejections", witnessed: true, requiresAdmissionRejections: true) }
+}
+
+extension IndexKind where Value == MessagePointer {
+    static var messages: Self { .init("messages") }
+}
+
+extension IndexKind where Value == Location {
+    static var positions: Self { .init("positions") }
+}
+
+extension IndexKind where Value == [UUID] {
+    /// The Sessions whose mutation for one logical operation is unresolved. The set is the whole
+    /// value; it names no batch, so it keeps no batch alive during maintenance.
+    static var pendingOperations: Self {
+        .init("pending-operations", witnessed: true, requiresAdmissionRejections: true)
+    }
+}
+
+/// A kind's publication metadata, for code that walks every index file.
+private struct AnyIndexKind {
+    let name: String
+    let requiresAdmissionRejections: Bool
+    /// Decodes an index payload as this kind's value and returns its slots, current first.
+    let slots: (Data) throws -> [(key: String, version: UInt64, generation: UInt64)]
+
+    init<Value>(_ kind: IndexKind<Value>) {
+        name = kind.name
+        requiresAdmissionRejections = kind.requiresAdmissionRejections
+        slots = { payload in
+            let index = try JSONDecoder().decode(Index<Value>.self, from: payload)
+            return [index.current, index.previous].compactMap { $0 }.map {
+                (key: $0.key, version: $0.version, generation: IndexKind<Value>.generation(of: $0.value))
+            }
+        }
+    }
+
+    static func all(supportsAdmissionRejections: Bool) -> [AnyIndexKind] {
+        [
+            .init(IndexKind<UInt64>.sessions), .init(IndexKind<UInt64>.operations), .init(IndexKind<UInt64>.calls),
+            .init(IndexKind<MessagePointer>.messages), .init(IndexKind<Location>.positions),
+            .init(IndexKind<UInt64>.blobIndex), .init(IndexKind<UInt64>.queueHeads),
+            .init(IndexKind<UInt64>.queueIDs), .init(IndexKind<UInt64>.queueOrder),
+            .init(IndexKind<UInt64>.queueLinks), .init(IndexKind<UInt64>.rejections),
+            .init(IndexKind<[UUID]>.pendingOperations),
+        ].filter { supportsAdmissionRejections || !$0.requiresAdmissionRejections }
+    }
+}
+
 private struct Segment: Codable {
     let id: UUID
     let end: UInt64
@@ -382,7 +464,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             throw AgentJournalError.persistenceUnavailable("create requires a new directory")
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for name in Self.managedDirectories + (supportsAdmissionRejections ? ["rejections", "pending-operations"] : []) {
+        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections) {
             try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
         }
         let descriptor = try lockStore(directory)
@@ -591,14 +673,13 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         return data
     }
 
-    private static let managedDirectories = [
-        "roots", "layouts", "segments", "sessions", "operations", "calls",
-        "messages", "positions", "state", "blobs", "blob-index", "tmp",
-        "queue-heads", "queue-ids", "queue-order", "queue-links", "witnesses",
-    ]
+    private static func managedDirectories(supportsAdmissionRejections: Bool) -> [String] {
+        ["roots", "layouts", "segments", "state", "blobs", "tmp", "witnesses"]
+            + AnyIndexKind.all(supportsAdmissionRejections: supportsAdmissionRejections).map(\.name)
+    }
 
     private func validateManagedDirectories() throws {
-        for name in Self.managedDirectories + (supportsAdmissionRejections ? ["rejections", "pending-operations"] : []) {
+        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections) {
             try validateManagedDirectory(directoryURL.appendingPathComponent(name))
         }
     }
@@ -637,10 +718,6 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             .appendingPathComponent(String(digest.prefix(2)))
             .appendingPathComponent("\(storeID.uuidString)_\(digest).json")
     }
-
-    private static let witnessedIndexes: Set<String> = [
-        "sessions", "queue-heads", "queue-ids", "operations", "rejections", "pending-operations",
-    ]
 
     private func witnessURL(_ kind: String, _ key: String) -> URL {
         let digest = Self.digest(Data(key.utf8))
@@ -892,38 +969,36 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func load(_ location: Location) throws -> BatchV2 { try readFrame(location).0 }
     private func frameDigest(_ location: Location) throws -> String { try readFrame(location).1 }
 
-    private func pointer<Value: Codable>(_ kind: String, key: String, root: Root) throws -> Value? {
-        let url = indexURL(kind, key)
+    private func pointer<Value: Codable>(_ kind: IndexKind<Value>, key: String, root: Root) throws -> Value? {
+        let url = indexURL(kind.name, key)
         guard FileManager.default.fileExists(atPath: url.path) else {
-            if Self.witnessedIndexes.contains(kind),
-               try witnessExists(kind, key),
-               try witnessWasPublished(loadWitness(kind, key), root: root) {
+            if kind.witnessed,
+               try witnessExists(kind.name, key),
+               try witnessWasPublished(loadWitness(kind.name, key), root: root) {
                 throw AgentJournalError.invalidRecord
             }
             return nil
         }
-        if Self.witnessedIndexes.contains(kind) {
-            guard try witnessExists(kind, key) else {
+        if kind.witnessed {
+            guard try witnessExists(kind.name, key) else {
                 throw AgentJournalError.invalidRecord
             }
             // An index candidate written before a failed CURRENT publication
             // can reuse a sequence later occupied by a different commit.
-            guard try witnessWasPublished(loadWitness(kind, key), root: root) else { return nil }
+            guard try witnessWasPublished(loadWitness(kind.name, key), root: root) else { return nil }
         }
         let index: Index<Value> = try loadIndex(url)
         for slot in [index.current, index.previous].compactMap({ $0 }) {
             guard slot.key == key else { throw AgentJournalError.invalidRecord }
-            let published = slot.version <= root.sequence &&
-                (kind != "positions" || ((slot.value as? Location)?.generation ?? UInt64.max) <= root.layoutGeneration)
-            if published { return slot.value }
+            if kind.isPublished(slot, in: root) { return slot.value }
         }
         return nil
     }
 
-    private func updateIndex<Value: Codable>(_ kind: String, key: String, value: Value,
+    private func updateIndex<Value: Codable>(_ kind: IndexKind<Value>, key: String, value: Value,
                                               version: UInt64, root: Root,
                                               commitID: UUID? = nil) throws {
-        let url = indexURL(kind, key)
+        let url = indexURL(kind.name, key)
         let shard = url.deletingLastPathComponent()
         if !FileManager.default.fileExists(atPath: shard.path) {
             try FileManager.default.createDirectory(at: shard, withIntermediateDirectories: false)
@@ -935,16 +1010,13 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         } else {
             old = nil
         }
-        let witnessExists = try Self.witnessedIndexes.contains(kind) &&
-            self.witnessExists(kind, key)
-        let witnessPublished = try witnessExists && witnessWasPublished(loadWitness(kind, key), root: root)
+        let witnessExists = try kind.witnessed && self.witnessExists(kind.name, key)
+        let witnessPublished = try witnessExists && witnessWasPublished(loadWitness(kind.name, key), root: root)
         let previous = [old?.current, old?.previous].compactMap { $0 }.first { slot in
-            slot.key == key && slot.version <= root.sequence &&
-                (kind != "positions" || ((slot.value as? Location)?.generation ?? UInt64.max) <= root.layoutGeneration) &&
-                (!Self.witnessedIndexes.contains(kind) || witnessPublished)
+            slot.key == key && kind.isPublished(slot, in: root) && (!kind.witnessed || witnessPublished)
         }
         if let old, old.current.key != key { throw AgentJournalError.invalidRecord }
-        if Self.witnessedIndexes.contains(kind) {
+        if kind.witnessed {
             guard let commitID else { throw AgentJournalError.invalidRecord }
             if previous != nil {
                 guard witnessPublished else {
@@ -958,7 +1030,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 }
                 // The witness is durable before the index and CURRENT. A
                 // failed candidate may safely be replaced on the next write.
-                try publishWitness(kind, key: key, sequence: version, commitID: commitID)
+                try publishWitness(kind.name, key: key, sequence: version, commitID: commitID)
             }
         }
         let index = Index(current: Slot(key: key, version: version, value: value), previous: previous)
@@ -968,15 +1040,19 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private func loadIndex<Value: Codable>(_ url: URL) throws -> Index<Value> {
+        try JSONDecoder().decode(Index<Value>.self, from: loadIndexPayload(url))
+    }
+
+    private func loadIndexPayload(_ url: URL) throws -> Data {
         let wrapped = try JSONDecoder().decode(IndexEnvelope.self, from: readData(url))
         guard wrapped.storeID == storeID,
               Self.digest(wrapped.payload) == wrapped.digest else { throw AgentJournalError.checksumMismatch }
-        return try JSONDecoder().decode(Index<Value>.self, from: wrapped.payload)
+        return wrapped.payload
     }
 
     private func location(_ sequence: UInt64, root: Root) throws -> Location {
         guard sequence > 0, sequence <= root.sequence,
-              let location: Location = try pointer("positions", key: String(sequence), root: root) else {
+              let location: Location = try pointer(.positions, key: String(sequence), root: root) else {
             throw AgentJournalError.invalidRecord
         }
         guard location.commitID != nil else { throw AgentJournalError.invalidRecord }
@@ -990,41 +1066,36 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             let ordinal = batch.messageStart + UInt64(offset)
             guard ordinal < count else { continue }
             let key = "\(batch.sessionID.uuidString)/\(ordinal)"
-            let pointer: MessagePointer? = try pointer("messages", key: key, root: root)
+            let pointer: MessagePointer? = try pointer(.messages, key: key, root: root)
             if pointer?.sequence == batch.sequence && pointer?.offset == offset { return true }
         }
         return false
     }
 
     private func isBatchNeeded(_ batch: BatchV2, at location: Location, root: Root) throws -> Bool {
-        let sessionHead: UInt64? = try pointer("sessions", key: batch.sessionID.uuidString, root: root)
+        let sessionHead: UInt64? = try pointer(.sessions, key: batch.sessionID.uuidString, root: root)
         let callHead: UInt64?
         if let mutation = batch.mutation {
             let key = "\(mutation.sessionID.uuidString)/\(mutation.runID.uuidString)/\(mutation.intent.call.id)"
-            callHead = try pointer("calls", key: key, root: root)
+            callHead = try pointer(.calls, key: key, root: root)
         } else { callHead = nil }
         if let rejection = batch.admissionRejection {
             let key = "\(batch.sessionID.uuidString)/\(rejection.runID.uuidString)/\(rejection.callID)"
-            let rejectionHead: UInt64? = try pointer("rejections", key: key, root: root)
+            let rejectionHead: UInt64? = try pointer(.rejections, key: key, root: root)
             if rejectionHead == batch.sequence { return true }
         }
-        if let mutation = batch.mutation, supportsAdmissionRejections {
-            if let key = Self.pendingOperationKey(try mutation.intent.value(), runID: mutation.runID) {
-                let head: UInt64? = try pointer("pending-operations", key: key, root: root)
-                if head == batch.sequence { return true }
-            }
-        }
+        // `pendingOperations` holds its Session set inline and names no batch, so it keeps none.
         if batch.queueHead != nil {
-            let head: UInt64? = try pointer("queue-heads", key: batch.sessionID.uuidString, root: root)
+            let head: UInt64? = try pointer(.queueHeads, key: batch.sessionID.uuidString, root: root)
             if head == batch.sequence { return true }
         }
         for record in batch.queueChanges {
-            let idHead: UInt64? = try pointer("queue-ids", key: Self.followUpKey(batch.sessionID, record.inputID), root: root)
-            let ordinalHead: UInt64? = try pointer("queue-order", key: Self.followUpOrdinalKey(batch.sessionID, record.ordinal), root: root)
+            let idHead: UInt64? = try pointer(.queueIDs, key: Self.followUpKey(batch.sessionID, record.inputID), root: root)
+            let ordinalHead: UInt64? = try pointer(.queueOrder, key: Self.followUpOrdinalKey(batch.sessionID, record.ordinal), root: root)
             if idHead == batch.sequence || ordinalHead == batch.sequence { return true }
         }
         for link in batch.queueLinks {
-            let head: UInt64? = try pointer("queue-links", key: Self.followUpOrdinalKey(batch.sessionID, link.ordinal), root: root)
+            let head: UInt64? = try pointer(.queueLinks, key: Self.followUpOrdinalKey(batch.sessionID, link.ordinal), root: root)
             if head == batch.sequence { return true }
         }
         return try hasLiveMessage(batch, root: root) || sessionHead == batch.sequence ||
@@ -1218,7 +1289,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 let new = Location(kind: "state", file: packID, offset: offset,
                                    length: length, generation: generation,
                                    commitID: old.commitID)
-                try updateIndex("positions", key: String(sequence), value: new,
+                try updateIndex(.positions, key: String(sequence), value: new,
                                 version: root.sequence, root: root)
                 if root.lastFrame?.file == old.file && root.lastFrame?.offset == old.offset {
                     relocatedLast = new
@@ -1229,7 +1300,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 let discardedLocation = Location(kind: "discarded", file: candidate.segment.id,
                                                   offset: old.offset, length: old.length,
                                                   generation: generation, commitID: old.commitID)
-                try updateIndex("positions", key: String(sequence), value: discardedLocation,
+                try updateIndex(.positions, key: String(sequence), value: discardedLocation,
                                 version: root.sequence, root: root)
             }
             guard relocatedLast?.file != candidate.segment.id else { throw AgentJournalError.invalidRecord }
@@ -1260,7 +1331,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             try? FileManager.default.removeItem(at: rootURL(oldRootID))
             try? FileManager.default.removeItem(at: layoutURL(root.layout))
             for sequence in discarded {
-                let pointer: Location? = try pointer("positions", key: String(sequence), root: updated)
+                let pointer: Location? = try pointer(.positions, key: String(sequence), root: updated)
                 guard pointer?.kind == "discarded", pointer?.file == candidate.segment.id else {
                     throw AgentJournalError.invalidRecord
                 }
@@ -1333,9 +1404,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 }
                 let batch = try load(Location(kind: "segment", file: segment.id, offset: offset,
                                               length: UInt32(length), generation: root.layoutGeneration))
-                let active: Location? = try pointer("positions", key: String(batch.sequence), root: root)
+                let active: Location? = try pointer(.positions, key: String(batch.sequence), root: root)
                 if active == nil || (active?.kind == "segment" && active?.file == segment.id) {
-                    let position = indexURL("positions", String(batch.sequence))
+                    let position = indexURL(IndexKind<Location>.positions.name, String(batch.sequence))
                     if FileManager.default.fileExists(atPath: position.path) {
                         try FileManager.default.removeItem(at: position)
                     }
@@ -1418,7 +1489,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             let discarded = Location(kind: "discarded", file: packID, offset: old.offset,
                                      length: old.length, generation: generation,
                                      commitID: old.commitID)
-            try updateIndex("positions", key: String(sequence), value: discarded,
+            try updateIndex(.positions, key: String(sequence), value: discarded,
                             version: root.sequence, root: root)
         }
         let layoutID = UUID()
@@ -1450,13 +1521,13 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     private func removeDiscardedBlob(_ blob: UUID, sequence: UInt64, root: Root) throws {
         let key = blob.uuidString
-        let referenced: UInt64? = try pointer("blob-index", key: key, root: root)
+        let referenced: UInt64? = try pointer(.blobIndex, key: key, root: root)
         guard referenced == nil || referenced == sequence else { throw AgentJournalError.invalidRecord }
-        if let active: Location = try pointer("positions", key: String(sequence), root: root),
+        if let active: Location = try pointer(.positions, key: String(sequence), root: root),
            active.kind == "state" || active.kind == "segment" {
             return
         }
-        let index = indexURL("blob-index", key)
+        let index = indexURL(IndexKind<UInt64>.blobIndex.name, key)
         if FileManager.default.fileExists(atPath: index.path) {
             try FileManager.default.removeItem(at: index)
         }
@@ -1535,10 +1606,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             guard url.pathExtension == "blob", stem.hasPrefix(managedPrefix),
                   let id = UUID(uuidString: String(stem.dropFirst(managedPrefix.count))),
                   id.uuidString.hasPrefix(shard), try managedRegularFile(url) else { continue }
-            let published: UInt64? = try pointer("blob-index", key: id.uuidString, root: root)
+            let published: UInt64? = try pointer(.blobIndex, key: id.uuidString, root: root)
             if published == nil {
                 try manager.removeItem(at: url)
-                let index = indexURL("blob-index", id.uuidString)
+                let index = indexURL(IndexKind<UInt64>.blobIndex.name, id.uuidString)
                 if manager.fileExists(atPath: index.path), try managedRegularFile(index) {
                     try manager.removeItem(at: index)
                 }
@@ -1552,43 +1623,27 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     private func cleanupUnpublishedIndexesLocked(root: Root) throws {
         let shard = String(format: "%02x", garbageIndexShard)
-        let kinds = ["sessions", "operations", "calls", "messages", "positions", "blob-index",
-                     "queue-heads", "queue-ids", "queue-order", "queue-links"]
-            + (supportsAdmissionRejections ? ["rejections", "pending-operations"] : [])
+        let kinds = AnyIndexKind.all(supportsAdmissionRejections: supportsAdmissionRejections)
         for kind in kinds {
-            if finishedIndexKinds.contains(kind) { continue }
-            let directory = directoryURL.appendingPathComponent("\(kind)/\(shard)")
+            if finishedIndexKinds.contains(kind.name) { continue }
+            let directory = directoryURL.appendingPathComponent("\(kind.name)/\(shard)")
             let (files, finished) = try nextManagedEntries(in: directory,
-                key: "index-\(kind)-\(shard)", limit: 8)
+                key: "index-\(kind.name)-\(shard)", limit: 8)
             for url in files {
                 guard url.pathExtension == "json",
                       url.deletingPathExtension().lastPathComponent.hasPrefix(storeID.uuidString + "_"),
                       try managedRegularFile(url) else { continue }
-                let slots: (String, UInt64, UInt64?, String?, UInt64?, UInt64?)
-                switch kind {
-                case "messages":
-                    let index: Index<MessagePointer> = try loadIndex(url)
-                    slots = (index.current.key, index.current.version, nil,
-                             index.previous?.key, index.previous?.version, nil)
-                case "positions":
-                    let index: Index<Location> = try loadIndex(url)
-                    slots = (index.current.key, index.current.version, index.current.value.generation,
-                             index.previous?.key, index.previous?.version, index.previous?.value.generation)
-                default:
-                    let index: Index<UInt64> = try loadIndex(url)
-                    slots = (index.current.key, index.current.version, nil,
-                             index.previous?.key, index.previous?.version, nil)
-                }
-                guard url.deletingPathExtension().lastPathComponent ==
-                    "\(storeID.uuidString)_\(Self.digest(Data(slots.0.utf8)))",
-                      slots.3 == nil || slots.3 == slots.0 else { throw AgentJournalError.invalidRecord }
-                let currentPublished = slots.1 <= root.sequence && (slots.2 ?? 0) <= root.layoutGeneration
-                let previousPublished = slots.4.map { $0 <= root.sequence && (slots.5 ?? 0) <= root.layoutGeneration } ?? false
-                if !currentPublished && !previousPublished {
+                let slots = try kind.slots(loadIndexPayload(url))
+                guard let current = slots.first,
+                      url.deletingPathExtension().lastPathComponent ==
+                        "\(storeID.uuidString)_\(Self.digest(Data(current.key.utf8)))",
+                      slots.allSatisfy({ $0.key == current.key }) else { throw AgentJournalError.invalidRecord }
+                let published = slots.contains { $0.version <= root.sequence && $0.generation <= root.layoutGeneration }
+                if !published {
                     try FileManager.default.removeItem(at: url)
                 }
             }
-            if finished { finishedIndexKinds.insert(kind) }
+            if finished { finishedIndexKinds.insert(kind.name) }
         }
         if finishedIndexKinds.count == kinds.count {
             garbageIndexShard = (garbageIndexShard + 1) % 256
@@ -1621,7 +1676,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
 
         func header(_ id: UUID) throws -> JournalSessionHeader? {
-            guard let sequence: UInt64 = try store.pointer("sessions", key: id.uuidString, root: root) else { return nil }
+            guard let sequence: UInt64 = try store.pointer(.sessions, key: id.uuidString, root: root) else { return nil }
             let found = try batch(sequence)
             guard found.sessionID == id, let header = found.header else { throw AgentJournalError.invalidRecord }
             return header.value()
@@ -1641,18 +1696,18 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
 
         func identity(_ key: String) throws -> JournalStoredMutation? {
-            try indexedMutation("operations", key: key)
+            try indexedMutation(.operations, key: key)
         }
 
         func mutation(sessionID: UUID, runID: UUID, callID: ToolCallID) throws -> JournalStoredMutation? {
-            try indexedMutation("calls", key: Self.callKey(sessionID, runID, callID))
+            try indexedMutation(.calls, key: Self.callKey(sessionID, runID, callID))
         }
 
         func admissionRejection(sessionID: UUID, runID: UUID,
                                 callID: ToolCallID) throws -> JournalAdmissionRejection? {
             guard store.supportsAdmissionRejections else { return nil }
             let key = Self.callKey(sessionID, runID, callID)
-            guard let sequence: UInt64 = try store.pointer("rejections", key: key, root: root) else { return nil }
+            guard let sequence: UInt64 = try store.pointer(.rejections, key: key, root: root) else { return nil }
             let found = try batch(sequence)
             guard found.sessionID == sessionID,
                   let value = try found.admissionRejection?.value(sessionID: sessionID),
@@ -1666,10 +1721,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             "\(sessionID.uuidString)/\(runID.uuidString)/\(callID.rawValue)"
         }
 
-        private func indexedMutation(_ kind: String, key: String) throws -> JournalStoredMutation? {
+        private func indexedMutation(_ kind: IndexKind<UInt64>, key: String) throws -> JournalStoredMutation? {
             guard let sequence: UInt64 = try store.pointer(kind, key: key, root: root) else { return nil }
             guard let mutation = try batch(sequence).mutation?.value() else { throw AgentJournalError.invalidRecord }
-            let actual = kind == "operations" ? mutation.intent.idempotencyKey
+            let actual = kind.name == IndexKind<UInt64>.operations.name ? mutation.intent.idempotencyKey
                 : Self.callKey(mutation.sessionID, mutation.runID, mutation.intent.call.id)
             guard actual == key else { throw AgentJournalError.invalidRecord }
             return mutation
@@ -1680,7 +1735,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             if let sessionID { sessions = [sessionID] }
             else {
                 let shards = try FileManager.default.contentsOfDirectory(
-                    at: store.directoryURL.appendingPathComponent("sessions"), includingPropertiesForKeys: nil
+                    at: store.directoryURL.appendingPathComponent(IndexKind<UInt64>.sessions.name), includingPropertiesForKeys: nil
                 ).filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
                 let urls = try shards.flatMap {
                     try FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil)
@@ -1707,7 +1762,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             guard store.supportsAdmissionRejections else { throw AgentJournalError.unsupportedFormat }
             for key in [SegmentedJournalStore.pendingOperationKey(operationID),
                         SegmentedJournalStore.untypedPendingKey] {
-                guard let sessions: [UUID] = try store.pointer("pending-operations", key: key, root: root) else {
+                guard let sessions: [UUID] = try store.pointer(.pendingOperations, key: key, root: root) else {
                     continue
                 }
                 for sessionID in sessions {
@@ -1737,7 +1792,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             var cached: BatchV2?
             for index in ordinal..<min(header.messageCount, ordinal + UInt64(limit)) {
                 let key = "\(sessionID.uuidString)/\(index)"
-                guard let pointer: MessagePointer = try store.pointer("messages", key: key, root: root) else {
+                guard let pointer: MessagePointer = try store.pointer(.messages, key: key, root: root) else {
                     throw AgentJournalError.invalidRecord
                 }
                 if pointer.sequence != cachedSequence {
@@ -1754,7 +1809,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
 
         func followUpHead(sessionID: UUID) throws -> JournalFollowUpHead {
-            guard let sequence: UInt64 = try store.pointer("queue-heads", key: sessionID.uuidString, root: root) else {
+            guard let sequence: UInt64 = try store.pointer(.queueHeads, key: sessionID.uuidString, root: root) else {
                 return .init()
             }
             let found = try batch(sequence)
@@ -1766,7 +1821,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
         func followUp(sessionID: UUID, inputID: String) throws -> JournalStoredFollowUp? {
             let key = SegmentedJournalStore.followUpKey(sessionID, inputID)
-            guard let sequence: UInt64 = try store.pointer("queue-ids", key: key, root: root) else { return nil }
+            guard let sequence: UInt64 = try store.pointer(.queueIDs, key: key, root: root) else { return nil }
             let found = try batch(sequence)
             guard found.sessionID == sessionID,
                   var value = try found.queueChanges.first(where: {
@@ -1780,7 +1835,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
         private func nextQueued(sessionID: UUID, ordinal: UInt64) throws -> UInt64? {
             let key = SegmentedJournalStore.followUpOrdinalKey(sessionID, ordinal)
-            guard let sequence: UInt64 = try store.pointer("queue-links", key: key, root: root) else {
+            guard let sequence: UInt64 = try store.pointer(.queueLinks, key: key, root: root) else {
                 throw AgentJournalError.invalidRecord
             }
             let found = try batch(sequence)
@@ -1793,7 +1848,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
         private func followUp(sessionID: UUID, ordinal: UInt64) throws -> JournalStoredFollowUp? {
             let key = SegmentedJournalStore.followUpOrdinalKey(sessionID, ordinal)
-            guard let sequence: UInt64 = try store.pointer("queue-order", key: key, root: root) else { return nil }
+            guard let sequence: UInt64 = try store.pointer(.queueOrder, key: key, root: root) else { return nil }
             let found = try batch(sequence)
             guard found.sessionID == sessionID,
                   var value = try found.queueChanges.first(where: { $0.ordinal == ordinal })?.value(),
@@ -1955,27 +2010,27 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             // published result. Reopen and inspect the root before retrying.
             store.poisoned = true
             let location = try store.append(bytes, to: root, commitID: batch.commitID)
-            try store.updateIndex("positions", key: String(next), value: location,
+            try store.updateIndex(.positions, key: String(next), value: location,
                                   version: next, root: root)
             if updateSession {
-                try store.updateIndex("sessions", key: batch.sessionID.uuidString, value: next,
+                try store.updateIndex(.sessions, key: batch.sessionID.uuidString, value: next,
                                       version: next, root: root, commitID: batch.commitID)
                 for offset in batch.messages.indices {
                     let key = "\(batch.sessionID.uuidString)/\(batch.messageStart + UInt64(offset))"
-                    try store.updateIndex("messages", key: key,
+                    try store.updateIndex(.messages, key: key,
                                           value: MessagePointer(sequence: next, offset: offset),
                                           version: next, root: root)
                 }
             }
             if let mutation = batch.mutation {
-                try store.updateIndex("operations", key: mutation.intent.identity, value: next,
+                try store.updateIndex(.operations, key: mutation.intent.identity, value: next,
                                       version: next, root: root, commitID: batch.commitID)
-                try store.updateIndex("calls", key: Self.callKey(mutation.sessionID, mutation.runID,
+                try store.updateIndex(.calls, key: Self.callKey(mutation.sessionID, mutation.runID,
                     .init(rawValue: mutation.intent.call.id)),
                                       value: next, version: next, root: root)
             }
             if let rejection = batch.admissionRejection {
-                try store.updateIndex("rejections",
+                try store.updateIndex(.rejections,
                     key: Self.callKey(batch.sessionID, rejection.runID,
                                       .init(rawValue: rejection.callID)),
                     value: next, version: next, root: root, commitID: batch.commitID)
@@ -1983,7 +2038,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             if let mutation = batch.mutation, store.supportsAdmissionRejections {
                 if let key = SegmentedJournalStore.pendingOperationKey(try mutation.intent.value(),
                                                                        runID: mutation.runID) {
-                    let existing: [UUID] = try store.pointer("pending-operations", key: key, root: root) ?? []
+                    let existing: [UUID] = try store.pointer(.pendingOperations, key: key, root: root) ?? []
                     var sessions = Set(existing)
                     if mutation.state == AgentMutationState.intent.rawValue ||
                        mutation.state == AgentMutationState.needsReconciliation.rawValue {
@@ -1991,27 +2046,27 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                     } else {
                         sessions.remove(mutation.sessionID)
                     }
-                    try store.updateIndex("pending-operations", key: key,
+                    try store.updateIndex(.pendingOperations, key: key,
                         value: sessions.sorted { $0.uuidString < $1.uuidString },
                         version: next, root: root, commitID: batch.commitID)
                 }
             }
             if batch.queueHead != nil {
-                try store.updateIndex("queue-heads", key: batch.sessionID.uuidString,
+                try store.updateIndex(.queueHeads, key: batch.sessionID.uuidString,
                                       value: next, version: next, root: root, commitID: batch.commitID)
             }
             for record in batch.queueChanges {
-                try store.updateIndex("queue-ids", key: SegmentedJournalStore.followUpKey(batch.sessionID, record.inputID),
+                try store.updateIndex(.queueIDs, key: SegmentedJournalStore.followUpKey(batch.sessionID, record.inputID),
                                       value: next, version: next, root: root, commitID: batch.commitID)
-                try store.updateIndex("queue-order", key: SegmentedJournalStore.followUpOrdinalKey(batch.sessionID, record.ordinal),
+                try store.updateIndex(.queueOrder, key: SegmentedJournalStore.followUpOrdinalKey(batch.sessionID, record.ordinal),
                                       value: next, version: next, root: root)
             }
             for link in batch.queueLinks {
-                try store.updateIndex("queue-links", key: SegmentedJournalStore.followUpOrdinalKey(batch.sessionID, link.ordinal),
+                try store.updateIndex(.queueLinks, key: SegmentedJournalStore.followUpOrdinalKey(batch.sessionID, link.ordinal),
                                       value: next, version: next, root: root)
             }
             if let blob {
-                try store.updateIndex("blob-index", key: blob.uuidString, value: next,
+                try store.updateIndex(.blobIndex, key: blob.uuidString, value: next,
                                       version: next, root: root)
             }
             try store.fault?(.afterIndexSync)

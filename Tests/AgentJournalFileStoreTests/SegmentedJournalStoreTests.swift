@@ -843,6 +843,118 @@ import Glibc
         try await journal.close()
     }
 
+    /// Schema 4 keeps, per logical operation, the Sessions whose mutation is unresolved. Rotation,
+    /// packing, index cleanup and reopen must all read that index as the Session set it stores.
+    @Test func pendingOperationIndexSurvivesRotationPackingIndexCleanupAndReopen() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-pending-index-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: 8192,
+                                                  maxUnreclaimedBytes: 65536, maxSegmentBatches: 2)
+        var journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "pending-index",
+                                                         policy: policy, supportsAdmissionRejections: true)
+        let open = try await admitOperation("open", in: journal)
+        try await settle(try await admitOperation("settled", in: journal), in: journal)
+        let quarantined = try await admitOperation("quarantined", in: journal)
+        try await journal.markMutationNeedsReconciliation(sessionID: quarantined.sessionID,
+                                                          runID: quarantined.runID, callID: quarantined.callID)
+        for index in 0..<6 {
+            _ = try await journal.appendCheckpoint([.checkpoint(history: [.user([.text("rotate \(index)")])], steeringIDs: [])],
+                                                   sessionID: UUID(), runID: UUID(), durability: .durable)
+        }
+        // Rotation has sealed the mutation batches; automatic maintenance may already be packing them.
+        #expect(try await (journal.storeStatus()?.layoutGeneration ?? 0) > 0)
+
+        try await maintainAcrossEveryIndexShard(journal)
+        let status = try #require(try await journal.maintenanceStatus())
+        #expect(status.sealedSegments == 0)
+        #expect(status.lastError == nil)
+        try await expectPendingOperations(["open", "quarantined"], resolved: ["settled", "unknown"], in: journal)
+
+        try await journal.close()
+        journal = try AgentIncrementalJournal.open(at: directory, policy: policy)
+        try await expectPendingOperations(["open", "quarantined"], resolved: ["settled", "unknown"], in: journal)
+        let pending = try #require(try await journal.recoverPendingMutations(sessionID: open.sessionID).first)
+        try await journal.abortMutation(pending, confirmedNoEffect: AgentNoEffectConfirmation(basis: "fixture wrote nothing"))
+        try await maintainAcrossEveryIndexShard(journal)
+        try await expectPendingOperations(["quarantined"], resolved: ["open", "settled"], in: journal)
+        try await journal.close()
+    }
+
+    /// A pending-operation index written before a failed publication is an unpublished candidate:
+    /// cleanup removes it, and the operation is admitted afresh.
+    @Test func unpublishedPendingOperationIndexIsCollectedAndTheOperationIsAdmittedAgain() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-pending-candidate-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = JournalFaultGate()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "pending-candidate",
+                                                                   supportsAdmissionRejections: true,
+                                                                   fault: { try gate.check($0) })
+        gate.arm(.afterIndexSync)
+        await #expect(throws: (any Error).self) { _ = try await admitOperation("lost", in: journal) }
+        try await journal.close()
+        #expect(try indexFiles(in: directory, kind: "pending-operations").count == 1)
+
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        #expect(try await reopened.hasRelatedPendingMutation(sessionID: UUID(), operationID: "lost") == false)
+        try await maintainAcrossEveryIndexShard(reopened)
+        #expect(try indexFiles(in: directory, kind: "pending-operations").isEmpty)
+        _ = try await admitOperation("lost", in: reopened)
+        #expect(try await reopened.hasRelatedPendingMutation(sessionID: UUID(), operationID: "lost"))
+        try await reopened.close()
+    }
+
+    private struct AdmittedOperation {
+        let sessionID: UUID, runID: UUID, callID: ToolCallID
+        let identity: String, target: EvidenceReference
+    }
+
+    /// Admits a mutation whose idempotency key names the logical operation, as a Run with an `operationID` does.
+    private func admitOperation(_ operation: String, in journal: AgentJournal) async throws -> AdmittedOperation {
+        let target = EvidenceReference(namespace: "fixture", id: operation)
+        let admitted = AdmittedOperation(sessionID: UUID(), runID: UUID(), callID: .init(rawValue: "call-\(operation)"),
+                                         identity: "\(operation)/write/{}", target: target)
+        let request = ToolMutationAdmissionRequest(sessionID: admitted.sessionID, runID: admitted.runID,
+                                                    callID: admitted.callID, name: "write", argumentsJSON: "{}",
+                                                    resources: [.named(target)], idempotencyKey: admitted.identity,
+                                                    receiptExpectation: try .init(targets: [target], revision: .present))
+        guard case .admitted = try await journal.admit(request) else { throw AgentJournalError.invalidRecord }
+        return admitted
+    }
+
+    private func settle(_ operation: AdmittedOperation, in journal: AgentJournal) async throws {
+        let call = ToolCall(id: operation.callID, name: "write", argumentsJSON: "{}", completeness: .complete)
+        let output = JSONValue.string("written")
+        try await journal.commitMutation(
+            sessionID: operation.sessionID, runID: operation.runID, callID: operation.callID,
+            receipt: ToolReceipt(operationID: operation.identity, status: .succeeded,
+                                 confirmedTargets: [operation.target], revision: "1"),
+            output: output,
+            history: [.user([.text("write")]), .assistant(content: [], toolCalls: [call]),
+                      .tool(.init(callID: operation.callID, content: [.json(output)], isError: false))],
+            steeringIDs: [])
+    }
+
+    private func expectPendingOperations(_ pending: [String], resolved: [String], in journal: AgentJournal) async throws {
+        for operation in pending {
+            #expect(try await journal.hasRelatedPendingMutation(sessionID: UUID(), operationID: operation), "\(operation)")
+        }
+        for operation in resolved {
+            #expect(try await journal.hasRelatedPendingMutation(sessionID: UUID(), operationID: operation) == false, "\(operation)")
+        }
+    }
+
+    /// Index cleanup inspects one of 256 key-digest shards per maintenance pass.
+    private func maintainAcrossEveryIndexShard(_ journal: AgentJournal) async throws {
+        for _ in 0..<(256 + 16) { _ = try await journal.requestMaintenance() }
+    }
+
+    private func indexFiles(in directory: URL, kind: String) throws -> [URL] {
+        let root = directory.appendingPathComponent(kind)
+        return try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil).flatMap {
+            try FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil)
+        }.filter { $0.pathExtension == "json" }
+    }
+
     private func launch(_ mode: String, directory: URL) throws -> Process {
         let process = Process()
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()

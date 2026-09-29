@@ -16,6 +16,13 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
   instance definition, read once at registration. A name from the instance must
   be 1 to 64 letters, digits, `_` or `-`. Existing tools keep their behavior.
 
+### Fixed
+
+- Schema-4 stores read the `pending-operations` index as the Session set it
+  stores. Maintenance previously decoded it as a batch sequence, so packing a
+  sealed mutation batch and index cleanup failed on every pass, until mutation
+  admission stopped with `maintenanceRequired`. The index pins no batch.
+
 ## [1.0.0-rc.4] - 2026-09-28
 
 RC4 is a breaking SDK prerelease, not a stable 1.0 release or production Host
