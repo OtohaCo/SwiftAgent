@@ -116,9 +116,13 @@ without a Host pre-turn compaction call. If maintenance cannot keep up, new
 mutation admission can fail with `maintenanceRequired`; an in-flight
 settlement still has its ordinary persistence path.
 
-A segment rotation whose `CURRENT` replacement may or may not be durable
-poisons the handle like any other uncertain publication; the batch it followed
-stays committed.
+A segment rotation that fails before publishing leaves the active segment past
+`segmentBytes`, but never past `maxWorkBytes`. Until a maintenance pass retries
+the rotation successfully, new Run input, mutation admission and follow-up
+enqueue fail with `maintenanceRequired`, and work already admitted settles
+within the remaining room. A rotation whose `CURRENT` replacement may or may
+not be durable poisons the handle like any other uncertain publication; the
+batch it followed stays committed.
 
 Only one same-host writer is supported. Do not copy an open directory as a
 backup or run an external compactor against it. Close it, then copy the whole

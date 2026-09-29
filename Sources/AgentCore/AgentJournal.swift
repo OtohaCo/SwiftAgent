@@ -413,11 +413,12 @@ public actor AgentJournal {
         try checkStartupAdmission(deadline: admissionDeadline, checkCancellation: checkAdmissionCancellation)
         if let store {
             guard !closing else { throw AgentJournalError.storeClosed }
-            let result = try store.write { view in
+            let result = try writeStore(store) { view in
                 try appendToStore(events, sessionID: sessionID, runID: runID,
                                   timestamp: timestamp, view: view,
                                   allowMutationSettlement: allowMutationSettlement,
-                                  followUpInputID: followUpInputID)
+                                  followUpInputID: followUpInputID,
+                                  admitsNewWork: checkAdmissionCancellation)
             }
             scheduleMaintenanceIfNeeded()
             return result
@@ -792,7 +793,7 @@ extension AgentJournal: ToolMutationAdmission {
         }
         try ToolResource.validate(request.resources)
         if let store {
-            let decision = try store.write { view -> ToolMutationAdmissionResult in
+            let decision = try writeStore(store) { view -> ToolMutationAdmissionResult in
                 if let existing = try view.identity(request.idempotencyKey) {
                     guard existing.intent.call.name == request.name,
                           try JSONValue.decodeToolArguments(existing.intent.call.argumentsJSON) == arguments,
@@ -864,7 +865,7 @@ extension AgentJournal {
         try Task.checkCancellation()
         try input.validate()
         guard let store else { throw AgentFollowUpError.durableJournalRequired }
-        let result = try store.write { view -> AgentFollowUpRecord in
+        let result = try writeStore(store) { view -> AgentFollowUpRecord in
             if let existing = try view.followUp(sessionID: sessionID, inputID: input.inputID) {
                 guard existing.input.matches(input) else { throw AgentFollowUpError.inputConflict }
                 return existing.publicRecord(storeID: store.storeID)
@@ -893,7 +894,7 @@ extension AgentJournal {
                                                  input: input, state: .queued)
             links.append(.init(ordinal: ordinal, next: nil))
             try view.publishFollowUp(.init(sessionID: sessionID, expectedRevision: oldRevision,
-                                            head: head, records: [accepted], links: links))
+                                            head: head, records: [accepted], links: links, admitsNewWork: true))
             return accepted.publicRecord(storeID: store.storeID)
         }
         scheduleMaintenanceIfNeeded()
@@ -1082,7 +1083,7 @@ extension AgentJournal {
     private func appendToStore(
         _ events: [AgentJournalEvent], sessionID: UUID, runID: UUID?, timestamp: Date,
         view: any JournalStoreView, allowMutationSettlement: Bool,
-        followUpInputID: String? = nil
+        followUpInputID: String? = nil, admitsNewWork: Bool = false
     ) throws -> [AgentJournalRecord] {
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
@@ -1181,7 +1182,8 @@ extension AgentJournal {
                                             header: nextHeader,
                                             messageStart: messageStart, messages: changedMessages,
                                             mutation: mutation, records: committed,
-                                            followUpAdmission: admission))
+                                            followUpAdmission: admission,
+                                            admitsNewWork: admitsNewWork))
         return committed
     }
 
@@ -1252,13 +1254,23 @@ extension AgentJournal {
         return (UInt64(start), replacement)
     }
 
+    /// A write refused for maintenance pressure schedules the maintenance that relieves it.
+    private func writeStore<T>(_ store: any JournalStore, _ body: (any JournalStoreView) throws -> T) throws -> T {
+        do {
+            return try store.write(body)
+        } catch AgentJournalError.maintenanceRequired {
+            scheduleMaintenanceIfNeeded()
+            throw AgentJournalError.maintenanceRequired
+        }
+    }
+
     private func scheduleMaintenanceIfNeeded() {
         guard let store, maintenanceTask == nil, !closing else { return }
         maintenanceTick &+= 1
         let status = try? store.status()
         guard (status?.sealedSegments ?? 0) > 0 ||
                 (status?.pendingGarbageSegments ?? 0) > 0 ||
-                (status?.pendingGarbagePacks ?? 0) > 0
+                (status?.pendingGarbagePacks ?? 0) > 0 || store.rotationOverdue()
                 || maintenanceTick.isMultiple(of: 32) else { return }
         let task = Task { try await store.maintain() }
         let id = UUID()

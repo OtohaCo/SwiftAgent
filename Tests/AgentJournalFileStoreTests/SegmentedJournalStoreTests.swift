@@ -1058,6 +1058,65 @@ import Glibc
         try await reopened.close()
     }
 
+    /// While rotation keeps failing the active segment never outgrows the work budget: new
+    /// admissions are refused, work already admitted still settles within the remaining room,
+    /// and maintenance retries rotation once the fault clears.
+    @Test func repeatedRotationFailureAppliesBackpressureWithinTheWorkBudget() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-rotation-budget-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = RotationFault()
+        let budget = try #require(try JournalMaintenancePolicy.minimumWorkBytes(segmentBytes: 1024))
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: budget,
+                                                  maxUnreclaimedBytes: 1 << 20, maxSegmentBatches: 1024)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "budget",
+            policy: policy, fault: { try fault.check($0) })
+        let inFlight = try await admitOperation("in-flight", in: journal)
+        fault.failEveryRotation(true)
+        let session = UUID()
+        var history: [ModelMessage] = []
+        var refusedProgress = false
+        for index in 0..<200 where !refusedProgress {
+            history.append(.user([.text("progress \(index) " + String(repeating: "p", count: 40))]))
+            do {
+                _ = try await journal.appendCheckpoint([.checkpoint(history: history, steeringIDs: [])],
+                                                       sessionID: session, runID: UUID(), durability: .durable)
+            } catch AgentJournalError.maintenanceRequired {
+                history.removeLast()
+                refusedProgress = true
+            }
+            let active = try #require(try await journal.storeStatus()).activeSegmentBytes
+            #expect(active <= UInt64(budget), "active segment \(active) exceeds the work budget \(budget)")
+            if active >= 1024, index.isMultiple(of: 2) {
+                await #expect(throws: AgentJournalError.maintenanceRequired) {
+                    _ = try await admitOperation("new-\(index)", in: journal)
+                }
+                await #expect(throws: AgentJournalError.maintenanceRequired) {
+                    _ = try await journal.appendStartupCheckpoint([.checkpoint(history: history, steeringIDs: [])],
+                        sessionID: UUID(), runID: UUID(), deadline: .now.advanced(by: .seconds(5)), durability: .durable)
+                }
+                await #expect(throws: AgentJournalError.maintenanceRequired) {
+                    _ = try await journal.enqueueFollowUp(.init(inputID: "q\(index)", text: "later",
+                        operationID: "op", configurationRef: "cfg"), sessionID: session)
+                }
+            }
+        }
+        #expect(refusedProgress, "progress writes reach the work budget and are refused, not appended past it")
+        #expect(try await journal.mutationStatus(identity: "new-0/write/{}") == nil, "a refused admission wrote nothing")
+
+        fault.failEveryRotation(false)
+        for _ in 0..<8 { _ = try await journal.requestMaintenance() }
+        try await settle(inFlight, in: journal)
+        try await expectSettledReplay(inFlight, in: journal)
+        _ = try await admitOperation("after-recovery", in: journal)
+        try await maintainAcrossEveryIndexShard(journal)
+        #expect(try await journal.maintenanceStatus()?.lastError == nil)
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
+        #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == history)
+        try await expectSettledReplay(inFlight, in: reopened)
+        try await reopened.close()
+    }
+
     private func expectSettledReplay(_ operation: AdmittedOperation, in journal: AgentJournal) async throws {
         let status = try #require(try await journal.mutationStatus(identity: operation.identity))
         #expect(status.state == .settled)

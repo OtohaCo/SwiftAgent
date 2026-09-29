@@ -37,6 +37,10 @@ Neither direction automatically migrates or downgrades the store. The opt-in
 does not change stable mutation identities, Evidence authority or Receipt
 settlement. Existing `AgentConfiguration` construction defaults to `.disabled`.
 
+Also unreleased: while a failed segment rotation leaves the active segment past
+`segmentBytes`, Run startup, mutation admission and follow-up enqueue fail with
+`maintenanceRequired` until maintenance rotates it.
+
 Also unreleased: `AgentFailure` adds `modelBinding`, `capability`,
 `contextPipeline` and `contextProjection`. These Core errors previously reached
 the event stream as `unclassified`; exhaustive switches must add the cases.

@@ -39,6 +39,8 @@ package protocol JournalStore: Sendable {
     func maintain() async throws -> JournalMaintenanceStatus
     func metrics() -> JournalStorageMetrics
     func status() throws -> JournalStoreStatus
+    /// A rotation failed and the active segment is past its target size; maintenance retries it.
+    func rotationOverdue() -> Bool
 }
 
 public struct JournalStorageMetrics: Sendable, Equatable {
@@ -191,11 +193,14 @@ package struct JournalStoreChange: Sendable {
     package let mutation: JournalStoredMutation?
     package let records: [AgentJournalRecord]
     package let followUpAdmission: JournalFollowUpAdmission?
+    /// Admits new work (a Run's input) rather than settling work already admitted. A store under
+    /// pressure refuses new work first.
+    package let admitsNewWork: Bool
 
     package init(sessionID: UUID, expectedRevision: UInt64, header: JournalSessionHeader,
                  messageStart: UInt64, messages: [JournalMessage],
                  mutation: JournalStoredMutation?, records: [AgentJournalRecord],
-                 followUpAdmission: JournalFollowUpAdmission? = nil) {
+                 followUpAdmission: JournalFollowUpAdmission? = nil, admitsNewWork: Bool = false) {
         self.sessionID = sessionID
         self.expectedRevision = expectedRevision
         self.header = header
@@ -204,6 +209,7 @@ package struct JournalStoreChange: Sendable {
         self.mutation = mutation
         self.records = records
         self.followUpAdmission = followUpAdmission
+        self.admitsNewWork = admitsNewWork
     }
 }
 

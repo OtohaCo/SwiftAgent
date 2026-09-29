@@ -677,6 +677,14 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     func metrics() -> JournalStorageMetrics { counters.snapshot() }
 
+    func rotationOverdue() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, !poisoned, let (root, _) = try? currentRoot() else { return false }
+        return root.activeEnd >= UInt64(policy.segmentBytes)
+    }
+
+
     private func readData(_ url: URL) throws -> Data {
         let handle = try openRegularFile(url)
         defer { try? handle.close() }
@@ -1232,7 +1240,15 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         do {
             guard !closed else { throw AgentJournalError.storeClosed }
             guard !poisoned else { throw AgentJournalError.commitUnknown }
-            let (root, _) = try currentRoot()
+            var (root, _) = try currentRoot()
+            if root.activeEnd >= UInt64(policy.segmentBytes) || root.activeBatches >= policy.maxSegmentBatches {
+                // One retry per pass of a rotation that failed after an earlier commit.
+                do { try rotateIfNeeded(root) } catch {
+                    if poisoned { throw AgentJournalError.commitUnknown }
+                    throw error
+                }
+                (root, _) = try currentRoot()
+            }
             let currentLayout = try layout(root)
             if let segment = currentLayout.sealed.first {
                 guard segment.end <= UInt64(policy.maxWorkBytes) else {
@@ -1994,6 +2010,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 queueChanges = [admitted]
                 queueLinks = [.init(ordinal: prior.ordinal, next: nil)]
             }
+            let admitsNewWork = change.admitsNewWork || change.followUpAdmission != nil
+                || change.records.contains { if case .pendingMutation = $0.event { return true }; return false }
             let batch = BatchV2(schema: 2, commitID: UUID(), sequence: next,
                                 sessionID: change.sessionID, header: DiskHeaderV1(finalHeader),
                                 messageStart: change.messageStart,
@@ -2004,7 +2022,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                 queueChanges: queueChanges.map(DiskFollowUpV2.init),
                                 queueLinks: queueLinks.map(DiskFollowUpLinkV2.init),
                                 recordCount: UInt32(change.records.count))
-            try publishBatch(batch, updateSession: true)
+            try publishBatch(batch, updateSession: true, admitsNewWork: admitsNewWork)
         }
 
         func publishFollowUp(_ change: JournalFollowUpChange) throws {
@@ -2030,13 +2048,22 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                 queueHead: DiskFollowUpHeadV2(change.head),
                                 queueChanges: change.records.map(DiskFollowUpV2.init),
                                 queueLinks: change.links.map(DiskFollowUpLinkV2.init), recordCount: 0)
-            try publishBatch(batch, updateSession: false)
+            try publishBatch(batch, updateSession: false, admitsNewWork: change.admitsNewWork)
         }
 
-        private func publishBatch(_ batch: BatchV2, updateSession: Bool) throws {
+        private func publishBatch(_ batch: BatchV2, updateSession: Bool, admitsNewWork: Bool) throws {
             let next = root.sequence + 1
             guard batch.sequence == next else { throw AgentJournalError.invalidRecord }
             let (bytes, digest, blob) = try store.frameBytes(batch)
+            // A failed rotation leaves the active segment past its target size. Until maintenance
+            // rotates it, refuse new work and let admitted work settle only within the work budget,
+            // so every segment stays readable by maintenance. Nothing is written before these checks.
+            if admitsNewWork, root.activeEnd >= UInt64(store.policy.segmentBytes) {
+                throw AgentJournalError.maintenanceRequired
+            }
+            guard root.activeEnd + UInt64(bytes.count) <= UInt64(store.policy.maxWorkBytes) else {
+                throw AgentJournalError.maintenanceRequired
+            }
             // Before append there is no possibly published batch. A failure
             // here has a definite noncommit result and leaves this handle
             // usable; managed blob candidates are collected as orphans.
