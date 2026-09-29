@@ -1,6 +1,6 @@
 # SwiftAgent Journal
 
-last-verified: 2026-09-28
+last-verified: 2026-09-29
 
 `AgentJournal` owns trusted mutation transitions and Session restoration. The
 optional `AgentJournalFileStore` product supplies the local durable format.
@@ -64,7 +64,10 @@ Session and Journal objects from starting further work; reopen the same
 directory to inspect its verified root. A failed close retains ownership for
 a retry of close, never for another mutation. The lock descriptor is
 close-on-exec, so a child process started while the store is open does not keep
-it locked after close.
+it locked after close. Until such a child starts its new program it still
+shares the descriptor: an open right after `close()`, while the same process is
+spawning, can briefly get `storeInUse` and succeeds once the spawn completes
+([#47](https://github.com/OtohaCo/SwiftAgent/issues/47)).
 
 ## Committed state and queries
 
@@ -118,10 +121,11 @@ packs or active segment exceed the handle's `maxWorkBytes` fails with
 `maintenanceBudgetTooSmall(requiredWorkBytes:)` and leaves the store unchanged;
 a budget of at least that size opens it. `storeStatus()`, `maintenanceStatus()`,
 `storageMetrics()`, and `requestMaintenance()` support
-observation and explicit low-load work. Normal operation schedules maintenance
-without a Host pre-turn compaction call. If maintenance cannot keep up, new
-mutation admission can fail with `maintenanceRequired`; an in-flight
-settlement still has its ordinary persistence path.
+observation and explicit low-load work. `requestMaintenance()` joins a pass
+that is already running and reports that pass's result. Normal operation
+schedules maintenance without a Host pre-turn compaction call. If maintenance
+cannot keep up, new mutation admission can fail with `maintenanceRequired`; an
+in-flight settlement still has its ordinary persistence path.
 
 A segment rotation that fails before publishing leaves the active segment past
 `segmentBytes`, but never past `maxWorkBytes`. Until a maintenance pass retries

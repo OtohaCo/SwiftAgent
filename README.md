@@ -49,25 +49,26 @@ Provider-specific contracts:
 
 ## Version scope and installation
 
-last-verified: 2026-09-28
+last-verified: 2026-09-29
 
-The RC4 prerelease candidate is `1.0.0-rc.4`. Pin the released tag explicitly:
+The RC5 prerelease candidate is `1.0.0-rc.5`. Pin the released tag explicitly:
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/OtohaCo/SwiftAgent.git",
-        exact: "1.0.0-rc.4"
+        exact: "1.0.0-rc.5"
     )
 ]
 ```
 
-See the [RC4 release notes](docs/releases/1.0.0-rc.4.md). RC4 is an SDK
-prerelease with breaking Journal format and public API changes, not a stable
-`1.0.0` release. It does not migrate old stores or qualify production Host
-cutover. Always read documentation from the same revision as the
-dependency installed in your app. Add only the products your target uses.
-See [versioning](docs/guides/swift-agent-versioning.md).
+See the [RC5 release notes](docs/releases/1.0.0-rc.5.md). RC5 is an SDK
+prerelease, not a stable `1.0.0` release or production Host approval. It adds
+new public enum cases and an opt-in schema-4 store; default stores remain
+schema 3. It does not migrate, upgrade or downgrade stores. Always read
+documentation from the same revision as the dependency installed in your app.
+Add only the products your target uses. See
+[versioning](docs/guides/swift-agent-versioning.md).
 
 For a local package supplied by a Git submodule, the parent's gitlink pins the
 SDK commit; the app's `Package.resolved` does not pin that local package.
