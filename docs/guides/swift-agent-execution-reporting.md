@@ -165,6 +165,13 @@ bash Scripts/ci-execution-reporting.sh
 
 Each case records the source commit and tree, workspace-dirty state, platform,
 toolchain, mode, exit code, result, duration, and known model request count.
+The script prints each case's start, end, exit code and log path as it runs,
+and keeps every log in `.build/ci-logs/execution-reporting` (or
+`SWIFT_AGENT_CI_LOG_DIR`); a failed case also prints its log tail. A case that
+exceeds `SWIFT_AGENT_CI_CASE_TIMEOUT_SECONDS` (default 1200) is stopped with
+exit 124 after its process tree and thread samples are saved; a case ended by
+a signal keeps any crash report the platform wrote. CI uploads these logs as a
+workflow artifact, including on failure.
 `skip` or `blocked` must not be rewritten as `pass`; fixture acceptance is not
 live Provider qualification. The script is included by the formal macOS and
 Linux CI scripts. Linux evidence must still come from a real Linux Swift 6.4
