@@ -24,6 +24,15 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
   candidate fails or is unknown, the request fails with `fallbackBlocked`
   before any other candidate is contacted. New `ModelProviderRoute.Candidate`
   declares stable candidate IDs that survive restarts and reordering.
+- Corrections accepted by `run.steer` but not delivered before a Run is cancelled
+  or fails are committed to the Journal with their IDs before the Run ends. They
+  were kept only in Session memory and lost on reopen. A failed commit is
+  reported by the Run; after `commitUnknown` the Session refuses history reads
+  and new Runs until reopen, and after a definite failure the corrections join
+  the next Run's input.
+- Once `AgentJournal.close()` starts, follow-up enqueue and withdrawal fail with
+  `storeClosed`, like other new work. They were accepted while close waited
+  for maintenance.
 - Schema-4 stores read the `pending-operations` index as the Session set it
   stores. Maintenance previously decoded it as a batch sequence, so packing a
   sealed mutation batch and index cleanup failed on every pass, until mutation
