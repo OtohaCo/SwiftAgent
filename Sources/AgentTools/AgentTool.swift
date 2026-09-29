@@ -12,6 +12,9 @@ public protocol AgentTool: Sendable {
     static var description: String { get }
     static var inputSchema: ToolSchema { get }
     static var outputSchema: ToolSchema { get }
+    /// What the model sees and what arguments and output are checked against. Defaults to the
+    /// type's name, description and schemas; a `RuntimeAgentTool` supplies its own.
+    var definition: ModelToolDefinition { get }
     var policy: ToolPolicy { get }
 
     func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement]
@@ -97,6 +100,10 @@ public enum RecoverableToolErrorValidationError: Error, Equatable, Sendable {
 }
 
 extension AgentTool {
+    public var definition: ModelToolDefinition {
+        ModelToolDefinition(name: Self.name, description: Self.description, inputSchema: Self.inputSchema.json, outputSchema: Self.outputSchema.json)
+    }
+
     public func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement] { [] }
     public func resourceRequirements(for input: Input) throws -> [ToolResource] { [.global] }
     public func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation? { nil }
@@ -134,4 +141,22 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
         isIdempotentReplay = false
         isModelVisibleError = true
     }
+}
+
+/// A tool whose name, description and schemas are known only at runtime: one declared by a Host's
+/// configuration, or offered by an external server. Its arguments and output are JSON, checked against
+/// its definition's schemas like any other tool's; authorization, Evidence, Receipts and mutation
+/// admission apply unchanged, under the definition's name. The type's static name, description and
+/// schemas are not used.
+public protocol RuntimeAgentTool: AgentTool where Input == JSONValue, Output == JSONValue {
+    /// The definition given at runtime. Its output schema is required.
+    var runtimeDefinition: ModelToolDefinition { get }
+}
+
+extension RuntimeAgentTool {
+    public var definition: ModelToolDefinition { runtimeDefinition }
+    public static var name: String { "" }
+    public static var description: String { "" }
+    public static var inputSchema: ToolSchema { .object(properties: [:]) }
+    public static var outputSchema: ToolSchema { .object(properties: [:]) }
 }

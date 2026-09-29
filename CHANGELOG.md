@@ -6,6 +6,16 @@ All notable changes to SwiftAgent are recorded here.
 
 Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
 
+### Added: tools defined at runtime
+
+- `AgentTool` gains `definition`, defaulting to the type's static name,
+  description and schemas. New `RuntimeAgentTool` (JSON input and output)
+  supplies `runtimeDefinition`, so one type can serve tools named at runtime,
+  such as a Host's app connectors or an external server's tools. Registration,
+  schema validation, capability bindings and mutation admission use the
+  instance definition, read once at registration. A name from the instance must
+  be 1 to 64 letters, digits, `_` or `-`. Existing tools keep their behavior.
+
 ## [1.0.0-rc.4] - 2026-09-28
 
 RC4 is a breaking SDK prerelease, not a stable 1.0 release or production Host

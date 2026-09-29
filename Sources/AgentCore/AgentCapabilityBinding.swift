@@ -91,16 +91,20 @@ public struct AgentCapabilityBinding: Sendable {
         var toolIDs = Set<String>()
         var names = Set<String>()
         var descriptors: [AgentCapabilityInfo.Tool] = []
+        var erased: [AnyAgentTool] = []
         for entry in tools {
             guard Self.valid(entry.id), Self.valid(entry.version) else {
                 throw AgentCapabilityError.invalidIdentity("tool")
             }
             guard toolIDs.insert(entry.id).inserted else { throw AgentCapabilityError.duplicateToolIdentity }
-            guard names.insert(type(of: entry.tool).name).inserted else { throw AgentCapabilityError.duplicateToolName }
+            // Known by its definition, read once: a tool defined at runtime has no name of its type.
+            let tool = try AnyAgentTool(entry.tool)
+            guard names.insert(tool.definition.name).inserted else { throw AgentCapabilityError.duplicateToolName }
             descriptors.append(.init(id: entry.id, version: entry.version,
-                                     name: type(of: entry.tool).name, effect: entry.tool.policy.effect))
+                                     name: tool.definition.name, effect: tool.policy.effect))
+            erased.append(tool)
         }
-        registry = try ToolRegistry(tools: tools.map { try AnyAgentTool($0.tool) })
+        registry = try ToolRegistry(tools: erased)
         let instance = UUID()
         info = .init(identity: identity, version: version, scopeID: resolvedScopeID,
                      scopeInstanceID: instance, sessionID: sessionID, runID: nil,

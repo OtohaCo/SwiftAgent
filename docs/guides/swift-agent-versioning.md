@@ -1,6 +1,6 @@
 # SwiftAgent Semantic Versioning
 
-last-verified: 2026-09-28
+last-verified: 2026-09-29
 
 SwiftAgent follows Swift Package Manager rules, not a promise of ABI stability.
 A major version is required when a change can fail a client that compiled
@@ -98,6 +98,14 @@ Source-bound wrappers now declare `AgentContextSourceReferencing` requirements;
 `AgentContextProjectionInput` carries committed read-only result evidence
 instead of a current tool-name allowlist. There is no durable read-only effect
 history in the v1 Journal, so excerpts of pre-restart results fail closed.
+
+The unreleased `AgentTool.definition` requirement has a default that returns
+the type's static values, so existing tools compile and register unchanged.
+`RuntimeAgentTool` is a new protocol for tools named at runtime. A conforming
+type that already declares its own `definition` is affected. If it is a
+`ModelToolDefinition` less accessible than the type, it no longer compiles. If
+it is an internal or public `ModelToolDefinition`, it becomes the tool's
+definition. A member of another type is unaffected.
 
 Treat as non-breaking when existing clients still compile and keep the same
 runtime meaning:

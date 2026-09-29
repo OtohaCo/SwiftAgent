@@ -1,6 +1,6 @@
 # SwiftAgent Typed Tools
 
-last-verified: 2026-09-18
+last-verified: 2026-09-29
 
 Implement [AgentTool](../../Sources/AgentTools/AgentTool.swift) with
 Codable, Sendable input and output types. Declare the JSON field names explicitly
@@ -54,6 +54,35 @@ preserves constraints; it does not certify that a validator supports them.
 Schema declarations must agree with Codable behavior, including CodingKeys and
 custom encoding. No reflection or sample-value inference generates a schema for
 arbitrary Codable types. Schema validation is a separate runtime boundary.
+
+## Tools Defined at Runtime
+
+A tool whose name, description and schemas are known only at runtime (declared by
+a Host's configuration, or offered by an external server) conforms to
+`RuntimeAgentTool`. Its input and output are `JSONValue`, and it supplies
+`runtimeDefinition`; the type's static name, description and schemas are
+placeholders, so one type can serve many tools.
+
+- Every tool's `definition` is what the model sees and what the registry
+  validates arguments and output against. For an ordinary `AgentTool` it
+  defaults to the type's static values.
+- Registration, schema validation, capability bindings and mutation admission
+  use the definition, read once when the tool is registered. A definition must
+  not change for the life of a tool instance.
+- Authorization, Evidence and Receipts are unchanged.
+- A name that comes from the instance rather than the type must be 1 to 64
+  letters, digits, `_` or `-`, which every provider accepts. Tools named in code
+  keep their names.
+- A runtime name is part of durable mutation identity (operation ID, tool name,
+  arguments). Keep names stable, and namespace them per source (for example
+  `cap_export`), so that a name is never reused for a different operation.
+- The definition's output schema is required. Schemas must stay within the
+  supported subset; a Host converts external schemas (for example MCP's, which
+  may use `$ref`, `anyOf` or `format`) before registering them. One invalid
+  tool fails the whole registration.
+- A wrapper generic over `Base: AgentTool` must forward `definition`. Code must
+  identify tools by `definition.name`, never by `T.name` or
+  `type(of: tool).name`, which are placeholders for runtime tools.
 
 ## Registry Validation
 
