@@ -87,6 +87,16 @@ The default explicit binding is strict. Provider continuation is accepted only
 when its model and deployment origin match the binding. A model name alone is
 not proof that two service instances understand the same opaque state.
 
+`ModelProviderRoute` applies the same rule between its candidates. It records
+which candidate produced each continuation and returns that state only to it.
+While a conversation holds one candidate's state, the Route does not fall back
+to another; if the owner fails or is no longer a candidate, the request is
+refused with `fallbackBlocked` and nothing is sent to another service. Declare
+`ModelProviderRoute.Candidate(id:provider:)` with an ID that names the
+deployment. Candidates given without IDs are known only to their Route
+instance, so their state is refused after a restart. Use a semantic handoff to
+continue such a conversation elsewhere.
+
 `AgentSemanticHandoffProjector` is an explicit, lossy Host choice. It removes
 provider-private continuation and reasoning while preserving visible content
 and tool-call/result pairs. It does not fabricate a native continuation, close

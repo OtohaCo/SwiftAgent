@@ -18,6 +18,12 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
 
 ### Fixed
 
+- `ModelProviderRoute` no longer forwards one candidate's opaque continuation
+  state (such as encrypted reasoning) to another candidate on fallback. State
+  is recorded with its producing candidate and returned only to it; if that
+  candidate fails or is unknown, the request fails with `fallbackBlocked`
+  before any other candidate is contacted. New `ModelProviderRoute.Candidate`
+  declares stable candidate IDs that survive restarts and reordering.
 - Schema-4 stores read the `pending-operations` index as the Session set it
   stores. Maintenance previously decoded it as a batch sequence, so packing a
   sealed mutation batch and index cleanup failed on every pass, until mutation
@@ -34,6 +40,9 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
 
 ### Breaking
 
+- `ModelProviderFallbackPolicyError` adds `invalidCandidateIdentity`. A Route
+  refuses continuation state it cannot attribute to a current candidate,
+  including state from candidates without declared IDs after a restart.
 - `AgentFailure` adds `modelBinding`, `capability`, `contextPipeline` and
   `contextProjection` for Core errors that were reported as `unclassified`.
 
