@@ -24,6 +24,9 @@ Changes after the RC4 candidate are not part of `1.0.0-rc.4`.
   reported by the Run; after `commitUnknown` the Session refuses history reads
   and new Runs until reopen, and after a definite failure the corrections join
   the next Run's input.
+- Once `AgentJournal.close()` starts, follow-up enqueue and withdrawal fail with
+  `storeClosed`, like other new work. They were accepted while close waited
+  for maintenance.
 - Schema-4 stores read the `pending-operations` index as the Session set it
   stores. Maintenance previously decoded it as a batch sequence, so packing a
   sealed mutation batch and index cleanup failed on every pass, until mutation

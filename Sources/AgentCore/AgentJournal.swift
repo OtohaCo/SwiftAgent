@@ -860,10 +860,12 @@ extension AgentJournal {
         }
     }
 
+    /// New queue input. Once close begins, the store accepts no new work.
     package func enqueueFollowUp(_ input: AgentFollowUpInput, sessionID: UUID) async throws -> AgentFollowUpRecord {
         try Task.checkCancellation()
         try input.validate()
         guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        guard !closing else { throw AgentJournalError.storeClosed }
         let result = try store.write { view -> AgentFollowUpRecord in
             if let existing = try view.followUp(sessionID: sessionID, inputID: input.inputID) {
                 guard existing.input.matches(input) else { throw AgentFollowUpError.inputConflict }
@@ -990,9 +992,12 @@ extension AgentJournal {
         scheduleMaintenanceIfNeeded()
     }
 
+    /// A new Host request. Releases of already admitted inputs stay dispatcher cleanup, which
+    /// close cannot interleave with because it requires the dispatcher lease to be gone.
     package func withdrawFollowUp(sessionID: UUID, inputID: String) async throws -> AgentFollowUpWithdrawal {
         try Task.checkCancellation()
         guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        guard !closing else { throw AgentJournalError.storeClosed }
         let result = try store.write { view -> AgentFollowUpWithdrawal in
             guard var entry = try view.followUp(sessionID: sessionID, inputID: inputID) else {
                 throw AgentFollowUpError.missingInput
