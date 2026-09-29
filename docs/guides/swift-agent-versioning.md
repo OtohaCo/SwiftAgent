@@ -37,6 +37,13 @@ Neither direction automatically migrates or downgrades the store. The opt-in
 does not change stable mutation identities, Evidence authority or Receipt
 settlement. Existing `AgentConfiguration` construction defaults to `.disabled`.
 
+Also unreleased: `ModelProviderRoute` returns opaque continuation state only
+to the candidate that produced it, recorded in a Route-owned continuation
+format. A request whose state the Route cannot attribute to one of its current
+candidates, including state from candidates without declared IDs after a
+restart, now fails with `fallbackBlocked` instead of reaching a candidate.
+`ModelProviderFallbackPolicyError` adds `invalidCandidateIdentity`.
+
 Also unreleased: `AgentFailure` adds `modelBinding`, `capability`,
 `contextPipeline` and `contextProjection`. These Core errors previously reached
 the event stream as `unclassified`; exhaustive switches must add the cases.
