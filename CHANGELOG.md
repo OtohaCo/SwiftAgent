@@ -22,6 +22,11 @@ Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
   digest format stay unchanged. Session `history` remains a loaded view; durable
   resume examples use the existing throwing `conversationSnapshot()`.
 
+- Reuse the frozen Context source digest and identity-view size without retaining
+  encoded buffers. Changed projections are measured independently; external
+  source claims remain verified. The additive input `sourceDigest()` API keeps
+  the existing Codable and digest format.
+
 ### Fixed: audit boundary closeout
 
 - Preserve original and failure-audit errors while still attempting mutation

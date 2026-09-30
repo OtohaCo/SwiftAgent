@@ -524,7 +524,8 @@ package struct AgentLoop: Sendable {
                 }
             }
         }
-        let projection = try await binding.projector.project(.init(
+        let sourceEncoding = try AgentContextProjectionSource.measure(messages: messages)
+        var projectionInput = AgentContextProjectionInput(
             canonicalMessages: messages,
             model: model,
             sessionID: sessionID,
@@ -534,16 +535,18 @@ package struct AgentLoop: Sendable {
             modelTurn: modelTurn,
             formalMessageIDs: formalMessageIDs,
             verifiedReadOnlyResults: verifiedReadOnlyResults
-        ))
-        let sourceDigest = try AgentContextProjectionSource.digest(messages: messages)
+        )
+        projectionInput.bindSourceEncoding(sourceEncoding)
+        let projection = try await binding.projector.project(projectionInput)
         guard projection.plan.sourceRevision == conversationRevision,
-              projection.plan.sourceDigest == sourceDigest,
+              projection.plan.sourceDigest == sourceEncoding.digest,
               projection.plan.contextEpoch == contextEpoch,
               validToolPairs(projection.messages, allowUnresolvedToolTail: allowUnresolvedToolTail) else {
             throw AgentModelBindingError.invalidProjection
         }
         try validateContinuations(projection.messages)
-        let requestBytes = try AgentContextWindow.encodedByteCount(projection.messages)
+        let requestBytes = sharesCanonicalMessageStorage(projection.messages, messages)
+            ? sourceEncoding.byteCount : try AgentContextWindow.encodedByteCount(projection.messages)
         if let modelContextByteLimit {
             let bytes = requestBytes
             guard bytes <= modelContextByteLimit else {

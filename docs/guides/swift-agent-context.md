@@ -216,3 +216,19 @@ Formal messages and the indexed mutation ledger remain subject to their
 separate retention rules. Physical segment packing only copies necessary
 facts to new managed files before deleting unreferenced old segments. See
 [Journal](swift-agent-journal.md) and [ADR 0004](../adr/0004-journal-storage.md).
+
+### Frozen source encoding
+
+The runtime computes the canonical digest and encoded size of each frozen source
+once, before calling a projector. A projector or transparent wrapper can use
+`try input.sourceDigest()`; external or decoded inputs compute their own digest.
+The runtime still checks the returned source identity against its independent
+result. The existing digest format and Codable fields are unchanged.
+
+Identity projections that retain the same message array can reuse its encoded
+size. Changed or rebuilt arrays are measured from the actual projection, including
+shortened and enlarged views. Swift String equality alone is not a size witness:
+canonically equivalent strings can encode different UTF-8. The cache contains
+only a digest and byte count, is scoped to the current input, and retains no
+encoded message buffer. Custom projectors that calculate their own digest can
+still incur another encoding. Provider payload encoding is separate.

@@ -52,6 +52,8 @@ enum AgentContextWindow {
     }
 
     static func encodedByteCount(_ messages: [ModelMessage]) throws -> Int {
-        try JSONEncoder().encode(messages).count
+        let data = try JSONEncoder().encode(messages)
+        AgentContextEncodingObservation.didEncode?("projection", data.count)
+        return data.count
     }
 }
