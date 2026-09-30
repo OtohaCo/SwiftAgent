@@ -205,3 +205,9 @@ already in 1.0, as `StopReason.unknown` does.
   declare
 - Compatibility for `package` APIs, test helpers, or WorkspaceAgent host types
   as if they were the Core SDK
+
+`JournalWriterLockWait` and an explicit-wait `openAsync` overload are additive.
+The original overload (including function-reference signature) and fail-fast
+default remain. Waiting changes no schema 3/4/5, mutation identity or recovery
+rule. The new C POSIX helper target is test-process support only, not a library
+executor or production lock implementation.

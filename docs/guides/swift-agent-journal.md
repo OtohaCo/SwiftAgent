@@ -174,3 +174,39 @@ that **no external effect happened**. It cannot abort a mere in-flight intent
 or convert uncertainty into safety. The original identity, parameters and
 no-effect confirmation remain available after physical maintenance. The
 [recovery guide](swift-agent-mutation-recovery.md) describes the operator path.
+
+### Optional bounded writer-lock wait
+
+The original sync and async opening APIs still fail fast. Hosts can explicitly
+select a finite absolute deadline for short writer-lock contention:
+
+```swift
+import AgentCore
+import AgentJournalFileStore
+import Foundation
+
+func openHostJournal(directory: URL) async throws -> AgentJournal {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    return try await AgentIncrementalJournal.openAsync(at: directory,
+        writerLockWait: .until(deadline), deadline: deadline)
+}
+```
+
+The Host supplies its existing durable directory; there is no default production
+path, new ledger, migration or business retry. Waiting repeats only nonblocking
+`flock` on one owned descriptor after format validation, not the whole open.
+The earlier of the wait deadline and the original I/O deadline applies.
+Cancellation wakes the monotonic wait; the owned utility-queue operation finishes
+and closes any newly acquired handle before reporting cancellation. This waits
+on a dedicated I/O worker, not a Swift cooperative thread. Hosts should bound
+their concurrent opens. A real writer never grants concurrent write permission.
+Other lock I/O errors, invalid format or damaged roots are not retried.
+
+This optionally mitigates short lock competition. A forked child can still hold
+the actual Journal descriptor before exec; CLOEXEC releases it when exec succeeds.
+The controlled fork helper gates that window using raw POSIX child code (no Swift
+or Foundation after fork), launched via Foundation Process. It is an integration
+mechanism test, not a measurement of Foundation's internal spawn window duration.
+Separate real Foundation Process/posix_spawn tests verify the existing long-child
+noninheritance behavior. These tests run on macOS/Linux, not iOS. No OS lock
+primitive has been replaced, no other descriptor unlocked or lock file deleted.

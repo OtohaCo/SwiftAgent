@@ -3,6 +3,11 @@ import AgentJournalFileStore
 import AgentModels
 import AgentTools
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 @main struct JournalTestProcess {
     static func main() async {
@@ -70,6 +75,9 @@ import Foundation
                     + "pending=\(try await journal.pendingMutations(sessionID: sessionID).count)\n"
                 FileHandle.standardOutput.write(Data(line.utf8))
                 try await journal.close()
+                exit(0)
+            case "fork-window":
+                try await holdForkWindow(journal: journal)
                 exit(0)
             case "hold":
                 FileHandle.standardOutput.write(Data("READY\n".utf8))

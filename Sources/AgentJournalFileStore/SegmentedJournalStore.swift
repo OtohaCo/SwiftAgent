@@ -62,6 +62,14 @@ package enum JournalFileFaultStage: Sendable {
     case beforeSessionRead
 }
 
+/// Default fail-fast ownership, or an explicit finite absolute lock-wait deadline.
+public enum JournalWriterLockWait: Sendable {
+    case failFast
+    case until(ContinuousClock.Instant)
+}
+
+package enum JournalOpeningStage: Sendable { case formatValidated, lockContended, lockAcquired }
+
 public enum AgentIncrementalJournal {
     private static let openingQueue = DispatchQueue(label: "SwiftAgent.JournalFileStore.open",
                                                      qos: .utility, attributes: .concurrent)
@@ -84,7 +92,7 @@ public enum AgentIncrementalJournal {
                                    deadline: ContinuousClock.Instant? = nil) async throws -> AgentJournal {
         try Task.checkCancellation()
         if let deadline, ContinuousClock.now >= deadline { throw AgentJournalError.deadlineExceeded }
-        let journal = try await openOwned(deadline: deadline) {
+        let journal = try await openOwned(deadline: deadline) { _ in
             try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy,
                                              supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit)
         }
@@ -92,20 +100,60 @@ public enum AgentIncrementalJournal {
         return journal
     }
 
+    /// The existing asynchronous fail-fast API, including its function signature.
     public static func openAsync(at directory: URL,
                                  policy: JournalMaintenancePolicy = .default,
                                  deadline: ContinuousClock.Instant? = nil) async throws -> AgentJournal {
+        try await openAsync(at: directory, policy: policy, writerLockWait: .failFast, deadline: deadline)
+    }
+
+    /// Optional waiting applies only to writer-lock contention. Other opening
+    /// work is attempted once. The finite deadline is never reset by a retry.
+    public static func openAsync(at directory: URL,
+                                 policy: JournalMaintenancePolicy = .default,
+                                 writerLockWait: JournalWriterLockWait,
+                                 deadline: ContinuousClock.Instant? = nil) async throws -> AgentJournal {
+        try await openAsyncOwned(at: directory, policy: policy, writerLockWait: writerLockWait,
+                                 deadline: deadline, observer: nil)
+    }
+
+    package static func openAsyncForTesting(at directory: URL,
+                                            writerLockWait: JournalWriterLockWait,
+                                            deadline: ContinuousClock.Instant? = nil,
+                                            observer: @escaping @Sendable (JournalOpeningStage) -> Void) async throws -> AgentJournal {
+        try await openAsyncOwned(at: directory, policy: .default, writerLockWait: writerLockWait,
+                                 deadline: deadline, observer: observer)
+    }
+
+    private static func openAsyncOwned(at directory: URL, policy: JournalMaintenancePolicy,
+                                        writerLockWait: JournalWriterLockWait,
+                                        deadline: ContinuousClock.Instant?,
+                                        observer: (@Sendable (JournalOpeningStage) -> Void)?) async throws -> AgentJournal {
         try Task.checkCancellation()
-        if let deadline, ContinuousClock.now >= deadline { throw AgentJournalError.deadlineExceeded }
-        let journal = try await openOwned(deadline: deadline) {
-            try SegmentedJournalStore.open(at: directory, policy: policy)
+        let effectiveDeadline: ContinuousClock.Instant?
+        switch writerLockWait {
+        case .failFast: effectiveDeadline = deadline
+        case .until(let end): effectiveDeadline = deadline.map { min($0, end) } ?? end
         }
-        try Task.checkCancellation()
+        if let effectiveDeadline, ContinuousClock.now >= effectiveDeadline { throw AgentJournalError.deadlineExceeded }
+        let journal = try await openOwned(deadline: effectiveDeadline) { cancellation in
+            let wait: (@Sendable () throws -> Void)?
+            switch writerLockWait {
+            case .failFast: wait = nil
+            case .until: wait = { try cancellation.waitForLockRetry(until: effectiveDeadline!) }
+            }
+            return try SegmentedJournalStore.open(at: directory, policy: policy, lockRetry: wait, observer: observer)
+        }
+        if Task.isCancelled || (effectiveDeadline.map { ContinuousClock.now >= $0 } ?? false) {
+            try await journal.close()
+            if Task.isCancelled { throw CancellationError() }
+            throw AgentJournalError.deadlineExceeded
+        }
         return journal
     }
 
     private static func openOwned(deadline: ContinuousClock.Instant?,
-                                  operation: @escaping @Sendable () throws -> SegmentedJournalStore) async throws -> AgentJournal {
+                                  operation: @escaping @Sendable (OpeningCancellation) throws -> SegmentedJournalStore) async throws -> AgentJournal {
         let cancellation = OpeningCancellation()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -113,7 +161,7 @@ public enum AgentIncrementalJournal {
                     do {
                         if cancellation.isCancelled { throw CancellationError() }
                         if let deadline, ContinuousClock.now >= deadline { throw AgentJournalError.deadlineExceeded }
-                        let store = try operation()
+                        let store = try operation(cancellation)
                         if cancellation.isCancelled || (deadline.map { ContinuousClock.now >= $0 } ?? false) {
                             try store.close()
                             if cancellation.isCancelled { throw CancellationError() }
@@ -160,6 +208,7 @@ public enum AgentIncrementalJournal {
 private final class OpeningCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+    private let wake = DispatchSemaphore(value: 0)
     var isCancelled: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -169,6 +218,20 @@ private final class OpeningCancellation: @unchecked Sendable {
         lock.lock()
         cancelled = true
         lock.unlock()
+        wake.signal()
+    }
+    func waitForLockRetry(until deadline: ContinuousClock.Instant) throws {
+        if isCancelled { throw CancellationError() }
+        let remaining = ContinuousClock.now.duration(to: deadline)
+        guard remaining > .zero else { throw AgentJournalError.deadlineExceeded }
+        // Dedicated owned utility-queue I/O; never block a Swift cooperative
+        // thread. DispatchTime is monotonic and cancellation wakes this wait.
+        let retry = min(remaining, .milliseconds(25))
+        let parts = retry.components
+        let nanoseconds = Int(parts.seconds * 1_000_000_000 + parts.attoseconds / 1_000_000_000)
+        _ = wake.wait(timeout: .now() + .nanoseconds(nanoseconds))
+        if isCancelled { throw CancellationError() }
+        if ContinuousClock.now >= deadline { throw AgentJournalError.deadlineExceeded }
     }
 }
 
@@ -540,7 +603,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
     }
 
-    static func open(at url: URL, policy: JournalMaintenancePolicy) throws -> SegmentedJournalStore {
+    static func open(at url: URL, policy: JournalMaintenancePolicy,
+                     lockRetry: (@Sendable () throws -> Void)? = nil,
+                     observer: (@Sendable (JournalOpeningStage) -> Void)? = nil) throws -> SegmentedJournalStore {
         let directory = canonical(url)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) else {
@@ -579,7 +644,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             throw AgentJournalError.invalidHeader
         }
         guard format.schema == 3 || format.schema == 4 || format.schema == 5 else { throw AgentJournalError.unsupportedFormat }
-        let descriptor = try lockStore(directory)
+        observer?(.formatValidated)
+        let descriptor = try lockStore(directory, retry: lockRetry, observer: observer)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
                                           descriptor: descriptor, formatDigest: Self.digest(formatBytes),
                                           policy: policy)
@@ -616,15 +682,26 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     /// The lock lives exactly as long as this handle's descriptor. O_CLOEXEC keeps a child the Host
     /// spawns (posix_spawn, fork/exec) from inheriting it and holding the store after close.
-    private static func lockStore(_ directory: URL) throws -> Int32 {
+    private static func lockStore(_ directory: URL,
+                                  retry: (@Sendable () throws -> Void)? = nil,
+                                  observer: (@Sendable (JournalOpeningStage) -> Void)? = nil) throws -> Int32 {
         let path = directory.appendingPathComponent(".writer.lock").path
         let fd = DarwinOrGlibcOpen(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw ioError("open writer lock") }
-        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+        do {
+            while flock(fd, LOCK_EX | LOCK_NB) != 0 {
+                let code = errno
+                guard code == EWOULDBLOCK || code == EAGAIN else { throw ioError("acquire writer lock") }
+                observer?(.lockContended)
+                guard let retry else { throw AgentJournalError.storeInUse }
+                try retry()
+            }
+            observer?(.lockAcquired)
+            return fd
+        } catch {
             _ = DarwinOrGlibcClose(fd)
-            throw AgentJournalError.storeInUse
+            throw error
         }
-        return fd
     }
 
     func close() throws {
