@@ -6,6 +6,11 @@ All notable changes to SwiftAgent are recorded here.
 
 Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 
+- Parse Retry-After HTTP dates with controlled UTC semantics and preserve retry
+  limits. DeepSeek diagnostic origin no longer depends on error message prose.
+  Document/test inclusive message and exclusive follow-up pagination.
+  This addresses selected #44 items, not the entire collection issue.
+
 ### Fixed: audit boundary closeout
 
 - Preserve original and failure-audit errors while still attempting mutation

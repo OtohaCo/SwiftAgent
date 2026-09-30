@@ -120,3 +120,18 @@ Contract sources verified on 2026-09-19:
 - `https://api-docs.deepseek.com/guides/responses_api`
 - `https://api-docs.deepseek.com/api/create-response`
 - `https://api-docs.deepseek.com/guides/thinking_mode`
+
+### Retry and diagnostic boundaries
+
+Shared HTTP failure handling accepts Retry-After as nonnegative decimal seconds
+or HTTP-date (IMF-fixdate, RFC850 and asctime). Parsing uses UTC/GMT and POSIX
+locale; RFC850 years use the fifty-year rule. Past dates yield zero, invalid or
+overflowing seconds are ignored, and header names remain case insensitive.
+The existing Run deadline and retry cap still limit waits. See
+[RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#name-retry-after).
+
+DeepSeek shape diagnostics use an internal typed decoding failure or known
+validation stage; they do not inspect error message prose. Public error kinds,
+safe event labels, model mismatch diagnostics and unknown-event behavior are
+unchanged. This corrects diagnostic wrapping, without claiming a new confirmed
+error-category defect.
