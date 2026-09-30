@@ -6,6 +6,11 @@ All notable changes to SwiftAgent are recorded here.
 
 Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 
+- Memory Journal keeps one full checkpoint per Session instead of all historical
+  versions. Complete canonical history, steering IDs, sequences and Run identity
+  queries are preserved. Identity-only metadata still grows with Sessions/Runs;
+  memory mode gains no mutation/audit capability. Durable formats are unchanged.
+
 ### Fixed: audit boundary closeout
 
 - Preserve original and failure-audit errors while still attempting mutation
