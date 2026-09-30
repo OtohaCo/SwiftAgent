@@ -1,5 +1,16 @@
 # SwiftAgent Sessions and Runs
 
+## RC6 candidate: Host-enforced audited authorization
+
+`AgentConfiguration.authorization` defaults to legacy. Required audit is
+immutable Agent/Session factory configuration, with no Run downgrade. It
+requires schema-5 durable storage, a Host authorizer and identity before input
+commit or Provider contact. Every model tool, including bound/runtime-defined
+read-only tools, is covered. Subsequent Runs, follow-up dispatch and settled
+replay evaluate current permission. Run/scope drain retain a slow authorizer
+until physical exit; exporters have separate owners/leases. See
+[Audited Authorization](swift-agent-authorization-audit.md).
+
 last-verified: 2026-09-27
 
 Agent holds Sendable configuration: provider, model, typed tools, instructions,

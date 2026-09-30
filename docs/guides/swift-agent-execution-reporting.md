@@ -1,5 +1,15 @@
 # Execution reporting and Host integration
 
+## RC6 candidate: authorization is distinct from execution evidence
+
+`AgentFailure.authorization` classifies `AgentAuthorizationError`. An allowed
+Host decision, durable `dispatchPrepared`, final admission, observed executor
+entry and authoritative settlement remain separate facts. A Receipt continues
+to prove execution, not approval. Typed audit records and export derive from
+committed Journal data, never presentation events; exporter failure after
+settlement cannot cause another effect. See
+[Audited Authorization](swift-agent-authorization-audit.md).
+
 last-verified: 2026-09-21
 
 This guide describes the Host-side pattern for presenting what a Run actually

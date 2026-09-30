@@ -1,5 +1,15 @@
 # Examples, credentials and live qualification
 
+## RC6 candidate: EnterpriseAuthorizationFixture
+
+`swift run --package-path Examples/ExternalClient EnterpriseAuthorizationFixture`
+uses only public APIs in a separate client package, disposable files and a
+scripted Provider. It shows automatic/human approval, denial/reopen, Evidence
+rejection with no Host decision, changed material/revision/backend/recipient,
+settled replay, JSONL ACK loss/deduplication, physical drain and legacy behavior.
+No key, network, mail or user-file mutation is used. See
+[Audited Authorization](swift-agent-authorization-audit.md).
+
 last-verified: 2026-09-21
 
 Executable-example baseline: `99dd1171d8ef1f3091a350575f30e7e13791b1b5`.

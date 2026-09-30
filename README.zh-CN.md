@@ -4,12 +4,13 @@
 
 SwiftAgent 是一个不绑定模型厂商的 Swift Agent 运行时，提供类型化工具、actor 隔离的会话、流式事件、基于 Evidence 的执行、mutation 回执、持久化 Journal、崩溃恢复和 Provider 适配器。
 
-这份 README 用于选择阅读路径。详细接入指南目前使用英文；中文和日文 README 提供相同的导航与范围说明。
+这份 README 用于选择阅读路径。详细接入指南主要使用英文；可审计授权另有中文指南。中文和日文 README 提供导航与范围说明。
 
 ## 从这里开始
 
 | 你要做什么 | 先读 | 接着读 |
 | --- | --- | --- |
+| Host 授权、精确动作绑定、持久审计和企业归档 | [可审计授权（RC6 候选，尚未发布）](docs/guides/swift-agent-authorization-audit.zh-CN.md) |
 | 在 App 中接入 SwiftAgent | [App 接入入口](INTEGRATION.md) | [接入步骤与常用模式](docs/ai/consumer-recipes.md) |
 | 让 Codex、Claude 或其他编码 AI 完成接入 | [AI 接入指南](docs/ai/start-here.md) | [验收清单](docs/ai/acceptance-checklist.md) |
 | 修改 SDK 本身 | [贡献指南](CONTRIBUTING.md) | [测试指南](docs/testing.md)和[安全模型](docs/security-model.md) |

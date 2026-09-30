@@ -68,6 +68,24 @@ the event stream as `unclassified`; exhaustive switches must add the cases.
 largest segment rotation can seal. Such a policy previously initialized, then
 stalled maintenance permanently.
 
+## RC6 candidate, unreleased
+
+`AgentFailure.authorization` is a source break for exhaustive switches. It
+classifies the new `AgentAuthorizationError`; presentation consumers must handle
+it. Existing construction defaults to legacy and preserves tool execution.
+`AgentTool.authorizationBinding(for:)` has a default; a conformer already using
+that signature must adopt its now-public requirement, as with RC5 `definition`.
+New read-only query/export contracts are additive. The metrics initializer adds
+a defaulted batch-encoding counter.
+
+Explicit audit-capable creation uses schema 5; RC5 readers reject it at open,
+including empty stores. The new reader opens schema 3/4 without conversion and
+refuses required audit there before input/provider work. Default creation stays
+schema 3; rejection-only stays schema 4. Actual cross-reader open/append/maintain
+checks are in `Scripts/verify-rc6-compatibility.sh`. No in-place migration or
+new-directory deduplication transfer is provided. See
+[Audited Authorization](swift-agent-authorization-audit.md).
+
 ## 1.0 freeze decisions (SAI-026B)
 
 These source breaks happen before the first tagged 1.0:

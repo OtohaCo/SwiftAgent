@@ -1,5 +1,18 @@
 # SwiftAgent Testing
 
+## RC6 candidate audit acceptance
+
+`bash Scripts/ci-audited-authorization.sh` runs targeted authorization/export and
+independent-process regressions, the public no-network fixture and an actual
+RC5/candidate reader matrix. Main macOS/Linux CI already runs all tests and
+invokes its fixture/matrix phase. Checkout SHA/tree, compiler and workflow
+attempt are saved under `.build/ci-logs/`; hosted checks use the actual PR head.
+This evidence improvement does not claim to fix unrelated intermittent CI
+failures. `swift run -c release AuditAuthorizationBenchmark 20` measures legacy,
+allow, deny, unrelated Sessions, long conversation and export lag; metrics
+count batch encoding/decoding/publication and storage read/write bytes, not all Swift JSON
+serialization. See [the acceptance record](releases/rc6-audited-authorization-acceptance.md).
+
 last-verified: 2026-09-27
 
 Primary compiler: Swift 6.4. From the package directory:

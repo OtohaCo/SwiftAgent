@@ -1,5 +1,13 @@
 # SwiftAgent Context Policy
 
+## RC6 candidate: audit does not revise conversation
+
+Proposal/decision/disposition and exporter checkpoint commits do not advance
+conversation revision or stale source IDs. Rejected proposals have independent
+restricted audit payloads; they are not invented tool results in canonical
+history. Existing bounded pre-admission rejection feedback remains explicit.
+See [Audited Authorization](swift-agent-authorization-audit.md).
+
 last-verified: 2026-09-27
 
 SwiftAgent keeps three layers of context. They are not interchangeable.

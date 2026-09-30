@@ -1,6 +1,6 @@
 # ADR 0009: Audited Authorization
 
-Status: accepted for RC6 implementation
+Status: implemented on the RC6 candidate branch; unreleased
 
 The Host owns the authorization decision. SwiftAgent captures, binds, enforces
 and records it in the existing AgentLoop. A Receipt remains execution evidence;
@@ -60,3 +60,5 @@ work until physical exit; cancelled waiters do not release that ownership.
 Export is disabled until explicitly started. There is no automatic migration,
 memory fallback, arbitrary Journal backend, automatic deletion or remote/local
 distributed transaction. JSONL is an archive view, not a recoverable backup.
+
+Public contracts and verified boundaries: [guide](../guides/swift-agent-authorization-audit.md), [acceptance](../releases/rc6-audited-authorization-acceptance.md).
