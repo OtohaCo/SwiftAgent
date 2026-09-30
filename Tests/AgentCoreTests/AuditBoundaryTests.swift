@@ -168,9 +168,12 @@ struct AuditBoundaryTests {
         let requests = await authorizer.requests
         #expect(requests.count == 2)
         #expect(requests.first?.normalizedArguments == requests.last?.normalizedArguments)
+        // Authorizer callbacks may arrive in either order; join these known Run-local labels.
+        let original = try #require(requests.first { $0.modelCallID.rawValue == "call-0" })
+        let related = try #require(requests.first { $0.modelCallID.rawValue == "call-1" })
         // Lineage is an additional bound field; canonical parameter equality does not erase it.
-        #expect(requests.first?.relatedProposalID == nil)
-        #expect(requests.last?.relatedProposalID == requests.first?.proposalID)
+        #expect(original.relatedProposalID == nil)
+        #expect(related.relatedProposalID == original.proposalID)
         #expect(requests.first?.actionDigest != requests.last?.actionDigest)
         #expect(requests.first?.requestID != requests.last?.requestID)
         #expect(await log.names.count == 2)
