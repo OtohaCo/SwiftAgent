@@ -1,6 +1,20 @@
 # SwiftAgent Semantic Versioning
 
-last-verified: 2026-09-29
+last-verified: 2026-10-01
+
+## RC6 Decision evaluation (unreleased)
+
+`Examples/DecisionEvaluation` is an optional package-outside-SDK Host consumer
+and evaluation runner. `AgentDecisions`, Jev Noul/Choice/Score, their Codable
+forms, and root SDK products/dependency directions are unchanged. No Core
+Decision-service dependency, Journal schema change, authorization conversion
+or native OpenAI Decisions API is added. The native protocol remains
+unestablished; ordinary Responses is not relabeled as native Decisions.
+
+The example's versioned synthetic dataset and JSONL ledger are evaluation
+artifacts, not SDK approvals, execution facts or a recoverable Journal backup.
+Ordinary CI uses no credentials or paid services. Host-attested live budget
+bounds do not authenticate provider pricing or guarantee a server bill.
 
 SwiftAgent follows Swift Package Manager rules, not a promise of ABI stability.
 A major version is required when a change can fail a client that compiled

@@ -1,6 +1,6 @@
 # SwiftAgent Decision Providers
 
-last-verified: 2026-09-19
+last-verified: 2026-10-01
 
 Decision providers answer typed questions about supplied state. They are not
 language-model conversation providers and they do not run SwiftAgent tools.
@@ -10,6 +10,18 @@ language-model conversation providers and they do not run SwiftAgent tools.
 - `AgentDecisions` defines the vendor-neutral contract.
 - `AgentJevProvider` maps that contract to TypeSafe Jev System One.
 - `AgentCore` depends on neither product.
+
+[DecisionEvaluation](../../Examples/DecisionEvaluation) adds a shared Host-side
+Choice evaluation dataset/runner and a compiling public Jev consumer. It is
+outside AgentCore and adds no SDK product or public contract changes. Default
+dry-run requires no credentials/network; controlled HTTP tests use the actual
+SDK. Live requires explicit provider/endpoint/model/consent and finite budgets;
+unknown per-request cost bounds are rejected before dispatch. Offline protocol
+PASS is distinct from service eligibility and model quality (both NOT RUN).
+Native OpenAI Decisions is blocked by missing public wire-schema evidence;
+[the protocol record](../../Examples/DecisionEvaluation/native-protocol.md)
+distinguishes documented `gpt-6-luna` Responses support from native Decisions.
+There is no silent Responses fallback or automatic provider routing.
 
 ```swift
 import AgentDecisions
