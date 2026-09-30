@@ -70,7 +70,8 @@ stalled maintenance permanently.
 
 ## RC6 candidate, unreleased
 
-`AgentFailure.authorization` is a source break for exhaustive switches. It
+`AgentFailure.authorization` and `AgentFailure.auditPersistence` are source breaks
+for exhaustive switches. The candidate
 classifies the new `AgentAuthorizationError`; presentation consumers must handle
 it. Existing construction defaults to legacy and preserves tool execution.
 `AgentTool.authorizationBinding(for:)` has a default; a conformer already using

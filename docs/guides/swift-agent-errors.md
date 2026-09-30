@@ -8,6 +8,14 @@ authorizer failure/timeout, stale or mismatched decision, changed action,
 expiry/revocation, backlog and export errors stay typed. Actual store failures
 remain `AgentJournalError` (including `commitUnknown`); audit failure never
 silently grants execution. Host timeouts/errors are not recorded as deny.
+
+If publishing failure audit also fails, `AgentAuditPersistenceError` preserves
+`original` and `audit` as typed `AgentFailure` values; events and execution reports
+use `AgentFailure.auditPersistence`. Required mutation quarantine still runs.
+If quarantine also fails, `AgentMutationPersistenceError.settlement` contains
+that composite and `quarantine` contains its separate failure. No failed
+quarantine is reported as successfully persisted; reopen a poisoned handle.
+Unknown Host errors remain `unclassified` without private error strings.
 See [Audited Authorization](swift-agent-authorization-audit.md).
 
 last-verified: 2026-09-27

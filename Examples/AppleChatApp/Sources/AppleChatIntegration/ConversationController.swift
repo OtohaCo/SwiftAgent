@@ -387,6 +387,7 @@ public actor ConversationController {
         case let value as ToolResourceError: .resource(value)
         case let value as ToolSchedulerError: .scheduler(value)
         case let value as AgentJournalError: .journal(value)
+        case let value as AgentAuditPersistenceError: .auditPersistence(value)
         case let value as AgentMutationPersistenceError: .mutationPersistence(value)
         case let value as AgentContextError: .context(value)
         case let value as AgentModelBindingError: .modelBinding(value)

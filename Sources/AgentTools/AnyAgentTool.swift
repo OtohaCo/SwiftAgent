@@ -49,6 +49,7 @@ package struct AnyAgentTool: Sendable {
             return PreparedInvocation(resources: resources, evidenceRequirements: requirements,
                                       receiptExpectation: receiptExpectation, binding: binding, preauthorize: { context in
                 guard let audit = context.auditAuthorization else { return }
+                audit.beginEvaluation()
                 try context.checkActive()
                 try await Self.validateEvidence(requirements, context: context)
                 try await context.executionAdmission?.check(runID: context.runID, resources: resources)
@@ -57,7 +58,11 @@ package struct AnyAgentTool: Sendable {
                 if policy.authorization == .required {
                     let authorization: ToolAuthorization
                     do { authorization = try await tool.authorize(input, context: context) }
-                    catch { try await audit.recordToolAuthorization(nil, failed: true); throw error }
+                    catch {
+                        audit.noteFailureOrigin(.toolAuthorization)
+                        try await audit.recordToolAuthorization(nil, failed: true)
+                        throw error
+                    }
                     try await audit.recordToolAuthorization(authorization, failed: false)
                     try context.checkActive()
                     guard authorization == .allowed else { throw ToolInvocationError.authorizationDenied }
@@ -214,7 +219,13 @@ package struct AnyAgentTool: Sendable {
 
     private static func validateEvidence(_ requirements: [EvidenceRequirement], context: ToolContext) async throws {
         guard !requirements.isEmpty else { return }
-        try await context.requireEvidence(requirements)
+        do { try await context.requireEvidence(requirements) }
+        catch {
+            // This is the SDK ledger gate. EvidenceError thrown by a Host callback
+            // elsewhere does not acquire this origin.
+            if error is EvidenceError { context.auditAuthorization?.noteFailureOrigin(.runtimeEvidence) }
+            throw error
+        }
     }
 
     package func prepare(arguments: JSONValue, prepareAuthorizationBinding: Bool = false) throws -> PreparedInvocation {

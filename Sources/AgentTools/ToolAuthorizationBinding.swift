@@ -48,8 +48,16 @@ public struct ToolAuthorizationBinding: Codable, Equatable, Sendable {
     }
 }
 
+/// Tagged by the runtime at the actual throwing boundary, never inferred from
+/// public error types that a Host callback can also throw.
+package enum ToolAuditFailureOrigin: Sendable {
+    case runtimeEvidence, toolAuthorization, toolDenied
+}
+
 /// Core supplies this process-local owner. A Host cannot manufacture one through ToolContext.
 package protocol ToolAuditAuthorization: Sendable {
+    func beginEvaluation()
+    func noteFailureOrigin(_ origin: ToolAuditFailureOrigin)
     func authorize(context: ToolContext) async throws
     func recordToolAuthorization(_ value: ToolAuthorization?, failed: Bool) async throws
     func apply(mutation: ToolMutationAdmissionRequest?) async throws -> ToolMutationAdmissionResult?

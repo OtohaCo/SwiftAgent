@@ -11,6 +11,7 @@ package actor AgentAuditRuntime {
     private let work = AgentAuditWorkDrain()
     private var received: [ToolCallID: AuditRecordLinks] = [:]
     private var unprepared: [UUID: AuditRecordLinks] = [:]
+    private var prepared: [UUID: AgentAuditInvocation] = [:]
     private var previousProposal: [String: UUID] = [:]
     private var captured = 0
 
@@ -74,8 +75,10 @@ package actor AgentAuditRuntime {
         try await journal.appendAudit([.init(links: links.authorizing(request), fact: .proposal(proposal))])
         received[call.call.id] = links.authorizing(request)
         unprepared.removeValue(forKey: links.invocationID)
-        return call.boundToAudit(AgentAuditInvocation(request: request, links: links.authorizing(request),
-            journal: journal, configuration: configuration, work: work))
+        let invocation = AgentAuditInvocation(request: request, links: links.authorizing(request),
+            journal: journal, configuration: configuration, work: work)
+        prepared[links.invocationID] = invocation
+        return call.boundToAudit(invocation)
     }
 
     func rejected(_ callID: ToolCallID, reason: String) async throws {
@@ -85,6 +88,11 @@ package actor AgentAuditRuntime {
             .init(links: links, fact: .disposition(.init(state: .notExecuted, reasonCode: reason))),
         ])
         unprepared.removeValue(forKey: links.invocationID)
+        prepared.removeValue(forKey: links.invocationID)
+    }
+
+    func closeUnstarted(_ error: any Error) async throws {
+        for invocation in prepared.values { try await invocation.closeUnstarted(error) }
     }
 
     func rejectUnprepared(_ error: any Error) async throws {
@@ -169,6 +177,9 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
     private var executorObserved = false
     private var replaySource: JournalStoredMutation?
     private var failureRecorded = false
+    private var dispatchStarted = false
+    private var enterprisePhase = false
+    private var failureOrigin: ToolAuditFailureOrigin?
 
     init(request: AuthorizationRequest, links: AuditRecordLinks, journal: AgentJournal,
          configuration: AgentAuthorizationConfiguration, work: AgentAuditWorkDrain) {
@@ -176,7 +187,29 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
         self.configuration = configuration; self.work = work
     }
 
+    func beginEvaluation() { lock.withLock { dispatchStarted = true } }
+    func noteFailureOrigin(_ origin: ToolAuditFailureOrigin) {
+        lock.withLock { if failureOrigin == nil { failureOrigin = origin } }
+    }
+
+    /// The scheduler has ended without ever starting this invocation. A started
+    /// or completed sibling must retain its own execution/settlement facts.
+    func closeUnstarted(_ error: any Error) async throws {
+        let shouldClose = lock.withLock {
+            guard !dispatchStarted, !failureRecorded else { return false }
+            failureRecorded = true
+            return true
+        }
+        guard shouldClose else { return }
+        let reason = error is CancellationError ? "cancelled_before_scheduling" : "batch_stopped_before_scheduling"
+        try await journal.appendAudit([
+            .init(links: links, fact: .authorization(.init(layer: .enterprise, status: .notEvaluated, reasonCode: reason))),
+            .init(links: links, fact: .disposition(.init(state: .notExecuted, reasonCode: reason))),
+        ])
+    }
+
     func authorize(context: ToolContext) async throws {
+        lock.withLock { enterprisePhase = true }
         guard let authorizer = configuration.authorizer else { throw AgentAuthorizationError.missingAuthorizer }
         try configuration.scope.check(expectedGeneration: request.policyGeneration)
         try await journal.checkAuditAvailability(backlog: configuration.backlog)
@@ -228,7 +261,7 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
                     expires = min(expires, ContinuousClock.now.advanced(by: .seconds(seconds)))
                 }
                 guard ContinuousClock.now < expires else { throw AgentAuthorizationError.expired }
-                self.lock.withLock { self.expires = expires }
+                self.lock.withLock { self.expires = expires; self.enterprisePhase = false }
             } onOperationFinished: { await self.work.end() }
         } catch { throw error }
     }
@@ -252,6 +285,7 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
     func recordToolAuthorization(_ value: ToolAuthorization?, failed: Bool) async throws {
         let status: AuditAuthorizationEvaluation.Status = failed ? .incomplete : value.map { $0 == .allowed ? .allowed : .denied } ?? .notRequired
         try await journal.appendAudit([.init(links: links, fact: .authorization(.init(layer: .tool, status: status)))])
+        if value == .denied { noteFailureOrigin(.toolDenied) }
     }
 
     func apply(mutation: ToolMutationAdmissionRequest?) async throws -> ToolMutationAdmissionResult? {
@@ -309,16 +343,17 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
             return (enterpriseEvaluated, dispatchPrepared, executorObserved, enterpriseStarted)
         }
         guard let state else { return }
+        let reason = failureReason(error)
         var drafts: [JournalAuditDraft] = []
         if !state.0 {
             drafts.append(.init(links: links, fact: .authorization(.init(layer: .enterprise,
-                status: state.3 ? .incomplete : .notEvaluated, reasonCode: Self.reason(error)))))
+                status: state.3 ? .incomplete : .notEvaluated, reasonCode: reason))))
         }
         if state.2 { drafts.append(.init(links: links, fact: .disposition(.init(state: .executorObserved)))) }
         let unknown = request.toolPolicy.effect == .mutation && state.1 && replaySource == nil
         let disposition: AuditExecutionDisposition.State = unknown ? .uncertain : state.2 ? .interrupted : .notExecuted
         drafts.append(.init(links: links, fact: .disposition(.init(state: disposition,
-            reasonCode: Self.reason(error)))))
+            reasonCode: reason))))
         try await journal.appendAudit(drafts)
     }
 
@@ -335,22 +370,33 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
         return drafts
     }
 
-    static func reason(_ error: any Error) -> String {
-        if error is EvidenceError { return "runtime_evidence_rejected" }
+    private func failureReason(_ error: any Error) -> String {
+        if error is CancellationError { return "cancelled" }
+        return lock.withLock {
+            if executorObserved { return "executor_failed" }
+            switch failureOrigin {
+            case .runtimeEvidence: return "runtime_evidence_rejected"
+            case .toolAuthorization: return "tool_authorization_failed"
+            case .toolDenied: return "tool_denied"
+            case nil: return Self.reason(error, enterprise: enterprisePhase)
+            }
+        }
+    }
+
+    static func reason(_ error: any Error, enterprise: Bool = false) -> String {
         if error is CancellationError { return "cancelled" }
         if let error = error as? AgentAuthorizationError {
             switch error {
-            case .authorizationDenied: return "host_denied"
-            case .requiresUserAction: return "user_action_required"
-            case .authorizerTimedOut: return "authorizer_timeout"
-            case .authorizerFailed: return "authorizer_error"
+            case .authorizationDenied: return enterprise ? "host_denied" : "authorization_invalid"
+            case .requiresUserAction: return enterprise ? "user_action_required" : "authorization_invalid"
+            case .authorizerTimedOut: return enterprise ? "authorizer_timeout" : "authorization_invalid"
+            case .authorizerFailed: return enterprise ? "authorizer_error" : "authorization_invalid"
             case .actionChanged: return "action_changed"
             case .expired: return "expired"
             case .revoked: return "revoked"
             default: return "authorization_invalid"
             }
         }
-        if let error = error as? ToolInvocationError, error == .authorizationDenied { return "tool_denied" }
         return "runtime_failed"
     }
 }

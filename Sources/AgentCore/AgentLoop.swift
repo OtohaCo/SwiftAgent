@@ -129,8 +129,13 @@ package struct AgentLoop: Sendable {
                         emitter: emitter, lifecycle: lifecycle, evidenceLedger: evidenceLedger,
                         initialRequest: initialRequest)
                 } catch {
-                    try await audit?.rejectUnprepared(error)
-                    throw error
+                    let captured = await AgentAuditPersistenceError.capturing(original: error) {
+                        try await audit?.rejectUnprepared(error)
+                    }
+                    let exposed = await AgentAuditPersistenceError.capturing(original: captured) {
+                        try await audit?.closeUnstarted(error)
+                    }
+                    throw exposed
                 }
             }, onOperationFinished: { await audit?.finishBody() }))
         } catch {
@@ -366,8 +371,10 @@ package struct AgentLoop: Sendable {
                 }, onCompleted: { index, call, result in
                     try await progress.record(index: index, call: call, result: result)
                 }, onFailed: { call, error in
-                    try await call.auditAuthorization?.failed(error)
-                    var exposed: any Error = Self.toolError(error)
+                    // Audit failure cannot discard the original error or skip existing recovery.
+                    var exposed = await AgentAuditPersistenceError.capturing(original: Self.toolError(error)) {
+                        try await call.auditAuthorization?.failed(error)
+                    }
                     if call.policy.effect == .mutation {
                         let mark = lifecycle?.markMutationNeedsReconciliation
                         let callID = call.call.id
