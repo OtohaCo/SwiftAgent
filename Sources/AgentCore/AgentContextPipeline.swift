@@ -80,7 +80,8 @@ public struct AgentContextToolExcerpt: Hashable, Sendable {
     }
 }
 
-/// A request-local proof produced by Core after a read-only result checkpoint.
+/// A request-local proof produced by Core after a read-only result checkpoint,
+/// including an explicitly model-visible recoverable read-only failure.
 /// Direct projector callers can construct an input, but only the Session/Run
 /// path obtains this from actual tool execution.
 public struct AgentContextVerifiedReadOnlyResult: Hashable, Sendable, Codable {
@@ -101,7 +102,7 @@ package actor AgentContextEffectLedger {
     package init() {}
 
     package func record(call: ToolCall, result: ToolResultMessage) {
-        guard call.id == result.callID, !result.isError,
+        guard call.id == result.callID,
               let digest = try? AgentContextProjectionSource.digest(messages: [.tool(result)]) else { return }
         confirmed[call.id] = .init(toolName: call.name, sourceDigest: digest)
     }
@@ -449,7 +450,7 @@ public struct AgentCompositeContextProjector: AgentContextSourceReferencing {
         return .init(messages: messages, plan: .init(
             projectionID: "source-bound-composite", version: policyVersion,
             sourceRevision: input.conversationRevision,
-            sourceDigest: try AgentContextProjectionSource.digest(messages: input.canonicalMessages),
+            sourceDigest: try input.sourceDigest(),
             contextEpoch: input.contextEpoch, lossy: !summaries.isEmpty || !excerpts.isEmpty || omitted > 0,
             reason: !summaries.isEmpty || !excerpts.isEmpty || omitted > 0 ? "Host-approved derived context." : nil
         ), report: report)

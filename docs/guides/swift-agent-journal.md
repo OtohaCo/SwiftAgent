@@ -26,6 +26,24 @@ queue-only writes do not advance conversation revision. See the
 [follow-up guide](swift-agent-follow-up-queue.md) and [ADR 0007](../adr/0007-durable-follow-up-queue.md).
 Read-only Agents can omit a Journal or use `AgentJournal()` in memory. An Agent
 with mutation tools requires a durable Journal at `makeSession`.
+Memory mode retains the latest complete checkpoint per Session, including its
+steering IDs and record coordinates. Replaced checkpoints and other event
+payloads are released; canonical history is not truncated. Session-created and
+last-Run markers have one entry per Session. Previously seen Run IDs remain as
+identity-only metadata, growing with the number of distinct Runs; this preserves
+the existing `hasRun` query without retaining each Run's message arrays. Reads
+and normal commits use the affected Session's index, not a scan of old events.
+There is no automatic Session/Run identity eviction. This mode still cannot
+admit mutations or `requiredAudit`; durable schema 3/4/5 behavior is unchanged.
+
+`swift run -c release MemoryJournalBenchmark 1000` measures the actual memory
+Journal (also use 2000 and 4000 in separate processes). It reports retained
+checkpoint arrays, message slots, Session/Run metadata and RSS. Message values
+and their content can share storage across snapshots; slots are not unique
+body allocations. RSS includes allocator/runtime effects and is not a fixed
+correctness threshold. See `MemoryJournalRetentionTests` for structural and
+real Session/restore assertions.
+
 For bounded pre-admission Evidence feedback, create a **new** store with
 `supportsAdmissionRejections: true`; it reserves schema 4, a typed rejection
 marker and a bounded operation-pending index. An opt-in Run on schema 3 fails

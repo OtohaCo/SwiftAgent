@@ -37,8 +37,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: execution-reporting-macos-attempt-${{ github.run_attempt }}
+          # Only the explicit CI evidence paths below; never the workspace root.
+          include-hidden-files: true
           path: |
             .build/ci-logs/
+            .ci-logs/
             .build/execution-reporting-acceptance.json
           if-no-files-found: ignore
           retention-days: 30
@@ -61,15 +64,22 @@ jobs:
         run: bash Scripts/install-linux-swift.sh
       - name: Verify compiler
         run: bash Scripts/require-toolchain.sh
+      - name: Watchdog regression
+        run: python3 -m unittest discover Scripts -p 'test_ci_stage.py'
       - name: Core --target build, tests, external client
         run: bash Scripts/ci-linux.sh
+      - name: Finite original reporting reproduction (five attempts, stop on failure)
+        if: ${{ !cancelled() }}
+        run: bash Scripts/ci-linux-reporting-repro.sh
       - name: Upload acceptance logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: execution-reporting-linux-attempt-${{ github.run_attempt }}
+          include-hidden-files: true
           path: |
             .build/ci-logs/
+            .ci-logs/
             .build/execution-reporting-acceptance.json
           if-no-files-found: ignore
           retention-days: 30
