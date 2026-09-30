@@ -12,6 +12,10 @@ Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
   Sample the current owned ancestry (root and at most two active descendants),
   with shared-budget identity checks and explicit unavailable/failure outcomes;
   do not select a stale historical PID or infer depth from PID size.
+- Memory Journal keeps one full checkpoint per Session instead of all historical
+  versions. Complete canonical history, steering IDs, sequences and Run identity
+  queries are preserved. Identity-only metadata still grows with Sessions/Runs;
+  memory mode gains no mutation/audit capability. Durable formats are unchanged.
 
 ### Fixed: audit boundary closeout
 
