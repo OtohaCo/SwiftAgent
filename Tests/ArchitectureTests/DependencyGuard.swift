@@ -3,6 +3,7 @@ import Foundation
 enum DependencyGuard {
     static let dependencies: [String: Set<String>] = [
         "AgentModels": [],
+        "JournalProcessPrimitives": [], // Only the controlled test executable consumes this C helper.
         "AgentTools": ["AgentModels"],
         "AgentCore": ["AgentModels", "AgentTools"],
         "AgentJournalFileStore": ["AgentCore", "AgentModels", "AgentTools"],
