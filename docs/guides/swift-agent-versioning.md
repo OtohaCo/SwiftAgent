@@ -205,3 +205,9 @@ already in 1.0, as `StopReason.unknown` does.
   declare
 - Compatibility for `package` APIs, test helpers, or WorkspaceAgent host types
   as if they were the Core SDK
+
+Resolved read-only group projection now requires proof for all removed calls and
+the resolving call. This stricter behavior can reject previously accepted Host
+spans. `AgentContextReadOnlyGroupReferencing` is additive; wrappers must forward
+its requirements. Existing source/Codable proof fields and schema 3/4/5 stay
+unchanged. Reopened Sessions conservatively reject spans without live proof.

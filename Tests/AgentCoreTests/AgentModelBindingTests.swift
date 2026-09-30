@@ -326,7 +326,11 @@ struct AgentModelBindingTests {
             runID: UUID(),
             conversationRevision: 7,
             contextEpoch: 3,
-            modelTurn: 1
+            modelTurn: 1,
+            verifiedReadOnlyResults: [
+                failed.id: .init(toolName: failed.name, sourceDigest: try AgentContextProjectionSource.digest(messages: [canonical[2]])),
+                resolved.id: .init(toolName: resolved.name, sourceDigest: try AgentContextProjectionSource.digest(messages: [canonical[4]]))
+            ]
         ))
 
         #expect(projection.messages == [

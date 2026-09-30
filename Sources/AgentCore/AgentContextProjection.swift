@@ -107,6 +107,13 @@ public protocol AgentContextSourceReferencing: AgentContextProjector {
     var toolResultCallIDs: [ToolCallID] { get }
 }
 
+/// Requests process-local execution provenance for complete tool groups. A
+/// transparent wrapper must forward these requirements. Reopening a Session
+/// does not recreate proof from tool names, current policies or output text.
+public protocol AgentContextReadOnlyGroupReferencing: AgentContextProjector {
+    var readOnlyGroupCallIDs: [ToolCallID] { get }
+}
+
 public enum AgentContextProjectionError: Error, Equatable, Sendable {
     case unresolvedReadOnlySpan(ToolCallID)
 }
@@ -174,8 +181,9 @@ public struct AgentResolvedReadOnlyToolSpan: Hashable, Sendable, Codable {
     }
 }
 
-public struct AgentResolvedReadOnlyToolProjector: AgentContextProjector {
+public struct AgentResolvedReadOnlyToolProjector: AgentContextReadOnlyGroupReferencing {
     public let spans: [AgentResolvedReadOnlyToolSpan]
+    public var readOnlyGroupCallIDs: [ToolCallID] { spans.flatMap { [$0.failedCallID, $0.resolvedByCallID] } }
 
     public init(spans: [AgentResolvedReadOnlyToolSpan]) {
         self.spans = spans
@@ -184,13 +192,22 @@ public struct AgentResolvedReadOnlyToolProjector: AgentContextProjector {
     public func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
         var messages = input.canonicalMessages
         for span in spans {
-            guard let failed = closedGroup(containing: span.failedCallID, in: messages),
+            guard let failed = Self.closedGroup(containing: span.failedCallID, in: messages),
                   let failedResult = failed.results[span.failedCallID],
                   failedResult.isError,
-                  let resolved = closedGroup(containing: span.resolvedByCallID, in: messages),
+                  let resolved = Self.closedGroup(containing: span.resolvedByCallID, in: messages),
                   resolved.range.lowerBound >= failed.range.upperBound,
                   resolved.results[span.resolvedByCallID]?.isError == false,
                   failed.names[span.failedCallID] == resolved.names[span.resolvedByCallID],
+                  try failed.results.allSatisfy({ id, result in
+                      input.verifiedReadOnlyResults[id] == .init(
+                          toolName: failed.names[id] ?? "",
+                          sourceDigest: try AgentContextProjectionSource.digest(messages: [.tool(result)]))
+                  }),
+                  let resolvedResult = resolved.results[span.resolvedByCallID],
+                  input.verifiedReadOnlyResults[span.resolvedByCallID] == .init(
+                      toolName: resolved.names[span.resolvedByCallID] ?? "",
+                      sourceDigest: try AgentContextProjectionSource.digest(messages: [.tool(resolvedResult)])),
                   !span.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw AgentContextProjectionError.unresolvedReadOnlySpan(span.failedCallID)
             }
@@ -213,11 +230,16 @@ public struct AgentResolvedReadOnlyToolProjector: AgentContextProjector {
         )
     }
 
-    private func closedGroup(
+    package static func closedGroup(
         containing callID: ToolCallID,
         in messages: [ModelMessage]
     ) -> (range: Range<Int>, names: [ToolCallID: String], results: [ToolCallID: ToolResultMessage])? {
-        for index in messages.indices {
+        let matches = messages.indices.filter { index in
+            if case .assistant(_, let calls) = messages[index] { return calls.contains { $0.id == callID } }
+            return false
+        }
+        guard matches.count == 1 else { return nil }
+        for index in matches {
             guard case .assistant(_, let calls) = messages[index], calls.contains(where: { $0.id == callID }) else {
                 continue
             }

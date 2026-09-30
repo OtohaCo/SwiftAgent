@@ -6,6 +6,10 @@ All notable changes to SwiftAgent are recorded here.
 
 Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 
+- Validate the whole replaced read-only failure group with committed execution
+  provenance. Mixed mutation groups and missing/reopened proof are rejected;
+  request views change without modifying canonical history or settlement.
+
 ### Fixed: audit boundary closeout
 
 - Preserve original and failure-audit errors while still attempting mutation
