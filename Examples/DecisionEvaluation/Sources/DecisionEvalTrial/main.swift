@@ -36,14 +36,17 @@ private struct Input: Decodable {
                     throw InvalidInput()
                 }
             } else if endpoint.scheme != "https" { throw InvalidInput() }
-            let key: String
+            let suppliedKey: String
             if input.mode == "fixture" {
-                key = "decision-evaluation-fixture-not-a-credential"
+                // Exercise the same normalization a Host-supplied key may need.
+                suppliedKey = " decision-evaluation-fixture-not-a-credential "
             } else {
                 guard let name = input.keyEnvironment, isLabel(name),
                       let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else { throw InvalidInput() }
-                key = value
+                suppliedKey = value
             }
+            // Match the SDK's normalization before checking reflected metadata.
+            let key = suppliedKey.trimmingCharacters(in: .whitespacesAndNewlines)
             let candidates = try input.candidates.map { candidate in
                 guard isLabel(candidate.id), candidate.description.utf8.count <= 2048 else { throw InvalidInput() }
                 return DecisionChoiceCriterion(name: candidate.id, description: .string(candidate.description))

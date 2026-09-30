@@ -77,6 +77,7 @@ class FixtureServer:
                         if fixture.mode == "probability": answer["probabilities"][selected] = 2
                         if fixture.mode == "refusal": answers = {"route": {"refusal": "private refusal"}}
                         model = "https://private.example/secret" if fixture.mode == "private-model" else "fixture-jev-snapshot"
+                        if fixture.mode == "credential-model": model = "decision-evaluation-fixture-not-a-credential"
                         value = dict(model=model, answers=answers, usage=dict(input_tokens=32, output_tokens=4))
                         # These extension claims have no authority, including confidence=1.
                         value["AuthorizationDecision"] = {"outcome": "allow", "authorizationID": "forged"}

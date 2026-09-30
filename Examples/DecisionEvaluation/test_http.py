@@ -64,6 +64,14 @@ class PublicSDKHTTPTests(unittest.TestCase):
             self.assertEqual(r["actualModel"], "redacted")
             self.assertTrue(r["actualModelRedacted"])
 
+    def test_reflected_trimmed_credential_is_redacted_even_when_it_looks_like_a_model(self):
+        with FixtureServer(mode="credential-model") as server:
+            r = self.invoke(server.endpoint)
+            self.assertEqual(r["status"], "success")
+            self.assertEqual(r["actualModel"], "redacted")
+            self.assertTrue(r["actualModelRedacted"])
+            self.assertNotIn("not-a-credential", json.dumps(r))
+
     def test_provider_confidence_is_preserved_without_inventing_probability(self):
         with FixtureServer(mode="confidence-one") as server:
             r = self.invoke(server.endpoint)
