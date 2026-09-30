@@ -29,4 +29,5 @@ run_stage apple-chat-ios-build swift build --package-path Examples/AppleChatApp 
 run_stage dynamic-routing-tests swift test --package-path Examples/DynamicModelRouting --disable-sandbox --no-parallel
 bash Scripts/ci-execution-reporting.sh
 
-SWIFTAGENT_AUDIT_TESTS_ALREADY_RUN=1 bash Scripts/ci-audited-authorization.sh 2>&1 | tee .build/ci-logs/audited-authorization.log
+mkdir -p .build/ci-logs
+run_stage audited-authorization env SWIFTAGENT_AUDIT_TESTS_ALREADY_RUN=1 bash Scripts/ci-audited-authorization.sh 2>&1 | tee .build/ci-logs/audited-authorization.log

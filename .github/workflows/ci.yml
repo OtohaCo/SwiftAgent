@@ -37,6 +37,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: execution-reporting-macos-attempt-${{ github.run_attempt }}
+          # Only the explicit CI evidence paths below; never the workspace root.
+          include-hidden-files: true
           path: |
             .build/ci-logs/
             .ci-logs/
@@ -74,6 +76,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: execution-reporting-linux-attempt-${{ github.run_attempt }}
+          include-hidden-files: true
           path: |
             .build/ci-logs/
             .ci-logs/

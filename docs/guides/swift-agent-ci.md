@@ -20,6 +20,9 @@ Execution-reporting attempts also retain separate directories rather than erase
 prior logs, with an immutable copy of each acceptance summary. Evidence lives
 outside `.build` so `swift package clean` cannot erase its own running stage.
 Hosted artifacts keep these records for 30 days.
+The upload explicitly includes hidden files only within the three declared CI
+evidence paths (`.ci-logs`, legacy `.build/ci-logs`, and the acceptance JSON).
+It does not upload the workspace root or arbitrary hidden credentials.
 
 `ci-linux-reporting-repro.sh` runs the original reporting-support test command at
 most five times in Swift 6.4 Linux, stopping at the first nonzero, timeout or crash.

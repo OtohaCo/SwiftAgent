@@ -15,6 +15,23 @@ import unittest
 STAGE = Path(__file__).with_name("ci_stage.py")
 
 class CIStageTests(unittest.TestCase):
+    def test_terminal_audit_gate_is_owned_and_tee_directory_exists_before_dispatch(self):
+        for name in ['ci-macos.sh', 'ci-linux.sh']:
+            script = STAGE.with_name(name).read_text()
+            audit = script.index('run_stage audited-authorization env ')
+            self.assertLess(script.index('mkdir -p .build/ci-logs'), audit)
+
+    def test_artifact_upload_explicitly_includes_only_ci_evidence_paths(self):
+        workflow = (STAGE.parent.parent / '.github/workflows/ci.yml').read_text()
+        uploads = workflow.split('uses: actions/upload-artifact@v4')[1:]
+        self.assertEqual(len(uploads), 2)
+        for upload in uploads:
+            block = upload.split('      - name:', 1)[0]
+            self.assertIn('include-hidden-files: true', block)
+            paths = block.split('          path: |\n', 1)[1].split('          if-no-files-found:', 1)[0]
+            self.assertEqual([line.strip() for line in paths.splitlines()], [
+                '.build/ci-logs/', '.ci-logs/', '.build/execution-reporting-acceptance.json'])
+
     def test_success_and_each_attempt_keeps_its_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             for _ in range(2):
