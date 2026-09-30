@@ -6,6 +6,8 @@ struct AgentLoopLifecycle: Sendable {
     let evidenceLedger: EvidenceLedger
     let mutationAdmission: (any ToolMutationAdmission)?
     let checkpoint: @Sendable ([ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage]
+    /// The live Session revision of this exact committed canonical source.
+    let sourceRevision: (@Sendable ([ModelMessage]) async throws -> UInt64)?
     let checkReplanningSafety: @Sendable (String?) async throws -> Bool
     let recordAdmissionRejection: @Sendable (ToolPreAdmissionRejection, [ModelMessage]) async throws -> [ModelMessage]
     let recordMutationReceipt: @Sendable (ToolCallID, ToolReceipt, JSONValue) async throws -> Void
@@ -22,6 +24,7 @@ struct AgentLoopLifecycle: Sendable {
         evidenceLedger: EvidenceLedger,
         mutationAdmission: (any ToolMutationAdmission)? = nil,
         checkpoint: @escaping @Sendable ([ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage],
+        sourceRevision: (@Sendable ([ModelMessage]) async throws -> UInt64)? = nil,
         checkReplanningSafety: @escaping @Sendable (String?) async throws -> Bool = { _ in false },
         recordAdmissionRejection: @escaping @Sendable (ToolPreAdmissionRejection, [ModelMessage]) async throws -> [ModelMessage] = { _, _ in throw AgentJournalError.persistenceUnavailable("rejection commit unavailable") },
         recordMutationReceipt: @escaping @Sendable (ToolCallID, ToolReceipt, JSONValue) async throws -> Void = { _, _, _ in },
@@ -35,6 +38,7 @@ struct AgentLoopLifecycle: Sendable {
         self.evidenceLedger = evidenceLedger
         self.mutationAdmission = mutationAdmission
         self.checkpoint = checkpoint
+        self.sourceRevision = sourceRevision
         self.checkReplanningSafety = checkReplanningSafety
         self.recordAdmissionRejection = recordAdmissionRejection
         self.recordMutationReceipt = recordMutationReceipt

@@ -43,6 +43,24 @@ written back as Session history. Formal messages, tool identity checks,
 budget accounting, Evidence, and mutation settlement continue to use formal
 runtime state.
 
+`conversationRevision` identifies that exact canonical snapshot in the live
+Session. Startup preflight includes an uncommitted user input and uses its
+reserved candidate revision, so it can be one ahead of `conversationSnapshot()`.
+After admission, each request uses the actual committed Session revision: two
+separately committed tool results can advance it twice within one tool batch.
+Steering and subsequent Runs use the newly committed source. Audit-only writes
+do not advance it. Reopening establishes a new actor's live revision; this is
+not a persistent Journal commit count or a globally comparable timestamp.
+
+`contextEpoch` is the Run's logical source-generation coordinate. Its initial
+value remains the reserved candidate revision for compatibility; it advances
+once for each steering/tool-source update, rather than for every result commit.
+It need not equal `conversationRevision`. Neither field is a cache identity by
+itself: compare within the same Session/Run and include `sourceDigest`, which
+binds all canonical messages and current instructions. Core independently
+checks the plan's revision, epoch and exact digest; an external projector cannot
+certify its own stale or altered source. No public field/Codable key is removed.
+
 An enqueued [follow-up](swift-agent-follow-up-queue.md) is not yet a canonical
 message and cannot alter the current Run's projection or source revision.
 When the Host explicitly dispatches it, the ordinary Session startup and

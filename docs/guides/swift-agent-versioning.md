@@ -70,6 +70,15 @@ stalled maintenance permanently.
 
 ## RC6 candidate, unreleased
 
+Projection `conversationRevision` now follows the exact committed live Session
+snapshot after multi-result tool commits; startup preflight still uses a reserved
+candidate revision. `contextEpoch` remains a distinct Run-local source-generation
+coordinate. Numeric values after a tool batch can differ from earlier versions;
+cache consumers must bind Session/Run, revision, epoch and exact source digest.
+No projection field, Codable key or digest format changes. Session `history`
+remains a loaded-memory view; the existing throwing `conversationSnapshot()` is
+the restoration interface, including current instructions and storage errors.
+
 `AgentFailure.authorization` and `AgentFailure.auditPersistence` are source breaks
 for exhaustive switches. The candidate
 classifies the new `AgentAuthorizationError`; presentation consumers must handle

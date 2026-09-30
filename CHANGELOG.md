@@ -6,6 +6,12 @@ All notable changes to SwiftAgent are recorded here.
 
 Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 
+- Projection source revision follows the actual committed Session snapshot after
+  multiple tool-result commits; candidate preflight and the distinct Run source
+  epoch are documented. Stale/wrong source plans still fail; Codable fields and
+  digest format stay unchanged. Session `history` remains a loaded view; durable
+  resume examples use the existing throwing `conversationSnapshot()`.
+
 ### Fixed: audit boundary closeout
 
 - Preserve original and failure-audit errors while still attempting mutation

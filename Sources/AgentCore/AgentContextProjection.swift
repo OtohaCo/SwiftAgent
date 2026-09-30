@@ -6,7 +6,13 @@ public struct AgentContextProjectionInput: Hashable, Sendable, Codable {
     public let model: ModelID
     public let sessionID: UUID
     public let runID: UUID
+    /// Revision of this exact source in the live Session. Startup preflight uses
+    /// the reserved candidate revision, before its user input is committed.
+    /// Reopened actors establish new live revisions; this is not a durable commit count.
     public let conversationRevision: UInt64
+    /// Source-generation coordinate within this Session/Run. It advances once
+    /// per logical steering/tool-source change, not once per Journal commit.
+    /// Compare together with Session/Run identity and the exact source digest.
     public let contextEpoch: UInt64
     public let modelTurn: Int
     /// Formal-message ordinal (excluding current runtime instructions) to Journal ID.
