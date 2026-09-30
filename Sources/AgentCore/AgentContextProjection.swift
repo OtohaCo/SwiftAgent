@@ -6,7 +6,13 @@ public struct AgentContextProjectionInput: Hashable, Sendable, Codable {
     public let model: ModelID
     public let sessionID: UUID
     public let runID: UUID
+    /// Revision of this exact source in the live Session. Startup preflight uses
+    /// the reserved candidate revision, before its user input is committed.
+    /// Reopened actors establish new live revisions; this is not a durable commit count.
     public let conversationRevision: UInt64
+    /// Source-generation coordinate within this Session/Run. It advances once
+    /// per logical steering/tool-source change, not once per Journal commit.
+    /// Compare together with Session/Run identity and the exact source digest.
     public let contextEpoch: UInt64
     public let modelTurn: Int
     /// Formal-message ordinal (excluding current runtime instructions) to Journal ID.
@@ -14,6 +20,39 @@ public struct AgentContextProjectionInput: Hashable, Sendable, Codable {
     public let formalMessageIDs: [Int: UUID]
     /// Core supplies these only for previously committed read-only results.
     public let verifiedReadOnlyResults: [ToolCallID: AgentContextVerifiedReadOnlyResult]
+    private var sourceEncoding: AgentContextSourceEncoding? = nil
+
+    // The runtime cache is neither archival data nor part of value identity.
+    private enum CodingKeys: String, CodingKey {
+        case canonicalMessages, model, sessionID, runID, conversationRevision,
+             contextEpoch, modelTurn, formalMessageIDs, verifiedReadOnlyResults
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.canonicalMessages == rhs.canonicalMessages && lhs.model == rhs.model
+            && lhs.sessionID == rhs.sessionID && lhs.runID == rhs.runID
+            && lhs.conversationRevision == rhs.conversationRevision && lhs.contextEpoch == rhs.contextEpoch
+            && lhs.modelTurn == rhs.modelTurn && lhs.formalMessageIDs == rhs.formalMessageIDs
+            && lhs.verifiedReadOnlyResults == rhs.verifiedReadOnlyResults
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(canonicalMessages); hasher.combine(model); hasher.combine(sessionID); hasher.combine(runID)
+        hasher.combine(conversationRevision); hasher.combine(contextEpoch); hasher.combine(modelTurn)
+        hasher.combine(formalMessageIDs); hasher.combine(verifiedReadOnlyResults)
+    }
+
+    /// Digest of this exact canonical input. Core-bound inputs reuse Core's
+    /// independently computed value; public/decoded inputs compute their own.
+    /// No serialized or projector-supplied field can populate the runtime cache.
+    public func sourceDigest() throws -> String {
+        if let sourceEncoding { return sourceEncoding.digest }
+        return try AgentContextProjectionSource.digest(messages: canonicalMessages)
+    }
+
+    package mutating func bindSourceEncoding(_ encoding: AgentContextSourceEncoding) {
+        sourceEncoding = encoding
+    }
 
     public init(
         canonicalMessages: [ModelMessage],
@@ -70,15 +109,20 @@ public enum AgentContextProjectionSource {
     /// Stable, non-secret digest for correlating a projection with its exact
     /// canonical input. It is an integrity/version marker, not a credential.
     public static func digest(messages: [ModelMessage]) throws -> String {
+        try measure(messages: messages).digest
+    }
+
+    package static func measure(messages: [ModelMessage]) throws -> AgentContextSourceEncoding {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(messages)
+        AgentContextEncodingObservation.didEncode?("source", data.count)
         var value: UInt64 = 14_695_981_039_346_656_037
         for byte in data {
             value ^= UInt64(byte)
             value = value &* 1_099_511_628_211
         }
-        return String(format: "%016llx", value)
+        return .init(digest: String(format: "%016llx", value), byteCount: data.count)
     }
 }
 
@@ -107,6 +151,13 @@ public protocol AgentContextSourceReferencing: AgentContextProjector {
     var toolResultCallIDs: [ToolCallID] { get }
 }
 
+/// Requests process-local execution provenance for complete tool groups. A
+/// transparent wrapper must forward these requirements. Reopening a Session
+/// does not recreate proof from tool names, current policies or output text.
+public protocol AgentContextReadOnlyGroupReferencing: AgentContextProjector {
+    var readOnlyGroupCallIDs: [ToolCallID] { get }
+}
+
 public enum AgentContextProjectionError: Error, Equatable, Sendable {
     case unresolvedReadOnlySpan(ToolCallID)
 }
@@ -121,7 +172,7 @@ public struct AgentIdentityContextProjector: AgentContextProjector {
                 projectionID: "identity",
                 version: "1",
                 sourceRevision: input.conversationRevision,
-                sourceDigest: try AgentContextProjectionSource.digest(messages: input.canonicalMessages),
+                sourceDigest: try input.sourceDigest(),
                 contextEpoch: input.contextEpoch,
                 lossy: false
             )
@@ -151,7 +202,7 @@ public struct AgentSemanticHandoffProjector: AgentContextProjector {
                 projectionID: "semantic-handoff",
                 version: "1",
                 sourceRevision: input.conversationRevision,
-                sourceDigest: try AgentContextProjectionSource.digest(messages: input.canonicalMessages),
+                sourceDigest: try input.sourceDigest(),
                 contextEpoch: input.contextEpoch,
                 lossy: true,
                 reason: "Provider-private continuation and reasoning were excluded."
@@ -174,8 +225,9 @@ public struct AgentResolvedReadOnlyToolSpan: Hashable, Sendable, Codable {
     }
 }
 
-public struct AgentResolvedReadOnlyToolProjector: AgentContextProjector {
+public struct AgentResolvedReadOnlyToolProjector: AgentContextReadOnlyGroupReferencing {
     public let spans: [AgentResolvedReadOnlyToolSpan]
+    public var readOnlyGroupCallIDs: [ToolCallID] { spans.flatMap { [$0.failedCallID, $0.resolvedByCallID] } }
 
     public init(spans: [AgentResolvedReadOnlyToolSpan]) {
         self.spans = spans
@@ -184,13 +236,22 @@ public struct AgentResolvedReadOnlyToolProjector: AgentContextProjector {
     public func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
         var messages = input.canonicalMessages
         for span in spans {
-            guard let failed = closedGroup(containing: span.failedCallID, in: messages),
+            guard let failed = Self.closedGroup(containing: span.failedCallID, in: messages),
                   let failedResult = failed.results[span.failedCallID],
                   failedResult.isError,
-                  let resolved = closedGroup(containing: span.resolvedByCallID, in: messages),
+                  let resolved = Self.closedGroup(containing: span.resolvedByCallID, in: messages),
                   resolved.range.lowerBound >= failed.range.upperBound,
                   resolved.results[span.resolvedByCallID]?.isError == false,
                   failed.names[span.failedCallID] == resolved.names[span.resolvedByCallID],
+                  try failed.results.allSatisfy({ id, result in
+                      input.verifiedReadOnlyResults[id] == .init(
+                          toolName: failed.names[id] ?? "",
+                          sourceDigest: try AgentContextProjectionSource.digest(messages: [.tool(result)]))
+                  }),
+                  let resolvedResult = resolved.results[span.resolvedByCallID],
+                  input.verifiedReadOnlyResults[span.resolvedByCallID] == .init(
+                      toolName: resolved.names[span.resolvedByCallID] ?? "",
+                      sourceDigest: try AgentContextProjectionSource.digest(messages: [.tool(resolvedResult)])),
                   !span.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw AgentContextProjectionError.unresolvedReadOnlySpan(span.failedCallID)
             }
@@ -205,7 +266,7 @@ public struct AgentResolvedReadOnlyToolProjector: AgentContextProjector {
                 projectionID: "resolved-read-only-tools",
                 version: "1",
                 sourceRevision: input.conversationRevision,
-                sourceDigest: try AgentContextProjectionSource.digest(messages: input.canonicalMessages),
+                sourceDigest: try input.sourceDigest(),
                 contextEpoch: input.contextEpoch,
                 lossy: !spans.isEmpty,
                 reason: spans.isEmpty ? nil : "Host-approved resolved read-only tool groups were summarized."
@@ -213,11 +274,16 @@ public struct AgentResolvedReadOnlyToolProjector: AgentContextProjector {
         )
     }
 
-    private func closedGroup(
+    package static func closedGroup(
         containing callID: ToolCallID,
         in messages: [ModelMessage]
     ) -> (range: Range<Int>, names: [ToolCallID: String], results: [ToolCallID: ToolResultMessage])? {
-        for index in messages.indices {
+        let matches = messages.indices.filter { index in
+            if case .assistant(_, let calls) = messages[index] { return calls.contains { $0.id == callID } }
+            return false
+        }
+        guard matches.count == 1 else { return nil }
+        for index in matches {
             guard case .assistant(_, let calls) = messages[index], calls.contains(where: { $0.id == callID }) else {
                 continue
             }

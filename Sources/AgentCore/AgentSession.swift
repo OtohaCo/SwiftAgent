@@ -11,6 +11,10 @@ import Foundation
 /// when another Session can mutate the same host resources.
 public actor AgentSession {
     public nonisolated let id: UUID
+    /// Currently loaded in-memory view. Reading this property does not restore
+    /// a Journal or throw on restore failure. Current instructions may already
+    /// make it nonempty before restoration. Use `conversationSnapshot()` for a
+    /// restored, throwing view; history cannot establish that a disk Session is empty.
     public private(set) var history: [ModelMessage]
     public private(set) var activeRunID: UUID?
     private let defaultBinding: AgentModelBinding
@@ -312,6 +316,8 @@ public actor AgentSession {
         return try await journal.followUpText(sessionID: id, inputID: inputID)
     }
 
+    /// `after` is exclusive. `nil` includes ordinal 0; continue with the last
+    /// returned ordinal. This differs from Journal message pagination.
     public func followUps(after ordinal: UInt64? = nil, limit: Int = 100) async throws -> [AgentFollowUpRecord] {
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
         return try await journal.followUps(sessionID: id, after: ordinal, limit: limit)
@@ -642,6 +648,7 @@ public actor AgentSession {
             evidenceLedger: evidenceLedger,
             mutationAdmission: journal,
             checkpoint: { messages, steering in try await self.record(messages, steering: steering, runID: runID, budget: budget) },
+            sourceRevision: { messages in try await self.projectionSourceRevision(messages, runID: runID) },
             checkReplanningSafety: { operationID in
                 guard let journal, journal.storage == .durable else { return false }
                 return try await !journal.hasRelatedPendingMutation(sessionID: self.id, operationID: operationID)
@@ -928,6 +935,12 @@ public actor AgentSession {
             }
             throw error
         }
+    }
+
+    private func projectionSourceRevision(_ messages: [ModelMessage], runID: UUID) throws -> UInt64 {
+        guard activeRunID == runID else { throw CancellationError() }
+        guard history == messages else { throw AgentModelBindingError.invalidProjection }
+        return conversationRevision
     }
 
     private var nextConversationRevision: UInt64? {

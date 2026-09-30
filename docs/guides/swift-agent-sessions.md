@@ -1,5 +1,30 @@
 # SwiftAgent Sessions and Runs
 
+## Reading a reopened Session
+
+`await session.history` returns the currently loaded in-memory view. It does
+not initiate Journal restoration or report storage failures. Current runtime
+instructions can make it nonempty before restoration; neither an empty nor a
+nonempty array establishes whether a disk conversation exists.
+
+Use the throwing snapshot API when resuming a durable conversation:
+
+```swift
+import AgentCore
+import AgentJournalFileStore
+
+let reopenedJournal = try AgentIncrementalJournal.open(at: hostStoreDirectory)
+let resumed = try agent.makeSession(id: savedSessionID, journal: reopenedJournal)
+let snapshot = try await resumed.conversationSnapshot()
+// snapshot.messages restores formal history and uses this Agent's current instructions.
+// A missing/damaged/closed store throws; it is not treated as an empty conversation.
+```
+
+The snapshot revision belongs to this live Session actor, not a durable commit
+counter. See [Context](swift-agent-context.md) for candidate preflight and
+projection source coordinates. This does not change synchronous history access
+or introduce asynchronous Session construction.
+
 ## RC6 candidate: Host-enforced audited authorization
 
 `AgentConfiguration.authorization` defaults to legacy. Required audit is

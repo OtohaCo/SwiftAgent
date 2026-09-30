@@ -195,6 +195,11 @@ package struct AgentLoop: Sendable {
             if modelTurns > 0 && !provider.descriptor.capabilities.contains(.multiTurn) {
                 throw AgentLoopError.unsupportedCapabilities(.multiTurn)
             }
+            if let sourceRevision = lifecycle?.sourceRevision {
+                // A tool batch may publish several canonical checkpoints. Its
+                // source revision is the Session's actual revision, not a turn count.
+                projectionRevision = try await sourceRevision(history)
+            }
             modelTurns += 1
             try await emitter?.send(.turnStarted(modelTurns))
             try budget.checkActive()
@@ -519,7 +524,24 @@ package struct AgentLoop: Sendable {
                 }
             }
         }
-        let projection = try await binding.projector.project(.init(
+        if let requirements = binding.projector as? any AgentContextReadOnlyGroupReferencing {
+            guard requirements.readOnlyGroupCallIDs.count <= 256 else {
+                throw AgentContextPipelineError.tooManyMaterials
+            }
+            var requested: Set<ToolCallID> = []
+            for anchor in requirements.readOnlyGroupCallIDs {
+                guard let group = AgentResolvedReadOnlyToolProjector.closedGroup(containing: anchor, in: messages),
+                      requested.count + group.results.count <= 256 else {
+                    throw AgentContextProjectionError.unresolvedReadOnlySpan(anchor)
+                }
+                for id in group.results.keys {
+                    requested.insert(id)
+                    if let proof = await contextEffects.proof(for: id) { verifiedReadOnlyResults[id] = proof }
+                }
+            }
+        }
+        let sourceEncoding = try AgentContextProjectionSource.measure(messages: messages)
+        var projectionInput = AgentContextProjectionInput(
             canonicalMessages: messages,
             model: model,
             sessionID: sessionID,
@@ -529,16 +551,18 @@ package struct AgentLoop: Sendable {
             modelTurn: modelTurn,
             formalMessageIDs: formalMessageIDs,
             verifiedReadOnlyResults: verifiedReadOnlyResults
-        ))
-        let sourceDigest = try AgentContextProjectionSource.digest(messages: messages)
+        )
+        projectionInput.bindSourceEncoding(sourceEncoding)
+        let projection = try await binding.projector.project(projectionInput)
         guard projection.plan.sourceRevision == conversationRevision,
-              projection.plan.sourceDigest == sourceDigest,
+              projection.plan.sourceDigest == sourceEncoding.digest,
               projection.plan.contextEpoch == contextEpoch,
               validToolPairs(projection.messages, allowUnresolvedToolTail: allowUnresolvedToolTail) else {
             throw AgentModelBindingError.invalidProjection
         }
         try validateContinuations(projection.messages)
-        let requestBytes = try AgentContextWindow.encodedByteCount(projection.messages)
+        let requestBytes = sharesCanonicalMessageStorage(projection.messages, messages)
+            ? sourceEncoding.byteCount : try AgentContextWindow.encodedByteCount(projection.messages)
         if let modelContextByteLimit {
             let bytes = requestBytes
             guard bytes <= modelContextByteLimit else {
