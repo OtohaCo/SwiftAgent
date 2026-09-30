@@ -1,7 +1,8 @@
 import AgentModels
+import Foundation
 
 enum ProviderHTTPFailure {
-    static func classify(_ status: Int, headers: [String: String]) -> ModelProviderError {
+    static func classify(_ status: Int, headers: [String: String], now: Date = Date()) -> ModelProviderError {
         let kind: ModelProviderError.Kind
         switch status {
         case 401: kind = .authentication
@@ -12,8 +13,8 @@ enum ProviderHTTPFailure {
         case 400...499: kind = .invalidRequest
         default: kind = .invalidResponse
         }
-        let retry = headers.first { $0.key.lowercased() == "retry-after" }.flatMap { Int($0.value) }
+        let retry = headers.first { $0.key.lowercased() == "retry-after" }.flatMap { ProviderRetryAfter.parse($0.value, now: now) }
         return .init(kind: kind, message: "Provider HTTP request failed (\(status)).",
-                     retryAfter: retry.flatMap { $0 >= 0 ? .seconds($0) : nil })
+                     retryAfter: retry)
     }
 }
