@@ -214,3 +214,8 @@ already in 1.0, as `StopReason.unknown` does.
   declare
 - Compatibility for `package` APIs, test helpers, or WorkspaceAgent host types
   as if they were the Core SDK
+
+The additive `AgentContextProjectionInput.sourceDigest()` method lets projectors
+reuse the runtime's frozen source measurement. Its cache is excluded from
+Codable, equality and hashing; decoded inputs do not acquire a trusted runtime
+cache. There is no digest, Journal schema, Provider request or budget change.

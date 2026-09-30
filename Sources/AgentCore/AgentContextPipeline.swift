@@ -449,7 +449,7 @@ public struct AgentCompositeContextProjector: AgentContextSourceReferencing {
         return .init(messages: messages, plan: .init(
             projectionID: "source-bound-composite", version: policyVersion,
             sourceRevision: input.conversationRevision,
-            sourceDigest: try AgentContextProjectionSource.digest(messages: input.canonicalMessages),
+            sourceDigest: try input.sourceDigest(),
             contextEpoch: input.contextEpoch, lossy: !summaries.isEmpty || !excerpts.isEmpty || omitted > 0,
             reason: !summaries.isEmpty || !excerpts.isEmpty || omitted > 0 ? "Host-approved derived context." : nil
         ), report: report)
