@@ -219,3 +219,9 @@ The additive `AgentContextProjectionInput.sourceDigest()` method lets projectors
 reuse the runtime's frozen source measurement. Its cache is excluded from
 Codable, equality and hashing; decoded inputs do not acquire a trusted runtime
 cache. There is no digest, Journal schema, Provider request or budget change.
+
+Resolved read-only group projection now requires proof for all removed calls and
+the resolving call. This stricter behavior can reject previously accepted Host
+spans. `AgentContextReadOnlyGroupReferencing` is additive; wrappers must forward
+its requirements. Existing source/Codable proof fields and schema 3/4/5 stay
+unchanged. Reopened Sessions conservatively reject spans without live proof.

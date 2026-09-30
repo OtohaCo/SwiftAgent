@@ -524,6 +524,22 @@ package struct AgentLoop: Sendable {
                 }
             }
         }
+        if let requirements = binding.projector as? any AgentContextReadOnlyGroupReferencing {
+            guard requirements.readOnlyGroupCallIDs.count <= 256 else {
+                throw AgentContextPipelineError.tooManyMaterials
+            }
+            var requested: Set<ToolCallID> = []
+            for anchor in requirements.readOnlyGroupCallIDs {
+                guard let group = AgentResolvedReadOnlyToolProjector.closedGroup(containing: anchor, in: messages),
+                      requested.count + group.results.count <= 256 else {
+                    throw AgentContextProjectionError.unresolvedReadOnlySpan(anchor)
+                }
+                for id in group.results.keys {
+                    requested.insert(id)
+                    if let proof = await contextEffects.proof(for: id) { verifiedReadOnlyResults[id] = proof }
+                }
+            }
+        }
         let sourceEncoding = try AgentContextProjectionSource.measure(messages: messages)
         var projectionInput = AgentContextProjectionInput(
             canonicalMessages: messages,

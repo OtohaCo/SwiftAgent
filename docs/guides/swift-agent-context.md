@@ -232,3 +232,24 @@ canonically equivalent strings can encode different UTF-8. The cache contains
 only a digest and byte count, is scoped to the current input, and retains no
 encoded message buffer. Custom projectors that calculate their own digest can
 still incur another encoding. Provider payload encoding is separate.
+
+### Resolved read-only groups
+
+`AgentResolvedReadOnlyToolProjector` verifies every call/result in the entire
+failed group before replacing it, plus the successful resolving call. Core
+supplies process-local proof after each committed read-only result, including
+explicitly model-visible recoverable failures. The proof binds the actual call
+ID, tool name and exact result digest (including error status); a failed result
+is not itself proof of no side effects. Mutation siblings are never certified
+from current tool policy, output text or model claims. Missing, ambiguous or
+mismatched proof rejects the projection. Empty spans retain the original view.
+
+A transparent wrapper must implement `AgentContextReadOnlyGroupReferencing` and
+forward `readOnlyGroupCallIDs`. These requirements collect complete-group proof
+from the Session's own ledger, including for memory Sessions. They do not grant
+Journal write or executor access. Reopening or changing tools cannot recreate
+old process-local proof; preserve the canonical view instead of reclassifying
+historical calls. Direct constructed projector inputs are a trusted Host seam,
+not an authentication API. Canonical history, Receipts and audit records remain
+unchanged: this corrects request-view eligibility, not an execution permission
+bypass. Existing tool excerpts still require a successful read-only result.
