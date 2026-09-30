@@ -10,6 +10,7 @@ package actor AgentAuditRuntime {
     let identity: AgentAuthorizationIdentity
     private let work = AgentAuditWorkDrain()
     private var received: [ToolCallID: AuditRecordLinks] = [:]
+    private var unprepared: [UUID: AuditRecordLinks] = [:]
     private var previousProposal: [String: UUID] = [:]
     private var captured = 0
 
@@ -31,7 +32,7 @@ package actor AgentAuditRuntime {
             sessionID: scope.sessionID, runID: scope.runID, invocationID: UUID(),
             modelCallID: Self.prefix(call.id.rawValue, bytes: 512), proposalID: UUID(),
             operationID: bounded ? mutationIdentity : nil, logicalOperationID: operationID,
-            relatedProposalID: previousProposal[Self.prefix(call.name, bytes: 512)])
+            relatedProposalID: previousProposal[Self.prefix(call.name, bytes: 512)] ?? configuration.relatedProposalID)
         let proposal = AuditProposal(stage: .received, toolName: Self.prefix(call.name, bytes: 512),
             rawArgumentsJSON: bounded ? call.argumentsJSON : Self.prefix(call.argumentsJSON, bytes: 4096),
             normalizedArguments: nil, originalUTF8Bytes: call.argumentsJSON.utf8.count,
@@ -40,25 +41,27 @@ package actor AgentAuditRuntime {
             actionDigest: nil, identity: identity, scope: scope)
         try await journal.appendAudit([.init(links: links, fact: .proposal(proposal))], admitsNewWork: true)
         received[call.id] = links
+        unprepared[links.invocationID] = links
         previousProposal[proposal.toolName] = links.proposalID
         if !bounded {
             try await rejected(call.id, reason: "proposal_too_large")
             throw AgentAuthorizationError.proposalTooLarge
         }
+        await configuration.testingHooks?.receivedCommitted?()
     }
 
     func prepare(_ call: PreparedToolCall, deadline: ContinuousClock.Instant) async throws -> PreparedToolCall {
         guard let links = received[call.call.id] else { throw AgentAuthorizationError.auditUnavailable }
         let arguments = try JSONValue.decodeToolArguments(call.call.argumentsJSON)
         try Self.validateBinding(call.binding, resources: call.resources)
-        let material = Action(version: 1, scope: scope, identity: identity, definition: call.definition,
+        let material = Action(version: 1, scope: scope, relatedProposalID: links.relatedProposalID, identity: identity, definition: call.definition,
             policy: call.policy, binding: call.binding, arguments: arguments, resources: call.resources,
             receiptExpectation: call.receiptExpectation)
         let bytes = try AuditEncoding.encode(material)
         guard bytes.count <= 128 * 1024 else { throw AgentAuthorizationError.proposalTooLarge }
         let digest = "sha256-action-v1:" + (try await journal.auditDigest(bytes))
         let request = AuthorizationRequest(version: 1, requestID: UUID(), authorizationID: UUID(),
-            invocationID: links.invocationID, proposalID: links.proposalID, modelCallID: call.call.id,
+            invocationID: links.invocationID, proposalID: links.proposalID, relatedProposalID: links.relatedProposalID, modelCallID: call.call.id,
             actionDigest: digest, scope: scope, identity: identity, policyGeneration: configuration.scope.policyGeneration,
             toolDefinition: call.definition, toolPolicy: call.policy, normalizedArguments: arguments,
             binding: call.binding, resources: call.resources, receiptExpectation: call.receiptExpectation,
@@ -69,6 +72,8 @@ package actor AgentAuditRuntime {
             binding: call.binding, resources: call.resources, receiptExpectation: call.receiptExpectation,
             actionDigest: digest, identity: identity, scope: scope)
         try await journal.appendAudit([.init(links: links.authorizing(request), fact: .proposal(proposal))])
+        received[call.call.id] = links.authorizing(request)
+        unprepared.removeValue(forKey: links.invocationID)
         return call.boundToAudit(AgentAuditInvocation(request: request, links: links.authorizing(request),
             journal: journal, configuration: configuration, work: work))
     }
@@ -79,12 +84,29 @@ package actor AgentAuditRuntime {
             .init(links: links, fact: .authorization(.init(layer: .enterprise, status: .notEvaluated, reasonCode: reason))),
             .init(links: links, fact: .disposition(.init(state: .notExecuted, reasonCode: reason))),
         ])
+        unprepared.removeValue(forKey: links.invocationID)
     }
 
+    func rejectUnprepared(_ error: any Error) async throws {
+        while !unprepared.isEmpty {
+            let pending = Array(unprepared.values.prefix(32))
+            let drafts = pending.flatMap { links in [
+                JournalAuditDraft(links: links, fact: .authorization(.init(layer: .enterprise,
+                    status: .notEvaluated, reasonCode: AgentAuditInvocation.reason(error)))),
+                JournalAuditDraft(links: links, fact: .disposition(.init(state: .notExecuted,
+                    reasonCode: AgentAuditInvocation.reason(error)))),
+            ] }
+            try await journal.appendAudit(drafts)
+            for links in pending { unprepared.removeValue(forKey: links.invocationID) }
+        }
+    }
+
+    func beginBody() async { await work.begin() }
+    func finishBody() async { await work.end() }
     func waitForDrain() async { await work.wait() }
 
     private struct Action: Codable {
-        let version: Int; let scope: AuthorizationScope; let identity: AgentAuthorizationIdentity
+        let version: Int; let scope: AuthorizationScope; let relatedProposalID: UUID?; let identity: AgentAuthorizationIdentity
         let definition: ModelToolDefinition; let policy: ToolPolicy; let binding: ToolAuthorizationBinding
         let arguments: JSONValue; let resources: [ToolResource]; let receiptExpectation: ToolReceiptExpectation?
     }
@@ -141,6 +163,7 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
     private let lock = NSLock()
     private var expires: ContinuousClock.Instant?
     private var enterpriseEvaluated = false
+    private var enterpriseStarted = false
     private var dispatchPrepared = false
     private var admitted = false
     private var executorObserved = false
@@ -163,6 +186,7 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
         do {
             try await withOperationDeadline(deadline, timeoutError: AgentAuthorizationError.authorizerTimedOut) {
                 let decision: AuthorizationDecision
+                self.lock.withLock { self.enterpriseStarted = true }
                 do { decision = try await authorizer.decide(self.request) }
                 catch {
                     try await self.recordEnterprise(.init(layer: .enterprise, status: .incomplete,
@@ -237,8 +261,8 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
         let draft = JournalAuditDraft(links: links, fact: .disposition(.init(state: .dispatchPrepared,
             actionDigest: request.actionDigest, localPolicyGeneration: request.policyGeneration)))
         let result: ToolMutationAdmissionResult?
-        if let mutation { result = try await journal.admit(mutation, auditDrafts: [draft]) }
-        else { try await journal.appendAudit([draft], admitsNewWork: true); result = nil }
+        if let mutation { result = try await journal.admit(mutation, auditDrafts: [draft], backlog: configuration.backlog) }
+        else { try await journal.appendAudit([draft], admitsNewWork: true, backlog: configuration.backlog); result = nil }
         lock.withLock { dispatchPrepared = true }
         await configuration.testingHooks?.applicationCommitted?()
         if case .settled = result, let key = links.operationID {
@@ -280,15 +304,15 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
     func releaseFinal(_ ticket: UUID) { configuration.scope.releaseAdmission(ticket) }
 
     func failed(_ error: any Error) async throws {
-        let state = lock.withLock { () -> (Bool, Bool, Bool)? in
+        let state = lock.withLock { () -> (Bool, Bool, Bool, Bool)? in
             if failureRecorded { return nil }; failureRecorded = true
-            return (enterpriseEvaluated, dispatchPrepared, executorObserved)
+            return (enterpriseEvaluated, dispatchPrepared, executorObserved, enterpriseStarted)
         }
         guard let state else { return }
         var drafts: [JournalAuditDraft] = []
         if !state.0 {
             drafts.append(.init(links: links, fact: .authorization(.init(layer: .enterprise,
-                status: error is EvidenceError ? .notEvaluated : .incomplete, reasonCode: Self.reason(error)))))
+                status: state.3 ? .incomplete : .notEvaluated, reasonCode: Self.reason(error)))))
         }
         if state.2 { drafts.append(.init(links: links, fact: .disposition(.init(state: .executorObserved)))) }
         let unknown = request.toolPolicy.effect == .mutation && state.1 && replaySource == nil

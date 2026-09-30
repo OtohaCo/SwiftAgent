@@ -121,12 +121,18 @@ package struct AgentLoop: Sendable {
         let outcome: Result<AgentLoopResult, any Error>
         do {
             if cancelledAtCreation { throw CancellationError() }
-            outcome = .success(try await withAgentDeadline(budget.deadline) {
-                try await runBody(messages: messages, sessionID: sessionID, runID: runID,
-                                  budget: budget, structuredOutput: structuredOutput, operationID: operationID,
-                                  emitter: emitter, lifecycle: lifecycle, evidenceLedger: evidenceLedger,
-                                  initialRequest: initialRequest)
-            })
+            await audit?.beginBody()
+            outcome = .success(try await withAgentDeadline(budget.deadline, operation: {
+                do {
+                    return try await runBody(messages: messages, sessionID: sessionID, runID: runID,
+                        budget: budget, structuredOutput: structuredOutput, operationID: operationID,
+                        emitter: emitter, lifecycle: lifecycle, evidenceLedger: evidenceLedger,
+                        initialRequest: initialRequest)
+                } catch {
+                    try await audit?.rejectUnprepared(error)
+                    throw error
+                }
+            }, onOperationFinished: { await audit?.finishBody() }))
         } catch {
             outcome = .failure(error)
         }
@@ -208,12 +214,13 @@ package struct AgentLoop: Sendable {
             try budget.checkActive()
             var accumulator = ModelEventAccumulator()
             var receivedThisTurn: [ToolCallID] = []
-            var startedThisTurn: Set<ToolCallID> = []
+                var startedThisTurn: Set<ToolCallID> = []
             for try await rawEvent in provider.stream(request: request) {
                 try budget.checkActive()
                 let event = try scopeContinuation(rawEvent)
                 if let audit, case .toolCallStarted(let id, let name) = event {
-                    if id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.isEmpty
+                    if id.rawValue.utf8.count > 512 || name.utf8.count > 512
+                        || id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.isEmpty
                         || !startedThisTurn.insert(id).inserted {
                         // Only a bounded identity diagnostic is available; no claim to reconstruct fragments.
                         try await audit.capture(.init(id: id, name: name, argumentsJSON: "", completeness: .incomplete),
@@ -271,8 +278,14 @@ package struct AgentLoop: Sendable {
                 return AgentLoopResult(response: response, history: history, outcome: outcome,
                                        modelTurns: modelTurns, toolCalls: toolCalls, receipts: receipts)
             }
-            guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
-            guard response.toolCalls.count <= budget.maxToolCalls - toolCalls else { throw AgentLoopError.toolCallLimitReached }
+            guard modelTurns < budget.maxModelTurns else {
+                for call in response.toolCalls { try await audit?.rejected(call.id, reason: "model_turn_limit") }
+                throw AgentLoopError.modelTurnLimitReached
+            }
+            guard response.toolCalls.count <= budget.maxToolCalls - toolCalls else {
+                for call in response.toolCalls { try await audit?.rejected(call.id, reason: "tool_call_limit") }
+                throw AgentLoopError.toolCallLimitReached
+            }
             var preparedCalls: [PreparedToolCall] = []
             for call in response.toolCalls {
                 do {
@@ -282,7 +295,7 @@ package struct AgentLoop: Sendable {
                     idempotencyKey: Self.idempotencyKey(operationID: operationID, runID: runID, call: call),
                     argumentsJSON: call.argumentsJSON, evidenceLedger: evidenceLedger,
                     mutationAdmission: lifecycle?.mutationAdmission,
-                    executionAdmission: capabilityScope))
+                    executionAdmission: capabilityScope), prepareAuthorizationBinding: audit != nil)
                 if let allowedResources, !Set(prepared.resources).isSubset(of: allowedResources) {
                     throw AgentCapabilityError.resourceOutsideScope
                 }
@@ -290,6 +303,9 @@ package struct AgentLoop: Sendable {
                 preparedCalls.append(prepared)
                 } catch {
                     try await audit?.rejected(call.id, reason: error is AgentCapabilityError ? "resource_outside_scope" : "preparation_rejected")
+                    for sibling in response.toolCalls where sibling.id != call.id {
+                        try await audit?.rejected(sibling.id, reason: "batch_preparation_failed")
+                    }
                     throw error
                 }
             }

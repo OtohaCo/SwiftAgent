@@ -174,7 +174,10 @@ public actor AgentSession {
     ) async throws -> AgentRun {
         try Task.checkCancellation()
         try authorization.validate(journal: journal)
-        if authorization.mode == .requiredAudit { try await journal?.checkAuditAvailability(backlog: authorization.backlog) }
+        if authorization.mode == .requiredAudit {
+            try await journal?.checkAuditAvailability(backlog: authorization.backlog)
+            try await journal?.validateAuditProposalReference(authorization.relatedProposalID, sessionID: id)
+        }
         guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentSessionError.emptyInput }
         try contextPolicy.checkInput(text)
@@ -291,7 +294,10 @@ public actor AgentSession {
     /// conversation. The durable store, not this actor's memory, confirms it.
     public func enqueueFollowUp(_ input: AgentFollowUpInput) async throws -> AgentFollowUpRecord {
         try authorization.validate(journal: journal)
-        if authorization.mode == .requiredAudit { try await journal?.checkAuditAvailability(backlog: authorization.backlog) }
+        if authorization.mode == .requiredAudit {
+            try await journal?.checkAuditAvailability(backlog: authorization.backlog)
+            try await journal?.validateAuditProposalReference(authorization.relatedProposalID, sessionID: id)
+        }
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
         return try await journal.enqueueFollowUp(input, sessionID: id)
     }

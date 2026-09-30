@@ -110,14 +110,36 @@ struct AuditedAuthorizationTests {
         let snapshot = try await session.conversationSnapshot()
         let first = try await journal.auditRecords(limit: 1)
         let cursor = try #require(first.nextCursor)
+        try await seedExportFacts(journal, count: 1)
         await #expect(throws: AgentAuthorizationError.cursorMismatch) {
             try await journal.auditRecords(matching: .init(runID: run.id), cursor: cursor)
         }
         let next = try await journal.auditRecords(limit: 1, cursor: cursor)
         #expect(next.highWaterSequence == first.highWaterSequence)
         #expect(next.records.first!.sequence > first.records.first!.sequence)
+        var continuation = next.nextCursor
+        while let current = continuation {
+            let page = try await journal.auditRecords(limit: 2, cursor: current)
+            #expect(page.records.allSatisfy { $0.sequence <= first.highWaterSequence })
+            #expect(page.highWaterSequence == first.highWaterSequence)
+            continuation = page.nextCursor
+        }
+        #expect(try await journal.auditRecords(afterExclusiveSequence: first.highWaterSequence).records.count == 1)
         #expect(try await session.conversationSnapshot() == snapshot)
         try await journal.close()
+    }
+
+    @Test func legacyDoesNotEvaluateAnUnusedAuditBinding() async throws {
+        let log = EffectLog()
+        let provider = ScriptedProvider { request, _ in
+            request.messages.last?.role == .tool ? textResponse(request, "done") : toolResponse(request, [
+                .init(id: .init(rawValue: "legacy"), name: "unused_audit_binding", argumentsJSON: "{}", completeness: .complete)
+            ])
+        }
+        let run = try await Agent(model: fixtureModel, provider: provider, tools: [UnusedAuditBindingTool(log: log)])
+            .makeSession().run("read")
+        _ = try await run.wait(); try await run.waitForDrain()
+        #expect(await log.names.count == 1)
     }
 
     @Test func legacyNeedsNoAuditAndKeepsNotRequiredBehavior() async throws {
@@ -163,5 +185,16 @@ actor AuditTestAuthorizer: AgentAuthorizer {
             validFor: .seconds(30), reasonCode: "fixture")
         if roundTrip { return try JSONDecoder().decode(AuthorizationDecision.self, from: JSONEncoder().encode(decision)) }
         return decision
+    }
+}
+
+private struct UnusedAuditBindingTool: RuntimeAgentTool {
+    let runtimeDefinition = ModelToolDefinition(name: "unused_audit_binding", description: "Legacy skips the audit-only hook",
+        inputSchema: ToolSchema.object(properties: [:]).json, outputSchema: ToolSchema.string.json)
+    let policy = try! ToolPolicy.readOnly(authorization: .notRequired)
+    let log: EffectLog
+    func authorizationBinding(for input: JSONValue) throws -> ToolAuthorizationBinding { throw FixtureError.invalidOperation }
+    func execute(_ input: JSONValue, context: ToolContext) async throws -> ToolResult<JSONValue> {
+        await log.record("legacy", context); return .init(output: .string("read"))
     }
 }

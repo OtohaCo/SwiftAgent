@@ -3,6 +3,13 @@ import AgentTools
 import Foundation
 
 extension AgentJournal {
+    package func validateAuditProposalReference(_ proposalID: UUID?, sessionID: UUID) throws {
+        guard let proposalID else { return }
+        let page = try auditRecords(matching: .init(proposalID: proposalID), limit: 1)
+        guard let record = page.records.first, record.links.sessionID == sessionID,
+              case .proposal = record.fact else { throw AgentAuthorizationError.invalidProposalReference }
+    }
+
     package func auditDigest(_ bytes: Data) throws -> String {
         guard let store, supportsAuthorizationAudit else { throw AgentAuthorizationError.auditStoreRequired }
         return store.auditDigest(bytes)
@@ -28,10 +35,12 @@ extension AgentJournal {
         }
     }
 
-    package func appendAudit(_ drafts: [JournalAuditDraft], admitsNewWork: Bool = false) throws {
+    package func appendAudit(_ drafts: [JournalAuditDraft], admitsNewWork: Bool = false,
+                             backlog: AuditBacklogPolicy? = nil) throws {
         guard !closing else { throw AgentJournalError.storeClosed }
         guard let store, supportsAuthorizationAudit else { throw AgentAuthorizationError.auditStoreRequired }
         try writeStore(store) { view in
+            try checkAuditBacklog(backlog, view: view)
             let records = try makeAuditRecords(drafts, view: view, journalSequence: view.nextRecordSequence())
             try view.publishAudit(.init(records: records, admitsNewWork: admitsNewWork))
         }
@@ -43,13 +52,19 @@ extension AgentJournal {
         guard let store, supportsAuthorizationAudit else { throw AgentAuthorizationError.auditStoreRequired }
         try store.read { view in
             let highWater = try view.auditHighWater()
-            if let backlog {
-                let acknowledged = try view.auditExportCheckpoint(backlog.exportConfigurationID)?.throughSequence ?? 0
-                guard acknowledged <= highWater,
-                      highWater - acknowledged < backlog.maximumUnacknowledgedRecords else {
-                    throw AgentAuthorizationError.backlogExceeded
-                }
-            }
+            // Bounded check of the latest published typed payload/index, without a history scan.
+            if highWater > 0 { _ = try view.auditRecord(sequence: highWater) }
+            try checkAuditBacklog(backlog, view: view)
+        }
+    }
+
+    func checkAuditBacklog(_ backlog: AuditBacklogPolicy?, view: any JournalStoreView) throws {
+        guard let backlog else { return }
+        let highWater = try view.auditHighWater()
+        let acknowledged = try view.auditExportCheckpoint(backlog.exportConfigurationID)?.throughSequence ?? 0
+        guard acknowledged <= highWater,
+              highWater - acknowledged < backlog.maximumUnacknowledgedRecords else {
+            throw AgentAuthorizationError.backlogExceeded
         }
     }
 

@@ -15,7 +15,7 @@ package struct AnyAgentTool: Sendable {
         let preauthorize: @Sendable (ToolContext) async throws -> Void
         let invoke: Invocation
     }
-    private let decode: @Sendable (JSONValue) throws -> PreparedInvocation
+    private let decode: @Sendable (JSONValue, Bool) throws -> PreparedInvocation
 
     package init<T: AgentTool>(_ tool: T) throws {
         let definition = tool.definition
@@ -27,7 +27,7 @@ package struct AnyAgentTool: Sendable {
         self.definition = definition
         let policy = tool.policy
         self.policy = policy
-        decode = { arguments in
+        decode = { arguments, prepareAuthorizationBinding in
             let input: T.Input
             do {
                 input = try JSONDecoder().decode(T.Input.self, from: JSONEncoder().encode(arguments))
@@ -41,7 +41,7 @@ package struct AnyAgentTool: Sendable {
             try ToolResource.validate(resources)
             if policy.evidence == .required { try EvidenceLedger.checkRequirements(requirements) }
             let receiptExpectation = try tool.receiptExpectation(for: input)
-            let binding = try tool.authorizationBinding(for: input)
+            let binding = prepareAuthorizationBinding ? try tool.authorizationBinding(for: input) : .init()
             let requiresReceipt = policy.effect == .mutation || policy.idempotency == .requiresReceipt || receiptExpectation != nil
             if policy.effect == .readOnly && requiresReceipt && receiptExpectation == nil {
                 throw ToolInvocationError.receiptValidationUnavailable
@@ -217,8 +217,8 @@ package struct AnyAgentTool: Sendable {
         try await context.requireEvidence(requirements)
     }
 
-    package func prepare(arguments: JSONValue) throws -> PreparedInvocation {
-        try decode(arguments)
+    package func prepare(arguments: JSONValue, prepareAuthorizationBinding: Bool = false) throws -> PreparedInvocation {
+        try decode(arguments, prepareAuthorizationBinding)
     }
 
     package func invoke(arguments: JSONValue, context: ToolContext) async throws -> ToolResult<JSONValue> {

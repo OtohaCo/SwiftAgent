@@ -39,6 +39,7 @@ public struct AuthorizationRequest: Sendable, Equatable {
     public let authorizationID: UUID
     public let invocationID: UUID
     public let proposalID: UUID
+    public let relatedProposalID: UUID?
     public let modelCallID: ToolCallID
     public let actionDigest: String
     public let scope: AuthorizationScope
@@ -149,15 +150,18 @@ public struct AgentAuthorizationConfiguration: Sendable {
     public let authorizerTimeout: Duration
     public let maximumDecisionLifetime: Duration
     public let backlog: AuditBacklogPolicy?
+    /// Host-selected lineage for a newly dispatched Run, never an approval credential.
+    public let relatedProposalID: UUID?
     var testingHooks: AgentAuditTestingHooks? = nil
 
     public init(mode: AgentAuthorizationMode = .legacy, authorizer: (any AgentAuthorizer)? = nil,
                 identity: AgentAuthorizationIdentity? = nil, scope: AgentAuthorizationScope = .init(),
                 authorizerTimeout: Duration = .seconds(30), maximumDecisionLifetime: Duration = .seconds(300),
-                backlog: AuditBacklogPolicy? = nil) {
+                backlog: AuditBacklogPolicy? = nil, relatedProposalID: UUID? = nil) {
         self.mode = mode; self.authorizer = authorizer; self.identity = identity; self.scope = scope
         self.authorizerTimeout = authorizerTimeout; self.maximumDecisionLifetime = maximumDecisionLifetime
         self.backlog = backlog
+        self.relatedProposalID = relatedProposalID
     }
 
     package func validate(journal: AgentJournal?) throws {
@@ -176,6 +180,7 @@ public struct AgentAuthorizationConfiguration: Sendable {
 }
 
 struct AgentAuditTestingHooks: Sendable {
+    var receivedCommitted: (@Sendable () async -> Void)? = nil
     var beforeApplication: (@Sendable () async -> Void)? = nil
     var applicationCommitted: (@Sendable () async -> Void)? = nil
     var finalAdmitted: (@Sendable () async -> Void)? = nil
@@ -198,7 +203,7 @@ public struct AuditBacklogPolicy: Sendable {
 
 public enum AgentAuthorizationError: Error, Equatable, Sendable {
     case auditStoreRequired, missingAuthorizer, missingIdentity, invalidConfiguration
-    case auditUnavailable, proposalTooLarge, tooManyInvocations, invalidDecision
+    case auditUnavailable, proposalTooLarge, tooManyInvocations, invalidDecision, invalidProposalReference
     case authorizationDenied, requiresUserAction, authorizerFailed, authorizerTimedOut
     case actionChanged, expired, revoked, policyGenerationMismatch
     case invalidQuery, cursorMismatch, invalidAcknowledgement, staleExporter, exporterInUse, exporterStopped

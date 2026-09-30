@@ -100,6 +100,8 @@ public struct AuditExportStatus: Sendable, Equatable {
     public let observedHighWaterSequence: UInt64
     public let batchesAttempted: UInt64
     public let lastFailure: AgentAuthorizationError?
+    /// Preserve a typed local publication failure, including commitUnknown requiring reopen.
+    public let journalFailure: AgentJournalError?
     public var backlogRecords: UInt64 { observedHighWaterSequence - min(acknowledgedThroughSequence, observedHighWaterSequence) }
 }
 
@@ -121,6 +123,7 @@ public actor AuditExporter {
     private var highWater: UInt64
     private var attempts: UInt64 = 0
     private var failure: AgentAuthorizationError?
+    private var journalFailure: AgentJournalError?
 
     init(id: UUID, journal: AgentJournal, configuration: AuditExportConfiguration, digest: String,
          sink: any AuditExportSink, redactor: (any AuditExportRedactor)?, acknowledged: UInt64, highWater: UInt64) {
@@ -134,7 +137,7 @@ public actor AuditExporter {
     public func status() -> AuditExportStatus {
         .init(exporterID: id, stopped: stopped, physicallyDrained: drained,
               acknowledgedThroughSequence: acknowledged, observedHighWaterSequence: highWater,
-              batchesAttempted: attempts, lastFailure: failure)
+              batchesAttempted: attempts, lastFailure: failure, journalFailure: journalFailure)
     }
 
     private func pump() async {
@@ -174,6 +177,7 @@ public actor AuditExporter {
             }
         } catch {
             if let error = error as? AgentAuthorizationError { failure = error }
+            else if let error = error as? AgentJournalError { journalFailure = error; failure = .auditUnavailable }
             else if error is CancellationError { failure = .exporterStopped }
             else { failure = .auditUnavailable }
         }
@@ -212,6 +216,7 @@ public actor AuditExporter {
             "invocationID": .string(record.links.invocationID.uuidString), "proposalID": .string(record.links.proposalID.uuidString),
         ]
         if let id = record.links.authorizationID { view["authorizationID"] = .string(id.uuidString) }
+        if let id = record.links.relatedProposalID { view["relatedProposalID"] = .string(id.uuidString) }
         switch record.fact {
         case .proposal(let p):
             view["kind"] = .string("proposal"); view["stage"] = .string(p.stage.rawValue)

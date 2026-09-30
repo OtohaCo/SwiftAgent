@@ -129,6 +129,169 @@ struct AuditBoundaryTests {
         }
     }
 
+    @Test(arguments: ["id", "name"])
+    func oversizeStreamingIdentityIsBoundedBeforeAccumulatorCopy(_ field: String) async throws {
+        let directory = auditTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "stream-limit", supportsAuthorizationAudit: true)
+        let authorizer = AuditTestAuthorizer(), log = EffectLog()
+        let enormous = String(repeating: "界", count: 1024)
+        let call = ToolCall(id: .init(rawValue: field == "id" ? enormous : "call"), name: field == "name" ? enormous : "add",
+            argumentsJSON: #"{"lhs":1,"rhs":2}"#, completeness: .complete)
+        let run = try await Agent(model: fixtureModel, provider: ScriptedProvider { request, _ in toolResponse(request, [call]) },
+            tools: [try AddTool(log: log)], configuration: .init(authorization: auditTestConfiguration(authorizer: authorizer)))
+            .makeSession(journal: journal).run("test")
+        await #expect(throws: AgentAuthorizationError.proposalTooLarge) { try await run.wait() }
+        try await run.waitForDrain()
+        #expect(await authorizer.requests.isEmpty)
+        #expect(await log.names.isEmpty)
+        let facts = try await journal.auditRecords(includeRestrictedPayload: true).records
+        #expect(facts.allSatisfy { $0.links.modelCallID.utf8.count <= 512 })
+        #expect(facts.contains { if case .proposal(let p) = $0.fact { return p.payloadTruncated && !p.reconstructable && p.toolName.utf8.count <= 512 }; return false })
+        try await journal.close()
+    }
+
+    @Test func rawRepresentationsUseExistingCanonicalSemanticsInAConcurrentBatch() async throws {
+        let directory = auditTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "canonical", supportsAuthorizationAudit: true)
+        let authorizer = AuditTestAuthorizer(), log = EffectLog()
+        let raw = [#"{"lhs":1,"rhs":2}"#, "{ \"rhs\": 2, \"lhs\": 1 }"]
+        let provider = ScriptedProvider { request, _ in
+            if request.messages.last?.role == .tool { return textResponse(request, "done") }
+            return toolResponse(request, raw.enumerated().map { .init(id: .init(rawValue: "call-\($0.offset)"), name: "add", argumentsJSON: $0.element, completeness: .complete) })
+        }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [try AddTool(log: log)],
+            configuration: .init(authorization: auditTestConfiguration(authorizer: authorizer))).makeSession(journal: journal)
+        let run = try await session.run("add twice")
+        _ = try await run.wait(); try await run.waitForDrain()
+        let requests = await authorizer.requests
+        #expect(requests.count == 2)
+        #expect(requests.first?.normalizedArguments == requests.last?.normalizedArguments)
+        // Lineage is an additional bound field; canonical parameter equality does not erase it.
+        #expect(requests.first?.relatedProposalID == nil)
+        #expect(requests.last?.relatedProposalID == requests.first?.proposalID)
+        #expect(requests.first?.actionDigest != requests.last?.actionDigest)
+        #expect(requests.first?.requestID != requests.last?.requestID)
+        #expect(await log.names.count == 2)
+        #expect(try await journal.pendingMutations().isEmpty)
+        let facts = try await journal.auditRecords(matching: .init(runID: run.id), includeRestrictedPayload: true).records
+        let saved = facts.compactMap { if case .proposal(let p) = $0.fact { return p.rawArgumentsJSON }; return nil }
+        #expect(Set(saved) == Set(raw))
+        let history = await session.history
+        #expect(history.filter { $0.role == .tool }.count == 2)
+        #expect(facts.filter { if case .result(let r) = $0.fact { return r.kind == .readOnlyOutput && r.receipt == nil }; return false }.count == 2)
+        try await journal.close()
+    }
+
+    @Test func capturedProposalCleanupHasAnOwnerUntilTheAuditWorkerExits() async throws {
+        let directory = auditTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "capture-drain", supportsAuthorizationAudit: true)
+        let entered = AuditGate(), release = AuditGate(), scope = AgentAuthorizationScope(), authorizer = AuditTestAuthorizer(), log = EffectLog()
+        var authorization = AgentAuthorizationConfiguration(mode: .requiredAudit, authorizer: authorizer,
+            identity: auditTestConfiguration().identity, scope: scope)
+        authorization.testingHooks = .init(receivedCommitted: { await entered.open(); await release.wait() })
+        let run = try await Agent(model: fixtureModel, provider: ScriptedProvider { request, _ in toolResponse(request, [
+            .init(id: .init(rawValue: "received"), name: "add", argumentsJSON: #"{"lhs":1,"rhs":2}"#, completeness: .complete)
+        ]) }, tools: [try AddTool(log: log)], configuration: .init(authorization: authorization))
+            .makeSession(journal: journal).run("add")
+        await entered.wait(); await run.cancel()
+        await #expect(throws: CancellationError.self) { try await run.wait() }
+        await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
+        #expect(await authorizer.requests.isEmpty)
+        await release.open(); try await run.waitForDrain(); try await scope.waitForDrain()
+        let facts = try await journal.auditRecords(matching: .init(runID: run.id)).records
+        #expect(facts.contains { if case .authorization(let a) = $0.fact { return a.status == .notEvaluated }; return false })
+        #expect(facts.contains { if case .disposition(let d) = $0.fact { return d.state == .notExecuted }; return false })
+        #expect(await log.names.isEmpty)
+        try await journal.close()
+    }
+
+    @Test(arguments: ["budget", "batch"])
+    func completedUndispatchedProposalsRecordNotEvaluatedForEveryInstance(_ reason: String) async throws {
+        let directory = auditTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "not-dispatched", supportsAuthorizationAudit: true)
+        let log = EffectLog(), authorizer = AuditTestAuthorizer()
+        let calls = [ToolCall(id: .init(rawValue: "first"), name: "add", argumentsJSON: #"{"lhs":1,"rhs":2}"#, completeness: .complete),
+            .init(id: .init(rawValue: "second"), name: "unknown", argumentsJSON: "{}", completeness: .complete)]
+        let run = try await Agent(model: fixtureModel, provider: ScriptedProvider { request, _ in toolResponse(request, calls) },
+            tools: [try AddTool(log: log)], configuration: .init(maxToolCalls: reason == "budget" ? 0 : 8,
+                authorization: auditTestConfiguration(authorizer: authorizer))).makeSession(journal: journal).run("test")
+        await #expect(throws: (any Error).self) { try await run.wait() }
+        try await run.waitForDrain()
+        let facts = try await journal.auditRecords(matching: .init(runID: run.id)).records
+        #expect(facts.filter { if case .authorization(let a) = $0.fact { return a.status == .notEvaluated }; return false }.count == 2)
+        #expect(facts.filter { if case .disposition(let d) = $0.fact { return d.state == .notExecuted }; return false }.count == 2)
+        #expect(await authorizer.requests.isEmpty)
+        #expect(await log.names.isEmpty)
+        try await journal.close()
+    }
+
+    @Test func missingLatestAuditPayloadRefusesInputBeforeProviderContact() async throws {
+        let directory = auditTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "missing-payload", supportsAuthorizationAudit: true)
+        try await seedExportFacts(journal, count: 1)
+        try await journal.close()
+        let folder = directory.appendingPathComponent("audit-records")
+        let files = try #require(FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey])).allObjects.compactMap { $0 as? URL }
+        for file in files where (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+            try FileManager.default.removeItem(at: file)
+        }
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let provider = ScriptedProvider { request, _ in textResponse(request, "unused") }
+        let session = try Agent(model: fixtureModel, provider: provider,
+            configuration: .init(authorization: auditTestConfiguration())).makeSession(journal: reopened)
+        await #expect(throws: (any Error).self) { try await session.run("blocked") }
+        #expect(await provider.log.requests.isEmpty)
+        #expect(await session.history.isEmpty)
+        try await reopened.close()
+    }
+
+    @Test func correctedRedispatchLinksTheOriginalProposalWithoutReusingItsDecision() async throws {
+        let directory = auditTestDirectory(), otherDirectory = auditTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory); try? FileManager.default.removeItem(at: otherDirectory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "lineage", supportsAuthorizationAudit: true)
+        let waiting = AuditTestAuthorizer(outcome: .requiresUserAction), probe = AuditExecutionProbe()
+        let firstSession = try Agent(model: fixtureModel, provider: AuditExecutionProvider(), tools: [try AuditExecutionTool(probe: probe)],
+            configuration: .init(authorization: auditTestConfiguration(authorizer: waiting))).makeSession(journal: journal)
+        let first = try await firstSession.run("write", operationID: "same-business")
+        await #expect(throws: AgentAuthorizationError.requiresUserAction) { try await first.wait() }
+        try await first.waitForDrain()
+        let original = try #require(await waiting.requests.first)
+        let current = AuditTestAuthorizer()
+        let authorization = AgentAuthorizationConfiguration(mode: .requiredAudit, authorizer: current,
+            identity: auditTestConfiguration().identity, relatedProposalID: original.proposalID)
+        let provider = ScriptedProvider { request, _ in
+            request.messages.last?.role == .tool ? textResponse(request, "done") : toolResponse(request, [
+                .init(id: .init(rawValue: "corrected"), name: AuditExecutionTool.name, argumentsJSON: #"{"id":"B"}"#, completeness: .complete)
+            ])
+        }
+        let agent = try Agent(model: fixtureModel, provider: provider, tools: [try AuditExecutionTool(probe: probe)],
+            configuration: .init(authorization: authorization))
+        let corrected = try await agent.makeSession(id: firstSession.id, journal: journal).run("corrected", operationID: "same-business")
+        _ = try await corrected.wait(); try await corrected.waitForDrain()
+        let request = try #require(await current.requests.first)
+        #expect(request.relatedProposalID == original.proposalID)
+        #expect(request.proposalID != original.proposalID && request.requestID != original.requestID)
+        #expect(request.actionDigest != original.actionDigest)
+        #expect(await probe.executorEntered == 1)
+        let originalFacts = try await journal.auditRecords(matching: .init(proposalID: original.proposalID)).records
+        #expect(originalFacts.contains { if case .authorization(let a) = $0.fact { return a.decision?.outcome == .requiresUserAction }; return false })
+        #expect(try await journal.auditRecords(matching: .init(runID: corrected.id)).records.allSatisfy { $0.links.relatedProposalID == original.proposalID })
+        let requestsBefore = await provider.log.requests.count
+        let foreignSession = try agent.makeSession(journal: journal)
+        await #expect(throws: AgentAuthorizationError.invalidProposalReference) { try await foreignSession.run("foreign") }
+        let other = try AgentIncrementalJournal.create(at: otherDirectory, operationDomain: "lineage", supportsAuthorizationAudit: true)
+        await #expect(throws: AgentAuthorizationError.invalidProposalReference) {
+            try await agent.makeSession(id: firstSession.id, journal: other).run("foreign")
+        }
+        #expect(await provider.log.requests.count == requestsBefore)
+        try await other.close(); try await journal.close()
+    }
+
     @Test func runtimeDefinedToolAndForgedApprovalFieldsStillUseTheHost() async throws {
         let directory = auditTestDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -183,6 +346,37 @@ struct AuditBoundaryTests {
         #expect(await exporter.status().physicallyDrained == false)
         await release.open(); try await exporter.waitForDrain()
         #expect(await exporter.status().acknowledgedThroughSequence == 0)
+        try await journal.close()
+    }
+
+    @Test(arguments: [false, true])
+    func backlogIsRecheckedInTheApplicationTransaction(_ mutation: Bool) async throws {
+        let directory = auditTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "atomic-backlog", supportsAuthorizationAudit: true)
+        let entered = AuditGate(), release = AuditGate(), probe = AuditExecutionProbe(), log = EffectLog(), authorizer = AuditTestAuthorizer()
+        var authorization = AgentAuthorizationConfiguration(mode: .requiredAudit, authorizer: authorizer,
+            identity: auditTestConfiguration().identity, backlog: .init(exportConfigurationID: "offline", maximumUnacknowledgedRecords: 16))
+        authorization.testingHooks = .init(beforeApplication: { await entered.open(); await release.wait() })
+        let provider = ScriptedProvider { request, _ in toolResponse(request, [
+            .init(id: .init(rawValue: "call"), name: mutation ? AuditExecutionTool.name : "add",
+                argumentsJSON: mutation ? #"{"id":"A"}"# : #"{"lhs":1,"rhs":2}"#, completeness: .complete)
+        ]) }
+        let tools: [any AgentTool] = mutation ? [try AuditExecutionTool(probe: probe)] : [try AddTool(log: log)]
+        let run = try await Agent(model: fixtureModel, provider: provider, tools: tools,
+            configuration: .init(authorization: authorization)).makeSession(journal: journal).run("execute")
+        await entered.wait()
+        try await seedExportFacts(journal, count: 16)
+        await release.open()
+        await #expect(throws: AgentAuthorizationError.backlogExceeded) { try await run.wait() }
+        try await run.waitForDrain()
+        #expect(await authorizer.requests.count == 1)
+        #expect(await probe.executorEntered == 0)
+        #expect(await log.names.isEmpty)
+        #expect(try await journal.pendingMutations().isEmpty)
+        #expect(!((try await journal.auditRecords(matching: .init(runID: run.id))).records.contains {
+            if case .disposition(let d) = $0.fact { return d.state == .dispatchPrepared }; return false
+        }))
         try await journal.close()
     }
 

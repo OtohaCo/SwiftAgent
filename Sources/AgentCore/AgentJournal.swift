@@ -791,7 +791,8 @@ extension AgentJournal: ToolMutationAdmission {
         try await admit(request, auditDrafts: [])
     }
 
-    package func admit(_ request: ToolMutationAdmissionRequest, auditDrafts: [JournalAuditDraft]) async throws -> ToolMutationAdmissionResult {
+    package func admit(_ request: ToolMutationAdmissionRequest, auditDrafts: [JournalAuditDraft],
+                       backlog: AuditBacklogPolicy? = nil) async throws -> ToolMutationAdmissionResult {
         guard !closing else { throw AgentJournalError.storeClosed }
         guard !request.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !request.callID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -811,6 +812,7 @@ extension AgentJournal: ToolMutationAdmission {
         try ToolResource.validate(request.resources)
         if let store {
             let decision = try writeStore(store) { view -> ToolMutationAdmissionResult in
+                try checkAuditBacklog(backlog, view: view)
                 if let existing = try view.identity(request.idempotencyKey) {
                     guard existing.intent.call.name == request.name,
                           try JSONValue.decodeToolArguments(existing.intent.call.argumentsJSON) == arguments,

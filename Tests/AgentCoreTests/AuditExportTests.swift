@@ -83,6 +83,32 @@ struct AuditExportTests {
         try await reopened.close()
     }
 
+    @Test(arguments: [false, true])
+    func checkpointPublicationFailureReopensTheActualRootWithoutLosingRecords(_ unknown: Bool) async throws {
+        let directory = auditTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = AuditExportCommitFault(unknown: unknown)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "export-commit",
+            supportsAuthorizationAudit: true, fault: { try fault.check($0) })
+        try await seedExportFacts(journal, count: 3)
+        let configuration = AuditExportConfiguration(id: "fault", destinationID: "fixture", contentVersion: "1", redactionVersion: "1")
+        let exporter = try await journal.startAuditExporter(configuration: configuration, sink: ArmingAuditSink(fault: fault))
+        try await exporter.waitForDrain()
+        let status = await exporter.status()
+        #expect(status.lastFailure == .auditUnavailable)
+        if unknown { #expect(status.journalFailure == .commitUnknown) }
+        #expect(status.acknowledgedThroughSequence == 0)
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let sink = ExportTestSink()
+        let resumed = try await reopened.startAuditExporter(configuration: configuration, sink: sink)
+        try await resumed.waitForDrain()
+        #expect(await resumed.status().acknowledgedThroughSequence == 3)
+        #expect(await sink.uniqueRecordIDs.count == (unknown ? 0 : 3))
+        #expect(try await reopened.auditRecords().records.count == 3)
+        try await reopened.close()
+    }
+
     @Test func redactionFailureSendsNothingAndNeverModifiesRestrictedHistory() async throws {
         let directory = auditTestDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -154,4 +180,24 @@ private actor RepeatedAuditAckSink: AuditExportSink {
 }
 private struct RejectingAuditRedactor: AuditExportRedactor {
     func redact(_ record: AuditExportRecord) throws -> JSONValue { throw FixtureError.invalidOperation }
+}
+
+private final class AuditExportCommitFault: @unchecked Sendable {
+    let unknown: Bool
+    private let lock = NSLock(); private var armed = false
+    init(unknown: Bool) { self.unknown = unknown }
+    func arm() { lock.withLock { armed = true } }
+    func check(_ stage: JournalFileFaultStage) throws {
+        let eligible: Bool
+        if unknown { if case .afterCurrentReplace = stage { eligible = true } else { eligible = false } }
+        else { if case .beforeAppend = stage { eligible = true } else { eligible = false } }
+        guard eligible else { return }
+        if lock.withLock({ let value = armed; armed = false; return value }) {
+            throw AgentJournalError.persistenceUnavailable("controlled export checkpoint failure")
+        }
+    }
+}
+private struct ArmingAuditSink: AuditExportSink {
+    let fault: AuditExportCommitFault
+    func write(_ batch: AuditExportBatch) async throws -> AuditExportAcknowledgement { fault.arm(); return .init(batch: batch) }
 }

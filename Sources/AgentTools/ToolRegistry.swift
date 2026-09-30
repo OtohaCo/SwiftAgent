@@ -43,7 +43,7 @@ package struct ToolRegistry: Sendable {
         }
     }
 
-    package func prepare(_ call: ToolCall, context: ToolContext) throws -> PreparedToolCall {
+    package func prepare(_ call: ToolCall, context: ToolContext, prepareAuthorizationBinding: Bool = false) throws -> PreparedToolCall {
         try context.checkActive()
         guard call.completeness == .complete else { throw ToolRegistryError.truncatedCall }
         guard let registration = tools[call.name],
@@ -59,7 +59,7 @@ package struct ToolRegistry: Sendable {
         catch { throw ToolRegistryError.invalidJSON }
         do { try registration.input.validate(arguments) }
         catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidArguments(error) }
-        let invocation = try registration.tool.prepare(arguments: arguments)
+        let invocation = try registration.tool.prepare(arguments: arguments, prepareAuthorizationBinding: prepareAuthorizationBinding)
         try context.checkActive()
         return PreparedToolCall(call: call, policy: registration.tool.policy, resources: invocation.resources,
                                 evidenceRequirements: invocation.evidenceRequirements,
