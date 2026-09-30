@@ -225,7 +225,15 @@ public actor AgentJournal {
     private nonisolated let ioExecutor = JournalIOExecutor()
     public nonisolated var unownedExecutor: UnownedSerialExecutor { ioExecutor.asUnownedSerialExecutor() }
 
-    private var records: [AgentJournalRecord]
+    // Memory mode is a latest-state store, not an event archive. Historical
+    // Run IDs preserve hasRun's existing identity query without message payloads.
+    private struct MemorySessionState {
+        var created = false
+        var lastRunID: UUID?
+        var runIDs: Set<UUID> = []
+        var checkpoint: AgentJournalRecord?
+    }
+    private var memorySessions: [UUID: MemorySessionState] = [:]
     private var nextSequence: UInt64
     let store: (any JournalStore)?
     private var maintenanceTask: Task<JournalMaintenanceStatus, Error>?
@@ -258,7 +266,6 @@ public actor AgentJournal {
     }
 
     public init() {
-        records = []
         nextSequence = 1
         store = nil
         maintenanceTask = nil
@@ -270,7 +277,6 @@ public actor AgentJournal {
     }
 
     package init(store: any JournalStore) {
-        records = []
         nextSequence = 1
         self.store = store
         maintenanceTask = nil
@@ -322,8 +328,7 @@ public actor AgentJournal {
             guard let current, current.header.historyHead != nil else { return nil }
             return (current.history, current.header.steeringIDs)
         }
-        for record in records.reversed() where record.sessionID == sessionID {
-            guard case .checkpoint(let history, let steeringIDs) = record.event else { continue }
+        if case .checkpoint(let history, let steeringIDs) = memorySessions[sessionID]?.checkpoint?.event {
             return (history: history, steeringIDs: steeringIDs)
         }
         return nil
@@ -395,7 +400,7 @@ public actor AgentJournal {
         if let store {
             let current = try store.read { try $0.header(sessionID)?.lastRunID }
             guard current == runID else { throw CancellationError() }
-        } else if records.last(where: { $0.sessionID == sessionID && $0.runID != nil })?.runID != runID {
+        } else if memorySessions[sessionID]?.lastRunID != runID {
             throw CancellationError()
         }
         return try appendCheckpoint(
@@ -454,7 +459,19 @@ public actor AgentJournal {
                 event: event
             )
         }
-        records.append(contentsOf: committed)
+        // Update only the affected Session; never scan old events or copy its
+        // state/Run-ID set out of the dictionary on each commit.
+        for record in committed {
+            if let runID = record.runID {
+                memorySessions[sessionID, default: .init()].lastRunID = runID
+                memorySessions[sessionID, default: .init()].runIDs.insert(runID)
+            }
+            switch record.event {
+            case .sessionCreated: memorySessions[sessionID, default: .init()].created = true
+            case .checkpoint: memorySessions[sessionID, default: .init()].checkpoint = record
+            default: break
+            }
+        }
         nextSequence += UInt64(committed.count)
         return committed
     }
@@ -864,16 +881,23 @@ extension AgentJournal {
 
     package func hasSessionCreated(_ sessionID: UUID) throws -> Bool {
         if let store { return try store.read { try $0.header(sessionID)?.created ?? false } }
-        return records.contains { record in
-            guard record.sessionID == sessionID else { return false }
-            if case .sessionCreated = record.event { return true }
-            return false
-        }
+        return memorySessions[sessionID]?.created ?? false
     }
 
     package func hasRun(_ runID: UUID, sessionID: UUID) throws -> Bool {
         if let store { return try store.read { try $0.header(sessionID)?.lastRunID == runID } }
-        return records.contains { $0.sessionID == sessionID && $0.runID == runID }
+        return memorySessions[sessionID]?.runIDs.contains(runID) ?? false
+    }
+
+    // Package-only structural measurement for the memory-retention benchmark.
+    package func memoryRetentionStatistics() -> (checkpointArrays: Int, messageSlots: Int, otherRecords: Int,
+                                                 sessionStates: Int, runIdentities: Int) {
+        var arrays = 0, slots = 0, runIDs = 0
+        for state in memorySessions.values {
+            if case .checkpoint(let history, _) = state.checkpoint?.event { arrays += 1; slots += history.count }
+            runIDs += state.runIDs.count
+        }
+        return (arrays, slots, 0, memorySessions.count, runIDs)
     }
 
     public func readMessages(sessionID: UUID, after ordinal: UInt64 = 0, limit: Int = 100) throws -> [JournalConversationMessage] {
