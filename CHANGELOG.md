@@ -9,6 +9,9 @@ Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 - Bound early CI build/test stages and retain per-attempt process/source evidence.
   Add a five-attempt Linux reporting reproduction experiment that stops on failure;
   historical #45/#46 hang/segfault root causes remain unestablished.
+  Sample the current owned ancestry (root and at most two active descendants),
+  with shared-budget identity checks and explicit unavailable/failure outcomes;
+  do not select a stale historical PID or infer depth from PID size.
 
 ### Fixed: audit boundary closeout
 

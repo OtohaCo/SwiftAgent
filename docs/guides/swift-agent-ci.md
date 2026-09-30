@@ -10,8 +10,18 @@ Each stage creates a new evidence directory under `.ci-logs/stages`, with
 checkout SHA/tree, workspace state, toolchain, run/attempt, PID, process tree
 observations, duration, child/owner exit codes and complete output. Last observed
 test lines may be buffered: they are not claimed to identify the current test.
-Collection commands have separate bounds (ten-second stack/core budget plus a
-two-second process listing bound). Only owned process groups are stopped and
+Stack collection shares one ten-second budget for listings, identity checks and
+sampling the root plus at most two active descendants, ordered by actual ancestry.
+The cumulative historical PID set remains evidence, never a sampling candidate
+list. Each debugger attempt records exit/timeout/unavailable status in
+`sampling.json`; pre-attach checks reject vanished or changed identities using
+parent/group/start-time/command observations. A detected post-attach race is
+marked unavailable, not certified as an owned-process stack. External debuggers
+attach by PID: these best-effort checks are not atomic identity pinning, and the
+OS-reported start time has finite precision. The collector does not claim to
+eliminate that race. Child termination/reaping can extend elapsed collection
+time; cleanup ownership is retained rather than abandoned at the budget boundary.
+Core-report collection has its own bounded budget. Only owned process groups are stopped and
 reaped; unrelated processes/reports are not collected or killed. Missing debugger,
 core access or a process that vanished before sampling is recorded as unavailable.
 Crash output can establish a test-child failure even when SwiftPM returns 1;

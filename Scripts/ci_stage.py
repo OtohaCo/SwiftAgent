@@ -31,7 +31,7 @@ def terminate_group(process):
     return process.wait()  # single owner reaps the actual child
 
 
-def capture(command, timeout):
+def capture(command, timeout, outcome=None):
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                start_new_session=True)
     try:
@@ -39,40 +39,120 @@ def capture(command, timeout):
     except subprocess.TimeoutExpired:
         terminate_group(process)
         output, _ = process.communicate()
+        if outcome is not None:
+            outcome.update(exitCode=process.returncode, timedOut=True)
         return output.decode(errors="replace") + "\nEVIDENCE COLLECTION TIMED OUT\n"
+    if outcome is not None:
+        outcome.update(exitCode=process.returncode, timedOut=False)
     return output.decode(errors="replace")
 
 
-def process_tree(root):
-    rows = capture(["ps", "-axo", "pid=,ppid=,pgid=,stat=,etime=,comm="], 2)
-    parsed = []
+def process_rows(rows):
+    parsed = {}
     for line in rows.splitlines():
-        parts = line.strip().split(None, 5)
-        if len(parts) == 6 and all(x.isdecimal() for x in parts[:3]):
-            parsed.append((int(parts[0]), int(parts[1]), line))
+        parts = line.strip().split(None, 9)
+        if len(parts) == 10 and all(x.isdecimal() for x in parts[:3]):
+            parsed[int(parts[0])] = dict(parent=int(parts[1]), group=int(parts[2]),
+                state=parts[3], identity=(parts[1], parts[2], *parts[4:]), row=line)
+    return parsed
+
+
+def process_tree(root, timeout=2):
+    # lstart plus parent/group/command distinguishes a reused PID in observations.
+    rows = capture(["env", "LC_ALL=C", "ps", "-axo",
+                    "pid=,ppid=,pgid=,stat=,lstart=,comm="], timeout)
+    parsed = process_rows(rows)
     owned = {root}
     while True:
-        added = {pid for pid, parent, _ in parsed if parent in owned}
+        added = {pid for pid, node in parsed.items() if node["parent"] in owned}
         if added <= owned:
             break
         owned |= added
-    return owned, "\n".join(line for pid, _, line in parsed if pid in owned) + "\n"
+    return owned, "\n".join(node["row"] for pid, node in parsed.items() if pid in owned) + "\n"
+
+
+def sampling_targets(nodes, root):
+    active = lambda node: not node["state"].startswith(("Z", "X"))
+    if root not in nodes or not active(nodes[root]) or nodes[root]["group"] != root:
+        return []
+    depths = {root: 0}
+    while True:
+        added = {pid: depths[node["parent"]] + 1 for pid, node in nodes.items()
+                 if pid not in depths and node["parent"] in depths}
+        if not added:
+            break
+        depths.update(added)
+    children = [pid for pid in depths if pid != root and active(nodes[pid])]
+    # PID breaks equal-depth ties only; ancestry determines depth.
+    children.sort(key=lambda pid: (-depths[pid], pid))
+    return [root, *children[:2]]
 
 
 def collect(evidence, process, owned, budget):
     deadline = time.monotonic() + budget
-    remaining = lambda: max(0.01, deadline - time.monotonic())
-    current, rows = process_tree(process.pid)
+    remaining = lambda: max(0, deadline - time.monotonic())
+    current, rows = process_tree(process.pid, min(2, remaining()))
     owned |= current
     (evidence / "processes.txt").write_text(rows)
-    # One deepest observed child, rather than an unbounded stack walk.
-    target = max(owned)
-    if shutil.which("sample"):
-        (evidence / "stack.txt").write_text(capture(["sample", str(target), "1"], remaining()))
-    elif shutil.which("gdb"):
-        (evidence / "stack.txt").write_text(capture(["gdb", "-p", str(target), "-batch", "-ex", "thread apply all bt"], remaining()))
-    else:
-        (evidence / "stack.txt").write_text("NOT AVAILABLE: no sample/gdb\n")
+    nodes = process_rows(rows)
+    targets = sampling_targets(nodes, process.pid)
+    debugger = shutil.which("sample") or shutil.which("gdb")
+    results, stacks = [], []
+    for index, target in enumerate(targets):
+        result = dict(pid=target, observedIdentity=nodes[target]["identity"])
+        results.append(result)
+        if not debugger:
+            result["status"] = "unavailable_no_debugger"
+            continue
+        if process.poll() is not None:
+            result["status"] = "unavailable_owner_exited"
+            continue
+        if remaining() <= 0:
+            result["status"] = "unavailable_budget_exhausted"
+            continue
+        live, live_rows = process_tree(process.pid, min(2, remaining()))
+        owned |= live
+        live_nodes = process_rows(live_rows)
+        if target not in live_nodes or live_nodes[target]["state"].startswith(("Z", "X")):
+            result["status"] = "unavailable_target_exited"
+            continue
+        if (process.poll() is not None or process.pid not in live_nodes
+                or live_nodes[process.pid]["identity"] != nodes[process.pid]["identity"]
+                or live_nodes[target]["identity"] != nodes[target]["identity"]):
+            result["status"] = "unavailable_identity_changed"
+            continue
+        if remaining() <= 0:
+            result["status"] = "unavailable_budget_exhausted"
+            continue
+        allowance = remaining() / (len(targets) - index)
+        command = ([debugger, str(target), "1"] if Path(debugger).name == "sample" else
+                   [debugger, "-p", str(target), "-batch", "-ex", "thread apply all bt"])
+        text = None
+        try:
+            text = capture(command, allowance, result)
+            result["status"] = "timeout" if result["timedOut"] else "sampled" if result["exitCode"] == 0 else "failed"
+        except OSError as error:
+            result.update(status="failed_launch", errno=error.errno)
+        # External debuggers attach by PID. Recheck and label an exit/reuse race;
+        # this is best-effort diagnostics, not an atomic process identity claim.
+        if remaining() > 0:
+            live, after_rows = process_tree(process.pid, min(2, remaining()))
+            owned |= live
+            after = process_rows(after_rows)
+            result["postCheck"] = ("same_observed_identity" if process.poll() is None
+                and process.pid in after and after[process.pid]["identity"] == nodes[process.pid]["identity"]
+                and target in after and after[target]["identity"] == nodes[target]["identity"]
+                else "exited_or_identity_changed_during_sampling")
+            if result["postCheck"] != "same_observed_identity":
+                result["captureStatus"] = result["status"]
+                result["status"] = "unavailable_identity_race"
+        else:
+            result["postCheck"] = "unavailable_budget_exhausted"
+        if text is not None:
+            stacks.append(f"PID {target}: {result['status']}\n{text}")
+    (evidence / "sampling.json").write_text(json.dumps(dict(
+        budgetSeconds=budget, targets=results, status="attempted" if targets else "unavailable_no_active_owned_tree"), indent=2) + "\n")
+    (evidence / "stack.txt").write_text("\n".join(stacks) or "NOT AVAILABLE: see sampling.json\n")
     return owned
 
 

@@ -15,6 +15,143 @@ import unittest
 STAGE = Path(__file__).with_name("ci_stage.py")
 
 class CIStageTests(unittest.TestCase):
+    def test_sampling_depth_uses_parents_not_pid_order_and_is_bounded(self):
+        module = self.sampling_module()
+        rows = self.sampling_rows((100, 1), (900, 100), (10, 900), (800, 100), (5, 10))
+        self.assertEqual(module.sampling_targets(module.process_rows(rows), 100), [100, 5, 10])
+
+    def test_sampling_rechecks_exit_and_pid_identity_before_attach(self):
+        for change in ['exit', 'reuse']:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                module = self.sampling_module()
+                original = self.sampling_rows((100, 1), (200, 100))
+                changed = self.sampling_rows((100, 1)) if change == 'exit' else original.replace(
+                    '200 100 100 S Wed Sep 30 12:00:00 2026 child',
+                    '200 100 100 S Wed Sep 30 12:01:00 2026 child')
+                snapshots, sampled = [], []
+                def capture(command, timeout, outcome=None):
+                    if command[0] == 'env':
+                        snapshots.append(command)
+                        return changed if len(snapshots) >= 4 else original
+                    sampled.append(int(command[1]))
+                    outcome.update(exitCode=0, timedOut=False)
+                    return 'controlled sample'
+                process = mock.Mock(pid=100); process.poll.return_value = None
+                with mock.patch.object(module, 'capture', side_effect=capture), mock.patch.object(module.shutil, 'which', return_value='/fixture/sample'):
+                    module.collect(Path(directory), process, {100, 200, 999}, 5)
+                self.assertEqual(sampled, [100])
+                results = json.loads((Path(directory)/'sampling.json').read_text())['targets']
+                self.assertEqual(results[1]['status'], 'unavailable_target_exited' if change == 'exit' else 'unavailable_identity_changed')
+
+    def test_sampling_no_debugger_failure_and_owner_exit_are_explicit(self):
+        for condition in ['missing', 'failure', 'owner-exit']:
+            with self.subTest(condition=condition), tempfile.TemporaryDirectory() as directory:
+                module = self.sampling_module(); sampled = []
+                def capture(command, timeout, outcome=None):
+                    if command[0] == 'env': return self.sampling_rows((100, 1), (200, 100))
+                    sampled.append(int(command[1])); outcome.update(exitCode=9, timedOut=False)
+                    return 'controlled sampler failure'
+                process = mock.Mock(pid=100); process.poll.return_value = 0 if condition == 'owner-exit' else None
+                with mock.patch.object(module, 'capture', side_effect=capture), mock.patch.object(module.shutil, 'which', return_value=None if condition == 'missing' else '/fixture/sample'):
+                    module.collect(Path(directory), process, {100, 200, 999}, 5)
+                results = json.loads((Path(directory)/'sampling.json').read_text())['targets']
+                expected = {'missing':'unavailable_no_debugger','failure':'failed','owner-exit':'unavailable_owner_exited'}[condition]
+                self.assertTrue(all(x['status'] == expected for x in results))
+                self.assertEqual(sampled, [100, 200] if condition == 'failure' else [])
+
+    def test_sampling_detected_post_attach_identity_race_is_not_certified(self):
+        module = self.sampling_module(); snapshots = []
+        original = self.sampling_rows((100, 1), (200, 100))
+        changed = original.replace('200 100 100 S Wed Sep 30 12:00:00 2026 child',
+                                   '200 100 100 S Wed Sep 30 12:01:00 2026 child')
+        def capture(command, timeout, outcome=None):
+            if command[0] == 'env':
+                snapshots.append(command)
+                return changed if len(snapshots) >= 5 else original
+            outcome.update(exitCode=0, timedOut=False)
+            return 'controlled sample'
+        process = mock.Mock(pid=100); process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(module, 'capture', side_effect=capture), mock.patch.object(module.shutil, 'which', return_value='/fixture/sample'):
+                module.collect(Path(directory), process, {100, 200}, 5)
+            result = json.loads((Path(directory)/'sampling.json').read_text())['targets'][1]
+            self.assertEqual(result['status'], 'unavailable_identity_race')
+            self.assertEqual(result['captureStatus'], 'sampled')
+
+    def test_sampling_root_and_children_share_one_total_budget(self):
+        module = self.sampling_module(); elapsed = [0.0]; allowances = []
+        def capture(command, timeout, outcome=None):
+            if command[0] == 'env':
+                return self.sampling_rows((100, 1), (200, 100), (300, 200))
+            allowances.append(timeout); elapsed[0] += timeout
+            outcome.update(exitCode=-15, timedOut=True)
+            return 'controlled sampling timeout'
+        process = mock.Mock(pid=100); process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(module, 'capture', side_effect=capture), mock.patch.object(module.shutil, 'which', return_value='/fixture/sample'), mock.patch.object(module.time, 'monotonic', side_effect=lambda:elapsed[0]):
+                module.collect(Path(directory), process, {100, 200, 300, 999}, 6)
+            self.assertEqual(allowances, [2, 2, 2])
+            results = json.loads((Path(directory)/'sampling.json').read_text())['targets']
+            self.assertEqual([x['pid'] for x in results], [100, 300, 200])
+            self.assertTrue(all(x['status'] == 'timeout' for x in results))
+
+    def sampling_module(self):
+        spec = importlib.util.spec_from_file_location('ci_sampling_fixture', STAGE)
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        return module
+
+    def sampling_rows(self, *pairs):
+        return '\n'.join(f'{pid} {parent} 100 S Wed Sep 30 12:00:00 2026 '+('root' if pid == 100 else 'child') for pid,parent in pairs)+'\n'
+
+    def test_sampling_uses_live_owned_tree_after_later_child_exits(self):
+        spec = importlib.util.spec_from_file_location('ci_sampling_fixture', STAGE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        worker = """import subprocess,sys,json
+long = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE)
+short = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE)
+print(json.dumps([long.pid, short.pid]), flush=True)
+sys.stdin.readline()
+short.stdin.close(); short.wait()
+print('short exited', flush=True)
+sys.stdin.read()
+long.stdin.close(); long.wait()
+"""
+        root = subprocess.Popen([sys.executable, '-u', '-c', worker], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            self.assertTrue(select.select([root.stdout], [], [], 10)[0])
+            long, short = json.loads(root.stdout.readline())
+            observed, _ = module.process_tree(root.pid)
+            self.assertIn(short, observed)
+            root.stdin.write('exit short\n'); root.stdin.flush()
+            self.assertTrue(select.select([root.stdout], [], [], 10)[0])
+            self.assertEqual(root.stdout.readline().strip(), 'short exited')
+            # The OS fixture creates this PID later; no sleeps or PID-size depth assumption.
+            self.assertEqual(max(observed), short)
+            with tempfile.TemporaryDirectory() as directory:
+                directory = Path(directory)
+                sample = directory / 'sample'
+                sample.write_text('#!' + sys.executable + '\nimport os,sys\n'
+                                  "with open(os.environ['SAMPLE_TARGETS'],'a') as f:f.write(sys.argv[1]+'\\n')\n"
+                                  "try:os.kill(int(sys.argv[1]),0)\nexcept ProcessLookupError:sys.exit(9)\n")
+                sample.chmod(0o755)
+                targets = directory / 'targets'
+                with mock.patch.dict(os.environ, PATH=str(directory)+os.pathsep+os.environ['PATH'],
+                                     SAMPLE_TARGETS=str(targets)):
+                    history = module.collect(directory, root, observed, 5)
+                sampled = {int(x) for x in targets.read_text().splitlines()}
+                self.assertIn(long, sampled, 'still-live owned child must be sampled')
+                self.assertIn(root.pid, sampled, 'root is also relevant evidence')
+                self.assertNotIn(short, sampled, 'exited historical maximum is not a sampling target')
+                self.assertIn(short, history, 'historical observations remain retained')
+        finally:
+            root.stdin.close()
+            if root.poll() is None:
+                try: root.wait(timeout=5)
+                except subprocess.TimeoutExpired: module.terminate_group(root)
+            root.stdout.close()
+
     def test_terminal_audit_gate_is_owned_and_tee_directory_exists_before_dispatch(self):
         for name in ['ci-macos.sh', 'ci-linux.sh']:
             script = STAGE.with_name(name).read_text()
