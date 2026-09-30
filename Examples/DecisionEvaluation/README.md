@@ -71,8 +71,11 @@ Fixture probabilities and usage are literal synthetic transport data. Fixture
 accuracy is an oracle/runner consistency check, not a quality leaderboard.
 There is no Jev/OpenAI speed or vision-quality conclusion.
 
-Failure/timeout/unknown results stay in the registered trial denominator.
-Unsupported labels have zero dispatched attempts and are not model errors.
+Failure/timeout/unknown results stay in the dispatched supported trial
+denominator, including failures. All registered statuses and coverage are
+retained; budget stops, dry-run and unsupported trials are not model errors.
+With no dispatch, accuracy/class/repeat metrics are absent or empty, not zero
+model quality. Registered correct rate also exposes incomplete batch coverage.
 The report separates registered trials, attempts, status rates, per-class
 precision/recall, per-language accuracy, exact-repeat and order consistency.
 Failure makes its repeat group inconsistent. Allowed answer sets are scored as

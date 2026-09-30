@@ -33,6 +33,18 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual(s["calibration"]["n"], 0)
             self.assertIsNone(s["calibration"]["meanBrier"])
 
+    def test_unsupported_is_not_a_wrong_answer_but_timeout_stays_in_accuracy(self):
+        t = {"id": "a", "kind": "choice", "allowed": ["A"],
+             "candidates": [{"id": "A"}], "repeatGroup": "a"}
+        s = e.summarize([dict(task=t, status="success", selected="A", latencyMs=1),
+                         dict(task=t, status="timeout"), dict(task=t, status="unsupported")], "fixture")
+        self.assertEqual(s["totalTrials"], 3)
+        self.assertEqual(s["attempts"], 2)
+        self.assertEqual(s["accuracy"], .5)
+        self.assertEqual(s["evaluationCoverage"], 2 / 3)
+        self.assertEqual(s["registeredCorrectRate"], 1 / 3)
+        self.assertEqual(s["perClass"]["A"]["expected"], 2)
+
     def test_dataset_hash_order_repeat_and_language_are_pre_registered(self):
         d = e.load_dataset(Path(__file__).with_name("dataset-v1.json"))
         p = e.plan(d, repetitions=2, seed=73)
@@ -93,6 +105,9 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual(s["attempts"], 0)
             self.assertEqual(s["protocolQualification"], "NOT_RUN")
             self.assertIsNone(s["configuration"]["requestedModel"])
+            self.assertIsNone(s["accuracy"])
+            self.assertEqual(s["perClass"], {})
+            self.assertEqual(s["repeatConsistency"]["groups"], 0)
 
     def test_original_absolute_budget_deadline_does_not_reset(self):
         now = [10.0]

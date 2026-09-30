@@ -173,6 +173,8 @@ def summarize(trials, mode):
     tokens = 0
     usage_n = 0
     for r in trials:
+        if r["status"] in ("dry_run", "unsupported", "budget_exhausted"):
+            continue  # No model observation; retain it in statuses/coverage, not as a wrong answer.
         t = r["task"]
         success = r["status"] == "success"
         chosen = r.get("selected") if success else None
@@ -221,7 +223,11 @@ def summarize(trials, mode):
     statuses = Counter(r["status"] for r in trials)
     dispatched = sum(n for s, n in statuses.items() if s not in ("dry_run", "unsupported", "budget_exhausted"))
     return dict(schema=1, mode=mode, totalTrials=len(trials), attempts=dispatched, correct=correct,
-                accuracy=correct / len(trials) if trials else None, perClass=classes, perLanguage=languages, statuses=dict(statuses),
+                accuracy=correct / dispatched if dispatched else None,
+                accuracyDenominator="dispatched_supported_trials_including_failures",
+                registeredCorrectRate=correct / len(trials) if dispatched else None,
+                evaluationCoverage=dispatched / len(trials) if trials else None,
+                perClass=classes, perLanguage=languages, statuses=dict(statuses),
                 failureRate=(dispatched - statuses["success"]) / dispatched if dispatched else None,
                 timeoutRate=(statuses["timeout"] + statuses["deadline_exceeded"]) / dispatched if dispatched else None,
                 refusalRate=None, refusalAvailability="Jev has no distinct model-refusal result in this contract",
