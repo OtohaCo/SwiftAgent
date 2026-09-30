@@ -91,7 +91,20 @@ final class DependencyGuardTests: XCTestCase {
         XCTAssertTrue(packageJSON.contains("\"identity\":\"swift-crypto\""), packageJSON)
         XCTAssertTrue(packageJSON.contains("swift-crypto.git"), packageJSON)
         let targets = try XCTUnwrap(manifest["targets"] as? [[String: Any]])
-        let libraries = targets.filter { $0["type"] as? String == "regular" }
+        // The only non-SDK regular target is the raw C primitive for the test
+        // executable. SDK direction/source assertions remain unchanged.
+        let regular = targets.filter { $0["type"] as? String == "regular" }
+        let primitives = regular.filter { $0["name"] as? String == "JournalProcessPrimitives" }
+        XCTAssertEqual(primitives.count, 1)
+        let primitive = try XCTUnwrap(primitives.first)
+        XCTAssertEqual((primitive["dependencies"] as? [Any])?.count, 0)
+        XCTAssertTrue((primitive["settings"] as? [Any] ?? []).isEmpty)
+        let products = try XCTUnwrap(manifest["products"] as? [[String: Any]])
+        for product in products {
+            XCTAssertFalse((product["targets"] as? [String] ?? []).contains("JournalProcessPrimitives"),
+                           "The primitive must not become a published product")
+        }
+        let libraries = regular.filter { $0["name"] as? String != "JournalProcessPrimitives" }
         XCTAssertEqual(Set(libraries.compactMap { $0["name"] as? String }), Set(DependencyGuard.dependencies.keys))
         for target in libraries {
             let name = try XCTUnwrap(target["name"] as? String)
