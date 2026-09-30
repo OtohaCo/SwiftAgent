@@ -7,3 +7,6 @@ DerivedData/
 Examples/**/.env.live
 *.live-budget.json
 *.live-budget.json.lock
+
+# Per-attempt CI evidence must survive SwiftPM package clean.
+/.ci-logs/
