@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bounded CI child owner. Product deadlines/drain are deliberately untouched."""
 import argparse
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -75,6 +76,16 @@ def collect(evidence, process, owned, budget):
     return owned
 
 
+@contextmanager
+def owned_child(command, log):
+    child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        yield child
+    finally:
+        if child.poll() is None:
+            terminate_group(child)
+
+
 def run(args):
     root = Path(__file__).resolve().parent.parent
     base = Path(args.log_dir or os.environ.get("SWIFT_AGENT_CI_STAGE_LOG_DIR", str(root / ".build/ci-logs/stages")))
@@ -95,18 +106,17 @@ def run(args):
     started = time.monotonic()
     deadline = started + args.timeout
     stopped = None
-    with output.open("wb") as log:
-        child = subprocess.Popen(args.command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    with output.open("wb") as log, owned_child(args.command, log) as child:
         metadata["pid"] = child.pid
         owned = {child.pid}
         cancelled = []
         old_handlers = {}
         for sig in (signal.SIGTERM, signal.SIGINT):
             old_handlers[sig] = signal.signal(sig, lambda number, frame: cancelled.append(number))
-        print(f"CI STAGE {args.stage}: PID={child.pid} evidence={evidence}", flush=True)
-        (evidence / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-        next_observation = started
         try:
+            print(f"CI STAGE {args.stage}: PID={child.pid} evidence={evidence}", flush=True)
+            (evidence / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+            next_observation = started
             while child.poll() is None:
                 now = time.monotonic()
                 if now >= next_observation:

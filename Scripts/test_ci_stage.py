@@ -1,4 +1,7 @@
 import json
+import argparse
+import importlib.util
+from unittest import mock
 import os
 import select
 import signal
@@ -96,7 +99,39 @@ class CIStageTests(unittest.TestCase):
             finally:
                 os.close(ready_reader)
                 if runner.poll() is None:
-                    runner.kill(); runner.wait(timeout=10)
+                    runner.send_signal(signal.SIGTERM); runner.wait(timeout=20)
+
+    def test_evidence_write_failure_releases_actual_owned_worker(self):
+        spec = importlib.util.spec_from_file_location('ci_stage_fixture', STAGE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        original_handler = signal.getsignal(signal.SIGTERM)
+        original_popen = module.subprocess.Popen
+        original_write = module.Path.write_text
+        processes = []
+        def launch(*args, **kwargs):
+            process = original_popen(*args, **kwargs)
+            processes.append(process)
+            return process
+        def fail_metadata(path, text, *args, **kwargs):
+            if path.name == 'metadata.json':
+                raise OSError('controlled evidence write failure')
+            return original_write(path, text, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as directory:
+            fifo = Path(directory) / 'blocked'
+            os.mkfifo(fifo)
+            args = argparse.Namespace(stage='write-failure', log_dir=directory, timeout=30, evidence_timeout=1,
+                command=[sys.executable, '-c', 'import os,sys; os.open(sys.argv[1],os.O_RDONLY)', str(fifo)])
+            try:
+                with mock.patch.object(module.subprocess, 'Popen', side_effect=launch), mock.patch.object(module.Path, 'write_text', new=fail_metadata):
+                    with self.assertRaises(OSError):
+                        module.run(args)
+                self.assertIsNotNone(processes[-1].poll(), 'failed evidence cannot abandon the owned worker')
+                self.assertEqual(signal.getsignal(signal.SIGTERM), original_handler)
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        module.terminate_group(process)
 
     def wait_without_closing_barrier(self, runner):
         # stdin stays open: closing it would falsely make the blocked test pass.
