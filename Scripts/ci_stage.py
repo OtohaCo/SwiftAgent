@@ -88,7 +88,7 @@ def owned_child(command, log):
 
 def run(args):
     root = Path(__file__).resolve().parent.parent
-    base = Path(args.log_dir or os.environ.get("SWIFT_AGENT_CI_STAGE_LOG_DIR", str(root / ".build/ci-logs/stages")))
+    base = Path(args.log_dir or os.environ.get("SWIFT_AGENT_CI_STAGE_LOG_DIR", str(root / ".ci-logs/stages")))
     base.mkdir(parents=True, exist_ok=True)
     label = "".join(c if c.isalnum() or c in "-_" else "_" for c in args.stage)[:80]
     evidence = Path(tempfile.mkdtemp(prefix=label + "-", dir=base))

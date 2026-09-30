@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import shutil
 import unittest
 
 STAGE = Path(__file__).with_name("ci_stage.py")
@@ -132,6 +133,23 @@ class CIStageTests(unittest.TestCase):
                 for process in processes:
                     if process.poll() is None:
                         module.terminate_group(process)
+
+    def test_actual_swift_package_clean_does_not_erase_its_stage_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'Scripts').mkdir()
+            script = root / 'Scripts/ci_stage.py'
+            shutil.copyfile(STAGE, script)
+            (root / 'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "CleanFixture")\n')
+            subprocess.run(['git', 'init', '--quiet'], cwd=root, check=True)
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=CI Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'fixture'], cwd=root, check=True)
+            result = subprocess.run([sys.executable, str(script), '--stage', 'package-clean', '--timeout', '30', '--',
+                                     'swift', 'package', 'clean'], cwd=root, capture_output=True, timeout=45)
+            self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+            records = list((root / '.ci-logs').glob('stages/package-clean-*/metadata.json'))
+            self.assertEqual(len(records), 1, 'logs must live outside SwiftPM clean output')
+            self.assertEqual(json.loads(records[0].read_text())['exitCode'], 0)
 
     def wait_without_closing_barrier(self, runner):
         # stdin stays open: closing it would falsely make the blocked test pass.

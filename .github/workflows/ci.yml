@@ -39,6 +39,7 @@ jobs:
           name: execution-reporting-macos-attempt-${{ github.run_attempt }}
           path: |
             .build/ci-logs/
+            .ci-logs/
             .build/execution-reporting-acceptance.json
           if-no-files-found: ignore
           retention-days: 30
@@ -74,6 +75,7 @@ jobs:
           name: execution-reporting-linux-attempt-${{ github.run_attempt }}
           path: |
             .build/ci-logs/
+            .ci-logs/
             .build/execution-reporting-acceptance.json
           if-no-files-found: ignore
           retention-days: 30

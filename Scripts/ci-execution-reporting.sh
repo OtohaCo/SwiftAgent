@@ -7,7 +7,7 @@ cd "$root"
 artifact="${SWIFT_AGENT_ACCEPTANCE_OUTPUT:-$root/.build/execution-reporting-acceptance.json}"
 mkdir -p "$(dirname "$artifact")"
 # Logs outlive the script: CI uploads this directory and a failed case keeps its evidence.
-log_dir="${SWIFT_AGENT_CI_LOG_DIR:-$root/.build/ci-logs/execution-reporting}"
+log_dir="${SWIFT_AGENT_CI_LOG_DIR:-$root/.ci-logs/execution-reporting}"
 mkdir -p "$log_dir"
 log_dir="$(mktemp -d "$log_dir/attempt-XXXXXXXX")"
 case_timeout="${SWIFT_AGENT_CI_CASE_TIMEOUT_SECONDS:-1200}"
@@ -96,6 +96,7 @@ run_case "AppleChatIntegrationTests" "fixture" \
     done
     printf '\n  ]\n}\n'
 } >"$artifact"
+cp "$artifact" "$log_dir/acceptance.json"
 
 printf 'Execution reporting acceptance: %s (logs kept in %s)\n' "$artifact" "$log_dir"
 exit "$overall"
