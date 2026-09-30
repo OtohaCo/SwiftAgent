@@ -11,6 +11,8 @@ package struct AnyAgentTool: Sendable {
         let resources: [ToolResource]
         let evidenceRequirements: [EvidenceRequirement]
         let receiptExpectation: ToolReceiptExpectation?
+        let binding: ToolAuthorizationBinding
+        let preauthorize: @Sendable (ToolContext) async throws -> Void
         let invoke: Invocation
     }
     private let decode: @Sendable (JSONValue) throws -> PreparedInvocation
@@ -39,12 +41,28 @@ package struct AnyAgentTool: Sendable {
             try ToolResource.validate(resources)
             if policy.evidence == .required { try EvidenceLedger.checkRequirements(requirements) }
             let receiptExpectation = try tool.receiptExpectation(for: input)
+            let binding = try tool.authorizationBinding(for: input)
             let requiresReceipt = policy.effect == .mutation || policy.idempotency == .requiresReceipt || receiptExpectation != nil
             if policy.effect == .readOnly && requiresReceipt && receiptExpectation == nil {
                 throw ToolInvocationError.receiptValidationUnavailable
             }
             return PreparedInvocation(resources: resources, evidenceRequirements: requirements,
-                                      receiptExpectation: receiptExpectation) { context in
+                                      receiptExpectation: receiptExpectation, binding: binding, preauthorize: { context in
+                guard let audit = context.auditAuthorization else { return }
+                try context.checkActive()
+                try await Self.validateEvidence(requirements, context: context)
+                try await context.executionAdmission?.check(runID: context.runID, resources: resources)
+                try await audit.authorize(context: context)
+                try context.checkActive()
+                if policy.authorization == .required {
+                    let authorization: ToolAuthorization
+                    do { authorization = try await tool.authorize(input, context: context) }
+                    catch { try await audit.recordToolAuthorization(nil, failed: true); throw error }
+                    try await audit.recordToolAuthorization(authorization, failed: false)
+                    try context.checkActive()
+                    guard authorization == .allowed else { throw ToolInvocationError.authorizationDenied }
+                } else { try await audit.recordToolAuthorization(nil, failed: false) }
+            }) { context in
                 try context.checkActive()
                 if policy.effect == .mutation {
                     guard context.mutationAdmission != nil, context.argumentsJSON != nil else {
@@ -59,17 +77,22 @@ package struct AnyAgentTool: Sendable {
                 }
                 try await Self.validateEvidence(requirements, context: context)
                 try await context.executionAdmission?.check(runID: context.runID, resources: resources)
-                if policy.authorization == .required {
+                if policy.authorization == .required, context.auditAuthorization == nil {
                     let authorization = try await tool.authorize(input, context: context)
                     try context.checkActive()
                     guard authorization == .allowed else { throw ToolInvocationError.authorizationDenied }
                     try await Self.validateEvidence(requirements, context: context)
                 }
                 try await context.executionAdmission?.check(runID: context.runID, resources: resources)
+                if let audit = context.auditAuthorization {
+                    try audit.checkPreparedAction(definition: tool.definition, policy: tool.policy,
+                        resources: tool.resourceRequirements(for: input), expectation: tool.receiptExpectation(for: input),
+                        binding: tool.authorizationBinding(for: input))
+                }
                 if policy.effect == .mutation {
                     let mutationAdmission = context.mutationAdmission!
                     let argumentsJSON = context.argumentsJSON!
-                    let admission = try await mutationAdmission.admit(.init(
+                    let request = ToolMutationAdmissionRequest(
                         sessionID: context.sessionID,
                         runID: context.runID,
                         callID: context.callID,
@@ -78,7 +101,12 @@ package struct AnyAgentTool: Sendable {
                         resources: resources,
                         idempotencyKey: context.idempotencyKey ?? "",
                         receiptExpectation: receiptExpectation
-                    ))
+                    )
+                    let admission: ToolMutationAdmissionResult
+                    if let audit = context.auditAuthorization {
+                        guard let value = try await audit.apply(mutation: request) else { throw ToolInvocationError.mutationIntegrityUnavailable }
+                        admission = value
+                    } else { admission = try await mutationAdmission.admit(request) }
                     try context.checkActive()
                     if case .settled(let receipt, let output) = admission {
                         try await context.executionAdmission?.check(runID: context.runID, resources: resources)
@@ -91,12 +119,52 @@ package struct AnyAgentTool: Sendable {
                             operationID: operationID,
                             expectation: receiptExpectation
                         )
+                        if let audit = context.auditAuthorization {
+                            try audit.checkPreparedAction(definition: tool.definition, policy: tool.policy,
+                        resources: tool.resourceRequirements(for: input), expectation: tool.receiptExpectation(for: input),
+                        binding: tool.authorizationBinding(for: input))
+                            let scopeTicket = try await context.executionAdmission?.admit(runID: context.runID, resources: resources)
+                            do {
+                                let ticket = try audit.admitFinal()
+                                do { try await audit.recordAdmission(); audit.releaseFinal(ticket) }
+                                catch { audit.releaseFinal(ticket); throw error }
+                                if let scopeTicket { await context.executionAdmission?.release(scopeTicket) }
+                            } catch {
+                                if let scopeTicket { await context.executionAdmission?.release(scopeTicket) }
+                                throw error
+                            }
+                        }
                         return ToolResult(output: output, receipt: receipt, isIdempotentReplay: true)
                     }
+                } else if let audit = context.auditAuthorization {
+                    _ = try await audit.apply(mutation: nil)
                 }
                 let result: ToolResult<T.Output>
                 do {
-                    if let admission = context.executionAdmission {
+                    if let audit = context.auditAuthorization {
+                        try audit.checkPreparedAction(definition: tool.definition, policy: tool.policy,
+                        resources: tool.resourceRequirements(for: input), expectation: tool.receiptExpectation(for: input),
+                        binding: tool.authorizationBinding(for: input))
+                        let scopeTicket = try await context.executionAdmission?.admit(runID: context.runID, resources: resources)
+                        do {
+                            let ticket = try audit.admitFinal()
+                            do {
+                                try await audit.recordAdmission()
+                                try context.checkActive()
+                                // No await between final binding check, entry observation and executor call.
+                                try audit.checkPreparedAction(definition: tool.definition, policy: tool.policy,
+                        resources: tool.resourceRequirements(for: input), expectation: tool.receiptExpectation(for: input),
+                        binding: tool.authorizationBinding(for: input))
+                                audit.observeExecutor()
+                                result = try await tool.execute(input, context: context)
+                                audit.releaseFinal(ticket)
+                            } catch { audit.releaseFinal(ticket); throw error }
+                            if let scopeTicket { await context.executionAdmission?.release(scopeTicket) }
+                        } catch {
+                            if let scopeTicket { await context.executionAdmission?.release(scopeTicket) }
+                            throw error
+                        }
+                    } else if let admission = context.executionAdmission {
                         let ticket = try await admission.admit(runID: context.runID, resources: resources)
                         do {
                             try context.checkActive()

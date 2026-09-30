@@ -20,8 +20,14 @@ public protocol AgentTool: Sendable {
     func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement]
     func resourceRequirements(for input: Input) throws -> [ToolResource]
     func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation?
+    /// Declare immutable action versions; checked again just before audited dispatch.
+    func authorizationBinding(for input: Input) throws -> ToolAuthorizationBinding
     func authorize(_ input: Input, context: ToolContext) async throws -> ToolAuthorization
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output>
+}
+
+extension AgentTool {
+    public func authorizationBinding(for input: Input) throws -> ToolAuthorizationBinding { .init() }
 }
 
 /// Trusted runtime admission required immediately before a mutation executor runs.

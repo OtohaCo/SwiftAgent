@@ -26,6 +26,7 @@ public actor AgentSession {
     private let instructions: String
     private let contextPolicy: AgentContextPolicy
     private let preAdmissionReplanning: AgentPreAdmissionReplanning
+    private let authorization: AgentAuthorizationConfiguration
     private let journal: AgentJournal?
     private let checkpointDidExit: (@Sendable (UUID) -> Void)?
     private let drainWaitDidBegin: (@Sendable (UUID) -> Void)?
@@ -64,12 +65,14 @@ public actor AgentSession {
         let journalLeaseAcquired: Bool
         var capabilityScope: AgentCapabilityScope? = nil
         var runID: UUID? = nil
+        var authorizationRegistered = false
     }
 
     init(id: UUID = UUID(), defaultBinding: AgentModelBinding, tools: ToolRegistry, scheduler: ToolScheduler,
          instructions: String, structuredOutput: StructuredOutputSchema?, maxModelTurns: Int,
          maxToolCalls: Int, runTimeout: Duration, contextPolicy: AgentContextPolicy, journal: AgentJournal? = nil,
          preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled,
+         authorization: AgentAuthorizationConfiguration = .init(),
          checkpointDidExit: (@Sendable (UUID) -> Void)? = nil,
          drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil,
          drainReleaseDidBegin: (@Sendable (UUID) async -> Void)? = nil,
@@ -86,6 +89,7 @@ public actor AgentSession {
         self.instructions = instructions
         self.contextPolicy = contextPolicy
         self.preAdmissionReplanning = preAdmissionReplanning
+        self.authorization = authorization
         history = AgentContextWindow.applyingCurrentInstructions([], instructions: instructions)
         self.maxModelTurns = maxModelTurns
         self.maxToolCalls = maxToolCalls
@@ -169,6 +173,8 @@ public actor AgentSession {
         followUpInputID: String? = nil
     ) async throws -> AgentRun {
         try Task.checkCancellation()
+        try authorization.validate(journal: journal)
+        if authorization.mode == .requiredAudit { try await journal?.checkAuditAvailability(backlog: authorization.backlog) }
         guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentSessionError.emptyInput }
         try contextPolicy.checkInput(text)
@@ -272,6 +278,7 @@ public actor AgentSession {
             await scope.releaseRun(runID)
             await scopeReleaseDidFinish?(runID)
         }
+        if reservation.authorizationRegistered, let runID = reservation.runID { authorization.scope.releaseRun(runID) }
     }
 
     public func conversationSnapshot() async throws -> AgentConversationSnapshot {
@@ -283,6 +290,8 @@ public actor AgentSession {
     /// Receives a future input without changing the current Run or formal
     /// conversation. The durable store, not this actor's memory, confirms it.
     public func enqueueFollowUp(_ input: AgentFollowUpInput) async throws -> AgentFollowUpRecord {
+        try authorization.validate(journal: journal)
+        if authorization.mode == .requiredAudit { try await journal?.checkAuditAvailability(backlog: authorization.backlog) }
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
         return try await journal.enqueueFollowUp(input, sessionID: id)
     }
@@ -471,6 +480,16 @@ public actor AgentSession {
         }
         let runID = UUID()
         let control = AgentRunControl()
+        let audit: AgentAuditRuntime?
+        if authorization.mode == .requiredAudit {
+            guard let journal, let identity = authorization.identity,
+                  let store = await journal.storeIdentity() else { throw AgentAuthorizationError.auditStoreRequired }
+            try authorization.scope.register(runID: runID, cancel: { await control.cancel() })
+            startupReservations[startupID]?.runID = runID
+            startupReservations[startupID]?.authorizationRegistered = true
+            audit = AgentAuditRuntime(configuration: authorization, journal: journal, identity: identity,
+                store: store, sessionID: id, runID: runID, capability: capabilities?.info)
+        } else { audit = nil }
         let selectedTools = capabilities?.registry ?? tools
         if selectedTools.hasMutation, journal?.storage != .durable {
             throw AgentSessionError.durableJournalRequired
@@ -492,7 +511,7 @@ public actor AgentSession {
                              journal: journal, contextEffects: contextEffects,
                              capabilityScope: capabilities?.scope,
                              allowedResources: capabilities?.allowedResources,
-                             preAdmissionReplanning: preAdmissionReplanning)
+                             preAdmissionReplanning: preAdmissionReplanning, audit: audit)
         let owed = owedSteering
         let candidateMessages = prepared + owed.map { .user([.text($0.text)]) } + [.user([.text(text)])]
         let preparedRequest: AgentPreparedModelRequest
@@ -632,6 +651,27 @@ public actor AgentSession {
                 try await self.commitMutation(callID, receipt: receipt, output: output,
                                               history: messages, steering: steering, runID: runID)
             },
+            commitAuditedResult: { call, result, messages in
+                guard let owner = call.auditAuthorization as? AgentAuditInvocation, let journal else {
+                    throw AgentAuthorizationError.auditUnavailable
+                }
+                let drafts = try await owner.resultDrafts(result)
+                let prepared = try await self.prepareCheckpoint(messages)
+                await self.beginCommittedWrite(runID)
+                do {
+                    if call.policy.effect == .mutation, !result.isIdempotentReplay {
+                        guard let receipt = result.receipt else { throw ToolReceiptError.missing }
+                        try await journal.commitMutation(sessionID: self.id, runID: runID, callID: call.call.id,
+                            receipt: receipt, output: result.output, history: prepared, steeringIDs: [], auditDrafts: drafts)
+                    } else {
+                        try await journal.commitAuditedCheckpoint(history: prepared, steeringIDs: [],
+                            sessionID: self.id, runID: runID, drafts: drafts)
+                    }
+                    await self.applyCommittedHistory(prepared, steering: [], runID: runID)
+                    await self.endCommittedWrite(runID)
+                    return prepared
+                } catch { await self.endCommittedWrite(runID); throw error }
+            },
             markMutationNeedsReconciliation: { callID in
                 await self.mutationQuarantineDidBegin?(runID, callID)
                 try await journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
@@ -758,6 +798,7 @@ public actor AgentSession {
         let journal = self.journal
         let drain = drainHandles[runID]
         let scope = scopesByRunID[runID]
+        let authorizationScope = authorization.mode == .requiredAudit ? authorization.scope : nil
         let drainReleaseDidBegin = self.drainReleaseDidBegin
         let scopeReleaseDidFinish = self.scopeReleaseDidFinish
         pendingDrainTask = Task { [weak self] in
@@ -773,6 +814,7 @@ public actor AgentSession {
                 await AgentSessionIdentityRegistry.shared.release(sessionID, storeID: await journal?.storeIdentity()?.storeID)
                 await drain?.complete()
                 await scope?.releaseRun(runID)
+                authorizationScope?.releaseRun(runID)
                 if scope != nil { await scopeReleaseDidFinish?(runID) }
             }
         }
@@ -826,6 +868,7 @@ public actor AgentSession {
             await scope.releaseRun(runID)
             await scopeReleaseDidFinish?(runID)
         }
+        if authorization.mode == .requiredAudit { authorization.scope.releaseRun(runID) }
     }
 
     private func restoreJournalStateIfNeeded() async throws {

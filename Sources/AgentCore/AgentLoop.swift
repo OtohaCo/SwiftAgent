@@ -21,6 +21,7 @@ package struct AgentLoop: Sendable {
     private let allowedResources: Set<ToolResource>?
     private let preAdmissionReplanning: AgentPreAdmissionReplanning
     private let projectionDrain = AgentProjectionDrain()
+    private let audit: AgentAuditRuntime?
 
     private var model: ModelID { binding.model }
     private var provider: any ModelProvider { binding.provider }
@@ -31,7 +32,8 @@ package struct AgentLoop: Sendable {
                  contextEffects: AgentContextEffectLedger = .init(),
                  capabilityScope: AgentCapabilityScope? = nil,
                  allowedResources: Set<ToolResource>? = nil,
-                 preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled) {
+                 preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled,
+                 audit: AgentAuditRuntime? = nil) {
         self.binding = binding
         self.tools = tools
         self.scheduler = scheduler
@@ -41,6 +43,7 @@ package struct AgentLoop: Sendable {
         self.capabilityScope = capabilityScope
         self.allowedResources = allowedResources
         self.preAdmissionReplanning = preAdmissionReplanning
+        self.audit = audit
     }
 
     package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
@@ -98,6 +101,7 @@ package struct AgentLoop: Sendable {
         await providerDrain
         await toolDrain
         await contextDrain
+        await audit?.waitForDrain()
     }
 
     private func waitForProviderToDrain(sessionID: UUID, runID: UUID) async {
@@ -203,10 +207,32 @@ package struct AgentLoop: Sendable {
             let request = preparedRequest.request
             try budget.checkActive()
             var accumulator = ModelEventAccumulator()
+            var receivedThisTurn: [ToolCallID] = []
+            var startedThisTurn: Set<ToolCallID> = []
             for try await rawEvent in provider.stream(request: request) {
                 try budget.checkActive()
                 let event = try scopeContinuation(rawEvent)
-                try accumulator.append(event)
+                if let audit, case .toolCallStarted(let id, let name) = event {
+                    if id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.isEmpty
+                        || !startedThisTurn.insert(id).inserted {
+                        // Only a bounded identity diagnostic is available; no claim to reconstruct fragments.
+                        try await audit.capture(.init(id: id, name: name, argumentsJSON: "", completeness: .incomplete),
+                            operationID: operationID, mutationIdentity: nil)
+                        try await audit.rejected(id, reason: "invalid_or_duplicate_stream_identity")
+                    }
+                }
+                if let audit, case .toolCallCompleted(let call) = event {
+                    let bounded = call.argumentsJSON.utf8.count <= AuditEncoding.maximumRawBytes
+                        && call.id.rawValue.utf8.count <= 512 && call.name.utf8.count <= 512
+                    let key = bounded ? Self.idempotencyKey(operationID: operationID, runID: runID, call: call) : nil
+                    try await audit.capture(call, operationID: operationID, mutationIdentity: key)
+                    receivedThisTurn.append(call.id)
+                }
+                do { try accumulator.append(event) }
+                catch {
+                    for id in receivedThisTurn { try await audit?.rejected(id, reason: "model_stream_rejected") }
+                    throw error
+                }
                 if case .responseStarted(let info) = event { try requireConfiguredModel(info.model) }
                 if case .responseCompleted = event { continue }
                 try await emitter?.send(.model(event))
@@ -219,6 +245,7 @@ package struct AgentLoop: Sendable {
             if let lifecycle {
                 let inputs = try await lifecycle.control.takeSteering(atTermination: response.stopReason != .toolCalls)
                 if !inputs.isEmpty {
+                    for call in response.toolCalls { try await audit?.rejected(call.id, reason: "steering_superseded") }
                     guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
                     try await applySteering(inputs, to: &history, lifecycle: lifecycle, emitter: emitter)
                     (projectionRevision, contextEpoch) = try advancedProjectionCoordinates(
@@ -229,6 +256,7 @@ package struct AgentLoop: Sendable {
                 }
             }
             if response.stopReason != .toolCalls {
+                for call in response.toolCalls { try await audit?.rejected(call.id, reason: "not_dispatched") }
                 let outcome: AgentLoopOutcome
                 switch response.stopReason {
                 case .endTurn, .stopSequence: outcome = .completed
@@ -245,9 +273,11 @@ package struct AgentLoop: Sendable {
             }
             guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
             guard response.toolCalls.count <= budget.maxToolCalls - toolCalls else { throw AgentLoopError.toolCallLimitReached }
-            let preparedCalls = try response.toolCalls.map { call in
+            var preparedCalls: [PreparedToolCall] = []
+            for call in response.toolCalls {
+                do {
                 guard usedCallIDs.insert(call.id).inserted else { throw AgentLoopError.reusedToolCallID(call.id) }
-                let prepared = try tools.prepare(call, context: ToolContext(sessionID: sessionID, runID: runID,
+                var prepared = try tools.prepare(call, context: ToolContext(sessionID: sessionID, runID: runID,
                     callID: call.id, deadline: budget.deadline,
                     idempotencyKey: Self.idempotencyKey(operationID: operationID, runID: runID, call: call),
                     argumentsJSON: call.argumentsJSON, evidenceLedger: evidenceLedger,
@@ -256,7 +286,12 @@ package struct AgentLoop: Sendable {
                 if let allowedResources, !Set(prepared.resources).isSubset(of: allowedResources) {
                     throw AgentCapabilityError.resourceOutsideScope
                 }
-                return prepared
+                if let audit { prepared = try await audit.prepare(prepared, deadline: budget.deadline) }
+                preparedCalls.append(prepared)
+                } catch {
+                    try await audit?.rejected(call.id, reason: error is AgentCapabilityError ? "resource_outside_scope" : "preparation_rejected")
+                    throw error
+                }
             }
             if let call = preparedCalls.first, preparedCalls.count == 1,
                !admissionFeedbackUsed, !mutationObserved,
@@ -266,6 +301,7 @@ package struct AgentLoop: Sendable {
                 // This probe belongs to the prepared runtime invocation, before authorization,
                 // durable intent and final admission. Invocation repeats the check on success.
                 if let rejection = try await call.preAdmissionEvidenceRejection() {
+                    try await audit?.rejected(call.call.id, reason: "runtime_evidence_rejected")
                     try budget.checkActive()
                     try await capabilityScope?.check(runID: runID, resources: call.resources)
                     guard try await lifecycle.checkReplanningSafety(operationID) else {
@@ -314,6 +350,7 @@ package struct AgentLoop: Sendable {
                 }, onCompleted: { index, call, result in
                     try await progress.record(index: index, call: call, result: result)
                 }, onFailed: { call, error in
+                    try await call.auditAuthorization?.failed(error)
                     var exposed: any Error = Self.toolError(error)
                     if call.policy.effect == .mutation {
                         let mark = lifecycle?.markMutationNeedsReconciliation

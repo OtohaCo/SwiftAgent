@@ -63,7 +63,8 @@ package struct ToolRegistry: Sendable {
         try context.checkActive()
         return PreparedToolCall(call: call, policy: registration.tool.policy, resources: invocation.resources,
                                 evidenceRequirements: invocation.evidenceRequirements,
-                                receiptExpectation: invocation.receiptExpectation, context: context) { executionContext in
+                                receiptExpectation: invocation.receiptExpectation, definition: registration.tool.definition,
+                                binding: invocation.binding, context: context, preauthorize: invocation.preauthorize) { executionContext in
             let result = try await invocation.invoke(executionContext)
             if !result.isModelVisibleError {
                 do { try registration.output.validate(result.output) }
@@ -89,12 +90,18 @@ package struct PreparedToolCall: Sendable {
     package var contextSessionID: UUID { context.sessionID }
     package var contextRunID: UUID { context.runID }
     package let receiptExpectation: ToolReceiptExpectation?
+    package let definition: ModelToolDefinition
+    package let binding: ToolAuthorizationBinding
+    package var auditAuthorization: (any ToolAuditAuthorization)? { context.auditAuthorization }
     private let context: ToolContext
     private let operation: AnyAgentTool.Invocation
+    private let preauthorize: @Sendable (ToolContext) async throws -> Void
 
     fileprivate init(call: ToolCall, policy: ToolPolicy, resources: [ToolResource],
                      evidenceRequirements: [EvidenceRequirement], receiptExpectation: ToolReceiptExpectation?,
-                     context: ToolContext, operation: @escaping AnyAgentTool.Invocation) {
+                     definition: ModelToolDefinition, binding: ToolAuthorizationBinding,
+                     context: ToolContext, preauthorize: @escaping @Sendable (ToolContext) async throws -> Void,
+                     operation: @escaping AnyAgentTool.Invocation) {
         self.call = call
         self.policy = policy
         self.resources = resources
@@ -102,6 +109,21 @@ package struct PreparedToolCall: Sendable {
         self.receiptExpectation = receiptExpectation
         self.context = context
         self.operation = operation
+        self.definition = definition; self.binding = binding; self.preauthorize = preauthorize
+    }
+
+    package func preauthorizeAudit(deadline: ContinuousClock.Instant) async throws {
+        try await preauthorize(executionContext(deadline: deadline))
+    }
+
+    package func boundToAudit(_ audit: any ToolAuditAuthorization) -> Self {
+        let updated = ToolContext(sessionID: context.sessionID, runID: context.runID, callID: context.callID,
+            deadline: context.deadline, idempotencyKey: context.idempotencyKey, argumentsJSON: context.argumentsJSON,
+            evidenceLedger: context.evidenceLedger, mutationAdmission: context.mutationAdmission,
+            executionAdmission: context.executionAdmission, auditAuthorization: audit)
+        return Self(call: call, policy: policy, resources: resources, evidenceRequirements: evidenceRequirements,
+            receiptExpectation: receiptExpectation, definition: definition, binding: binding,
+            context: updated, preauthorize: preauthorize, operation: operation)
     }
 
     /// Only this runtime-owned ledger resolution can return a trusted, pre-admission rejection.
@@ -118,14 +140,18 @@ package struct PreparedToolCall: Sendable {
     }
 
     package func invoke(deadline: ContinuousClock.Instant? = nil) async throws -> ToolResult<JSONValue> {
+        try await operation(executionContext(deadline: deadline))
+    }
+
+    private func executionContext(deadline: ContinuousClock.Instant?) -> ToolContext {
         let effectiveDeadline: ContinuousClock.Instant?
         if let current = context.deadline, let deadline { effectiveDeadline = min(current, deadline) }
         else { effectiveDeadline = context.deadline ?? deadline }
         let executionContext = ToolContext(sessionID: context.sessionID, runID: context.runID, callID: context.callID,
             deadline: effectiveDeadline, idempotencyKey: context.idempotencyKey, argumentsJSON: context.argumentsJSON,
             evidenceLedger: context.evidenceLedger, mutationAdmission: context.mutationAdmission,
-            executionAdmission: context.executionAdmission)
-        return try await operation(executionContext)
+            executionAdmission: context.executionAdmission, auditAuthorization: context.auditAuthorization)
+        return executionContext
     }
 }
 

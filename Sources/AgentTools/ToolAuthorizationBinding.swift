@@ -1,3 +1,4 @@
+import AgentModels
 import Foundation
 
 /// Non-secret identifiers for the actual backend/account captured by a Host tool.
@@ -53,6 +54,8 @@ package protocol ToolAuditAuthorization: Sendable {
     func recordToolAuthorization(_ value: ToolAuthorization?, failed: Bool) async throws
     func apply(mutation: ToolMutationAdmissionRequest?) async throws -> ToolMutationAdmissionResult?
     func checkFinal(binding: ToolAuthorizationBinding) throws
+    func checkPreparedAction(definition: ModelToolDefinition, policy: ToolPolicy, resources: [ToolResource],
+                             expectation: ToolReceiptExpectation?, binding: ToolAuthorizationBinding) throws
     func admitFinal() throws -> UUID
     func recordAdmission() async throws
     func observeExecutor()

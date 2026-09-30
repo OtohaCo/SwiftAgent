@@ -149,6 +149,7 @@ public struct AgentAuthorizationConfiguration: Sendable {
     public let authorizerTimeout: Duration
     public let maximumDecisionLifetime: Duration
     public let backlog: AuditBacklogPolicy?
+    var testingHooks: AgentAuditTestingHooks? = nil
 
     public init(mode: AgentAuthorizationMode = .legacy, authorizer: (any AgentAuthorizer)? = nil,
                 identity: AgentAuthorizationIdentity? = nil, scope: AgentAuthorizationScope = .init(),
@@ -172,6 +173,11 @@ public struct AgentAuthorizationConfiguration: Sendable {
         try backlog?.validate()
         try scope.check()
     }
+}
+
+struct AgentAuditTestingHooks: Sendable {
+    var applicationCommitted: (@Sendable () async -> Void)? = nil
+    var finalAdmitted: (@Sendable () async -> Void)? = nil
 }
 
 /// Optional local export pressure. It never changes settlement or authorizes execution.

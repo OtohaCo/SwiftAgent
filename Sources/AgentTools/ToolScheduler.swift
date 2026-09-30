@@ -118,6 +118,8 @@ public struct ToolScheduler: Sendable {
                     do {
                         let timeoutError: ToolSchedulerError = toolDeadline == deadline ? .deadlineExceeded : .toolTimedOut(call.call.id)
                         let result = try await withOperationDeadline(toolDeadline, timeoutError: timeoutError) {
+                            // Human/network authorization holds no scheduler resource lease.
+                            if call.auditAuthorization != nil { try await call.preauthorizeAudit(deadline: toolDeadline) }
                             let lease = try await coordinator.acquire(resources: call.resources, effect: call.policy.effect,
                                                                       execution: call.policy.execution)
                             do {

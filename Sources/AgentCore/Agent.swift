@@ -26,6 +26,7 @@ public struct AgentConfiguration: Sendable {
     public var scheduler: ToolScheduler
     public var contextPolicy: AgentContextPolicy
     public var preAdmissionReplanning: AgentPreAdmissionReplanning
+    public var authorization: AgentAuthorizationConfiguration
 
     public init(
         instructions: String = "",
@@ -35,7 +36,8 @@ public struct AgentConfiguration: Sendable {
         runTimeout: Duration = .seconds(30),
         scheduler: ToolScheduler = .init(),
         contextPolicy: AgentContextPolicy = .default,
-        preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled
+        preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled,
+        authorization: AgentAuthorizationConfiguration = .init()
     ) {
         self.instructions = instructions
         self.structuredOutput = structuredOutput
@@ -45,6 +47,7 @@ public struct AgentConfiguration: Sendable {
         self.scheduler = scheduler
         self.contextPolicy = contextPolicy
         self.preAdmissionReplanning = preAdmissionReplanning
+        self.authorization = authorization
     }
 }
 
@@ -125,6 +128,7 @@ public struct Agent: Sendable {
         startupReleaseDidFinish: (@Sendable (UUID) async -> Void)? = nil,
         mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)? = nil
     ) throws -> AgentSession {
+        try configuration.authorization.validate(journal: journal)
         if requiresDurableJournal, journal?.storage != .durable {
             throw AgentSessionError.durableJournalRequired
         }
@@ -135,6 +139,7 @@ public struct Agent: Sendable {
             maxToolCalls: configuration.maxToolCalls, runTimeout: configuration.runTimeout,
             contextPolicy: configuration.contextPolicy, journal: journal,
             preAdmissionReplanning: configuration.preAdmissionReplanning,
+            authorization: configuration.authorization,
             checkpointDidExit: checkpointDidExit, drainWaitDidBegin: drainWaitDidBegin,
             drainReleaseDidBegin: drainReleaseDidBegin,
             scopeReleaseDidFinish: scopeReleaseDidFinish,
