@@ -248,7 +248,8 @@ private struct IndexKind<Value: Codable> {
     static func generation(of value: Value) -> UInt64 { (value as? Location)?.generation ?? 0 }
 }
 
-/// Indexes whose value is the sequence of the batch holding the indexed record.
+/// Most UInt64 indexes point to the Journal batch holding their current value.
+/// auditMembers instead maps a group ordinal to a global audit-record sequence.
 extension IndexKind where Value == UInt64 {
     static var sessions: Self { .init("sessions", witnessed: true) }
     static var operations: Self { .init("operations", witnessed: true) }
@@ -258,7 +259,9 @@ extension IndexKind where Value == UInt64 {
     static var queueIDs: Self { .init("queue-ids", witnessed: true) }
     static var queueOrder: Self { .init("queue-order") }
     static var queueLinks: Self { .init("queue-links") }
+    /// Ordinal -> audit sequence, retained with its group and typed facts; not a batch pointer.
     static var auditMembers: Self { .init("audit-members", requiresAuthorizationAudit: true) }
+    /// Latest checkpoint batch sequence; keeps that checkpoint batch live.
     static var auditExports: Self { .init("audit-exports", witnessed: true, requiresAuthorizationAudit: true) }
     static var rejections: Self { .init("rejections", witnessed: true, requiresAdmissionRejections: true) }
 }
@@ -424,12 +427,13 @@ private final class MetricsBox: @unchecked Sendable {
     private var decoded: UInt64 = 0
     private var written: UInt64 = 0
     private var committed: UInt64 = 0
+    private var encoded: UInt64 = 0
     private var writeLock: UInt64 = 0
     private var maintenance: UInt64 = 0
 
     func add(read bytes: Int = 0, decoded batches: Int = 0, written output: Int = 0,
              committed publications: Int = 0, writeLockNanoseconds: UInt64 = 0,
-             maintenanceNanoseconds: UInt64 = 0) {
+             maintenanceNanoseconds: UInt64 = 0, encodedBatches: UInt64 = 0) {
         lock.lock()
         read += UInt64(bytes)
         decoded += UInt64(batches)
@@ -437,6 +441,7 @@ private final class MetricsBox: @unchecked Sendable {
         committed += UInt64(publications)
         writeLock += writeLockNanoseconds
         maintenance += maintenanceNanoseconds
+        encoded += encodedBatches
         lock.unlock()
     }
 
@@ -446,7 +451,7 @@ private final class MetricsBox: @unchecked Sendable {
         return JournalStorageMetrics(bytesRead: read, decodedBatches: decoded,
                                      bytesWritten: written, committedBatches: committed,
                                      writeLockNanoseconds: writeLock,
-                                     maintenanceNanoseconds: maintenance)
+                                     maintenanceNanoseconds: maintenance, encodedBatches: encoded)
     }
 }
 
@@ -1005,6 +1010,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private func frameBytes(_ batch: BatchV2) throws -> (Data, String, UUID?) {
+        counters.add(encodedBatches: 1)
         let payload = try JSONEncoder().encode(batch)
         let digest = Self.digest(payload)
         let frame: Frame

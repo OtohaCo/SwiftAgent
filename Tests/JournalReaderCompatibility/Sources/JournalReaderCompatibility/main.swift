@@ -23,6 +23,11 @@ import Foundation
                 journal = try AgentIncrementalJournal.create(at: directory,
                     operationDomain: "reader-matrix", supportsAdmissionRejections: true)
             #endif
+            #if AUDIT_RUNTIME
+            case "create-audit-empty", "create-audit-denial":
+                journal = try AgentIncrementalJournal.create(at: directory,
+                    operationDomain: "reader-matrix", supportsAuthorizationAudit: true)
+            #endif
             default:
                 journal = try AgentIncrementalJournal.open(at: directory)
             }
@@ -45,6 +50,19 @@ import Foundation
                 _ = try await run.wait()
                 try await run.waitForDrain()
             #endif
+            #if AUDIT_RUNTIME
+            case "create-audit-empty": break
+            case "create-audit-denial":
+                let agent = try Agent(model: .init(provider: "reader-matrix", name: "script"),
+                    provider: MatrixAuditProvider(), tools: [try MatrixSearch()],
+                    configuration: .init(authorization: .init(mode: .requiredAudit, authorizer: MatrixDenyAuthorizer(),
+                        identity: .init(securityDomain: "matrix", subjectID: "user", actingSubjectID: "agent",
+                            backend: .init(instanceID: "fixture", version: "1", accountID: "local", credentialGeneration: "1")))))
+                let run = try await agent.makeSession(id: sessionID, journal: journal).run("denied")
+                do { _ = try await run.wait(); throw AgentAuthorizationError.invalidDecision }
+                catch AgentAuthorizationError.authorizationDenied { }
+                try await run.waitForDrain()
+            #endif
             case "maintain":
                 for _ in 0..<8 { _ = try await journal.requestMaintenance() }
             case "inspect": break
@@ -62,6 +80,12 @@ import Foundation
                 + "rejectedMutation=\(rejectedMutation?.state.rawValue ?? "none") "
                 + "maintenance=\(maintenance == nil ? "none" : "readable") "
                 + "paired=\(messages.contains { if case .tool(let result) = $0.message { return result.isError }; return false })")
+            #if AUDIT_RUNTIME
+            if journal.supportsAuthorizationAudit {
+                let page = try await journal.auditRecords(includeRestrictedPayload: true)
+                print("audit=\(page.records.count) deny=\(page.records.filter { if case .authorization(let a) = $0.fact { return a.decision?.outcome == .deny }; return false }.count)")
+            }
+            #endif
             try await journal.close()
         } catch {
             print("open/operation=fail \(String(reflecting: error))")
@@ -132,6 +156,27 @@ private struct MatrixCommit: AgentTool {
     }
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<String> {
         throw AgentJournalError.invalidRecord
+    }
+}
+#endif
+
+#if AUDIT_RUNTIME
+private struct MatrixAuditProvider: ModelProvider {
+    let descriptor = ModelProviderDescriptor(id: "reader-matrix", capabilities: [.multiTurn, .tools])
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            let info = ResponseInfo(id: "audit-matrix", model: request.model)
+            let call = ToolCall(id: .init(rawValue: "denied-read"), name: MatrixSearch.name, argumentsJSON: "{}", completeness: .complete)
+            try emit(.responseStarted(info)); try emit(.toolCallStarted(call.id, name: call.name))
+            try emit(.toolCallArgumentsDelta(call.id, call.argumentsJSON)); try emit(.toolCallCompleted(call))
+            try emit(.responseCompleted(.init(info: info, toolCalls: [call], stopReason: .toolCalls)))
+        }
+    }
+}
+private struct MatrixDenyAuthorizer: AgentAuthorizer {
+    func decide(_ request: AuthorizationRequest) async throws -> AuthorizationDecision {
+        .init(request: request, outcome: .deny, subject: .init(issuer: "matrix", subjectID: "rule", type: .automatedPolicy),
+            policy: .init(id: "matrix", version: "1"), validFor: .seconds(30), reasonCode: "fixture")
     }
 }
 #endif

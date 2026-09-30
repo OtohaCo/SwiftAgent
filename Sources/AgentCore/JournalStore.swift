@@ -54,14 +54,18 @@ public struct JournalStorageMetrics: Sendable, Equatable {
     public let committedBatches: UInt64
     public let writeLockNanoseconds: UInt64
     public let maintenanceNanoseconds: UInt64
+    /// Number of disk batch encodings; excludes Host input/output encoders and index envelopes.
+    public let encodedBatches: UInt64
     public init(bytesRead: UInt64, decodedBatches: UInt64, bytesWritten: UInt64,
-                committedBatches: UInt64, writeLockNanoseconds: UInt64, maintenanceNanoseconds: UInt64) {
+                committedBatches: UInt64, writeLockNanoseconds: UInt64, maintenanceNanoseconds: UInt64,
+                encodedBatches: UInt64 = 0) {
         self.bytesRead = bytesRead
         self.decodedBatches = decodedBatches
         self.bytesWritten = bytesWritten
         self.committedBatches = committedBatches
         self.writeLockNanoseconds = writeLockNanoseconds
         self.maintenanceNanoseconds = maintenanceNanoseconds
+        self.encodedBatches = encodedBatches
     }
 }
 
