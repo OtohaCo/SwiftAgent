@@ -15,6 +15,42 @@ import Foundation
             case "probe":
                 try await journal.close()
                 exit(0)
+            case "read-audit":
+                var cursor: AuditCursor?, count = 0, allowed = 0, denied = 0, applied = 0, observed = 0, results = 0
+                var operationIDs: Set<String> = []
+                repeat {
+                    let page = try await journal.auditRecords(limit: 100, cursor: cursor, includeRestrictedPayload: true)
+                    for record in page.records {
+                        count += 1
+                        if let operation = record.links.operationID { operationIDs.insert(operation) }
+                        switch record.fact {
+                        case .authorization(let a):
+                            if a.layer == .enterprise, a.decision?.outcome == .allow { allowed += 1 }
+                            if a.layer == .enterprise, a.decision?.outcome == .deny { denied += 1 }
+                        case .disposition(let d):
+                            if d.state == .dispatchPrepared { applied += 1 }
+                            if d.state == .executorObserved { observed += 1 }
+                        case .result: results += 1
+                        case .proposal: break
+                        }
+                    }
+                    cursor = page.nextCursor
+                } while cursor != nil
+                print("audit=\(count) allowed=\(allowed) denied=\(denied) applied=\(applied) observed=\(observed) results=\(results) pending=\(try await journal.pendingMutations().count) operations=\(operationIDs.count)")
+                try await journal.close(); exit(0)
+            case "audit-deny-and-exit", "audit-write-and-wait", "audit-write-and-settle":
+                guard CommandLine.arguments.count == 4 else { exit(64) }
+                let file = URL(fileURLWithPath: CommandLine.arguments[3])
+                let agent = try Agent(model: .init(provider: "queue-process", name: "fixed"), provider: AuditProcessProvider(),
+                    tools: [AuditProcessWrite(file: file, hold: mode == "audit-write-and-wait")],
+                    configuration: .init(runTimeout: .seconds(120), authorization: .init(mode: .requiredAudit,
+                        authorizer: AuditProcessAuthorizer(deny: mode == "audit-deny-and-exit"),
+                        identity: .init(securityDomain: "process-fixture", subjectID: "user", actingSubjectID: "agent",
+                            backend: .init(instanceID: "local", version: "1", accountID: "fixture", credentialGeneration: "1")))))
+                let run = try await agent.makeSession(journal: journal).run("write", operationID: "audit-process-effect")
+                do { _ = try await run.wait() }
+                catch AgentAuthorizationError.authorizationDenied { guard mode == "audit-deny-and-exit" else { throw AgentAuthorizationError.authorizationDenied } }
+                try await run.waitForDrain(); try await journal.close(); exit(0)
             case "read-admission-rejection":
                 guard CommandLine.arguments.count == 6,
                       let sessionID = UUID(uuidString: CommandLine.arguments[3]),
@@ -132,5 +168,55 @@ private struct QueueProcessWrite: AgentTool {
         try handle.close()
         FileHandle.standardOutput.write(Data("EFFECT-WRITTEN\n".utf8))
         while true { try await Task.sleep(for: .seconds(30)) }
+    }
+}
+
+private struct AuditProcessProvider: ModelProvider {
+    let descriptor = ModelProviderDescriptor(id: "queue-process", capabilities: [.multiTurn, .tools])
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            let info = ResponseInfo(id: "audit-child", model: request.model)
+            try emit(.responseStarted(info))
+            if request.messages.last?.role == .tool {
+                try emit(.textDelta("done")); try emit(.responseCompleted(.init(info: info, content: [.text("done")], stopReason: .endTurn)))
+                return
+            }
+            let call = ToolCall(id: .init(rawValue: "audit-child-write"), name: AuditProcessWrite.name,
+                argumentsJSON: #"{"id":"A"}"#, completeness: .complete)
+            try emit(.toolCallStarted(call.id, name: call.name)); try emit(.toolCallArgumentsDelta(call.id, call.argumentsJSON))
+            try emit(.toolCallCompleted(call)); try emit(.responseCompleted(.init(info: info, toolCalls: [call], stopReason: .toolCalls)))
+        }
+    }
+}
+
+private struct AuditProcessAuthorizer: AgentAuthorizer {
+    let deny: Bool
+    func decide(_ request: AuthorizationRequest) async throws -> AuthorizationDecision {
+        .init(request: request, outcome: deny ? .deny : .allow,
+            subject: .init(issuer: "child-host", subjectID: "rule", type: .automatedPolicy),
+            policy: .init(id: "process-policy", version: "1"), validFor: .seconds(120), reasonCode: "fixture")
+    }
+}
+
+private struct AuditProcessWrite: AgentTool {
+    struct Input: Codable, Sendable { let id: String }
+    typealias Output = String
+    static let name = "audit_process_write"
+    static let description = "Write a disposable fixture file through the real AgentLoop"
+    static let inputSchema = ToolSchema.object(properties: ["id": .string], required: ["id"])
+    static let outputSchema = ToolSchema.string
+    let file: URL; let hold: Bool
+    let policy = try! ToolPolicy.mutation(timeout: .seconds(120), authorization: .notRequired, evidence: .none)
+    func resourceRequirements(for input: Input) throws -> [ToolResource] { [.named(.init(namespace: "audit.process", id: input.id))] }
+    func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation? { try .init(targets: [.init(namespace: "audit.process", id: input.id)], revision: .present) }
+    func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<String> {
+        try Data("effect\n".utf8).write(to: file)
+        let handle = try FileHandle(forWritingTo: file); try handle.synchronize(); try handle.close()
+        if hold {
+            FileHandle.standardOutput.write(Data("AUDIT-EFFECT-WRITTEN\n".utf8))
+            while true { try await Task.sleep(for: .seconds(60)) }
+        }
+        return .init(output: "effect", receipt: .init(operationID: context.idempotencyKey!, status: .succeeded,
+            confirmedTargets: [.init(namespace: "audit.process", id: input.id)], revision: "1"))
     }
 }

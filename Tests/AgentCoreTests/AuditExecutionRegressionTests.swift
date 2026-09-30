@@ -175,7 +175,7 @@ struct AuditExecutionProvider: ModelProvider {
     func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         ModelEventStream.make { emit in
             let events = request.messages.last?.role == .tool ? textResponse(request, "done") : toolResponse(request, [
-                .init(id: .init(rawValue: "write-\(request.runID)"), name: AuditExecutionTool.name, argumentsJSON: #"{"id":"A"}"#, completeness: .complete)
+                .init(id: .init(rawValue: "write-\(request.runID?.uuidString ?? "missing-run")"), name: AuditExecutionTool.name, argumentsJSON: #"{"id":"A"}"#, completeness: .complete)
             ])
             for event in events { try emit(event) }
         }

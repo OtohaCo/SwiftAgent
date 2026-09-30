@@ -146,6 +146,26 @@ struct AuditBoundaryTests {
         try await journal.close()
     }
 
+    @Test func aReadOnlyExecutorFailureIsObservedAndInterruptedNotUnexecuted() async throws {
+        let directory = auditTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "read-failure", supportsAuthorizationAudit: true)
+        let log = EffectLog()
+        let run = try await Agent(model: fixtureModel, provider: ScriptedProvider { request, _ in toolResponse(request, [
+            .init(id: .init(rawValue: "read-error"), name: "audit_read_error", argumentsJSON: "{}", completeness: .complete)
+        ]) }, tools: [FailingAuditRead(log: log)], configuration: .init(authorization: auditTestConfiguration()))
+            .makeSession(journal: journal).run("read")
+        await #expect(throws: FixtureError.invalidOperation) { try await run.wait() }
+        try await run.waitForDrain()
+        #expect(await log.names.count == 1)
+        let facts = try await journal.auditRecords(matching: .init(runID: run.id)).records
+        #expect(facts.contains { if case .disposition(let d) = $0.fact { return d.state == .executorObserved }; return false })
+        #expect(facts.contains { if case .disposition(let d) = $0.fact { return d.state == .interrupted }; return false })
+        #expect(!facts.contains { if case .disposition(let d) = $0.fact { return d.state == .notExecuted }; return false })
+        #expect(try await journal.pendingMutations().isEmpty)
+        try await journal.close()
+    }
+
     @Test func exporterStopRetainsNoncooperativeSinkAndCancelledWaiterDoesNotReleaseIt() async throws {
         let directory = auditTestDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -218,4 +238,14 @@ private struct AuditRuntimeRead: RuntimeAgentTool {
 private struct BlockingAuditSink: AuditExportSink {
     let entered: AuditGate; let release: AuditGate
     func write(_ batch: AuditExportBatch) async throws -> AuditExportAcknowledgement { await entered.open(); await release.wait(); return .init(batch: batch) }
+}
+
+private struct FailingAuditRead: RuntimeAgentTool {
+    let runtimeDefinition = ModelToolDefinition(name: "audit_read_error", description: "Controlled read failure",
+        inputSchema: ToolSchema.object(properties: [:]).json, outputSchema: ToolSchema.string.json)
+    let policy = try! ToolPolicy.readOnly(authorization: .notRequired)
+    let log: EffectLog
+    func execute(_ input: JSONValue, context: ToolContext) async throws -> ToolResult<JSONValue> {
+        await log.record("read", context); throw FixtureError.invalidOperation
+    }
 }

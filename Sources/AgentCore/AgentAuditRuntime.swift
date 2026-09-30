@@ -233,6 +233,7 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
     func apply(mutation: ToolMutationAdmissionRequest?) async throws -> ToolMutationAdmissionResult? {
         try checkFinal(binding: request.binding)
         try await journal.checkAuditAvailability(backlog: configuration.backlog)
+        await configuration.testingHooks?.beforeApplication?()
         let draft = JournalAuditDraft(links: links, fact: .disposition(.init(state: .dispatchPrepared,
             actionDigest: request.actionDigest, localPolicyGeneration: request.policyGeneration)))
         let result: ToolMutationAdmissionResult?
@@ -291,7 +292,8 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
         }
         if state.2 { drafts.append(.init(links: links, fact: .disposition(.init(state: .executorObserved)))) }
         let unknown = request.toolPolicy.effect == .mutation && state.1 && replaySource == nil
-        drafts.append(.init(links: links, fact: .disposition(.init(state: unknown ? .uncertain : .notExecuted,
+        let disposition: AuditExecutionDisposition.State = unknown ? .uncertain : state.2 ? .interrupted : .notExecuted
+        drafts.append(.init(links: links, fact: .disposition(.init(state: disposition,
             reasonCode: Self.reason(error)))))
         try await journal.appendAudit(drafts)
     }

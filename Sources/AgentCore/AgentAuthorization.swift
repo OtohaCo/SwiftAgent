@@ -176,6 +176,7 @@ public struct AgentAuthorizationConfiguration: Sendable {
 }
 
 struct AgentAuditTestingHooks: Sendable {
+    var beforeApplication: (@Sendable () async -> Void)? = nil
     var applicationCommitted: (@Sendable () async -> Void)? = nil
     var finalAdmitted: (@Sendable () async -> Void)? = nil
 }
