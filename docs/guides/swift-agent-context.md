@@ -43,6 +43,24 @@ written back as Session history. Formal messages, tool identity checks,
 budget accounting, Evidence, and mutation settlement continue to use formal
 runtime state.
 
+`conversationRevision` identifies that exact canonical snapshot in the live
+Session. Startup preflight includes an uncommitted user input and uses its
+reserved candidate revision, so it can be one ahead of `conversationSnapshot()`.
+After admission, each request uses the actual committed Session revision: two
+separately committed tool results can advance it twice within one tool batch.
+Steering and subsequent Runs use the newly committed source. Audit-only writes
+do not advance it. Reopening establishes a new actor's live revision; this is
+not a persistent Journal commit count or a globally comparable timestamp.
+
+`contextEpoch` is the Run's logical source-generation coordinate. Its initial
+value remains the reserved candidate revision for compatibility; it advances
+once for each steering/tool-source update, rather than for every result commit.
+It need not equal `conversationRevision`. Neither field is a cache identity by
+itself: compare within the same Session/Run and include `sourceDigest`, which
+binds all canonical messages and current instructions. Core independently
+checks the plan's revision, epoch and exact digest; an external projector cannot
+certify its own stale or altered source. No public field/Codable key is removed.
+
 An enqueued [follow-up](swift-agent-follow-up-queue.md) is not yet a canonical
 message and cannot alter the current Run's projection or source revision.
 When the Host explicitly dispatches it, the ordinary Session startup and
@@ -198,6 +216,22 @@ Formal messages and the indexed mutation ledger remain subject to their
 separate retention rules. Physical segment packing only copies necessary
 facts to new managed files before deleting unreferenced old segments. See
 [Journal](swift-agent-journal.md) and [ADR 0004](../adr/0004-journal-storage.md).
+
+### Frozen source encoding
+
+The runtime computes the canonical digest and encoded size of each frozen source
+once, before calling a projector. A projector or transparent wrapper can use
+`try input.sourceDigest()`; external or decoded inputs compute their own digest.
+The runtime still checks the returned source identity against its independent
+result. The existing digest format and Codable fields are unchanged.
+
+Identity projections that retain the same message array can reuse its encoded
+size. Changed or rebuilt arrays are measured from the actual projection, including
+shortened and enlarged views. Swift String equality alone is not a size witness:
+canonically equivalent strings can encode different UTF-8. The cache contains
+only a digest and byte count, is scoped to the current input, and retains no
+encoded message buffer. Custom projectors that calculate their own digest can
+still incur another encoding. Provider payload encoding is separate.
 
 ### Resolved read-only groups
 

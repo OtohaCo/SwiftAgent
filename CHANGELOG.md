@@ -6,6 +6,27 @@ All notable changes to SwiftAgent are recorded here.
 
 Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 
+- Bound early CI build/test stages and retain per-attempt process/source evidence.
+  Add a five-attempt Linux reporting reproduction experiment that stops on failure;
+  historical #45/#46 hang/segfault root causes remain unestablished.
+  Sample the current owned ancestry (root and at most two active descendants),
+  with shared-budget identity checks and explicit unavailable/failure outcomes;
+  do not select a stale historical PID or infer depth from PID size.
+- Memory Journal keeps one full checkpoint per Session instead of all historical
+  versions. Complete canonical history, steering IDs, sequences and Run identity
+  queries are preserved. Identity-only metadata still grows with Sessions/Runs;
+  memory mode gains no mutation/audit capability. Durable formats are unchanged.
+- Projection source revision follows the actual committed Session snapshot after
+  multiple tool-result commits; candidate preflight and the distinct Run source
+  epoch are documented. Stale/wrong source plans still fail; Codable fields and
+  digest format stay unchanged. Session `history` remains a loaded view; durable
+  resume examples use the existing throwing `conversationSnapshot()`.
+
+- Reuse the frozen Context source digest and identity-view size without retaining
+  encoded buffers. Changed projections are measured independently; external
+  source claims remain verified. The additive input `sourceDigest()` API keeps
+  the existing Codable and digest format.
+
 - Validate the whole replaced read-only failure group with committed execution
   provenance. Mixed mutation groups and missing/reopened proof are rejected;
   request views change without modifying canonical history or settlement.

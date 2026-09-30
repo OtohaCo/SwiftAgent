@@ -70,6 +70,15 @@ stalled maintenance permanently.
 
 ## RC6 candidate, unreleased
 
+Projection `conversationRevision` now follows the exact committed live Session
+snapshot after multi-result tool commits; startup preflight still uses a reserved
+candidate revision. `contextEpoch` remains a distinct Run-local source-generation
+coordinate. Numeric values after a tool batch can differ from earlier versions;
+cache consumers must bind Session/Run, revision, epoch and exact source digest.
+No projection field, Codable key or digest format changes. Session `history`
+remains a loaded-memory view; the existing throwing `conversationSnapshot()` is
+the restoration interface, including current instructions and storage errors.
+
 `AgentFailure.authorization` and `AgentFailure.auditPersistence` are source breaks
 for exhaustive switches. The candidate
 classifies the new `AgentAuthorizationError`; presentation consumers must handle
@@ -205,6 +214,11 @@ already in 1.0, as `StopReason.unknown` does.
   declare
 - Compatibility for `package` APIs, test helpers, or WorkspaceAgent host types
   as if they were the Core SDK
+
+The additive `AgentContextProjectionInput.sourceDigest()` method lets projectors
+reuse the runtime's frozen source measurement. Its cache is excluded from
+Codable, equality and hashing; decoded inputs do not acquire a trusted runtime
+cache. There is no digest, Journal schema, Provider request or budget change.
 
 Resolved read-only group projection now requires proof for all removed calls and
 the resolving call. This stricter behavior can reject previously accepted Host
