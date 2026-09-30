@@ -35,6 +35,11 @@ Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
   Document/test inclusive message and exclusive follow-up pagination.
   This addresses selected #44 items, not the entire collection issue.
 
+- Add an explicit finite async writer-lock wait while preserving the original
+  fail-fast API and schema. Cancellation keeps its I/O owner until actual exit.
+  Real Journal process tests cover contention and the surviving pre-exec window;
+  this mitigates transient competition rather than eliminating OS inheritance.
+
 ### Fixed: audit boundary closeout
 
 - Preserve original and failure-audit errors while still attempting mutation

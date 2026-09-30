@@ -225,3 +225,9 @@ the resolving call. This stricter behavior can reject previously accepted Host
 spans. `AgentContextReadOnlyGroupReferencing` is additive; wrappers must forward
 its requirements. Existing source/Codable proof fields and schema 3/4/5 stay
 unchanged. Reopened Sessions conservatively reject spans without live proof.
+
+`JournalWriterLockWait` and an explicit-wait `openAsync` overload are additive.
+The original overload (including function-reference signature) and fail-fast
+default remain. Waiting changes no schema 3/4/5, mutation identity or recovery
+rule. The new C POSIX helper target is test-process support only, not a library
+executor or production lock implementation.
