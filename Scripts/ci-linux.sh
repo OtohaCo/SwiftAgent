@@ -48,3 +48,5 @@ swift test --package-path Examples/DynamicModelRouting --disable-sandbox --no-pa
 
 echo "execution reporting support and consumers"
 bash Scripts/ci-execution-reporting.sh
+
+SWIFTAGENT_AUDIT_TESTS_ALREADY_RUN=1 bash Scripts/ci-audited-authorization.sh 2>&1 | tee .build/ci-logs/audited-authorization.log

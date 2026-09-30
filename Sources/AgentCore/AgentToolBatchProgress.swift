@@ -36,7 +36,12 @@ actor AgentToolBatchProgress {
             var proposed = results
             proposed[index] = message
             let committedHistory = history(proposed)
-            if call.policy.effect == .mutation {
+            if let commitAudit = lifecycle?.commitAuditedResult, call.auditAuthorization != nil {
+                let canonical = try await commitAudit(call, result, committedHistory)
+                updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+                if call.policy.effect == .mutation, !result.isIdempotentReplay { executedMutation = true }
+                if call.policy.effect == .readOnly { await lifecycle?.recordReadOnlyResult(call.call, message) }
+            } else if call.policy.effect == .mutation {
                 guard let receipt = result.receipt else { throw ToolReceiptError.missing }
                 if result.isIdempotentReplay, let lifecycle {
                     let canonical = try await lifecycle.checkpoint(committedHistory, [])

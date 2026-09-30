@@ -1,5 +1,16 @@
 # SwiftAgent Typed Tools
 
+## RC6 candidate: enterprise authorizer and action versions
+
+In `requiredAudit`, centralized Host `AgentAuthorizer` runs for every model tool,
+including `.notRequired`. Required `tool.authorize` still supplies a distinct
+domain check; human confirmation can live only in the enterprise authorizer.
+The defaulted `authorizationBinding(for:)` declares tool/implementation versions,
+backend/account generation, resource revisions and immutable material versions
+for exact action binding. The Host executor must enforce immutable inputs or
+conditional writes itself. Approval does not freeze a mutable backend or cover
+Provider egress. See [Audited Authorization](swift-agent-authorization-audit.md).
+
 last-verified: 2026-09-29
 
 Implement [AgentTool](../../Sources/AgentTools/AgentTool.swift) with

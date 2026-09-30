@@ -1,5 +1,14 @@
 # Durable follow-up inputs
 
+## RC6 candidate: required audit on queued work
+
+Required audit also checks configuration, storage and backlog before enqueue or
+candidate input publication. Dispatch remains a new Run with current model,
+capability and authorization decisions; durable approvals never revive live
+permission. A failed audit store refuses new work while an already admitted
+mutation retains settlement/drain ownership. See
+[Audited Authorization](swift-agent-authorization-audit.md).
+
 `AgentSession.enqueueFollowUp(_:)` durably receives *future* user input. It
 does not call a model or append to the formal conversation. `session.run(_:)`
 still starts immediately (or rejects overlap); `run.steer(_:)` still corrects

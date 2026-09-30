@@ -6,13 +6,14 @@ SwiftAgent is a provider-neutral Agent runtime for Swift. It combines typed tool
 actor-isolated conversations, streaming events, Evidence-backed execution,
 mutation receipts, durable journaling, crash recovery and provider adapters.
 
-Use this README to choose a reading path. Detailed integration guides are currently
-in English; the Chinese and Japanese READMEs provide the same navigation and scope.
+Use this README to choose a reading path. Most detailed integration guides are in English; Audited Authorization also has
+a Chinese guide. The Chinese and Japanese READMEs provide navigation and scope.
 
 ## Start here
 
 | What you are doing | Read first | Continue with |
 | --- | --- | --- |
+| Host-owned tool decisions, exact action binding, durable audit and archive sinks | [Audited Authorization (RC6 candidate, unreleased)](docs/guides/swift-agent-authorization-audit.md) |
 | Integrating SwiftAgent into an app | [App integration entry](INTEGRATION.md) | [Consumer recipes](docs/ai/consumer-recipes.md) |
 | Asking Codex, Claude or another coding agent to build the integration | [AI integration guide](docs/ai/start-here.md) | [Acceptance checklist](docs/ai/acceptance-checklist.md) |
 | Changing the SDK itself | [Contributing](CONTRIBUTING.md) | [Testing](docs/testing.md) and [security model](docs/security-model.md) |

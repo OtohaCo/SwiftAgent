@@ -108,7 +108,7 @@ private actor QueueProbeResolver: AgentFollowUpResolver {
 
 /// A child process whose waits are all bounded. A wait that runs out collects the child's state,
 /// kills the child and fails the test instead of blocking it.
-private final class BoundedChild: @unchecked Sendable {
+final class BoundedChild: @unchecked Sendable {
     private let process: Process
     private let errors: Pipe
     private let exited = DispatchSemaphore(value: 0)

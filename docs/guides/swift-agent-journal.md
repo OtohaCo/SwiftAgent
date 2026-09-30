@@ -1,5 +1,19 @@
 # SwiftAgent Journal
 
+## RC6 candidate: authorization audit (opt-in)
+
+An explicit `supportsAuthorizationAudit: true` create selects schema 5 and
+stores typed proposal/decision/disposition/result-reference facts in the same
+CURRENT transaction domain. It includes schema-4 rejection support. Default
+creation stays schema 3, rejection-only stays schema 4; neither is upgraded.
+Audit-only commits do not advance conversation revision. Incremental indexes
+and witnesses retain facts/raw payloads during maintenance; upload is not a
+retention policy. `auditRecords` is a throwing, bounded Host query; exporter
+checkpoints share the store. See [Audited Authorization](swift-agent-authorization-audit.md)
+for explicit directory selection, old-reader rejection, query/export and
+recovery. `storageMetrics().encodedBatches` counts batch encodings, excluding
+index encodings and Host serialization.
+
 last-verified: 2026-09-29
 
 `AgentJournal` owns trusted mutation transitions and Session restoration. The

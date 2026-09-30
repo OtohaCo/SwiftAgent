@@ -227,16 +227,18 @@ public actor AgentJournal {
 
     private var records: [AgentJournalRecord]
     private var nextSequence: UInt64
-    private let store: (any JournalStore)?
+    let store: (any JournalStore)?
     private var maintenanceTask: Task<JournalMaintenanceStatus, Error>?
     private var maintenanceID: UUID?
     private var maintenanceTick: UInt64 = 0
-    private var closing = false
+    var closing = false
+    var auditExporterLeases: [String: UUID] = [:]
     private var sessionLeases: Set<UUID>
     private var dispatcherLeases: [UUID: (owner: UUID, notify: @Sendable () async -> Void)] = [:]
     /// Immutable configured capability. A durable commit can still fail.
     public nonisolated let storage: AgentJournalStorage
     package nonisolated let supportsAdmissionRejections: Bool
+    public nonisolated let supportsAuthorizationAudit: Bool
 
     private struct MutationKey: Hashable {
         let sessionID: UUID
@@ -252,6 +254,7 @@ public actor AgentJournal {
         var receipt: ToolReceipt?
         var output: JSONValue?
         var abortConfirmation: AgentNoEffectConfirmation?
+        var auditLinks: AuditRecordLinks? = nil
     }
 
     public init() {
@@ -263,6 +266,7 @@ public actor AgentJournal {
         sessionLeases = []
         storage = .memory
         supportsAdmissionRejections = false
+        supportsAuthorizationAudit = false
     }
 
     package init(store: any JournalStore) {
@@ -274,6 +278,7 @@ public actor AgentJournal {
         sessionLeases = []
         storage = .durable
         supportsAdmissionRejections = store.supportsAdmissionRejections
+        supportsAuthorizationAudit = store.supportsAuthorizationAudit
     }
 
     package func acquireSessionLease(sessionID: UUID, dispatcherID: UUID? = nil) throws {
@@ -403,7 +408,7 @@ public actor AgentJournal {
         )
     }
 
-    private func appendCheckpoint(
+    func appendCheckpoint(
         _ events: [AgentJournalEvent],
         sessionID: UUID,
         runID: UUID?,
@@ -412,7 +417,8 @@ public actor AgentJournal {
         allowMutationSettlement: Bool,
         admissionDeadline: ContinuousClock.Instant? = nil,
         checkAdmissionCancellation: Bool = false,
-        followUpInputID: String? = nil
+        followUpInputID: String? = nil,
+        auditDrafts: [JournalAuditDraft] = []
     ) throws -> [AgentJournalRecord] {
         try checkStartupAdmission(deadline: admissionDeadline, checkCancellation: checkAdmissionCancellation)
         if let store {
@@ -422,7 +428,8 @@ public actor AgentJournal {
                                   timestamp: timestamp, view: view,
                                   allowMutationSettlement: allowMutationSettlement,
                                   followUpInputID: followUpInputID,
-                                  admitsNewWork: checkAdmissionCancellation)
+                                  admitsNewWork: checkAdmissionCancellation,
+                                  auditDrafts: auditDrafts)
             }
             scheduleMaintenanceIfNeeded()
             return result
@@ -512,7 +519,8 @@ public actor AgentJournal {
         receipt: ToolReceipt,
         output: JSONValue,
         history: [ModelMessage],
-        steeringIDs: [UUID]
+        steeringIDs: [UUID],
+        auditDrafts: [JournalAuditDraft] = []
     ) throws {
         let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
         guard let record = try mutationRecord(for: key) else { throw AgentJournalError.mutationNotFound }
@@ -533,7 +541,8 @@ public actor AgentJournal {
             runID: runID,
             timestamp: Date(),
             durability: .durable,
-            allowMutationSettlement: true
+            allowMutationSettlement: true,
+            auditDrafts: auditDrafts
         )
     }
 
@@ -779,6 +788,11 @@ public actor AgentJournal {
 extension AgentJournal: ToolMutationAdmission {
     @discardableResult
     package func admit(_ request: ToolMutationAdmissionRequest) async throws -> ToolMutationAdmissionResult {
+        try await admit(request, auditDrafts: [])
+    }
+
+    package func admit(_ request: ToolMutationAdmissionRequest, auditDrafts: [JournalAuditDraft],
+                       backlog: AuditBacklogPolicy? = nil) async throws -> ToolMutationAdmissionResult {
         guard !closing else { throw AgentJournalError.storeClosed }
         guard !request.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !request.callID.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -798,6 +812,7 @@ extension AgentJournal: ToolMutationAdmission {
         try ToolResource.validate(request.resources)
         if let store {
             let decision = try writeStore(store) { view -> ToolMutationAdmissionResult in
+                try checkAuditBacklog(backlog, view: view)
                 if let existing = try view.identity(request.idempotencyKey) {
                     guard existing.intent.call.name == request.name,
                           try JSONValue.decodeToolArguments(existing.intent.call.argumentsJSON) == arguments,
@@ -809,6 +824,10 @@ extension AgentJournal: ToolMutationAdmission {
                     case .settled:
                         guard let receipt = existing.receipt else { throw AgentJournalError.mutationIntentConflict }
                         guard let output = existing.output else { throw AgentJournalError.mutationReplayUnavailable }
+                        if !auditDrafts.isEmpty {
+                            let records = try makeAuditRecords(auditDrafts, view: view, journalSequence: view.nextRecordSequence())
+                            try view.publishAudit(.init(records: records, admitsNewWork: true))
+                        }
                         return .settled(receipt: receipt, output: output)
                     case .intent: throw AgentJournalError.mutationPending
                     case .needsReconciliation: throw AgentJournalError.mutationRequiresReconciliation
@@ -822,7 +841,7 @@ extension AgentJournal: ToolMutationAdmission {
                                                        receiptExpectation: request.receiptExpectation)
                 _ = try appendToStore([.pendingMutation(intent)], sessionID: request.sessionID,
                                       runID: request.runID, timestamp: Date(), view: view,
-                                      allowMutationSettlement: false)
+                                      allowMutationSettlement: false, auditDrafts: auditDrafts)
                 return .admitted
             }
             scheduleMaintenanceIfNeeded()
@@ -1079,20 +1098,21 @@ extension AgentJournal {
                                         callID: stored.intent.call.id),
                        intent: stored.intent, sequence: stored.sequence, state: stored.state,
                        receipt: stored.receipt, output: stored.output,
-                       abortConfirmation: stored.abortConfirmation)
+                       abortConfirmation: stored.abortConfirmation, auditLinks: stored.auditLinks)
     }
 
     private static func storedMutation(_ record: MutationRecord) -> JournalStoredMutation {
         JournalStoredMutation(sessionID: record.key.sessionID, runID: record.key.runID,
                               intent: record.intent, sequence: record.sequence, state: record.state,
                               receipt: record.receipt, output: record.output,
-                              abortConfirmation: record.abortConfirmation)
+                              abortConfirmation: record.abortConfirmation, auditLinks: record.auditLinks)
     }
 
-    private func appendToStore(
+    func appendToStore(
         _ events: [AgentJournalEvent], sessionID: UUID, runID: UUID?, timestamp: Date,
         view: any JournalStoreView, allowMutationSettlement: Bool,
-        followUpInputID: String? = nil, admitsNewWork: Bool = false
+        followUpInputID: String? = nil, admitsNewWork: Bool = false,
+        auditDrafts: [JournalAuditDraft] = []
     ) throws -> [AgentJournalRecord] {
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
@@ -1181,7 +1201,29 @@ extension AgentJournal {
         } else if changedKey != nil {
             nextHeader.pendingIdentity = nil
         }
-        let mutation = changedKey.flatMap { storedRecords[$0] }.map(Self.storedMutation)
+        var mutation = changedKey.flatMap { storedRecords[$0] }.map(Self.storedMutation)
+        if let links = auditDrafts.first?.links, events.contains(where: { if case .pendingMutation = $0 { return true }; return false }) {
+            mutation?.auditLinks = links
+        }
+        var finalAuditDrafts = auditDrafts
+        if let mutation, let links = mutation.auditLinks {
+            for event in events {
+                switch event {
+                case .mutationNeedsReconciliation:
+                    finalAuditDrafts.append(.init(links: links, fact: .disposition(.init(state: .uncertain, reasonCode: "ledger_needs_reconciliation"))))
+                case .mutationSettled(_, let receipt, let source) where source == .reconciliation:
+                    finalAuditDrafts.append(.init(links: links, fact: .result(.init(kind: .reconciliation,
+                        sourceSessionID: mutation.sessionID, sourceRunID: mutation.runID,
+                        sourceModelCallID: mutation.intent.call.id.rawValue, receipt: receipt,
+                        outputDigest: try mutation.output.map { try auditDigest(AuditEncoding.encode($0)) }, settlementSource: source))))
+                case .mutationAborted:
+                    finalAuditDrafts.append(.init(links: links, fact: .result(.init(kind: .noEffectConfirmation,
+                        sourceSessionID: mutation.sessionID, sourceRunID: mutation.runID, sourceModelCallID: mutation.intent.call.id.rawValue))))
+                default: break
+                }
+            }
+        }
+        let audits = try makeAuditRecords(finalAuditDrafts, view: view, journalSequence: sequence + UInt64(committed.count))
         let admission = try followUpInputID.map { id in
             JournalFollowUpAdmission(inputID: id,
                 expectedQueueRevision: try view.followUpHead(sessionID: sessionID).revision)
@@ -1192,7 +1234,7 @@ extension AgentJournal {
                                             messageStart: messageStart, messages: changedMessages,
                                             mutation: mutation, records: committed,
                                             followUpAdmission: admission,
-                                            admitsNewWork: admitsNewWork))
+                                            admitsNewWork: admitsNewWork, auditRecords: audits))
         return committed
     }
 
@@ -1264,7 +1306,7 @@ extension AgentJournal {
     }
 
     /// A write refused for maintenance pressure schedules the maintenance that relieves it.
-    private func writeStore<T>(_ store: any JournalStore, _ body: (any JournalStoreView) throws -> T) throws -> T {
+    func writeStore<T>(_ store: any JournalStore, _ body: (any JournalStoreView) throws -> T) throws -> T {
         do {
             return try store.write(body)
         } catch AgentJournalError.maintenanceRequired {
@@ -1273,7 +1315,7 @@ extension AgentJournal {
         }
     }
 
-    private func scheduleMaintenanceIfNeeded() {
+    func scheduleMaintenanceIfNeeded() {
         guard let store, maintenanceTask == nil, !closing else { return }
         maintenanceTick &+= 1
         let status = try? store.status()
@@ -1330,7 +1372,7 @@ extension AgentJournal {
     }
 
     public func close() async throws {
-        guard sessionLeases.isEmpty, dispatcherLeases.isEmpty else { throw AgentJournalError.sessionLeaseUnavailable }
+        guard sessionLeases.isEmpty, dispatcherLeases.isEmpty, auditExporterLeases.isEmpty else { throw AgentJournalError.sessionLeaseUnavailable }
         closing = true
         if let maintenanceTask {
             _ = await maintenanceTask.result

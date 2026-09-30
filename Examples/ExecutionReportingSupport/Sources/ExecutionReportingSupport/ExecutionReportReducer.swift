@@ -410,6 +410,8 @@ public struct ExecutionReportReducer: Sendable {
         case let error as ToolResourceError: .resource(error)
         case let error as ToolSchedulerError: .scheduler(error)
         case let error as AgentJournalError: .journal(error)
+        case let error as AgentAuthorizationError: .authorization(error)
+        case let error as AgentAuditPersistenceError: .auditPersistence(error)
         case let error as AgentMutationPersistenceError: .mutationPersistence(error)
         case let error as AgentContextError: .context(error)
         case let error as AgentModelBindingError: .modelBinding(error)

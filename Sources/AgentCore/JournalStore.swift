@@ -32,6 +32,8 @@ package protocol JournalStore: Sendable {
     var storeID: UUID { get }
     var operationDomain: String { get }
     var supportsAdmissionRejections: Bool { get }
+    var supportsAuthorizationAudit: Bool { get }
+    func auditDigest(_ bytes: Data) -> String
     func read<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
     func write<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
     func close() throws
@@ -52,14 +54,18 @@ public struct JournalStorageMetrics: Sendable, Equatable {
     public let committedBatches: UInt64
     public let writeLockNanoseconds: UInt64
     public let maintenanceNanoseconds: UInt64
+    /// Number of disk batch encodings; excludes Host input/output encoders and index envelopes.
+    public let encodedBatches: UInt64
     public init(bytesRead: UInt64, decodedBatches: UInt64, bytesWritten: UInt64,
-                committedBatches: UInt64, writeLockNanoseconds: UInt64, maintenanceNanoseconds: UInt64) {
+                committedBatches: UInt64, writeLockNanoseconds: UInt64, maintenanceNanoseconds: UInt64,
+                encodedBatches: UInt64 = 0) {
         self.bytesRead = bytesRead
         self.decodedBatches = decodedBatches
         self.bytesWritten = bytesWritten
         self.committedBatches = committedBatches
         self.writeLockNanoseconds = writeLockNanoseconds
         self.maintenanceNanoseconds = maintenanceNanoseconds
+        self.encodedBatches = encodedBatches
     }
 }
 
@@ -109,6 +115,13 @@ package protocol JournalStoreView: AnyObject {
     func followUp(sessionID: UUID, inputID: String) throws -> JournalStoredFollowUp?
     func followUps(sessionID: UUID, after ordinal: UInt64, limit: Int) throws -> [JournalStoredFollowUp]
     func publishFollowUp(_ change: JournalFollowUpChange) throws
+    func auditHighWater() throws -> UInt64
+    func auditRecord(sequence: UInt64) throws -> AuditRecord
+    func auditGroupCount(_ key: String) throws -> UInt64
+    func auditGroupMember(_ key: String, ordinal: UInt64) throws -> UInt64
+    func publishAudit(_ change: JournalAuditChange) throws
+    func auditExportCheckpoint(_ configurationID: String) throws -> JournalAuditExportCheckpoint?
+    func publishAuditExport(_ change: JournalAuditExportChange) throws
 }
 
 package struct JournalAdmissionRejection: Equatable, Sendable {
@@ -162,10 +175,11 @@ package struct JournalStoredMutation: Codable, Equatable, Sendable {
     package var receipt: ToolReceipt?
     package var output: JSONValue?
     package var abortConfirmation: AgentNoEffectConfirmation?
+    package var auditLinks: AuditRecordLinks?
 
     package init(sessionID: UUID, runID: UUID, intent: PendingMutationIntent, sequence: UInt64,
                  state: AgentMutationState, receipt: ToolReceipt? = nil, output: JSONValue? = nil,
-                 abortConfirmation: AgentNoEffectConfirmation? = nil) {
+                 abortConfirmation: AgentNoEffectConfirmation? = nil, auditLinks: AuditRecordLinks? = nil) {
         self.sessionID = sessionID
         self.runID = runID
         self.intent = intent
@@ -174,6 +188,7 @@ package struct JournalStoredMutation: Codable, Equatable, Sendable {
         self.receipt = receipt
         self.output = output
         self.abortConfirmation = abortConfirmation
+        self.auditLinks = auditLinks
     }
 }
 
@@ -196,11 +211,13 @@ package struct JournalStoreChange: Sendable {
     /// Admits new work (a Run's input) rather than settling work already admitted. A store under
     /// pressure refuses new work first.
     package let admitsNewWork: Bool
+    package let auditRecords: [AuditRecord]
 
     package init(sessionID: UUID, expectedRevision: UInt64, header: JournalSessionHeader,
                  messageStart: UInt64, messages: [JournalMessage],
                  mutation: JournalStoredMutation?, records: [AgentJournalRecord],
-                 followUpAdmission: JournalFollowUpAdmission? = nil, admitsNewWork: Bool = false) {
+                 followUpAdmission: JournalFollowUpAdmission? = nil, admitsNewWork: Bool = false,
+                 auditRecords: [AuditRecord] = []) {
         self.sessionID = sessionID
         self.expectedRevision = expectedRevision
         self.header = header
@@ -210,6 +227,7 @@ package struct JournalStoreChange: Sendable {
         self.records = records
         self.followUpAdmission = followUpAdmission
         self.admitsNewWork = admitsNewWork
+        self.auditRecords = auditRecords
     }
 }
 

@@ -29,6 +29,7 @@ let package = Package(
         ]),
         .executableTarget(name: "JournalTestProcess", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentModels", "AgentTools"]),
         .executableTarget(name: "JournalBenchmark", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentModels", "AgentTools"]),
+        .executableTarget(name: "AuditAuthorizationBenchmark", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentModels", "AgentTools"]),
         .executableTarget(name: "FollowUpQueueBenchmark", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentModels"]),
         .target(name: "AgentProviders", dependencies: ["AgentModels", "AgentCatalog"]),
         .target(name: "AgentAppleProvider", dependencies: ["AgentModels"]),

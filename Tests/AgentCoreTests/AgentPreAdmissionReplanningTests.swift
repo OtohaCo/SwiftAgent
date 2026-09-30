@@ -24,6 +24,26 @@ struct AgentPreAdmissionReplanningTests {
         try await journal.close()
     }
 
+    @Test func requiredAuditAndBoundedCorrectionKeepSeparateCallInstances() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-audit-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "replan-audit", supportsAuthorizationAudit: true)
+        let authorizer = AuditTestAuthorizer(), provider = rejectionProvider()
+        let session = try Agent(model: fixtureModel, provider: provider,
+            tools: [try ResourceDiscovery(), try BoundedTestMutation()],
+            configuration: .init(preAdmissionReplanning: policy, authorization: auditTestConfiguration(authorizer: authorizer)))
+            .makeSession(journal: journal)
+        let run = try await session.run("start")
+        #expect(try await run.wait().outcome == .completed)
+        try await run.waitForDrain()
+        #expect(await authorizer.requests.count == 1) // The read, never the Evidence-rejected mutation.
+        let facts = try await journal.auditRecords(matching: .init(runID: run.id)).records
+        #expect(facts.contains { if case .authorization(let a) = $0.fact { return a.status == .notEvaluated }; return false })
+        #expect(Set(facts.map(\.links.invocationID)).count == 2)
+        #expect(try await journal.pendingMutations().isEmpty)
+        try await journal.close()
+    }
+
     @Test func unrelatedPendingDoesNotBlockButSameOperationPendingClosesFeedback() async throws {
         for (related, reconciled) in [(false, false), (true, false), (true, true)] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-pending-\(UUID())")

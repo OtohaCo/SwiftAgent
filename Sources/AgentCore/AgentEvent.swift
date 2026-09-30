@@ -73,6 +73,28 @@ public struct AgentMutationPersistenceError: Error, Equatable, Sendable {
     }
 }
 
+/// An execution/preparation failure and its audit publication failure.
+/// Neither replaces the other, and mutation quarantine remains a separate responsibility.
+public struct AgentAuditPersistenceError: Error, Equatable, Sendable {
+    public let original: AgentFailure
+    public let audit: AgentFailure
+
+    public init(original: AgentFailure, audit: AgentFailure) {
+        self.original = original
+        self.audit = audit
+    }
+
+    static func capturing(original: any Error,
+                          publication: @Sendable () async throws -> Void) async -> any Error {
+        do {
+            try await publication()
+            return original
+        } catch {
+            return AgentAuditPersistenceError(original: AgentFailure(original), audit: AgentFailure(error))
+        }
+    }
+}
+
 /// Typed failure for events and host switches. Match the enum; do not parse
 /// `localizedDescription`. Unknown host errors collapse to `unclassified`
 /// without leaking payloads.
@@ -88,6 +110,8 @@ public enum AgentFailure: Error, Equatable, Sendable {
     case resource(ToolResourceError)
     case scheduler(ToolSchedulerError)
     case journal(AgentJournalError)
+    case authorization(AgentAuthorizationError)
+    indirect case auditPersistence(AgentAuditPersistenceError)
     indirect case mutationPersistence(AgentMutationPersistenceError)
     case context(AgentContextError)
     case modelBinding(AgentModelBindingError)
@@ -111,6 +135,8 @@ public enum AgentFailure: Error, Equatable, Sendable {
         case let error as ToolResourceError: self = .resource(error)
         case let error as ToolSchedulerError: self = .scheduler(error)
         case let error as AgentJournalError: self = .journal(error)
+        case let error as AgentAuthorizationError: self = .authorization(error)
+        case let error as AgentAuditPersistenceError: self = .auditPersistence(error)
         case let error as AgentMutationPersistenceError: self = .mutationPersistence(error)
         case let error as AgentContextError: self = .context(error)
         case let error as AgentModelBindingError: self = .modelBinding(error)

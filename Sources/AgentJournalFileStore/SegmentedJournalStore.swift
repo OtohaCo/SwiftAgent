@@ -69,6 +69,7 @@ public enum AgentIncrementalJournal {
     fileprivate static func normalized(_ error: any Error) -> any Error {
         if error is CancellationError { return error }
         if let error = error as? AgentJournalError { return error }
+        if let error = error as? AgentAuthorizationError { return error }
         if let error = error as? AgentFollowUpError { return error }
         if error is DecodingError { return AgentJournalError.invalidRecord }
         return AgentJournalError.persistenceUnavailable(error.localizedDescription)
@@ -79,12 +80,13 @@ public enum AgentIncrementalJournal {
     public static func createAsync(at directory: URL, operationDomain: String,
                                    policy: JournalMaintenancePolicy = .default,
                                    supportsAdmissionRejections: Bool = false,
+                                   supportsAuthorizationAudit: Bool = false,
                                    deadline: ContinuousClock.Instant? = nil) async throws -> AgentJournal {
         try Task.checkCancellation()
         if let deadline, ContinuousClock.now >= deadline { throw AgentJournalError.deadlineExceeded }
         let journal = try await openOwned(deadline: deadline) {
             try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy,
-                                             supportsAdmissionRejections: supportsAdmissionRejections)
+                                             supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit)
         }
         try Task.checkCancellation()
         return journal
@@ -128,10 +130,11 @@ public enum AgentIncrementalJournal {
 
     public static func create(at directory: URL, operationDomain: String,
                               policy: JournalMaintenancePolicy = .default,
-                              supportsAdmissionRejections: Bool = false) throws -> AgentJournal {
+                              supportsAdmissionRejections: Bool = false,
+                              supportsAuthorizationAudit: Bool = false) throws -> AgentJournal {
         do {
             return AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
-                policy: policy, supportsAdmissionRejections: supportsAdmissionRejections))
+                policy: policy, supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit))
         } catch { throw normalized(error) }
     }
 
@@ -144,10 +147,12 @@ public enum AgentIncrementalJournal {
     package static func createForTesting(at directory: URL, operationDomain: String,
                                          policy: JournalMaintenancePolicy = .default,
                                          supportsAdmissionRejections: Bool = false,
+                                   supportsAuthorizationAudit: Bool = false,
                                          fault: @escaping @Sendable (JournalFileFaultStage) throws -> Void) throws -> AgentJournal {
         AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
                                                               policy: policy,
                                                               supportsAdmissionRejections: supportsAdmissionRejections,
+                                                              supportsAuthorizationAudit: supportsAuthorizationAudit,
                                                               fault: fault))
     }
 }
@@ -226,11 +231,13 @@ private struct IndexKind<Value: Codable> {
     let witnessed: Bool
     /// Only stores created with admission-rejection support (format schema 4) have this index.
     let requiresAdmissionRejections: Bool
+    let requiresAuthorizationAudit: Bool
 
-    init(_ name: String, witnessed: Bool = false, requiresAdmissionRejections: Bool = false) {
+    init(_ name: String, witnessed: Bool = false, requiresAdmissionRejections: Bool = false, requiresAuthorizationAudit: Bool = false) {
         self.name = name
         self.witnessed = witnessed
         self.requiresAdmissionRejections = requiresAdmissionRejections
+        self.requiresAuthorizationAudit = requiresAuthorizationAudit
     }
 
     func isPublished(_ slot: Slot<Value>, in root: Root) -> Bool {
@@ -241,7 +248,8 @@ private struct IndexKind<Value: Codable> {
     static func generation(of value: Value) -> UInt64 { (value as? Location)?.generation ?? 0 }
 }
 
-/// Indexes whose value is the sequence of the batch holding the indexed record.
+/// Most UInt64 indexes point to the Journal batch holding their current value.
+/// auditMembers instead maps a group ordinal to a global audit-record sequence.
 extension IndexKind where Value == UInt64 {
     static var sessions: Self { .init("sessions", witnessed: true) }
     static var operations: Self { .init("operations", witnessed: true) }
@@ -251,7 +259,19 @@ extension IndexKind where Value == UInt64 {
     static var queueIDs: Self { .init("queue-ids", witnessed: true) }
     static var queueOrder: Self { .init("queue-order") }
     static var queueLinks: Self { .init("queue-links") }
+    /// Ordinal -> audit sequence, retained with its group and typed facts; not a batch pointer.
+    static var auditMembers: Self { .init("audit-members", requiresAuthorizationAudit: true) }
+    /// Latest checkpoint batch sequence; keeps that checkpoint batch live.
+    static var auditExports: Self { .init("audit-exports", witnessed: true, requiresAuthorizationAudit: true) }
     static var rejections: Self { .init("rejections", witnessed: true, requiresAdmissionRejections: true) }
+}
+
+extension IndexKind where Value == AuditRecordPointer {
+    static var auditRecords: Self { .init("audit-records", witnessed: true, requiresAuthorizationAudit: true) }
+}
+
+extension IndexKind where Value == AuditIndexSummary {
+    static var auditGroups: Self { .init("audit-groups", witnessed: true, requiresAuthorizationAudit: true) }
 }
 
 extension IndexKind where Value == MessagePointer {
@@ -274,12 +294,14 @@ extension IndexKind where Value == [UUID] {
 private struct AnyIndexKind {
     let name: String
     let requiresAdmissionRejections: Bool
+    let requiresAuthorizationAudit: Bool
     /// Decodes an index payload as this kind's value and returns its slots, current first.
     let slots: (Data) throws -> [(key: String, version: UInt64, generation: UInt64)]
 
     init<Value>(_ kind: IndexKind<Value>) {
         name = kind.name
         requiresAdmissionRejections = kind.requiresAdmissionRejections
+        requiresAuthorizationAudit = kind.requiresAuthorizationAudit
         slots = { payload in
             let index = try JSONDecoder().decode(Index<Value>.self, from: payload)
             return [index.current, index.previous].compactMap { $0 }.map {
@@ -288,7 +310,7 @@ private struct AnyIndexKind {
         }
     }
 
-    static func all(supportsAdmissionRejections: Bool) -> [AnyIndexKind] {
+    static func all(supportsAdmissionRejections: Bool, supportsAuthorizationAudit: Bool = false) -> [AnyIndexKind] {
         [
             .init(IndexKind<UInt64>.sessions), .init(IndexKind<UInt64>.operations), .init(IndexKind<UInt64>.calls),
             .init(IndexKind<MessagePointer>.messages), .init(IndexKind<Location>.positions),
@@ -296,7 +318,10 @@ private struct AnyIndexKind {
             .init(IndexKind<UInt64>.queueIDs), .init(IndexKind<UInt64>.queueOrder),
             .init(IndexKind<UInt64>.queueLinks), .init(IndexKind<UInt64>.rejections),
             .init(IndexKind<[UUID]>.pendingOperations),
-        ].filter { supportsAdmissionRejections || !$0.requiresAdmissionRejections }
+            .init(IndexKind<AuditRecordPointer>.auditRecords), .init(IndexKind<AuditIndexSummary>.auditGroups),
+            .init(IndexKind<UInt64>.auditMembers), .init(IndexKind<UInt64>.auditExports),
+        ].filter { (supportsAdmissionRejections || !$0.requiresAdmissionRejections)
+            && (supportsAuthorizationAudit || !$0.requiresAuthorizationAudit) }
     }
 }
 
@@ -343,6 +368,7 @@ private struct Root: Codable {
     let layoutGeneration: UInt64
     let lastFrame: Location?
     let lastDigest: String?
+    var auditRecordCount: UInt64? = nil
 }
 
 private struct Current: Codable, Equatable {
@@ -367,6 +393,8 @@ private struct BatchV2: Codable {
     let queueChanges: [DiskFollowUpV2]
     let queueLinks: [DiskFollowUpLinkV2]
     let recordCount: UInt32
+    var auditRecords: [DiskAuditRecordV1]? = nil
+    var auditCheckpoint: JournalAuditExportCheckpoint? = nil
 }
 
 private struct DiskAdmissionRejectionV1: Codable {
@@ -399,12 +427,13 @@ private final class MetricsBox: @unchecked Sendable {
     private var decoded: UInt64 = 0
     private var written: UInt64 = 0
     private var committed: UInt64 = 0
+    private var encoded: UInt64 = 0
     private var writeLock: UInt64 = 0
     private var maintenance: UInt64 = 0
 
     func add(read bytes: Int = 0, decoded batches: Int = 0, written output: Int = 0,
              committed publications: Int = 0, writeLockNanoseconds: UInt64 = 0,
-             maintenanceNanoseconds: UInt64 = 0) {
+             maintenanceNanoseconds: UInt64 = 0, encodedBatches: UInt64 = 0) {
         lock.lock()
         read += UInt64(bytes)
         decoded += UInt64(batches)
@@ -412,6 +441,7 @@ private final class MetricsBox: @unchecked Sendable {
         committed += UInt64(publications)
         writeLock += writeLockNanoseconds
         maintenance += maintenanceNanoseconds
+        encoded += encodedBatches
         lock.unlock()
     }
 
@@ -421,7 +451,7 @@ private final class MetricsBox: @unchecked Sendable {
         return JournalStorageMetrics(bytesRead: read, decodedBatches: decoded,
                                      bytesWritten: written, committedBatches: committed,
                                      writeLockNanoseconds: writeLock,
-                                     maintenanceNanoseconds: maintenance)
+                                     maintenanceNanoseconds: maintenance, encodedBatches: encoded)
     }
 }
 
@@ -430,6 +460,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     let storeID: UUID
     let operationDomain: String
     let supportsAdmissionRejections: Bool
+    let supportsAuthorizationAudit: Bool
     private let policy: JournalMaintenancePolicy
     private let lock = NSLock()
     private var descriptor: Int32
@@ -455,7 +486,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         self.directoryURL = directoryURL
         storeID = format.storeID
         operationDomain = format.domain
-        supportsAdmissionRejections = format.schema == 4
+        supportsAdmissionRejections = format.schema >= 4
+        supportsAuthorizationAudit = format.schema == 5
         expectedFormatDigest = formatDigest
         self.descriptor = descriptor
         self.policy = policy
@@ -466,6 +498,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     static func create(at url: URL, domain: String, policy: JournalMaintenancePolicy,
                        supportsAdmissionRejections: Bool = false,
+                                   supportsAuthorizationAudit: Bool = false,
                        fault: (@Sendable (JournalFileFaultStage) throws -> Void)? = nil) throws -> SegmentedJournalStore {
         guard !domain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentJournalError.invalidRecord
@@ -475,11 +508,11 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             throw AgentJournalError.persistenceUnavailable("create requires a new directory")
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections) {
+        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections || supportsAuthorizationAudit, supportsAuthorizationAudit: supportsAuthorizationAudit) {
             try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
         }
         let descriptor = try lockStore(directory)
-        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsAdmissionRejections ? 4 : 3,
+        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
                             storeID: UUID(), domain: domain)
         let formatBytes = try JSONEncoder().encode(format)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -497,7 +530,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                             sequence: 0, nextRecordSequence: 1,
                             active: segment, activeEnd: 0, activeBatches: 0, layout: layoutID,
                             layoutDigest: Self.digest(layoutBytes), layoutGeneration: 0,
-                            lastFrame: nil, lastDigest: nil)
+                            lastFrame: nil, lastDigest: nil, auditRecordCount: supportsAuthorizationAudit ? 0 : nil)
             try store.publishRoot(root, id: rootID)
             try Self.syncParentDirectory(of: directory)
             return store
@@ -545,7 +578,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard format.magic == "SWIFTAGENT-SEGMENTED-JOURNAL", !format.domain.isEmpty else {
             throw AgentJournalError.invalidHeader
         }
-        guard format.schema == 3 || format.schema == 4 else { throw AgentJournalError.unsupportedFormat }
+        guard format.schema == 3 || format.schema == 4 || format.schema == 5 else { throw AgentJournalError.unsupportedFormat }
         let descriptor = try lockStore(directory)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
                                           descriptor: descriptor, formatDigest: Self.digest(formatBytes),
@@ -571,6 +604,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         } catch {
             try? store.close()
             if let error = error as? AgentJournalError { throw error }
+            if let error = error as? AgentAuthorizationError { throw error }
             if error is DecodingError { throw AgentJournalError.invalidRecord }
             throw AgentJournalError.persistenceUnavailable(error.localizedDescription)
         }
@@ -618,6 +652,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         } catch {
             if poisoned { throw AgentJournalError.commitUnknown }
             if let error = error as? AgentJournalError { throw error }
+            if let error = error as? AgentAuthorizationError { throw error }
             if let error = error as? AgentFollowUpError { throw error }
             if let error = error as? JournalFollowUpAdmissionError { throw error }
             if error is DecodingError { throw AgentJournalError.invalidRecord }
@@ -640,6 +675,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         } catch {
             if poisoned { throw AgentJournalError.commitUnknown }
             if let error = error as? AgentJournalError { throw error }
+            if let error = error as? AgentAuthorizationError { throw error }
             if let error = error as? AgentFollowUpError { throw error }
             if let error = error as? JournalFollowUpAdmissionError { throw error }
             if error is DecodingError { throw AgentJournalError.invalidRecord }
@@ -706,13 +742,13 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         return data
     }
 
-    private static func managedDirectories(supportsAdmissionRejections: Bool) -> [String] {
+    private static func managedDirectories(supportsAdmissionRejections: Bool, supportsAuthorizationAudit: Bool = false) -> [String] {
         ["roots", "layouts", "segments", "state", "blobs", "tmp", "witnesses"]
-            + AnyIndexKind.all(supportsAdmissionRejections: supportsAdmissionRejections).map(\.name)
+            + AnyIndexKind.all(supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit).map(\.name)
     }
 
     private func validateManagedDirectories() throws {
-        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections) {
+        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections || supportsAuthorizationAudit, supportsAuthorizationAudit: supportsAuthorizationAudit) {
             try validateManagedDirectory(directoryURL.appendingPathComponent(name))
         }
     }
@@ -843,6 +879,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         "\(sessionID.uuidString)/\(ordinal)"
     }
 
+    func auditDigest(_ data: Data) -> String { Self.digest(data) }
+
     private static func digest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
@@ -858,7 +896,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let bytes = try readData(rootURL(current.root))
         guard Self.digest(bytes) == current.digest else { throw AgentJournalError.checksumMismatch }
         let root = try JSONDecoder().decode(Root.self, from: bytes)
-        guard root.storeID == storeID, root.nextRecordSequence > 0 else { throw AgentJournalError.invalidHeader }
+        guard root.storeID == storeID, root.nextRecordSequence > 0,
+              (root.auditRecordCount != nil) == supportsAuthorizationAudit else { throw AgentJournalError.invalidHeader }
         guard root.formatDigest == expectedFormatDigest,
               Self.digest(try readData(directoryURL.appendingPathComponent("format.json"))) == expectedFormatDigest else {
             throw AgentJournalError.checksumMismatch
@@ -971,6 +1010,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private func frameBytes(_ batch: BatchV2) throws -> (Data, String, UUID?) {
+        counters.add(encodedBatches: 1)
         let payload = try JSONEncoder().encode(batch)
         let digest = Self.digest(payload)
         let frame: Frame
@@ -1014,6 +1054,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let batch = try JSONDecoder().decode(BatchV2.self, from: payload)
         counters.add(decoded: 1)
         guard batch.schema == 2,
+              supportsAuthorizationAudit || (batch.auditRecords == nil && batch.auditCheckpoint == nil),
               location.commitID.map({ $0 == batch.commitID }) ?? true else {
             throw AgentJournalError.invalidRecord
         }
@@ -1127,6 +1168,12 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private func isBatchNeeded(_ batch: BatchV2, at location: Location, root: Root) throws -> Bool {
+        // Default retention is append-only: audit facts and their restricted payloads stay live.
+        if !(batch.auditRecords ?? []).isEmpty { return true }
+        if let checkpoint = batch.auditCheckpoint {
+            let head: UInt64? = try pointer(.auditExports, key: checkpoint.configurationID, root: root)
+            if head == batch.sequence { return true }
+        }
         let sessionHead: UInt64? = try pointer(.sessions, key: batch.sessionID.uuidString, root: root)
         let callHead: UInt64?
         if let mutation = batch.mutation {
@@ -1203,7 +1250,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                             activeEnd: 0, activeBatches: 0, layout: nextLayoutID,
                             layoutDigest: Self.digest(nextLayoutBytes),
                             layoutGeneration: nextLayout.generation,
-                            lastFrame: root.lastFrame, lastDigest: root.lastDigest)
+                            lastFrame: root.lastFrame, lastDigest: root.lastDigest, auditRecordCount: root.auditRecordCount)
         let (_, oldRootID) = try currentRoot()
         // Once CURRENT may have changed, only a reopen can tell which root is current.
         poisoned = true
@@ -1387,7 +1434,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                activeBatches: root.activeBatches,
                                layout: nextLayoutID, layoutDigest: Self.digest(nextLayoutBytes),
                                layoutGeneration: generation,
-                               lastFrame: relocatedLast, lastDigest: root.lastDigest)
+                               lastFrame: relocatedLast, lastDigest: root.lastDigest, auditRecordCount: root.auditRecordCount)
             try fault?(.beforeMaintenancePublish)
             poisoned = true
             try publishRoot(updated, id: UUID())
@@ -1442,7 +1489,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                active: root.active, activeEnd: root.activeEnd,
                                activeBatches: root.activeBatches, layout: newID,
                                layoutDigest: Self.digest(bytes), layoutGeneration: next.generation,
-                               lastFrame: root.lastFrame, lastDigest: root.lastDigest)
+                               lastFrame: root.lastFrame, lastDigest: root.lastDigest, auditRecordCount: root.auditRecordCount)
             poisoned = true
             try publishRoot(updated, id: UUID())
             poisoned = false
@@ -1497,7 +1544,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                            activeEnd: root.activeEnd, activeBatches: root.activeBatches, layout: newID,
                            layoutDigest: Self.digest(nextBytes),
                            layoutGeneration: next.generation, lastFrame: root.lastFrame,
-                           lastDigest: root.lastDigest)
+                           lastDigest: root.lastDigest, auditRecordCount: root.auditRecordCount)
         poisoned = true
         try publishRoot(updated, id: UUID())
         poisoned = false
@@ -1569,7 +1616,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                            active: root.active, activeEnd: root.activeEnd,
                            activeBatches: root.activeBatches, layout: layoutID,
                            layoutDigest: Self.digest(bytes), layoutGeneration: next.generation,
-                           lastFrame: root.lastFrame, lastDigest: root.lastDigest)
+                           lastFrame: root.lastFrame, lastDigest: root.lastDigest, auditRecordCount: root.auditRecordCount)
         poisoned = true
         try publishRoot(updated, id: UUID())
         poisoned = false
@@ -1687,7 +1734,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     private func cleanupUnpublishedIndexesLocked(root: Root) throws {
         let shard = String(format: "%02x", garbageIndexShard)
-        let kinds = AnyIndexKind.all(supportsAdmissionRejections: supportsAdmissionRejections)
+        let kinds = AnyIndexKind.all(supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit)
         for kind in kinds {
             if finishedIndexKinds.contains(kind.name) { continue }
             let directory = directoryURL.appendingPathComponent("\(kind.name)/\(shard)")
@@ -1846,6 +1893,91 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
 
         func nextRecordSequence() throws -> UInt64 { root.nextRecordSequence }
+
+        func auditHighWater() throws -> UInt64 {
+            guard store.supportsAuthorizationAudit, let count = root.auditRecordCount else {
+                throw AgentAuthorizationError.auditStoreRequired
+            }
+            let summary: AuditIndexSummary? = try store.pointer(.auditGroups, key: "all", root: root)
+            guard (summary?.count ?? 0) == count, (summary?.lastSequence ?? 0) == count else {
+                throw AgentJournalError.invalidRecord
+            }
+            return count
+        }
+
+        func auditRecord(sequence: UInt64) throws -> AuditRecord {
+            guard sequence > 0, sequence <= (try auditHighWater()),
+                  let pointer: AuditRecordPointer = try store.pointer(.auditRecords, key: String(sequence), root: root) else {
+                throw AgentJournalError.invalidRecord
+            }
+            let found = try batch(pointer.batchSequence)
+            guard let records = found.auditRecords, records.indices.contains(pointer.offset) else {
+                throw AgentJournalError.invalidRecord
+            }
+            let record = try records[pointer.offset].value()
+            guard record.sequence == sequence, record.links.storeID == store.storeID,
+                  record.links.operationDomain == store.operationDomain,
+                  record.digest == store.auditDigest(try record.unsignedBytes()) else {
+                throw AgentJournalError.invalidRecord
+            }
+            return record
+        }
+
+        func auditGroupCount(_ key: String) throws -> UInt64 {
+            _ = try auditHighWater()
+            let summary: AuditIndexSummary? = try store.pointer(.auditGroups, key: key, root: root)
+            guard let summary else { return 0 }
+            guard summary.count > 0, summary.count <= (root.auditRecordCount ?? 0),
+                  summary.lastSequence <= (root.auditRecordCount ?? 0),
+                  try auditGroupMember(key, ordinal: summary.count) == summary.lastSequence else {
+                throw AgentJournalError.invalidRecord
+            }
+            return summary.count
+        }
+
+        func auditGroupMember(_ key: String, ordinal: UInt64) throws -> UInt64 {
+            guard ordinal > 0, let sequence: UInt64 = try store.pointer(.auditMembers,
+                key: "\(key)/\(ordinal)", root: root), sequence > 0, sequence <= (root.auditRecordCount ?? 0) else {
+                throw AgentJournalError.invalidRecord
+            }
+            return sequence
+        }
+
+        func publishAudit(_ change: JournalAuditChange) throws {
+            guard writable, !didPublish, store.supportsAuthorizationAudit, !change.records.isEmpty else {
+                throw AgentJournalError.invalidRecord
+            }
+            let batch = BatchV2(schema: 2, commitID: UUID(), sequence: root.sequence + 1,
+                sessionID: change.records[0].links.sessionID, header: nil, messageStart: 0, messages: [],
+                mutation: nil, admissionRejection: nil, queueHead: nil, queueChanges: [], queueLinks: [],
+                recordCount: UInt32(change.records.count), auditRecords: change.records.map(DiskAuditRecordV1.init))
+            try publishBatch(batch, updateSession: false, admitsNewWork: change.admitsNewWork)
+        }
+
+        func auditExportCheckpoint(_ configurationID: String) throws -> JournalAuditExportCheckpoint? {
+            guard store.supportsAuthorizationAudit else { throw AgentAuthorizationError.auditStoreRequired }
+            guard let sequence: UInt64 = try store.pointer(.auditExports, key: configurationID, root: root) else { return nil }
+            guard let checkpoint = try batch(sequence).auditCheckpoint,
+                  checkpoint.configurationID == configurationID,
+                  checkpoint.throughSequence <= (try auditHighWater()) else { throw AgentJournalError.invalidRecord }
+            return checkpoint
+        }
+
+        func publishAuditExport(_ change: JournalAuditExportChange) throws {
+            let previous = try auditExportCheckpoint(change.checkpoint.configurationID)
+            guard writable, !didPublish, store.supportsAuthorizationAudit,
+                  (previous?.throughSequence ?? 0) == change.expectedThroughSequence,
+                  change.checkpoint.throughSequence > change.expectedThroughSequence,
+                  change.checkpoint.throughSequence <= (try auditHighWater()),
+                  previous.map({ $0.configurationDigest == change.checkpoint.configurationDigest }) ?? true else {
+                throw AgentAuthorizationError.invalidAcknowledgement
+            }
+            let batch = BatchV2(schema: 2, commitID: UUID(), sequence: root.sequence + 1,
+                sessionID: store.storeID, header: nil, messageStart: 0, messages: [], mutation: nil,
+                admissionRejection: nil, queueHead: nil, queueChanges: [], queueLinks: [], recordCount: 0,
+                auditRecords: [], auditCheckpoint: change.checkpoint)
+            try publishBatch(batch, updateSession: false, admitsNewWork: false)
+        }
 
         func messages(sessionID: UUID, after ordinal: UInt64, limit: Int) throws -> [JournalMessage] {
             try store.fault?(.beforeSessionRead)
@@ -2034,7 +2166,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                 queueHead: queueHead.map(DiskFollowUpHeadV2.init),
                                 queueChanges: queueChanges.map(DiskFollowUpV2.init),
                                 queueLinks: queueLinks.map(DiskFollowUpLinkV2.init),
-                                recordCount: UInt32(change.records.count))
+                                recordCount: UInt32(change.records.count + change.auditRecords.count),
+                                auditRecords: store.supportsAuthorizationAudit ? change.auditRecords.map(DiskAuditRecordV1.init) : nil)
             try publishBatch(batch, updateSession: true, admitsNewWork: admitsNewWork)
         }
 
@@ -2067,6 +2200,22 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         private func publishBatch(_ batch: BatchV2, updateSession: Bool, admitsNewWork: Bool) throws {
             let next = root.sequence + 1
             guard batch.sequence == next else { throw AgentJournalError.invalidRecord }
+            let auditRecords = batch.auditRecords ?? []
+            guard auditRecords.count <= 64, auditRecords.isEmpty || store.supportsAuthorizationAudit,
+                  UInt64(batch.recordCount) >= UInt64(auditRecords.count) else { throw AgentJournalError.invalidRecord }
+            let firstAudit = try store.supportsAuthorizationAudit ? auditHighWater() + 1 : 1
+            let firstJournal = root.nextRecordSequence + UInt64(batch.recordCount) - UInt64(auditRecords.count)
+            for (offset, disk) in auditRecords.enumerated() {
+                let record = try disk.value()
+                guard record.sequence == firstAudit + UInt64(offset),
+                      record.journalRecordSequence == firstJournal + UInt64(offset),
+                      record.links.storeID == store.storeID, record.links.operationDomain == store.operationDomain,
+                      record.digest == store.auditDigest(try record.unsignedBytes()) else { throw AgentJournalError.invalidRecord }
+            }
+            if admitsNewWork {
+                let unreclaimed = try store.layout(root).sealed.reduce(UInt64(0)) { $0 + $1.end }
+                guard unreclaimed < UInt64(store.policy.maxUnreclaimedBytes) else { throw AgentJournalError.maintenanceRequired }
+            }
             let (bytes, digest, blob) = try store.frameBytes(batch)
             // A failed rotation leaves the active segment past its target size. Until maintenance
             // rotates it, refuse new work and let admitted work settle only within the work budget,
@@ -2144,6 +2293,31 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 try store.updateIndex(.blobIndex, key: blob.uuidString, value: next,
                                       version: next, root: root)
             }
+            if !auditRecords.isEmpty {
+                var summaries: [String: AuditIndexSummary] = [:]
+                for (offset, record) in auditRecords.enumerated() {
+                    try store.updateIndex(.auditRecords, key: String(record.sequence),
+                        value: AuditRecordPointer(batchSequence: next, offset: offset),
+                        version: next, root: root, commitID: batch.commitID)
+                    for key in record.links.indexKeys + ["all"] {
+                        let prior: AuditIndexSummary
+                        if let cached = summaries[key] { prior = cached }
+                        else { prior = try store.pointer(.auditGroups, key: key, root: root) ?? .init(count: 0, lastSequence: 0) }
+                        let summary = AuditIndexSummary(count: prior.count + 1, lastSequence: record.sequence)
+                        summaries[key] = summary
+                        try store.updateIndex(.auditMembers, key: "\(key)/\(summary.count)", value: record.sequence,
+                            version: next, root: root)
+                    }
+                }
+                for (key, summary) in summaries {
+                    try store.updateIndex(.auditGroups, key: key, value: summary,
+                        version: next, root: root, commitID: batch.commitID)
+                }
+            }
+            if let checkpoint = batch.auditCheckpoint {
+                try store.updateIndex(.auditExports, key: checkpoint.configurationID, value: next,
+                    version: next, root: root, commitID: batch.commitID)
+            }
             try store.fault?(.afterIndexSync)
             let updated = Root(storeID: root.storeID, formatDigest: root.formatDigest,
                                sequence: next,
@@ -2152,7 +2326,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                activeBatches: root.activeBatches + 1,
                                layout: root.layout, layoutDigest: root.layoutDigest,
                                layoutGeneration: root.layoutGeneration,
-                               lastFrame: location, lastDigest: digest)
+                               lastFrame: location, lastDigest: digest,
+                               auditRecordCount: root.auditRecordCount.map { $0 + UInt64((batch.auditRecords ?? []).count) })
             let (_, oldRootID) = try store.currentRoot()
             try store.publishRoot(updated, id: UUID())
             store.poisoned = false

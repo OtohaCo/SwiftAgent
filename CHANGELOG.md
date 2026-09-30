@@ -6,6 +6,45 @@ All notable changes to SwiftAgent are recorded here.
 
 Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 
+### Fixed: audit boundary closeout
+
+- Preserve original and failure-audit errors while still attempting mutation
+  quarantine. `AgentAuditPersistenceError` maps to the new source-breaking
+  `AgentFailure.auditPersistence` case; a failed quarantine remains separate.
+- Close prepared but unstarted sibling calls with known nonexecution facts and
+  classify safe audit failure reasons from actual runtime/tool/executor stages.
+- Clarify standard export as a conservative summary and demonstrate trusted
+  Host-selected subject/policy/time archival without changing SDK export ACKs.
+
+### Added: Audited Authorization (RC6 candidate)
+
+- Host-owned structured decisions bind runtime-prepared exact tool actions.
+  `AgentConfiguration.authorization` defaults to legacy; `requiredAudit` needs
+  schema-5 durable storage, authorizer and identity before input/provider work.
+  Read-only, mutation, dynamic and `.notRequired` tools all use the Host decision;
+  required tool-domain checks remain additional. Archived decisions cannot
+  restore live permission; changed inputs/versions, cancellation, generation
+  and expiry are enforced in the existing admission path.
+- Typed proposal, authorization, disposition and result-reference facts share
+  the Journal transaction domain. Application/intent and settlement/reference
+  publish atomically, without changing audit-only conversation revision.
+  Explicit schema-5 creation includes rejection support; schema 3/4 remain
+  unchanged and are not migrated. RC5 readers reject schema 5.
+- Bounded throwing Host queries, conservative export views and explicitly
+  started `AuditExportSink` delivery provide at-least-once archive delivery with
+  durable prefix ACKs and receiver deduplication. Export failure never retries
+  business execution; optional backlog pressure preserves in-flight settlement.
+- Public `EnterpriseAuthorizationFixture`, process/fault/reader compatibility
+  regressions and a storage-cost benchmark qualify the closed loop. Host
+  identity/policy, immutable backend operations, archive authentication and
+  viewing isolation remain Host responsibilities. Provider egress, IAM and
+  distributed remote/local transactions are outside scope. See
+  [the guide](docs/guides/swift-agent-authorization-audit.md).
+- Source compatibility: `AgentFailure.authorization` requires exhaustive
+  switches to change. `AgentTool.authorizationBinding(for:)` has a default;
+  existing same-signature conformer members must satisfy the public requirement.
+  Batch encoding metrics are additive. RC5 history is unchanged.
+
 ## [1.0.0-rc.5] - 2026-09-29
 
 RC5 is an SDK prerelease, not a stable 1.0 release or production Host

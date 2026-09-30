@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Runner metadata
         run: |
           sw_vers
@@ -30,7 +32,7 @@ jobs:
         run: bash Scripts/require-toolchain.sh --apple
       - name: Build, test, iOS cross-build, external client
         run: bash Scripts/ci-macos.sh
-      - name: Upload execution reporting logs
+      - name: Upload acceptance logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -49,6 +51,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Runner metadata
         run: |
           cat /etc/os-release
@@ -59,7 +63,7 @@ jobs:
         run: bash Scripts/require-toolchain.sh
       - name: Core --target build, tests, external client
         run: bash Scripts/ci-linux.sh
-      - name: Upload execution reporting logs
+      - name: Upload acceptance logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -76,6 +80,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Runner metadata
         run: |
           sw_vers

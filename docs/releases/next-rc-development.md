@@ -1,5 +1,15 @@
 # Next RC Development Policy
 
+## Current RC6 work
+
+Audited Authorization follows the immutable RC5 tag `1.0.0-rc.5`, commit
+`24447b8298ccea84f9f8056374857c5c47d8f64c`, tree
+`f3fbd3297f5b776cbe0ad22681d89ebd2469d3bf`. It is developed on an independent
+feature branch/PR; this document does not authorize a tag, Release or production
+Host upgrade. Scope, format boundaries, evidence and unexecuted checks are in
+[the RC6 acceptance record](rc6-audited-authorization-acceptance.md).
+The RC1/RC2 policy text below remains historical context.
+
 > last-verified: 2026-09-19
 
 SwiftAgent `1.0.0-rc.1` is frozen at
