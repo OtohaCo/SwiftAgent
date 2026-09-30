@@ -38,6 +38,7 @@ whether generated code looks plausible.
 | Choose a conversational provider and check capability boundaries | [Provider matrix](docs/providers.md) |
 | Discover models, select a Run configuration, or route with Jev | [Dynamic model selection](docs/guides/swift-agent-dynamic-model-selection.md) |
 | Use Noul, Choice and Score advice through TypeSafe Jev | [Decision Providers](docs/guides/swift-agent-decisions.md) |
+| Run reproducible synthetic Decision evaluation without live credentials | [DecisionEvaluation](Examples/DecisionEvaluation) |
 | Run examples, configure keys and distinguish fixtures from real calls | [Examples and live qualification](docs/guides/swift-agent-examples-and-live.md) |
 | Plan an app-owned speech, image, video or music service | [Host service tools](docs/guides/swift-agent-host-service-tools.md) — documentation only, not a media SDK |
 

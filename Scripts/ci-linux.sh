@@ -39,6 +39,8 @@ run_stage external-client-tests swift test --package-path Examples/ExternalClien
 run_stage strict-replanning-probe swift run --package-path Examples/ExternalClient BoundedReplanningProbe
 run_stage replanning-eval-build swift build --package-path Examples/ExternalClient --product ReplanningEvalTrial
 run_stage replanning-python python3 -m unittest discover Examples/ExternalClient/ReplanningEvaluation -p 'test_*.py'
+run_stage decision-eval-build swift build --package-path Examples/DecisionEvaluation
+run_stage decision-eval-regressions python3 -m unittest discover Examples/DecisionEvaluation -p 'test_*.py'
 run_stage context-pipeline swift run --package-path Examples/ExternalClient ContextPipelineFixture
 run_stage scoped-capability swift run --package-path Examples/ExternalClient ScopedCapabilityFixture
 run_stage follow-up-queue swift run --package-path Examples/ExternalClient FollowUpQueueFixture

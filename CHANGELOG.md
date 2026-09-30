@@ -6,6 +6,15 @@ All notable changes to SwiftAgent are recorded here.
 
 Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 
+- Add optional `Examples/DecisionEvaluation`: versioned synthetic multilingual
+  Choice dataset, deterministic permutations/repeats, dry-run, actual public
+  Jev HTTP fixture consumer, durable trial ledger and bounded explicit live
+  runner. Failures stay in the denominator; absent usage/probability/cost are
+  not invented. Native OpenAI Decisions remains blocked on authoritative
+  protocol details; no guessed provider or Responses fallback is shipped.
+  Existing Decision API/Codable, Core dependencies and Journal formats are
+  unchanged; certain or forged approval advice still cannot authorize effects.
+
 - Bound early CI build/test stages and retain per-attempt process/source evidence.
   Add a five-attempt Linux reporting reproduction experiment that stops on failure;
   historical #45/#46 hang/segfault root causes remain unestablished.

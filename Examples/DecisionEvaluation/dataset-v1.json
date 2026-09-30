@@ -1,0 +1,368 @@
+{
+  "schema": 1,
+  "version": "synthetic-routing-v1",
+  "promptVersion": "routing-prompt-v1",
+  "instructions": "Select the most relevant review queue. Respect negations and explicit corrections. For unresolved conflict or missing information select clarify. This is advice, never execution authorization.",
+  "tasks": [
+    {
+      "id": "en-payment",
+      "language": "en",
+      "input": "I was billed twice. Please review the duplicate charge.",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "billing"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "payment"
+    },
+    {
+      "id": "en-paraphrase",
+      "language": "en",
+      "input": "The same payment appears twice on my invoice.",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "billing"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "payment"
+    },
+    {
+      "id": "en-negation",
+      "language": "en",
+      "input": "It is not a billing problem. I cannot sign in.",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "access"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "access"
+    },
+    {
+      "id": "en-correction",
+      "language": "en",
+      "input": "I said delivery earlier; correction: I need a password reset.",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "access"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "access"
+    },
+    {
+      "id": "en-conflict",
+      "language": "en",
+      "input": "Route only to billing. Also route only to delivery. Neither instruction overrides the other.",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "clarify"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "conflict"
+    },
+    {
+      "id": "zh-payment",
+      "language": "zh",
+      "input": "账单里同一笔付款扣了两次，请核对重复扣款。",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "billing"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "payment"
+    },
+    {
+      "id": "zh-negation",
+      "language": "zh",
+      "input": "不是付款问题，我无法登录账号。",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "access"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "access"
+    },
+    {
+      "id": "zh-insufficient",
+      "language": "zh",
+      "input": "请帮我处理那个问题。没有其他信息。",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "clarify"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "insufficient"
+    },
+    {
+      "id": "ja-delivery",
+      "language": "ja",
+      "input": "荷物がまだ届きません。配送状況を確認してください。",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "delivery"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "delivery"
+    },
+    {
+      "id": "ja-correction",
+      "language": "ja",
+      "input": "請求ではありません。訂正します。パスワードを忘れました。",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "access"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "access"
+    },
+    {
+      "id": "ja-insufficient",
+      "language": "ja",
+      "input": "それをお願いします。対象の説明はありません。",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "clarify"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "insufficient"
+    },
+    {
+      "id": "en-near-options",
+      "language": "en",
+      "input": "The parcel arrived yesterday, but the invoice has a duplicated charge.",
+      "kind": "choice",
+      "modality": "text",
+      "candidates": [
+        {
+          "id": "billing",
+          "description": "Payment, invoice, refund or duplicate charge."
+        },
+        {
+          "id": "access",
+          "description": "Login, password or account access."
+        },
+        {
+          "id": "delivery",
+          "description": "Shipping or delivery."
+        },
+        {
+          "id": "clarify",
+          "description": "Insufficient or mutually conflicting information; ask the user."
+        }
+      ],
+      "allowed": [
+        "billing"
+      ],
+      "scoring": "exact_allowed",
+      "paraphraseGroup": "payment"
+    }
+  ]
+}
