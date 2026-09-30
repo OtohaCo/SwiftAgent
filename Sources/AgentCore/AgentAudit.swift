@@ -270,6 +270,11 @@ package struct JournalAuditExportCheckpoint: Codable, Equatable, Sendable {
     package let throughSequence: UInt64
     package let batchID: UUID
     package let batchDigest: String
+    package init(configurationID: String, configurationDigest: String, throughSequence: UInt64,
+                 batchID: UUID, batchDigest: String) {
+        self.configurationID = configurationID; self.configurationDigest = configurationDigest
+        self.throughSequence = throughSequence; self.batchID = batchID; self.batchDigest = batchDigest
+    }
 }
 
 package struct JournalAuditExportChange: Sendable {
