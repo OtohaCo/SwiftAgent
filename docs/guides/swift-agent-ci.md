@@ -23,7 +23,8 @@ Hosted artifacts keep these records for 30 days.
 
 `ci-linux-reporting-repro.sh` runs the original reporting-support test command at
 most five times in Swift 6.4 Linux, stopping at the first nonzero, timeout or crash.
-Each attempt has independent evidence; compilation/toolchain, process tree and
+The reproduction step can run after an unrelated earlier stage failure, but
+does not start after job cancellation. Each attempt has independent evidence; compilation/toolchain, process tree and
 any available core metadata stay separate. This is a bounded reproduction
 experiment, not retry-until-green. Debug/sanitizer runs, if any, are separate from
 normal acceptance. A pass means that attempt did not reproduce the old crash.
