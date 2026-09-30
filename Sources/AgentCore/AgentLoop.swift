@@ -195,6 +195,11 @@ package struct AgentLoop: Sendable {
             if modelTurns > 0 && !provider.descriptor.capabilities.contains(.multiTurn) {
                 throw AgentLoopError.unsupportedCapabilities(.multiTurn)
             }
+            if let sourceRevision = lifecycle?.sourceRevision {
+                // A tool batch may publish several canonical checkpoints. Its
+                // source revision is the Session's actual revision, not a turn count.
+                projectionRevision = try await sourceRevision(history)
+            }
             modelTurns += 1
             try await emitter?.send(.turnStarted(modelTurns))
             try budget.checkActive()

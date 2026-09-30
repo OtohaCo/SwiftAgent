@@ -16,6 +16,11 @@ Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
   versions. Complete canonical history, steering IDs, sequences and Run identity
   queries are preserved. Identity-only metadata still grows with Sessions/Runs;
   memory mode gains no mutation/audit capability. Durable formats are unchanged.
+- Projection source revision follows the actual committed Session snapshot after
+  multiple tool-result commits; candidate preflight and the distinct Run source
+  epoch are documented. Stale/wrong source plans still fail; Codable fields and
+  digest format stay unchanged. Session `history` remains a loaded view; durable
+  resume examples use the existing throwing `conversationSnapshot()`.
 
 ### Fixed: audit boundary closeout
 
