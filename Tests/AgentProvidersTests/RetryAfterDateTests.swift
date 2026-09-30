@@ -30,4 +30,18 @@ struct RetryAfterDateTests {
         let target = Date(timeIntervalSince1970: 1_893_456_000) // 2030-01-01
         #expect(ProviderRetryAfter.parse(formatter.string(from: target), now: reference) == .seconds(target.timeIntervalSince(reference)))
     }
+    @Test func yearWindowAndLeapSecondStayIndependentOfMachineDefaults() {
+        let futureCentury = Date(timeIntervalSince1970: 4_070_908_800) // 2099-01-01 UTC
+        let nextCentury = Date(timeIntervalSince1970: 4_102_444_800) // 2100-01-01 UTC
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEEE, dd-MMM-yy HH:mm:ss 'GMT'"
+        #expect(ProviderRetryAfter.parse(formatter.string(from: nextCentury), now: futureCentury) == .seconds(nextCentury.timeIntervalSince(futureCentury)))
+        let beforeLeap = Date(timeIntervalSince1970: 1_483_228_799)
+        for value in ["Sat, 31 Dec 2016 23:59:60 GMT", "Saturday, 31-Dec-16 23:59:60 GMT", "Sat Dec 31 23:59:60 2016"] {
+            #expect(ProviderRetryAfter.parse(value, now: beforeLeap) == .seconds(1))
+        }
+    }
+
 }
