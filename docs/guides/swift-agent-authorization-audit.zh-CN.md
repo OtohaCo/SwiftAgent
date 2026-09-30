@@ -137,9 +137,35 @@ print(status.acknowledgedThroughSequence, status.backlogRecords, status.lastFail
 事务。目的地、过滤或脱敏版本改变时，应换配置 ID 从零导出；同 ID 不会沿用不符的位点。
 过滤配置的位点确认的是该配置下的全局序号范围，不表示被过滤记录也已上传。
 
-默认导出省略原始参数、输出、Receipt/operation 身份、任意 Host 字符串和 endpoint。
+标准导出是保守摘要，不是完整授权记录副本。`AuditExportRedactor` 收到的也是
+这个摘要，不会收到原始 `AuditRecord`，不能从输入恢复 SDK 已省略的字段。
+
+| 字段 | 可信 Host 本地查询 | 标准导出及脱敏器输入 |
+| --- | --- | --- |
+| store/record ID、审计序号、原记录摘要、UUID 关联 | 保留 | 保留 |
+| 决定结果、人工/自动策略/服务主体类型 | 保留 | 保留 |
+| 主体 issuer、subjectID | 保留 | 省略 |
+| 策略 ID、版本、规则引用 | 保留 | 省略 |
+| Host 声明的决定时间、SDK 观察时间 | 分别保留 | 省略 |
+| 原始/规范化提案、材料 | 仅受限查询保留 | 省略 |
+| 输出、Receipt/规范化 operation 身份、endpoint | 按实际受限载荷查询 | 省略 |
+
 确定性脱敏器只能改导出视图；抛错或输出超限即停止，不修改绑定或正式历史。
-Journal 本身没有因此加密，也不能宣称没有敏感信息。JSONL 是归档视图，不是可恢复备份。
+Journal 本身没有因此加密，也不能宣称没有敏感信息。摘要仍可能暴露关联。
+
+需要保存主体、策略或时间元数据时，可信 Host 管理代码可分页调用
+`journal.auditRecords`，显式选择字段，写入 Host 自有格式和接收适配器。
+这些决定元数据在常规查询中已保留，无需为此读取原始参数。
+包外已编译的
+[`archiveSelectedAuthorizationMetadata`](../../../Examples/ExternalClient/Sources/EnterpriseAuthorizationFixture/HostIntegration.swift)
+只选择主体、策略 ID/版本和两种时间，并保留稳定 store/record ID 与原记录摘要。
+真实 fixture 同时核对本地查询、透传脱敏器、JSONL 摘要接收端和这个选择性归档。
+
+Host 为独立归档负责查看权限、字段/目的地格式版本、接收端持久去重及自己的确认
+位点。一次查询保留固定游标；持久接收后才推进 Host 位点。不能用
+`AuditExportAcknowledgement` 或 SDK 导出位点确认标准批次未包含的额外字段。
+这条管理路径不产生执行许可。选择性 JSONL 也不是完整授权记录副本或可恢复
+Journal 备份；需要完整记录的归档必须另行明确、授权并验证必要字段和保留规则。
 
 本地可靠提交是执行门槛，远端 ACK 不是授权。可设置积压上限拒绝新工作，仍允许
 已准入 mutation 结算和清理。stop 不要求清空全部积压；慢或不合作 sink 在实际

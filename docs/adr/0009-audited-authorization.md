@@ -49,7 +49,13 @@ Throwing Host-only queries use bounded pages, association indexes and a fixed
 high-water mark. Cursors bind store and filter. Restricted raw payloads are
 separate from the regular view. Explicitly started exporters read committed
 facts, apply deterministic redaction and send versioned batches to a Host
-`AuditExportSink`. Matching prefix ACKs advance a durable checkpoint. Stable
+`AuditExportSink`. The standard format and redactor input are conservative
+summaries: they omit subject issuer/ID, policy metadata, Host decision time and
+SDK observation time. Those fields remain available to trusted Host queries.
+A Host requiring them uses an explicit selected management-query projection,
+its own receiver/schema and confirmed position; SDK batch ACKs cannot confirm
+extra fields outside that batch. Neither export view is a full Journal backup.
+Matching prefix ACKs advance a durable checkpoint. Stable
 store/record IDs allow receiver deduplication under at-least-once delivery.
 Destination/filter/redaction changes use a different checkpoint. Local commit,
 not remote ACK, is the execution gate. Configured backlog pressure refuses new

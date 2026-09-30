@@ -263,14 +263,46 @@ acknowledging skipped sequences under that exact configuration. The optional
 backlog policy measures that configuration's confirmed **global range**, not
 remote acceptance of excluded records; the Host must choose suitable filters.
 
-The default export view includes UUID links, kinds, outcomes/subject type and
-action/output digests, and omits arbitrary Host strings, raw payloads, outputs,
-Receipt/canonical operation identities and endpoints. Implement deterministic
-`AuditExportRedactor`, change `redactionVersion` when behavior changes; throwing
-or output over 16 KiB stops without sending that batch. Redaction changes only
-the archive view, never binding or canonical history. The Journal itself is not
-encrypted or guaranteed free of sensitive data; digests can also disclose
-correlations. JSONL is an archive, not a complete recoverable Journal backup.
+The standard exporter provides a **conservative summary**, not a complete
+copy of the authorization record. Its redactor receives that same summary;
+`AuditExportRedactor` does not receive the original `AuditRecord` or recover
+fields removed by the SDK.
+
+| Field | Trusted Host query | Standard export / redactor input |
+| --- | --- | --- |
+| store/record IDs, audit sequence, committed digest, UUID links | Retained | Retained |
+| decision outcome, human/automated/service subject type | Retained | Retained |
+| subject issuer and subjectID | Retained | Omitted |
+| policy ID, version and rule references | Retained | Omitted |
+| Host decision time and SDK observation time | Retained as separate values | Omitted |
+| raw/normalized proposal and materials | Restricted query only | Omitted |
+| outputs, Receipt/canonical operation identities, endpoints | Restricted query as applicable | Omitted |
+
+Implement deterministic `AuditExportRedactor`, change `redactionVersion` when
+behavior changes; throwing or output over 16 KiB stops without sending that
+batch. Redaction changes only the archive view, never binding or canonical
+history. The Journal itself is not encrypted or guaranteed free of sensitive
+data; digests can also disclose correlations.
+
+For an archive that needs selected subject, policy or time metadata, trusted
+Host management code can paginate `journal.auditRecords` and explicitly project
+those fields into a Host-owned schema/receiver. Ordinary queries already retain
+those decision fields; retrieving them does not require restricted proposal
+payloads. The compiled package-external
+[`archiveSelectedAuthorizationMetadata`](../../../Examples/ExternalClient/Sources/EnterpriseAuthorizationFixture/HostIntegration.swift)
+example selects only subject, policy ID/version and both distinct times, with
+stable store/record IDs and the committed digest. The real fixture verifies both
+that archive and the summary seen by a pass-through redactor and JSONL sink.
+
+The Host owns access control, selection/destination schema versions, durable
+receiver deduplication and its own confirmed position for that independent
+archive. Keep a fixed query cursor during a pass, and advance the Host position
+only after durable receipt. Do not use `AuditExportAcknowledgement` or the SDK
+export checkpoint to claim receipt of extra fields omitted by the standard
+batch. Selecting additional fields does not grant execution permission or make
+either JSONL view a complete authorization-record copy or recoverable Journal
+backup. An archive claiming full records must separately define, authorize and
+validate its required fields and retention; this sample intentionally does not.
 
 Optional `AuditBacklogPolicy(exportConfigurationID:maximumUnacknowledgedRecords:)`
 refuses new protected work once its bound is reached. Local reliable commit is

@@ -6,6 +6,16 @@ All notable changes to SwiftAgent are recorded here.
 
 Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 
+### Fixed: audit boundary closeout
+
+- Preserve original and failure-audit errors while still attempting mutation
+  quarantine. `AgentAuditPersistenceError` maps to the new source-breaking
+  `AgentFailure.auditPersistence` case; a failed quarantine remains separate.
+- Close prepared but unstarted sibling calls with known nonexecution facts and
+  classify safe audit failure reasons from actual runtime/tool/executor stages.
+- Clarify standard export as a conservative summary and demonstrate trusted
+  Host-selected subject/policy/time archival without changing SDK export ACKs.
+
 ### Added: Audited Authorization (RC6 candidate)
 
 - Host-owned structured decisions bind runtime-prepared exact tool actions.

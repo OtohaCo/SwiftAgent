@@ -69,6 +69,39 @@ Interleaving tests use barriers/continuations; the timeout case waits on a real
 bounded timeout after an entered barrier. Process tests use bounded exit/output
 waits. SIGKILL is **not** power-loss validation.
 
+## Bounded PR #49 closeout review
+
+The independently checked implementation head was `2cefb55b07b615ecf20fcc83b83c69db6bca8380`,
+tree `3d32014e737f92a88ece1df988c8ae22261a0594`, base the RC5 commit above.
+Its existing green CI is baseline evidence only. Final repair-head qualification
+and actual checkout SHA/tree/attempt are attached to PR #49, without rewriting
+old failure logs or claiming that model review is human approval.
+
+| Review boundary | Reproduction and minimal change |
+| --- | --- |
+| A: failure audit vs mutation recovery | `AuditFailureRecoveryTests`: actual temporary file effect then error; once-only `beforeAppend` failure left original head's intent unquarantined and replaced executor error. `afterCurrentReplace` also replaced it. Capture original/audit separately and always attempt original quarantine/events; poisoned quarantine failure stays typed. Reopen never reexecutes. |
+| B: prepared unscheduled siblings | `AuditStageCloseoutTests`: A deny/cancel/Run deadline/authorizer timeout after preparation left B without evaluation/disposition. Retain bounded invocation owners and close only never-started siblings. Prefix reads/mutations retain paired history/results/Receipt; started uncertain calls are not labelled unexecuted. |
+| C: error source | Same tests: tool authorize/executor throwing public `EvidenceError` or `AgentAuthorizationError` falsely produced runtime Evidence/Host-denied reasons. Actual runtime gate/tool callback/enterprise phase/executor observation now determine bounded safe reasons. Real runtime gate and Host decision cases remain distinct. |
+| D: export fields | No unsafe code defect reproduced. `AuthorizationExportBoundary PASS` in the separate-package fixture verifies local subject/policy/times vs conservative standard export and pass-through redactor. Guides now call it a summary; explicit Host-selected query archival owns access, schema/version, dedup and confirmed position separately, without SDK ACK misuse. |
+
+`AgentAuditPersistenceError` preserves typed original/audit failures. If mutation
+quarantine also fails, `AgentMutationPersistenceError` retains that third failure;
+it never says a failed write was successful. `AgentFailure.auditPersistence` is
+an additional source break for exhaustive switches. Schema, Journal disk/index
+format, admission/intent atomicity and result/settlement atomicity are unchanged.
+
+Reproduce the added tests before full clean acceptance:
+
+```sh
+swift test --filter 'AuditFailureRecoveryTests|AuditStageCloseoutTests' --disable-sandbox --no-parallel
+swift run --package-path Examples/ExternalClient EnterpriseAuthorizationFixture
+```
+
+The closeout reruns the same release-build 20-Run benchmark and independent
+counters through the full scripts. These are controlled SDK/file-fixture costs,
+not model or enterprise-service latency. Preliminary data below is retained;
+new per-head artifacts supersede it only for their own checkout.
+
 ## Actual old/new reader matrix
 
 `Scripts/verify-rc6-compatibility.sh RC5_CHECKOUT CANDIDATE_CHECKOUT` builds the

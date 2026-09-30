@@ -54,15 +54,50 @@ import Foundation
         try check(records.contains { if case .result(let r) = $0.fact {
             return r.kind == .replay && r.sourceRunID == automatic.id && r.receipt == automaticReceipt
         }; return false }, "replay result reference must be durable")
+        // Standard export is a summary; trusted Host query can separately archive selected metadata.
+        let regularRecords = try await allRecords(journal, query: .init(sessionID: sessionID), restricted: false)
+        let localHuman = try require(regularRecords.first { if case .authorization(let a) = $0.fact {
+            return a.decision?.subject.type == .human
+        }; return false })
+        guard case .authorization(let humanEvaluation) = localHuman.fact else {
+            throw FixtureFailure.assertion("missing human evaluation")
+        }
+        let humanDecision = try require(humanEvaluation.decision)
+        try check(humanDecision.subject.issuer == "fixture-host" && humanDecision.subject.subjectID == "user-42"
+            && humanDecision.policy.id == "fixture-exact-action" && humanDecision.policy.version == "1"
+            && humanDecision.hostDecisionTime != nil, "regular local query retains subject, policy and Host time")
+        let selectedArchive = root.appendingPathComponent("host-selected-authorization.jsonl")
+        let selectedSink = try ExampleSelectedArchiveSink(file: selectedArchive)
+        let selectedCount = try await archiveSelectedAuthorizationMetadata(journal: journal, query: .init(runID: human.id)) {
+            try await selectedSink.write($0)
+        }
+        // A Host adapter can resend its own selected metadata without touching SDK export ACKs.
+        let selectedSinkReopened = try ExampleSelectedArchiveSink(file: selectedArchive)
+        _ = try await archiveSelectedAuthorizationMetadata(journal: journal, query: .init(runID: human.id)) {
+            try await selectedSinkReopened.write($0)
+        }
+        let selectedLines = try String(contentsOf: selectedArchive, encoding: .utf8).split(separator: "\n")
+        let selected = try selectedLines.map { try JSONDecoder().decode(ExampleSelectedAuthorizationArchiveRecord.self, from: Data($0.utf8)) }
+        try check(selectedCount == 1 && selected.count == 1, "Host-selected archive paginates to one exact decision")
+        try check(selected[0].auditRecordID == localHuman.auditRecordID && selected[0].subject == humanDecision.subject
+            && selected[0].policyVersion == humanDecision.policy.version && selected[0].hostDecisionTime == humanDecision.hostDecisionTime
+            && selected[0].sdkObservedAt == localHuman.sdkObservedAt, "Host-selected archive preserves explicitly chosen metadata")
+        let summaryProof = ExampleSummaryExportProof(localRecords: regularRecords)
         let sink = try FixtureJSONLSink(at: archive, loseFirstAcknowledgement: true)
         let export = AuditExportConfiguration(id: "archive-v1", destinationID: "fixture-jsonl", contentVersion: "1",
             redactionVersion: "conservative-v1", pageSize: 10, retryDelay: .zero)
-        let exporter = try await journal.startAuditExporter(configuration: export, sink: sink)
+        let exporter = try await journal.startAuditExporter(configuration: export, sink: sink, redactor: summaryProof)
         try await exporter.waitForDrain()
         let status = await exporter.status()
         try check(status.backlogRecords == 0 && status.lastFailure == nil, "export must acknowledge the backlog")
         try check(await sink.duplicates > 0, "lost ACK must cause a deduplicated resend")
         try check(await sink.recordIDs.count == records.count, "export must include every committed fact once")
+        let standardLines = try String(contentsOf: archive, encoding: .utf8).split(separator: "\n")
+        let standardRecords = try standardLines.map { try JSONDecoder().decode(AuditExportRecord.self, from: Data($0.utf8)) }
+        try check(summaryProof.observedRecords == records.count, "redactor receives every conservative summary")
+        for record in standardRecords { try summaryProof.validate(record) }
+        try check(standardRecords.contains { $0.auditRecordID == localHuman.auditRecordID }, "sink receives human summary without private metadata")
+        print("AuthorizationExportBoundary PASS localSubjectPolicyTimes=retained standardExport=summary redactorInput=summary hostSelectedArchive=1")
         try await journal.close()
         let reopened = try AgentIncrementalJournal.open(at: directory)
         let denials = try await allRecords(reopened, query: .init(runID: denied.id), restricted: true)
