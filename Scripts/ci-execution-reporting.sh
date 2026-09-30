@@ -8,8 +8,8 @@ artifact="${SWIFT_AGENT_ACCEPTANCE_OUTPUT:-$root/.build/execution-reporting-acce
 mkdir -p "$(dirname "$artifact")"
 # Logs outlive the script: CI uploads this directory and a failed case keeps its evidence.
 log_dir="${SWIFT_AGENT_CI_LOG_DIR:-$root/.build/ci-logs/execution-reporting}"
-rm -rf "$log_dir"
 mkdir -p "$log_dir"
+log_dir="$(mktemp -d "$log_dir/attempt-XXXXXXXX")"
 case_timeout="${SWIFT_AGENT_CI_CASE_TIMEOUT_SECONDS:-1200}"
 
 source_sha="$(git rev-parse HEAD)"
@@ -23,68 +23,13 @@ overall=0
 
 timestamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-descendants() {
-    local pid="$1" child
-    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
-        echo "$child"
-        descendants "$child"
-    done
-}
-
-# Best-effort process and thread evidence for a case that did not finish in time.
-collect_stacks() {
-    local pid="$1" evidence="$2" each
-    mkdir -p "$evidence"
-    ps -o pid,ppid,pgid,stat,etime,command -p "$pid" $(descendants "$pid" | sed 's/^/-p /') \
-        >"$evidence/processes.txt" 2>&1 || true
-    for each in "$pid" $(descendants "$pid"); do
-        if command -v sample >/dev/null 2>&1; then
-            sample "$each" 3 -file "$evidence/sample-$each.txt" >/dev/null 2>&1 || true
-        elif command -v gdb >/dev/null 2>&1; then
-            gdb -p "$each" -batch -ex "thread apply all bt" >"$evidence/gdb-$each.txt" 2>&1 || true
-        else
-            echo "no sample or gdb; stacks unavailable" >"$evidence/stacks-unavailable.txt"
-        fi
-    done
-}
-
-# Crash reports written while the case ran (macOS), or what Linux exposes without privileges.
-collect_crashes() {
-    local marker="$1" evidence="$2" reports="$HOME/Library/Logs/DiagnosticReports"
-    mkdir -p "$evidence"
-    if [[ -d "$reports" ]]; then
-        find "$reports" -type f -newer "$marker" -exec cp {} "$evidence/" \; 2>/dev/null || true
-    fi
-    if command -v coredumpctl >/dev/null 2>&1; then
-        coredumpctl info --no-pager --since "-30min" >"$evidence/coredumpctl.txt" 2>&1 || true
-    fi
-    echo "ulimit -c: $(ulimit -c)" >"$evidence/core-limit.txt"
-}
-
-# Runs one case in its own process group with a bounded wall-clock time. Returns the case's exit
-# status, or 124 after a timeout once evidence is collected and the group is stopped.
+# Reuse the same bounded owner as the earlier core stages. It records source,
+# process tree and bounded evidence before stopping only its own process group.
 run_bounded() {
     local log="$1" evidence="$2"
     shift 2
-    set -m
-    "$@" >"$log" 2>&1 &
-    local pid=$!
-    set +m
-    local waited=0
-    while kill -0 "$pid" 2>/dev/null; do
-        if (( waited >= case_timeout )); then
-            printf '[%s] timeout after %ss; collecting process state\n' "$(timestamp)" "$case_timeout" | tee -a "$log"
-            collect_stacks "$pid" "$evidence"
-            kill -TERM -- "-$pid" 2>/dev/null || true
-            sleep 5
-            kill -KILL -- "-$pid" 2>/dev/null || true
-            wait "$pid" 2>/dev/null || true
-            return 124
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-    wait "$pid"
+    python3 "$root/Scripts/ci_stage.py" --stage "$(basename "$log" .log)" \
+        --log-dir "$evidence" --timeout "$case_timeout" -- "$@" >"$log" 2>&1
 }
 
 run_case() {
@@ -109,9 +54,6 @@ run_case() {
     else
         result="fail"
         overall=1
-        if [[ "$exit_code" -gt 128 && "$exit_code" -ne 124 ]]; then
-            collect_crashes "$marker" "$evidence"
-        fi
     fi
     rm -f "$marker"
     printf '[%s] end %s: exit=%s result=%s seconds=%s log=%s\n' \

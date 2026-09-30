@@ -6,6 +6,10 @@ All notable changes to SwiftAgent are recorded here.
 
 Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 
+- Bound early CI build/test stages and retain per-attempt process/source evidence.
+  Add a five-attempt Linux reporting reproduction experiment that stops on failure;
+  historical #45/#46 hang/segfault root causes remain unestablished.
+
 ### Fixed: audit boundary closeout
 
 - Preserve original and failure-audit errors while still attempting mutation

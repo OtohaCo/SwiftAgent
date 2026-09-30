@@ -1,0 +1,110 @@
+import json
+import os
+import select
+import signal
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+STAGE = Path(__file__).with_name("ci_stage.py")
+
+class CIStageTests(unittest.TestCase):
+    def test_success_and_each_attempt_keeps_its_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for _ in range(2):
+                result = subprocess.run([sys.executable, str(STAGE), "--stage", "success", "--log-dir", directory,
+                                         "--timeout", "20", "--", sys.executable, "-c", "print('fixture pass')"], capture_output=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            entries = list(Path(directory).glob("*/metadata.json"))
+            self.assertEqual(len(entries), 2)
+            for entry in entries:
+                data = json.loads(entry.read_text())
+                self.assertEqual(data["result"], "pass")
+                self.assertEqual(data["exitCode"], 0)
+                self.assertEqual(len(data["sourceCommitSHA"]), 40)
+                self.assertEqual(len(data["sourceTreeSHA"]), 40)
+
+    def test_timeout_has_ready_barrier_and_does_not_kill_unrelated_child(self):
+        unrelated = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                ready = Path(directory) / "ready"
+                # Ready is published before the owned worker blocks in an actual read.
+                worker = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text(str(__import__('os').getpid())); sys.stdin.read()"
+                pipe = subprocess.PIPE
+                runner = subprocess.Popen([sys.executable, str(STAGE), "--stage", "blocked", "--log-dir", directory,
+                                           "--timeout", "3", "--evidence-timeout", "1", "--", sys.executable, "-c", worker, str(ready)],
+                                          stdin=pipe, stdout=pipe, stderr=pipe)
+                out, err = self.wait_without_closing_barrier(runner)
+                self.assertEqual(runner.returncode, 124, (out, err))
+                self.assertTrue(ready.exists(), "timeout must reach the controlled worker")
+                metadata = json.loads(next(Path(directory).glob("*/metadata.json")).read_text())
+                self.assertEqual(metadata["result"], "timeout")
+                self.assertEqual(metadata["exitCode"], 124)
+                self.assertIn(int(ready.read_text()), metadata["observedPIDs"])
+                self.assertIsNone(unrelated.poll())
+                self.assertTrue(next(Path(directory).glob("*/processes.txt")).exists())
+        finally:
+            unrelated.stdin.close()
+            unrelated.wait(timeout=10)
+
+    def test_core_build_before_execution_reporting_is_bounded_and_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            executable = directory / "swift"
+            ready = directory / "ready"
+            executable.write_text("#!/usr/bin/env python3\nimport os,pathlib,sys\nif '--version' in sys.argv:\n print('Swift version 6.4'); sys.exit(0)\nif sys.argv[1:3] == ['package','clean']:sys.exit(0)\npathlib.Path(os.environ['FIXTURE_READY']).write_text('core build entered')\nsys.stdin.read()\n")
+            executable.chmod(0o755)
+            env = os.environ.copy()
+            env.update(PATH=str(directory) + os.pathsep + env['PATH'], FIXTURE_READY=str(ready),
+                       SWIFT_AGENT_CI_CASE_TIMEOUT_SECONDS='2', SWIFT_AGENT_CI_STAGE_LOG_DIR=str(directory / 'inner'))
+            runner = subprocess.Popen([sys.executable, str(STAGE), '--stage', 'outer-test-owner', '--log-dir', str(directory / 'outer'),
+                                       '--timeout', '8', '--evidence-timeout', '1', '--', 'bash', str(STAGE.with_name('ci-linux.sh'))],
+                                      env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            out, err = self.wait_without_closing_barrier(runner)
+            self.assertTrue(ready.exists())
+            self.assertEqual(runner.returncode, 124, (out, err))
+            records = list((directory / 'inner').glob('core-build-AgentModels-*/metadata.json'))
+            self.assertEqual(len(records), 1, 'core stage needs its own evidence before reporting script')
+            self.assertEqual(json.loads(records[0].read_text())['result'], 'timeout')
+
+    def test_cancellation_and_noncooperative_descendant_are_owned_until_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            fifo = directory / 'ready-fifo'
+            os.mkfifo(fifo)
+            ready_reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+            worker = "import subprocess,sys; child=subprocess.Popen([sys.executable,'-c',\"import os,signal,sys; signal.signal(signal.SIGTERM,signal.SIG_IGN); f=open(sys.argv[1],'w'); f.write(str(os.getpid())); f.close(); sys.stdin.read()\",sys.argv[1]]); sys.stdin.read()"
+            runner = subprocess.Popen([sys.executable, str(STAGE), '--stage', 'cancellation', '--log-dir', str(directory / 'evidence'),
+                                       '--timeout', '30', '--evidence-timeout', '1', '--', sys.executable, '-c', worker, str(fifo)],
+                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                readable, _, _ = select.select([ready_reader], [], [], 10)
+                self.assertTrue(readable, 'actual owned child publishes readiness')
+                descendant = int(os.read(ready_reader, 64))
+                runner.send_signal(signal.SIGTERM)
+                out, err = self.wait_without_closing_barrier(runner)
+                self.assertEqual(runner.returncode, 130, (out, err))
+                data = json.loads(next((directory / 'evidence').glob('*/metadata.json')).read_text())
+                self.assertEqual(data['result'], 'cancelled')
+                self.assertIn(descendant, data['observedPIDs'])
+                # No running descendant; a short-lived reparented zombie may await OS reaping.
+                listing = subprocess.run(['ps', '-o', 'stat=', '-p', str(descendant)], capture_output=True, timeout=2).stdout.decode().strip()
+                self.assertTrue(not listing or listing.startswith('Z'), listing)
+            finally:
+                os.close(ready_reader)
+                if runner.poll() is None:
+                    runner.kill(); runner.wait(timeout=10)
+
+    def wait_without_closing_barrier(self, runner):
+        # stdin stays open: closing it would falsely make the blocked test pass.
+        runner.wait(timeout=20)
+        runner.stdin.close()
+        out, err = runner.stdout.read(), runner.stderr.read()
+        runner.stdout.close(); runner.stderr.close()
+        return out, err
+
+if __name__ == "__main__":
+    unittest.main()

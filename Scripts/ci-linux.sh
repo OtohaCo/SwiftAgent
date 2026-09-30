@@ -6,11 +6,17 @@ cd "$root"
 # shellcheck disable=SC1091
 . "$root/Scripts/require-toolchain.sh"
 
-swift package clean
+run_stage() {
+  local stage="$1"
+  shift
+  python3 "$root/Scripts/ci_stage.py" --stage "$stage" -- "$@"
+}
+
+run_stage core-package-clean swift package clean
 
 for target in AgentModels AgentTools AgentCore AgentCatalog AgentProviders AgentDecisions AgentJevProvider AgentUsage; do
   echo "swift build --target $target"
-  swift build --target "$target"
+  run_stage "core-build-$target" swift build --target "$target"
 done
 
 if find .build -name 'WorkspaceAgent.swiftmodule' | grep -q .; then
@@ -26,25 +32,25 @@ fi
 echo "Portable --target builds did not compile WorkspaceAgent or AgentAppleProvider."
 
 echo "swift test"
-swift test --disable-sandbox --no-parallel
+run_stage core-tests swift test --disable-sandbox --no-parallel
 
 echo "external client"
-swift test --package-path Examples/ExternalClient --disable-sandbox --no-parallel
-swift run --package-path Examples/ExternalClient BoundedReplanningProbe
-swift build --package-path Examples/ExternalClient --product ReplanningEvalTrial
-python3 -m unittest discover Examples/ExternalClient/ReplanningEvaluation -p 'test_*.py'
-swift run --package-path Examples/ExternalClient ContextPipelineFixture
-swift run --package-path Examples/ExternalClient ScopedCapabilityFixture
-swift run --package-path Examples/ExternalClient FollowUpQueueFixture
+run_stage external-client-tests swift test --package-path Examples/ExternalClient --disable-sandbox --no-parallel
+run_stage strict-replanning-probe swift run --package-path Examples/ExternalClient BoundedReplanningProbe
+run_stage replanning-eval-build swift build --package-path Examples/ExternalClient --product ReplanningEvalTrial
+run_stage replanning-python python3 -m unittest discover Examples/ExternalClient/ReplanningEvaluation -p 'test_*.py'
+run_stage context-pipeline swift run --package-path Examples/ExternalClient ContextPipelineFixture
+run_stage scoped-capability swift run --package-path Examples/ExternalClient ScopedCapabilityFixture
+run_stage follow-up-queue swift run --package-path Examples/ExternalClient FollowUpQueueFixture
 
 echo "provider qualification example"
-swift test --package-path Examples/ProviderQualification --disable-sandbox --no-parallel
+run_stage provider-qualification swift test --package-path Examples/ProviderQualification --disable-sandbox --no-parallel
 
 echo "Apple chat integration example"
-swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
+run_stage apple-chat-tests swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
 
 echo "dynamic model routing example"
-swift test --package-path Examples/DynamicModelRouting --disable-sandbox --no-parallel
+run_stage dynamic-routing-tests swift test --package-path Examples/DynamicModelRouting --disable-sandbox --no-parallel
 
 echo "execution reporting support and consumers"
 bash Scripts/ci-execution-reporting.sh
