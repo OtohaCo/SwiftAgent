@@ -13,27 +13,27 @@ struct DeepSeekResponsesStreamDecoder {
         var finalized = false
 
         mutating func seed(_ text: String) throws -> String {
-            guard !finalized else { throw ProviderJSON.invalid() }
-            guard value.isEmpty || value == text else { throw ProviderJSON.invalid() }
+            guard !finalized else { throw DeepSeekResponseJSON.invalid() }
+            guard value.isEmpty || value == text else { throw DeepSeekResponseJSON.invalid() }
             let suffix = value.isEmpty ? text : ""
             value = text
             return suffix
         }
 
         mutating func announce(_ text: String) throws -> String {
-            guard !announced, !finalized else { throw ProviderJSON.invalid() }
+            guard !announced, !finalized else { throw DeepSeekResponseJSON.invalid() }
             announced = true
             return try seed(text)
         }
 
         mutating func append(_ delta: String) throws -> String {
-            guard !finalized else { throw ProviderJSON.invalid() }
+            guard !finalized else { throw DeepSeekResponseJSON.invalid() }
             value += delta
             return delta
         }
 
         mutating func finish(_ text: String) throws -> String {
-            guard !finalized, text.hasPrefix(value) else { throw ProviderJSON.invalid() }
+            guard !finalized, text.hasPrefix(value) else { throw DeepSeekResponseJSON.invalid() }
             let suffix = String(text.dropFirst(value.count))
             value = text
             finalized = true
@@ -42,7 +42,7 @@ struct DeepSeekResponsesStreamDecoder {
 
         mutating func reconcile(_ text: String) throws -> String {
             if finalized {
-                guard value == text else { throw ProviderJSON.invalid() }
+                guard value == text else { throw DeepSeekResponseJSON.invalid() }
                 return ""
             }
             return try finish(text)
@@ -86,13 +86,18 @@ struct DeepSeekResponsesStreamDecoder {
     }
 
     mutating func consume(_ event: ProviderSSEEvent) throws -> [ModelEvent] {
-        let object = try ProviderJSON.decode(event.data)
-        let type = try ProviderJSON.string(object["type"])
+        do { return try consumeShape(event) }
+        catch is DeepSeekResponseShapeError { throw deepSeekEventDiagnostic(frame: event) }
+    }
+
+    private mutating func consumeShape(_ event: ProviderSSEEvent) throws -> [ModelEvent] {
+        let object = try DeepSeekResponseJSON.decode(event.data)
+        let type = try DeepSeekResponseJSON.string(object["type"])
         if let name = event.name, !name.isEmpty, name != "message", name != type {
-            throw ProviderJSON.invalid()
+            throw DeepSeekResponseJSON.invalid()
         }
         try validateSequence(object)
-        guard !ended else { throw ProviderJSON.invalid() }
+        guard !ended else { throw DeepSeekResponseJSON.invalid() }
 
         switch type {
         case "response.created", "response.in_progress": return try lifecycle(object)
@@ -100,7 +105,7 @@ struct DeepSeekResponsesStreamDecoder {
         case "error": throw failure(code: try optionalString(object["code"]))
         default: break
         }
-        guard info != nil else { throw ProviderJSON.invalid() }
+        guard info != nil else { throw DeepSeekResponseJSON.invalid() }
 
         switch type {
         case "response.output_item.added": return try itemAdded(object)
@@ -116,7 +121,7 @@ struct DeepSeekResponsesStreamDecoder {
         case "response.completed": return try completed(object)
         case "response.incomplete": return try incomplete(object)
         case "response.created", "response.in_progress", "response.failed", "error":
-            throw ProviderJSON.invalid()
+            throw DeepSeekResponseJSON.invalid()
         default:
             return []
         }
@@ -125,23 +130,23 @@ struct DeepSeekResponsesStreamDecoder {
     func finish() throws { guard ended else { throw ProviderJSON.invalid() } }
 
     private mutating func validateSequence(_ object: [String: JSONValue]) throws {
-        guard let sequence = try ProviderJSON.count(object["sequence_number"]) else {
-            throw ProviderJSON.invalid()
+        guard let sequence = try DeepSeekResponseJSON.count(object["sequence_number"]) else {
+            throw DeepSeekResponseJSON.invalid()
         }
-        if let lastSequenceNumber, sequence <= lastSequenceNumber { throw ProviderJSON.invalid() }
+        if let lastSequenceNumber, sequence <= lastSequenceNumber { throw DeepSeekResponseJSON.invalid() }
         lastSequenceNumber = sequence
     }
 
     private mutating func lifecycle(_ object: [String: JSONValue]) throws -> [ModelEvent] {
-        let response = try ProviderJSON.object(object["response"])
-        let id = try ProviderJSON.string(response["id"])
-        let observedModel = try ProviderJSON.string(response["model"])
-        guard !id.isEmpty, try ProviderJSON.string(response["status"]) == "in_progress" else {
-            throw ProviderJSON.invalid()
+        let response = try DeepSeekResponseJSON.object(object["response"])
+        let id = try DeepSeekResponseJSON.string(response["id"])
+        let observedModel = try DeepSeekResponseJSON.string(response["model"])
+        guard !id.isEmpty, try DeepSeekResponseJSON.string(response["status"]) == "in_progress" else {
+            throw DeepSeekResponseJSON.invalid()
         }
         try validateModel(observedModel)
         if let info {
-            guard info.id == id else { throw ProviderJSON.invalid() }
+            guard info.id == id else { throw DeepSeekResponseJSON.invalid() }
             return []
         }
         let started = ResponseInfo(id: id, model: model)
@@ -151,15 +156,15 @@ struct DeepSeekResponsesStreamDecoder {
 
     private mutating func itemAdded(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         let index = try index(object["output_index"])
-        guard items[index] == nil else { throw ProviderJSON.invalid() }
-        let item = try ProviderJSON.object(object["item"])
-        let id = try ProviderJSON.string(item["id"])
-        guard !id.isEmpty, itemIDs.insert(id).inserted else { throw ProviderJSON.invalid() }
-        switch try ProviderJSON.string(item["type"]) {
+        guard items[index] == nil else { throw DeepSeekResponseJSON.invalid() }
+        let item = try DeepSeekResponseJSON.object(object["item"])
+        let id = try DeepSeekResponseJSON.string(item["id"])
+        guard !id.isEmpty, itemIDs.insert(id).inserted else { throw DeepSeekResponseJSON.invalid() }
+        switch try DeepSeekResponseJSON.string(item["type"]) {
         case "message":
             try validateItemStatus(item["status"], expected: "in_progress")
-            guard try ProviderJSON.string(item["role"]) == "assistant",
-                  case .array(let parts) = item["content"] else { throw ProviderJSON.invalid() }
+            guard try DeepSeekResponseJSON.string(item["role"]) == "assistant",
+                  case .array(let parts) = item["content"] else { throw DeepSeekResponseJSON.invalid() }
             var state = ItemState(index: index, id: id, kind: .message)
             var events: [ModelEvent] = []
             for (partIndex, value) in parts.enumerated() {
@@ -170,7 +175,7 @@ struct DeepSeekResponsesStreamDecoder {
             return events
         case "reasoning":
             try validateItemStatus(item["status"], expected: "in_progress")
-            guard case .array(let parts) = item["content"] else { throw ProviderJSON.invalid() }
+            guard case .array(let parts) = item["content"] else { throw DeepSeekResponseJSON.invalid() }
             var state = ItemState(index: index, id: id, kind: .reasoning)
             var events: [ModelEvent] = []
             for (partIndex, value) in parts.enumerated() {
@@ -181,10 +186,10 @@ struct DeepSeekResponsesStreamDecoder {
             return events
         case "function_call":
             try validateItemStatus(item["status"], expected: "in_progress")
-            let callID = ToolCallID(rawValue: try ProviderJSON.string(item["call_id"]))
-            let name = try ProviderJSON.string(item["name"])
-            let arguments = try ProviderJSON.string(item["arguments"])
-            guard !callID.rawValue.isEmpty, !name.isEmpty else { throw ProviderJSON.invalid() }
+            let callID = ToolCallID(rawValue: try DeepSeekResponseJSON.string(item["call_id"]))
+            let name = try DeepSeekResponseJSON.string(item["name"])
+            let arguments = try DeepSeekResponseJSON.string(item["arguments"])
+            guard !callID.rawValue.isEmpty, !name.isEmpty else { throw DeepSeekResponseJSON.invalid() }
             items[index] = .init(index: index, id: id, kind: .functionCall,
                                  call: .init(id: callID, name: name, arguments: arguments))
             return [.toolCallStarted(callID, name: name)]
@@ -202,17 +207,17 @@ struct DeepSeekResponsesStreamDecoder {
     private mutating func partAdded(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         let itemIndex = try index(object["output_index"])
         let partIndex = try index(object["content_index"])
-        let itemID = try ProviderJSON.string(object["item_id"])
-        guard var state = items[itemIndex], state.id == itemID, !state.done else { throw ProviderJSON.invalid() }
+        let itemID = try DeepSeekResponseJSON.string(object["item_id"])
+        guard var state = items[itemIndex], state.id == itemID, !state.done else { throw DeepSeekResponseJSON.invalid() }
         let expected: PartKind = state.kind == .reasoning ? .reasoningText : .outputText
-        guard state.kind != .functionCall else { throw ProviderJSON.invalid() }
-        let part = try ProviderJSON.object(object["part"])
-        guard PartKind(rawValue: try ProviderJSON.string(part["type"])) == expected else {
-            throw ProviderJSON.invalid()
+        guard state.kind != .functionCall else { throw DeepSeekResponseJSON.invalid() }
+        let part = try DeepSeekResponseJSON.object(object["part"])
+        guard PartKind(rawValue: try DeepSeekResponseJSON.string(part["type"])) == expected else {
+            throw DeepSeekResponseJSON.invalid()
         }
         var value = state.parts[partIndex] ?? .init(kind: expected)
-        guard value.kind == expected else { throw ProviderJSON.invalid() }
-        let appended = try value.announce(try ProviderJSON.string(part["text"]))
+        guard value.kind == expected else { throw DeepSeekResponseJSON.invalid() }
+        let appended = try value.announce(try DeepSeekResponseJSON.string(part["text"]))
         state.parts[partIndex] = value
         items[itemIndex] = state
         return expected == .reasoningText ? appendReasoning(appended) : appendText(appended)
@@ -221,10 +226,10 @@ struct DeepSeekResponsesStreamDecoder {
     private mutating func partDelta(_ object: [String: JSONValue], kind: PartKind) throws -> [ModelEvent] {
         let itemIndex = try index(object["output_index"])
         let partIndex = try index(object["content_index"])
-        let itemID = try ProviderJSON.string(object["item_id"])
+        let itemID = try DeepSeekResponseJSON.string(object["item_id"])
         guard var state = items[itemIndex], state.id == itemID, !state.done,
-              var part = state.parts[partIndex], part.kind == kind else { throw ProviderJSON.invalid() }
-        let appended = try part.append(try ProviderJSON.string(object["delta"]))
+              var part = state.parts[partIndex], part.kind == kind else { throw DeepSeekResponseJSON.invalid() }
+        let appended = try part.append(try DeepSeekResponseJSON.string(object["delta"]))
         state.parts[partIndex] = part
         items[itemIndex] = state
         return kind == .reasoningText ? appendReasoning(appended) : appendText(appended)
@@ -233,10 +238,10 @@ struct DeepSeekResponsesStreamDecoder {
     private mutating func partTextDone(_ object: [String: JSONValue], kind: PartKind) throws -> [ModelEvent] {
         let itemIndex = try index(object["output_index"])
         let partIndex = try index(object["content_index"])
-        let itemID = try ProviderJSON.string(object["item_id"])
+        let itemID = try DeepSeekResponseJSON.string(object["item_id"])
         guard var state = items[itemIndex], state.id == itemID, !state.done,
-              var part = state.parts[partIndex], part.kind == kind else { throw ProviderJSON.invalid() }
-        let appended = try part.finish(try ProviderJSON.string(object["text"]))
+              var part = state.parts[partIndex], part.kind == kind else { throw DeepSeekResponseJSON.invalid() }
+        let appended = try part.finish(try DeepSeekResponseJSON.string(object["text"]))
         state.parts[partIndex] = part
         items[itemIndex] = state
         return kind == .reasoningText ? appendReasoning(appended) : appendText(appended)
@@ -245,16 +250,16 @@ struct DeepSeekResponsesStreamDecoder {
     private mutating func partDone(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         let itemIndex = try index(object["output_index"])
         let partIndex = try index(object["content_index"])
-        let itemID = try ProviderJSON.string(object["item_id"])
+        let itemID = try DeepSeekResponseJSON.string(object["item_id"])
         guard var state = items[itemIndex], state.id == itemID, !state.done,
               state.kind != .functionCall, var existing = state.parts[partIndex] else {
-            throw ProviderJSON.invalid()
+            throw DeepSeekResponseJSON.invalid()
         }
-        let part = try ProviderJSON.object(object["part"])
-        guard PartKind(rawValue: try ProviderJSON.string(part["type"])) == existing.kind else {
-            throw ProviderJSON.invalid()
+        let part = try DeepSeekResponseJSON.object(object["part"])
+        guard PartKind(rawValue: try DeepSeekResponseJSON.string(part["type"])) == existing.kind else {
+            throw DeepSeekResponseJSON.invalid()
         }
-        let appended = try existing.reconcile(try ProviderJSON.string(part["text"]))
+        let appended = try existing.reconcile(try DeepSeekResponseJSON.string(part["text"]))
         state.parts[partIndex] = existing
         items[itemIndex] = state
         return existing.kind == .reasoningText ? appendReasoning(appended) : appendText(appended)
@@ -262,10 +267,10 @@ struct DeepSeekResponsesStreamDecoder {
 
     private mutating func argumentsDelta(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         let itemIndex = try index(object["output_index"])
-        let itemID = try ProviderJSON.string(object["item_id"])
+        let itemID = try DeepSeekResponseJSON.string(object["item_id"])
         guard var state = items[itemIndex], state.id == itemID, !state.done,
-              var call = state.call, !call.argumentsDone, !call.completed else { throw ProviderJSON.invalid() }
-        let delta = try ProviderJSON.string(object["delta"])
+              var call = state.call, !call.argumentsDone, !call.completed else { throw DeepSeekResponseJSON.invalid() }
+        let delta = try DeepSeekResponseJSON.string(object["delta"])
         call.arguments += delta
         state.call = call
         items[itemIndex] = state
@@ -274,11 +279,11 @@ struct DeepSeekResponsesStreamDecoder {
 
     private mutating func argumentsDone(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         let itemIndex = try index(object["output_index"])
-        let itemID = try ProviderJSON.string(object["item_id"])
+        let itemID = try DeepSeekResponseJSON.string(object["item_id"])
         guard var state = items[itemIndex], state.id == itemID, !state.done,
-              var call = state.call, !call.argumentsDone, !call.completed else { throw ProviderJSON.invalid() }
-        let final = try ProviderJSON.string(object["arguments"])
-        guard final.hasPrefix(call.arguments) else { throw ProviderJSON.invalid() }
+              var call = state.call, !call.argumentsDone, !call.completed else { throw DeepSeekResponseJSON.invalid() }
+        let final = try DeepSeekResponseJSON.string(object["arguments"])
+        guard final.hasPrefix(call.arguments) else { throw DeepSeekResponseJSON.invalid() }
         let suffix = String(final.dropFirst(call.arguments.count))
         call.arguments = final
         call.argumentsDone = true
@@ -289,13 +294,13 @@ struct DeepSeekResponsesStreamDecoder {
 
     private mutating func itemDone(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         let itemIndex = try index(object["output_index"])
-        guard var state = items[itemIndex], !state.done else { throw ProviderJSON.invalid() }
-        let item = try ProviderJSON.object(object["item"])
-        guard try ProviderJSON.string(item["id"]) == state.id else { throw ProviderJSON.invalid() }
+        guard var state = items[itemIndex], !state.done else { throw DeepSeekResponseJSON.invalid() }
+        let item = try DeepSeekResponseJSON.object(object["item"])
+        guard try DeepSeekResponseJSON.string(item["id"]) == state.id else { throw DeepSeekResponseJSON.invalid() }
         var events: [ModelEvent] = []
         let status = try optionalString(item["status"])
         let terminalStatus = status.flatMap(ItemTerminalStatus.init(rawValue:))
-        guard status == nil || terminalStatus != nil else { throw ProviderJSON.invalid() }
+        guard status == nil || terminalStatus != nil else { throw DeepSeekResponseJSON.invalid() }
         let incomplete = terminalStatus == .incomplete
         switch state.kind {
         case .message:
@@ -306,19 +311,19 @@ struct DeepSeekResponsesStreamDecoder {
             try reconcileParts(item, state: &state, expected: .reasoningText, events: &events)
             guard incomplete
                 || (!state.parts.isEmpty && state.parts.values.contains(where: { !$0.value.isEmpty })) else {
-                throw ProviderJSON.invalid()
+                throw DeepSeekResponseJSON.invalid()
             }
         case .functionCall:
             try validateItemStatus(item["status"], expected: status ?? "completed")
-            guard try ProviderJSON.string(item["type"]) == "function_call", var call = state.call,
-                  try ProviderJSON.string(item["call_id"]) == call.id.rawValue,
-                  try ProviderJSON.string(item["name"]) == call.name else { throw ProviderJSON.invalid() }
-            let final = try ProviderJSON.string(item["arguments"])
-            guard final.hasPrefix(call.arguments) else { throw ProviderJSON.invalid() }
+            guard try DeepSeekResponseJSON.string(item["type"]) == "function_call", var call = state.call,
+                  try DeepSeekResponseJSON.string(item["call_id"]) == call.id.rawValue,
+                  try DeepSeekResponseJSON.string(item["name"]) == call.name else { throw DeepSeekResponseJSON.invalid() }
+            let final = try DeepSeekResponseJSON.string(item["arguments"])
+            guard final.hasPrefix(call.arguments) else { throw DeepSeekResponseJSON.invalid() }
             call.arguments = final
             if !incomplete {
                 guard call.argumentsDone,
-                      (try? JSONValue.decodeToolArguments(final)) != nil else { throw ProviderJSON.invalid() }
+                      (try? JSONValue.decodeToolArguments(final)) != nil else { throw DeepSeekResponseJSON.invalid() }
                 call.completed = true
             }
             state.call = call
@@ -335,31 +340,31 @@ struct DeepSeekResponsesStreamDecoder {
     }
 
     private mutating func completed(_ object: [String: JSONValue]) throws -> [ModelEvent] {
-        let response = try ProviderJSON.object(object["response"])
-        guard let info, try ProviderJSON.string(response["id"]) == info.id,
-              try ProviderJSON.string(response["status"]) == "completed" else {
+        let response = try DeepSeekResponseJSON.object(object["response"])
+        guard let info, try DeepSeekResponseJSON.string(response["id"]) == info.id,
+              try DeepSeekResponseJSON.string(response["status"]) == "completed" else {
             throw deepSeekCompletedInvalid("identity")
         }
-        try validateModel(try ProviderJSON.string(response["model"]))
+        try validateModel(try DeepSeekResponseJSON.string(response["model"]))
         guard items.values.allSatisfy({ $0.done && $0.terminalStatus != .incomplete }),
               items.values.allSatisfy({ $0.call?.completed != false }) else {
             throw deepSeekCompletedInvalid("lifecycle")
         }
         do {
             try validateFinalOutput(response["output"], completed: true)
-        } catch let error as ModelProviderError where error.message == "Invalid provider response." {
+        } catch is DeepSeekResponseShapeError {
             throw deepSeekCompletedInvalid("output snapshot")
         }
         let usageEvents: [ModelEvent]
         do {
             usageEvents = try updateUsage(response["usage"])
-        } catch let error as ModelProviderError where error.message == "Invalid provider response." {
+        } catch is DeepSeekResponseShapeError {
             throw deepSeekCompletedInvalid("usage")
         }
         let calls = orderedCalls()
         if requiresReasoningForTools, !calls.isEmpty {
             let reasoning = items.values.filter { $0.kind == .reasoning }.flatMap(\.parts.values).map(\.value).joined()
-            guard !reasoning.isEmpty else { throw ProviderJSON.invalid() }
+            guard !reasoning.isEmpty else { throw DeepSeekResponseJSON.invalid() }
         }
         ended = true
         var events = usageEvents
@@ -371,7 +376,7 @@ struct DeepSeekResponsesStreamDecoder {
                 content.append(.providerContinuation(continuation))
                 events.append(.providerContinuation(continuation))
             }
-        } catch let error as ModelProviderError where error.message == "Invalid provider response." {
+        } catch let error as ModelProviderError where error.kind == .invalidResponse {
             throw deepSeekCompletedInvalid("continuation")
         }
         events.append(.responseCompleted(.init(
@@ -386,14 +391,14 @@ struct DeepSeekResponsesStreamDecoder {
     }
 
     private mutating func incomplete(_ object: [String: JSONValue]) throws -> [ModelEvent] {
-        let response = try ProviderJSON.object(object["response"])
-        guard let info, try ProviderJSON.string(response["id"]) == info.id,
-              try ProviderJSON.string(response["status"]) == "incomplete" else { throw ProviderJSON.invalid() }
-        try validateModel(try ProviderJSON.string(response["model"]))
+        let response = try DeepSeekResponseJSON.object(object["response"])
+        guard let info, try DeepSeekResponseJSON.string(response["id"]) == info.id,
+              try DeepSeekResponseJSON.string(response["status"]) == "incomplete" else { throw DeepSeekResponseJSON.invalid() }
+        try validateModel(try DeepSeekResponseJSON.string(response["model"]))
         try validateFinalOutput(response["output"], completed: false)
         let usageEvents = try updateUsage(response["usage"])
-        let details = try ProviderJSON.object(response["incomplete_details"])
-        let reason = try ProviderJSON.string(details["reason"])
+        let details = try DeepSeekResponseJSON.object(response["incomplete_details"])
+        let reason = try DeepSeekResponseJSON.string(details["reason"])
         let stop: StopReason = reason == "max_output_tokens" ? .maxOutputTokens
             : (reason == "content_filter" ? .refusal : .unknown(reason))
         let calls = items.keys.sorted().compactMap { item -> ToolCall? in
@@ -409,12 +414,12 @@ struct DeepSeekResponsesStreamDecoder {
     private func seedPart(
         _ state: inout ItemState, partIndex: Int, value: JSONValue, expected: PartKind
     ) throws -> String {
-        let object = try ProviderJSON.object(value)
-        guard PartKind(rawValue: try ProviderJSON.string(object["type"])) == expected else {
-            throw ProviderJSON.invalid()
+        let object = try DeepSeekResponseJSON.object(value)
+        guard PartKind(rawValue: try DeepSeekResponseJSON.string(object["type"])) == expected else {
+            throw DeepSeekResponseJSON.invalid()
         }
         var part = state.parts[partIndex] ?? .init(kind: expected)
-        let appended = try part.seed(try ProviderJSON.string(object["text"]))
+        let appended = try part.seed(try DeepSeekResponseJSON.string(object["text"]))
         state.parts[partIndex] = part
         return appended
     }
@@ -423,18 +428,18 @@ struct DeepSeekResponsesStreamDecoder {
         _ item: [String: JSONValue], state: inout ItemState, expected: PartKind,
         events: inout [ModelEvent]
     ) throws {
-        guard try ProviderJSON.string(item["type"]) == (expected == .reasoningText ? "reasoning" : "message"),
+        guard try DeepSeekResponseJSON.string(item["type"]) == (expected == .reasoningText ? "reasoning" : "message"),
               case .array(let parts) = item["content"], state.parts.keys.sorted() == Array(parts.indices) else {
-            throw ProviderJSON.invalid()
+            throw DeepSeekResponseJSON.invalid()
         }
-        if expected == .outputText, try ProviderJSON.string(item["role"]) != "assistant" {
-            throw ProviderJSON.invalid()
+        if expected == .outputText, try DeepSeekResponseJSON.string(item["role"]) != "assistant" {
+            throw DeepSeekResponseJSON.invalid()
         }
         for index in parts.indices {
-            let value = try ProviderJSON.object(parts[index])
-            guard PartKind(rawValue: try ProviderJSON.string(value["type"])) == expected,
-                  var part = state.parts[index] else { throw ProviderJSON.invalid() }
-            let appended = try part.reconcile(try ProviderJSON.string(value["text"]))
+            let value = try DeepSeekResponseJSON.object(parts[index])
+            guard PartKind(rawValue: try DeepSeekResponseJSON.string(value["type"])) == expected,
+                  var part = state.parts[index] else { throw DeepSeekResponseJSON.invalid() }
+            let appended = try part.reconcile(try DeepSeekResponseJSON.string(value["text"]))
             state.parts[index] = part
             events.append(contentsOf: expected == .reasoningText ? appendReasoning(appended) : appendText(appended))
         }
@@ -442,12 +447,12 @@ struct DeepSeekResponsesStreamDecoder {
 
     private func validateFinalOutput(_ value: JSONValue?, completed: Bool) throws {
         guard case .array(let output) = value, output.count == items.count,
-              items.keys.sorted() == Array(output.indices) else { throw ProviderJSON.invalid() }
+              items.keys.sorted() == Array(output.indices) else { throw DeepSeekResponseJSON.invalid() }
         for index in output.indices {
-            guard let state = items[index] else { throw ProviderJSON.invalid() }
-            if completed && !state.done { throw ProviderJSON.invalid() }
-            let item = try ProviderJSON.object(output[index])
-            guard try ProviderJSON.string(item["id"]) == state.id else { throw ProviderJSON.invalid() }
+            guard let state = items[index] else { throw DeepSeekResponseJSON.invalid() }
+            if completed && !state.done { throw DeepSeekResponseJSON.invalid() }
+            let item = try DeepSeekResponseJSON.object(output[index])
+            guard try DeepSeekResponseJSON.string(item["id"]) == state.id else { throw DeepSeekResponseJSON.invalid() }
             try validateFinalItem(item, against: state, completed: completed)
         }
     }
@@ -461,38 +466,38 @@ struct DeepSeekResponsesStreamDecoder {
         case .message, .reasoning:
             let expectedType = state.kind == .message ? "message" : "reasoning"
             let expectedPart: PartKind = state.kind == .message ? .outputText : .reasoningText
-            guard try ProviderJSON.string(item["type"]) == expectedType,
+            guard try DeepSeekResponseJSON.string(item["type"]) == expectedType,
                   case .array(let parts) = item["content"],
                   state.parts.keys.sorted() == Array(parts.indices) else {
-                throw ProviderJSON.invalid()
+                throw DeepSeekResponseJSON.invalid()
             }
-            if state.kind == .message, try ProviderJSON.string(item["role"]) != "assistant" {
-                throw ProviderJSON.invalid()
+            if state.kind == .message, try DeepSeekResponseJSON.string(item["role"]) != "assistant" {
+                throw DeepSeekResponseJSON.invalid()
             }
             for index in parts.indices {
-                let part = try ProviderJSON.object(parts[index])
-                guard PartKind(rawValue: try ProviderJSON.string(part["type"])) == expectedPart,
-                      try ProviderJSON.string(part["text"]) == state.parts[index]?.value else {
-                    throw ProviderJSON.invalid()
+                let part = try DeepSeekResponseJSON.object(parts[index])
+                guard PartKind(rawValue: try DeepSeekResponseJSON.string(part["type"])) == expectedPart,
+                      try DeepSeekResponseJSON.string(part["text"]) == state.parts[index]?.value else {
+                    throw DeepSeekResponseJSON.invalid()
                 }
             }
         case .functionCall:
-            guard try ProviderJSON.string(item["type"]) == "function_call",
+            guard try DeepSeekResponseJSON.string(item["type"]) == "function_call",
                   let call = state.call,
-                  try ProviderJSON.string(item["call_id"]) == call.id.rawValue,
-                  try ProviderJSON.string(item["name"]) == call.name,
-                  try ProviderJSON.string(item["arguments"]) == call.arguments else {
-                throw ProviderJSON.invalid()
+                  try DeepSeekResponseJSON.string(item["call_id"]) == call.id.rawValue,
+                  try DeepSeekResponseJSON.string(item["name"]) == call.name,
+                  try DeepSeekResponseJSON.string(item["arguments"]) == call.arguments else {
+                throw DeepSeekResponseJSON.invalid()
             }
         }
     }
 
     private func validateItemStatus(_ value: JSONValue?, expected: String) throws {
         guard let value else { return }
-        guard value != .null else { throw ProviderJSON.invalid() }
-        let status = try ProviderJSON.string(value)
+        guard value != .null else { throw DeepSeekResponseJSON.invalid() }
+        let status = try DeepSeekResponseJSON.string(value)
         guard ["in_progress", "completed", "incomplete"].contains(status), status == expected else {
-            throw ProviderJSON.invalid()
+            throw DeepSeekResponseJSON.invalid()
         }
     }
 
@@ -519,9 +524,9 @@ struct DeepSeekResponsesStreamDecoder {
 
     private mutating func updateUsage(_ value: JSONValue?) throws -> [ModelEvent] {
         guard let value, value != .null else { return [] }
-        let object = try ProviderJSON.object(value)
-        let input = try ProviderJSON.count(object["input_tokens"])
-        let output = try ProviderJSON.count(object["output_tokens"])
+        let object = try DeepSeekResponseJSON.object(value)
+        let input = try DeepSeekResponseJSON.count(object["input_tokens"])
+        let output = try DeepSeekResponseJSON.count(object["output_tokens"])
         let cached = try optionalCount(object["input_tokens_details"], field: "cached_tokens")
         let reasoning = try optionalCount(object["output_tokens_details"], field: "reasoning_tokens")
         usage = .init(inputTokens: input, outputTokens: output, cachedInputTokens: cached,
@@ -531,12 +536,12 @@ struct DeepSeekResponsesStreamDecoder {
 
     private func optionalCount(_ value: JSONValue?, field: String) throws -> Int? {
         guard let value, value != .null else { return nil }
-        return try ProviderJSON.count(ProviderJSON.object(value)[field])
+        return try DeepSeekResponseJSON.count(DeepSeekResponseJSON.object(value)[field])
     }
 
     private func responseFailure(_ object: [String: JSONValue]) throws -> ModelProviderError {
-        let response = try ProviderJSON.object(object["response"])
-        let error = try ProviderJSON.object(response["error"])
+        let response = try DeepSeekResponseJSON.object(object["response"])
+        let error = try DeepSeekResponseJSON.object(response["error"])
         return failure(code: try optionalString(error["code"]))
     }
 
@@ -563,13 +568,13 @@ struct DeepSeekResponsesStreamDecoder {
     }
 
     private func index(_ value: JSONValue?) throws -> Int {
-        guard let value = try ProviderJSON.count(value) else { throw ProviderJSON.invalid() }
+        guard let value = try DeepSeekResponseJSON.count(value) else { throw DeepSeekResponseJSON.invalid() }
         return value
     }
 
     private func optionalString(_ value: JSONValue?) throws -> String? {
         guard let value, value != .null else { return nil }
-        return try ProviderJSON.string(value)
+        return try DeepSeekResponseJSON.string(value)
     }
 
     private func diagnostic(_ value: String) -> String {

@@ -192,3 +192,11 @@ that **no external effect happened**. It cannot abort a mere in-flight intent
 or convert uncertainty into safety. The original identity, parameters and
 no-effect confirmation remain available after physical maintenance. The
 [recovery guide](swift-agent-mutation-recovery.md) describes the operator path.
+
+Message pagination keeps its published **inclusive** semantics:
+`readMessages(sessionID:after:limit:)` includes the zero-based formal-message
+ordinal `after`. Start at 0 and advance by returned count. Follow-up pagination
+is **exclusive**: `session.followUps(after:limit:)` includes ordinal 0 for `nil`,
+then continues after the last returned ordinal. Audit keeps its existing
+exclusive sequence/cursor contract. These APIs are not renamed or silently
+changed. Boundary tests cover first, middle, last and empty pages across reopen.

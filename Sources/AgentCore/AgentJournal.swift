@@ -900,6 +900,8 @@ extension AgentJournal {
         return (arrays, slots, 0, memorySessions.count, runIDs)
     }
 
+    /// `after` is the inclusive zero-based formal-message ordinal (0 reads the
+    /// first message). Continue with the last requested ordinal plus page count.
     public func readMessages(sessionID: UUID, after ordinal: UInt64 = 0, limit: Int = 100) throws -> [JournalConversationMessage] {
         guard let store else { throw AgentJournalError.persistenceUnavailable("paginated messages require a durable store") }
         return try store.read { view in

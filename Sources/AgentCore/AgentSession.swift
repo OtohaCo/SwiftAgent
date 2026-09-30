@@ -316,6 +316,8 @@ public actor AgentSession {
         return try await journal.followUpText(sessionID: id, inputID: inputID)
     }
 
+    /// `after` is exclusive. `nil` includes ordinal 0; continue with the last
+    /// returned ordinal. This differs from Journal message pagination.
     public func followUps(after ordinal: UInt64? = nil, limit: Int = 100) async throws -> [AgentFollowUpRecord] {
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
         return try await journal.followUps(sessionID: id, after: ordinal, limit: limit)

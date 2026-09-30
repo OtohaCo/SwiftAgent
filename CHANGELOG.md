@@ -30,6 +30,10 @@ Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 - Validate the whole replaced read-only failure group with committed execution
   provenance. Mixed mutation groups and missing/reopened proof are rejected;
   request views change without modifying canonical history or settlement.
+- Parse Retry-After HTTP dates with controlled UTC semantics and preserve retry
+  limits. DeepSeek diagnostic origin no longer depends on error message prose.
+  Document/test inclusive message and exclusive follow-up pagination.
+  This addresses selected #44 items, not the entire collection issue.
 
 ### Fixed: audit boundary closeout
 
