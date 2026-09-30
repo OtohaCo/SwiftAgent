@@ -93,6 +93,17 @@ import AgentJournalFileStore
         await #expect(throws: AgentContextProjectionError.unresolvedReadOnlySpan(failed.id)) {
             try await restored.run("restored", using: binding)
         }
+        // Neither removing/renaming the tool nor changing its current effect
+        // classification can authenticate an old execution after reopen.
+        for changedAgent in [
+            try Agent(model: fixtureModel, provider: provider, tools: [GroupWrite(file: file)]),
+            try Agent(model: fixtureModel, provider: provider, tools: [ReclassifiedGroupSearch()])
+        ] {
+            let changed = try changedAgent.makeSession(id: session.id, journal: reopened)
+            await #expect(throws: AgentContextProjectionError.unresolvedReadOnlySpan(failed.id)) {
+                try await changed.run("changed registry", using: binding)
+            }
+        }
         let other = try agent.makeSession(journal: reopened)
         await #expect(throws: AgentContextProjectionError.unresolvedReadOnlySpan(failed.id)) {
             try await other.run("other Session", using: binding)
@@ -139,4 +150,15 @@ private struct GroupWrapper: AgentContextReadOnlyGroupReferencing {
     let forward: Bool
     var readOnlyGroupCallIDs: [ToolCallID] { forward ? wrapped.readOnlyGroupCallIDs : [] }
     func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection { try await wrapped.project(input) }
+}
+
+private struct ReclassifiedGroupSearch: RuntimeAgentTool {
+    let runtimeDefinition = ModelToolDefinition(name: "search", description: "Current mutation classification",
+        inputSchema: ToolSchema.object(properties: [:]).json, outputSchema: ToolSchema.string.json)
+    let policy: ToolPolicy
+    init() throws { policy = try .mutation(authorization: .notRequired, evidence: .none) }
+    func execute(_ input: JSONValue, context: ToolContext) async throws -> ToolResult<JSONValue> {
+        Issue.record("Projection preflight must reject before current executor")
+        throw FixtureError.invalidOperation
+    }
 }
