@@ -1,8 +1,8 @@
 # Confirmed no-effect mutation outcomes
 
-Implementation candidate; requires its independent feature PR to merge before
-main provides this capability. ADR 0010 was merged as a proposed design, not a
-feature release. ADRs 0011/0012 remain deferred.
+Implemented on main by PR #62; unreleased. PR #59 recorded the proposed design,
+and PR #62 implemented ADR 0010. RC6 has not been released. ADRs 0011/0012
+remain deferred and unimplemented.
 
 ## Host contract and opt-in
 
@@ -53,7 +53,9 @@ conditional writes. A digest/declaration does not freeze arbitrary Host code.
 The compiling [public fixture](../../Examples/ExternalClient/Sources/ConfirmedNoEffectFixture)
 contains the full AgentTool/provider/authorizer/Session integration.
 Existing authorization, Evidence, resources, scope and final admission remain;
-`requiredAudit` still requires the enterprise authorizer and identity context.
+`requiredAudit` still requires explicit Host configuration, the enterprise
+authorizer and identity context. A schema-6 store supports authorization audit;
+creating that store does not enable `requiredAudit`.
 
 ## Persistence, queries and lifecycle
 

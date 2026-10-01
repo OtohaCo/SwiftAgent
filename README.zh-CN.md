@@ -11,7 +11,7 @@ SwiftAgent 是一个不绑定模型厂商的 Swift Agent 运行时，提供类�
 | 你要做什么 | 先读 | 接着读 |
 | --- | --- | --- |
 | Host 授权、精确动作绑定、持久审计和企业归档 | [可审计授权（RC6 候选，尚未发布）](docs/guides/swift-agent-authorization-audit.zh-CN.md) |
-| 可信 executor 确认整次无效果后的显式 mutation 纠错 | [Confirmed no-effect（实现候选，尚未合并发布）](docs/guides/swift-agent-confirmed-no-effect.md) |
+| 可信 executor 确认整次无效果后的显式 mutation 纠错 | [Confirmed no-effect（已进入 main，尚未发布）](docs/guides/swift-agent-confirmed-no-effect.md) |
 | 在 App 中接入 SwiftAgent | [App 接入入口](INTEGRATION.md) | [接入步骤与常用模式](docs/ai/consumer-recipes.md) |
 | 让 Codex、Claude 或其他编码 AI 完成接入 | [AI 接入指南](docs/ai/start-here.md) | [验收清单](docs/ai/acceptance-checklist.md) |
 | 修改 SDK 本身 | [贡献指南](CONTRIBUTING.md) | [测试指南](docs/testing.md)和[安全模型](docs/security-model.md) |

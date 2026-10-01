@@ -4,13 +4,13 @@ All notable changes to SwiftAgent are recorded here.
 
 ## [Unreleased]
 
-- Add the separately developed ADR 0010 implementation candidate: explicit
+- Implement ADR 0010 on main (unreleased): explicit
   confirmed-no-effect mutation feedback, atomic proof/abort/checkpoint/audit,
   Host per-call queries and public controlled fixture. Default behavior remains
   closed. New public policy/failure enum cases and optional archival proof affect
   exhaustive switches/Codable consumers; explicit new-store schema 6 is required,
   with no migration and actual older-reader rejection. See the confirmed-no-effect
-  guide; this branch does not establish main delivery or an RC6 release.
+  guide. PR #62 is merged into main; RC6 remains unreleased.
 
 Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 
