@@ -33,8 +33,8 @@ import Glibc
             case "no-effect-before-publication", "no-effect-after-publication":
                 let id = UUID(uuidString: "00000000-0000-0000-0000-000000000610")!
                 let agent = try Agent(model: .init(provider: "no-effect-process", name: "fixed"),
-                    provider: NoEffectProcessProvider(), tools: [NoEffectProcessTool(hold: mode == "no-effect-before-publication")],
-                    configuration: .init(runTimeout: .seconds(120), authorization: .init(mode: .requiredAudit,
+                    provider: NoEffectProcessProvider(large: CommandLine.arguments.last == "large"), tools: [NoEffectProcessTool(hold: mode == "no-effect-before-publication")],
+                    configuration: .init(runTimeout: .seconds(120), authorization: .init(mode: CommandLine.arguments.last == "large" ? .legacy : .requiredAudit,
                         authorizer: AuditProcessAuthorizer(deny: false),
                         identity: .init(securityDomain: "process-fixture", subjectID: "user", actingSubjectID: "agent",
                             backend: .init(instanceID: "local", version: "1", accountID: "fixture", credentialGeneration: "1")))))
@@ -250,6 +250,7 @@ private struct AuditProcessWrite: AgentTool {
 }
 
 private struct NoEffectProcessProvider: ModelProvider {
+    let large: Bool
     let descriptor = ModelProviderDescriptor(id: "no-effect-process", capabilities: [.streaming, .multiTurn, .tools])
     func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         ModelEventStream.make { emit in
@@ -259,7 +260,7 @@ private struct NoEffectProcessProvider: ModelProvider {
                 while true { try await Task.sleep(for: .seconds(60)) }
             }
             let info = ResponseInfo(id: "no-effect", model: request.model)
-            let call = ToolCall(id: .init(rawValue: "no-effect"), name: "no_effect_process", argumentsJSON: "{}", completeness: .complete)
+            let call = ToolCall(id: .init(rawValue: "no-effect"), name: "no_effect_process", argumentsJSON: large ? "{\"content\":\"" + String(repeating: "x", count: 250_000) + "\"}" : "{}", completeness: .complete)
             try emit(.responseStarted(info)); try emit(.toolCallStarted(call.id, name: call.name))
             try emit(.toolCallArgumentsDelta(call.id, call.argumentsJSON)); try emit(.toolCallCompleted(call))
             try emit(.responseCompleted(.init(info: info, toolCalls: [call], stopReason: .toolCalls)))
@@ -268,7 +269,7 @@ private struct NoEffectProcessProvider: ModelProvider {
 }
 private struct NoEffectProcessTool: RuntimeAgentTool {
     let runtimeDefinition = ModelToolDefinition(name: "no_effect_process", description: "Synthetic confirmed conflict",
-        inputSchema: ToolSchema.object(properties: [:]).json, outputSchema: ToolSchema.string.json)
+        inputSchema: ToolSchema.object(properties: ["content": .string]).json, outputSchema: ToolSchema.string.json)
     let policy = try! ToolPolicy.mutation(authorization: .notRequired, evidence: .none, recoverableErrors: .confirmedNoEffect)
     let hold: Bool
     func receiptExpectation(for input: JSONValue) throws -> ToolReceiptExpectation? { try .init(targets: [.init(namespace: "fixture", id: "file")]) }

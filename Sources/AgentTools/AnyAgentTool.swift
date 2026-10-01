@@ -209,6 +209,15 @@ package struct AnyAgentTool: Sendable {
                           try tool.authorizationBinding(for: input) == binding,
                           try tool.resourceRequirements(for: input) == resources,
                           tool.definition == definition, tool.policy == policy else { throw ToolNoEffectError.invalidBinding }
+                    guard let operationID = context.idempotencyKey,
+                          error.proof.scopeInstanceID == context.executionAdmission?.scopeInstanceID,
+                          error.proof.definition == definition, error.proof.actionBinding == binding,
+                          error.proof.receiptSummary.map({ $0 == ToolNoEffectReceiptSummary(error.receipt) }) ?? (error.proof.receipt == error.receipt),
+                          try JSONEncoder().encode(error.error.payload).count <= 8192 else { throw ToolNoEffectError.invalidBinding }
+                    try ToolNoEffectProof.validateReceipt(error.receipt, operationID: operationID, maximumRevisionBytes: 4096)
+                    try error.proof.validate(sessionID: context.sessionID, runID: context.runID, callID: context.callID,
+                        name: definition.name, operationID: operationID, arguments: arguments, resources: resources,
+                        expectation: receiptExpectation, originalArgumentsUTF8Bytes: context.argumentsJSON?.utf8.count)
                     var result = ToolResult<JSONValue>(modelVisibleError: error.error.payload)
                     result.confirmedNoEffect = error.proof
                     return result

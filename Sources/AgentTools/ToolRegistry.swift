@@ -58,12 +58,19 @@ package struct ToolRegistry: Sendable {
               !call.id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ToolRegistryError.callIdentityMismatch
         }
+        if registration.tool.policy.recoverableErrors == .confirmedNoEffect,
+           call.argumentsJSON.utf8.count > ToolNoEffectProof.maximumInputBytes { throw ToolNoEffectError.payloadTooLarge }
         let arguments: JSONValue
         do { arguments = try JSONValue.decodeToolArguments(call.argumentsJSON) }
         catch { throw ToolRegistryError.invalidJSON }
         do { try registration.input.validate(arguments) }
         catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidArguments(error) }
         let invocation = try registration.tool.prepare(arguments: arguments, prepareAuthorizationBinding: prepareAuthorizationBinding)
+        if registration.tool.policy.recoverableErrors == .confirmedNoEffect {
+            try ToolNoEffectProof.checkAdmission(context: context, definition: registration.tool.definition,
+                arguments: arguments, resources: invocation.resources, action: invocation.binding,
+                expectation: invocation.receiptExpectation)
+        }
         try context.checkActive()
         return PreparedToolCall(call: call, policy: registration.tool.policy, resources: invocation.resources,
                                 evidenceRequirements: invocation.evidenceRequirements,

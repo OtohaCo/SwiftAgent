@@ -22,7 +22,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "AgentModels"),
-        .target(name: "AgentTools", dependencies: ["AgentModels"]),
+        .target(name: "AgentTools", dependencies: ["AgentModels", .product(name: "Crypto", package: "swift-crypto")]),
         .target(name: "AgentCore", dependencies: ["AgentModels", "AgentTools"]),
         .target(name: "AgentJournalFileStore", dependencies: [
             "AgentCore", "AgentModels", "AgentTools", .product(name: "Crypto", package: "swift-crypto"),

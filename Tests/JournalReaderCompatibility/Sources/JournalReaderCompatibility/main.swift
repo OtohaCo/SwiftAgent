@@ -14,7 +14,7 @@ import Foundation
             let journal: AgentJournal
             switch mode {
             #if NO_EFFECT_RUNTIME
-            case "create-no-effect-empty":
+            case "create-no-effect-empty", "create-no-effect":
                 journal = try AgentIncrementalJournal.create(at: directory,
                     operationDomain: "reader-matrix", supportsConfirmedNoEffect: true)
             #endif
@@ -59,6 +59,11 @@ import Foundation
             case "create-audit-empty": break
             #if NO_EFFECT_RUNTIME
             case "create-no-effect-empty": break
+            case "create-no-effect":
+                let agent = try Agent(model: .init(provider: "reader-matrix", name: "script"),
+                    provider: MatrixNoEffectProvider(), tools: [MatrixNoEffectTool()])
+                let run = try await agent.makeSession(id: sessionID, journal: journal).run("no effect", operationID: "matrix-op")
+                _ = try await run.wait(); try await run.waitForDrain()
             #endif
             case "create-audit-denial":
                 let agent = try Agent(model: .init(provider: "reader-matrix", name: "script"),
@@ -71,11 +76,30 @@ import Foundation
                 catch AgentAuthorizationError.authorizationDenied { }
                 try await run.waitForDrain()
             #endif
+            #if COMPACT_NO_EFFECT_RUNTIME
+            case "exercise-no-effect-small", "exercise-no-effect-large":
+                let large = mode == "exercise-no-effect-large"
+                let counter = MatrixExecutorCounter()
+                let agent = try Agent(model: .init(provider: "reader-matrix", name: "script"),
+                    provider: MatrixNoEffectProvider(large: large, callID: mode), tools: [MatrixNoEffectTool(counter: counter)])
+                let run = try await agent.makeSession(id: sessionID, journal: journal).run("no effect", operationID: "matrix-op")
+                if large {
+                    do { _ = try await run.wait(); throw AgentJournalError.invalidRecord }
+                    catch ToolNoEffectError.payloadTooLarge { }
+                    try await run.waitForDrain()
+                    guard await counter.executions == 0, try await journal.pendingMutations().isEmpty else { throw AgentJournalError.invalidRecord }
+                    print("v1-large=refused-before-executor pending=0")
+                } else { _ = try await run.wait(); try await run.waitForDrain() }
+            #endif
             case "maintain":
                 for _ in 0..<8 { _ = try await journal.requestMaintenance() }
             case "inspect": break
             default: exit(64)
             }
+            #if NO_EFFECT_RUNTIME
+            let noEffect = try await journal.mutationStatus(identity: "matrix-op/matrix_no_effect/{}")
+            print("noEffectVersion=\(noEffect?.abortConfirmation?.executorProof?.version ?? 0)")
+            #endif
             let checkpoint = try await journal.latestCheckpoint(sessionID: sessionID)
             let messages = try await journal.readMessages(sessionID: sessionID)
             let pending = try await journal.pendingMutations(sessionID: sessionID)
@@ -185,6 +209,46 @@ private struct MatrixDenyAuthorizer: AgentAuthorizer {
     func decide(_ request: AuthorizationRequest) async throws -> AuthorizationDecision {
         .init(request: request, outcome: .deny, subject: .init(issuer: "matrix", subjectID: "rule", type: .automatedPolicy),
             policy: .init(id: "matrix", version: "1"), validFor: .seconds(30), reasonCode: "fixture")
+    }
+}
+#endif
+
+#if NO_EFFECT_RUNTIME
+private struct MatrixNoEffectProvider: ModelProvider {
+    var large = false
+    var callID = "A"
+    let descriptor = ModelProviderDescriptor(id: "reader-matrix", capabilities: [.multiTurn, .tools])
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            let info = ResponseInfo(id: "no-effect", model: request.model)
+            try emit(.responseStarted(info))
+            if case .user? = request.messages.last {
+                let call = ToolCall(id: .init(rawValue: callID), name: "matrix_no_effect", argumentsJSON: large ? "{\"content\":\"" + String(repeating: "x", count: 143_000) + "\"}" : "{}", completeness: .complete)
+                try emit(.toolCallStarted(call.id, name: call.name)); try emit(.toolCallArgumentsDelta(call.id, call.argumentsJSON))
+                try emit(.toolCallCompleted(call)); try emit(.responseCompleted(.init(info: info, toolCalls: [call], stopReason: .toolCalls)))
+            } else {
+                try emit(.textDelta("done")); try emit(.responseCompleted(.init(info: info, content: [.text("done")], stopReason: .endTurn)))
+            }
+        }
+    }
+}
+private actor MatrixExecutorCounter {
+    var executions = 0
+    func entered() { executions += 1 }
+}
+private struct MatrixNoEffectTool: RuntimeAgentTool {
+    var counter = MatrixExecutorCounter()
+    let runtimeDefinition = ModelToolDefinition(name: "matrix_no_effect", description: "Reject before writing", inputSchema: ToolSchema.object(properties: ["content": .string]).json, outputSchema: ToolSchema.string.json)
+    let policy = try! ToolPolicy.mutation(evidence: .none, recoverableErrors: .confirmedNoEffect)
+    func receiptExpectation(for input: JSONValue) throws -> ToolReceiptExpectation? { try .init(targets: [.init(namespace: "matrix", id: "file")]) }
+    func authorizationBinding(for input: JSONValue) throws -> ToolAuthorizationBinding {
+        .init(implementationVersion: "1", backend: .init(instanceID: "fixture", version: "1", accountID: "local", credentialGeneration: "1"))
+    }
+    func authorize(_ input: JSONValue, context: ToolContext) async throws -> ToolAuthorization { .allowed }
+    func execute(_ input: JSONValue, context: ToolContext) async throws -> ToolResult<JSONValue> {
+        await counter.entered()
+        throw try context.confirmNoEffect(receipt: .init(operationID: context.idempotencyKey!, status: .failed, confirmedTargets: [], failure: .rejected),
+            error: .init(code: "refused", message: "No write"), wholeOperationHadNoEffect: true, noOutstandingEffects: true, basis: "checked before writing")
     }
 }
 #endif

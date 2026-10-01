@@ -54,7 +54,7 @@ The compiling [public fixture](../../Examples/ExternalClient/Sources/ConfirmedNo
 contains the full AgentTool/provider/authorizer/Session integration.
 Existing authorization, Evidence, resources, scope and final admission remain;
 `requiredAudit` still requires explicit Host configuration, the enterprise
-authorizer and identity context. A schema-6 store supports authorization audit;
+authorizer and identity context. Schema 6/7 stores support authorization audit;
 creating that store does not enable `requiredAudit`.
 
 ## Persistence, queries and lifecycle
@@ -101,31 +101,93 @@ in-flight and unknown calls distinct.
 ## Format and limits
 
 Ordinary creation remains schema 3, rejection-capable schema 4 and audit-capable
-schema 5. Explicit no-effect creation selects schema 6 (including schema 4/5
-facilities). Schema 6 adds a typed executor proof to the mutation payload and
-witnessed per-call indexes. Missing proof indexes/witnesses throw; they are not
-empty confirmation results. Existing mutation/call indexes retain proofs and
-associations through bounded maintenance/GC. No automatic forgetting, migration,
-new operation domain or duplicate executor/ledger exists.
+schema 5. Explicit no-effect creation now selects **schema 7**, with proof v2
+and the same witnessed per-call indexes and transaction domain. Existing
+schema 6 stores remain schema 6 and use proof v1 for new calls. There is no
+in-place migration, replacement ledger or operation-domain change. Queries,
+restoration, maintenance and GC retain the intent/proof/error associations;
+missing call indexes or witnesses still throw.
 
-RC5 and the pre-feature schema-5 reader reject schema 6 through their actual
-format check before writes; current reader preserves ordinary 3/4/5 behavior.
-Stores are never upgraded in place. Proof/query payloads are ordinary local
-checksummed facts, not signatures, trusted timestamps or tamper-proof archives.
+The actual pre-fix main reader (`e8ef319857ce651002504d6d3592fdcba7574172`)
+rejects schema 7 at its format check before opening for writes, including empty
+stores. RC5 and the pre-feature schema-5 reader likewise reject it. The new
+reader reads valid v1 data and continues writing v1 in schema 6. Requests that
+cannot fit the bounded v1 envelope are rejected **before intent or executor**;
+large-argument correction requires an explicitly created schema 7 store for
+new work. Existing stores must not be discarded to bypass pending operations.
 
-Model-visible error JSON is limited to 8 KiB; restricted basis to 4 KiB; encoded
-proof to 128 KiB. Host selects safe code/message/details, not raw backend errors,
-credentials or private body text. Restricted Journal may contain sensitive
-arguments; it is not encrypted by this feature. Archival proof cannot revive a
-permit. Storage grows with retained operation/invocation facts.
+Proof v2 adds `argumentBinding` (`encoding`, lowercase SHA-256, `utf8Bytes`),
+`originalArgumentsUTF8Bytes`, and a separate `receiptSummary`. `canonicalArguments`
+and `receipt` are now optional public/Codable fields. Small arguments and the
+original Receipt remain inline when their combined JSON encoding is at most
+16 KiB; larger calls omit both inline copies, rather than inventing `{}` or
+truncating parameters. The parameter digest always binds the full canonical
+input. The summary's typed `operation.source == intentIdempotencyKey` and key
+digest/count reference the authoritative intent, using the proof's Session,
+Run and call IDs. It is an archival receipt summary, **not a ToolReceipt with a
+substituted operationID**. `ConfirmedNoEffectToolError.receipt` retains the full
+original executor Receipt; it is validated with the live invocation token at
+the return boundary. The commit and disk reader independently recompute both
+bindings from the persisted intent. Nothing regenerates the intent's existing
+idempotency key or deduplication facts.
 
-Source/Codable additions: ToolPolicy.RecoverableErrors.confirmedNoEffect,
-ToolNoEffectProof, ConfirmedNoEffectToolError (not Codable), ToolNoEffectError,
-AgentFailure.noEffect, AgentSessionError.confirmedNoEffectJournalRequired,
-AgentNoEffectConfirmation.executorProof, creation flag and per-call queries.
-Exhaustive enum switches and stored policies may need updating. Existing
-success Receipt validator, stable idempotency identity and default failure
-behavior are unchanged.
+`swiftagent-json-v1` encodes UTF-8 with no whitespace; object keys sort by UTF-8
+bytes; array order is preserved. Unicode scalar sequences are preserved without
+normalization. Quote/backslash are escaped, slash is literal, and all controls
+use lowercase `\u00xx`. Finite Decimal values use POSIX base-10 non-exponent
+spelling, with zero encoded as `0`. This is a proof encoding, separate from the
+unchanged AgentLoop idempotency algorithm. Golden tests fix key order, escaping,
+Unicode and numeric output across macOS/Linux. The original input byte count is
+separate from these canonical bytes; `utf8-v1` hashes the exact original key.
+SHA-256 uses the existing swift-crypto package in AgentTools; no AgentTools to
+AgentCore dependency is introduced and no Swift `hashValue` is used.
+
+Model-visible error JSON remains limited to 8 KiB; restricted basis to 4 KiB;
+encoded proof to 128 KiB. New confirmations also bound optional receipt revision
+to 4 KiB. Static definition/binding/resource/expectation capacity is checked
+before executor admission, reserving worst-case escaped basis/revision space.
+Confirmed-no-effect inputs have an independent 1 MiB raw UTF-8 bound and 8 MiB
+canonical/key bounds; Run call/turn/deadline and store budgets still apply.
+These limits do not promise arbitrary or infinite input support. Proof storage
+no longer grows with large body/key copies; retained authoritative intent and
+conversation storage still do. Historical valid v1 receipts remain readable,
+including revisions accepted before the new generation bound.
+
+**Required audit is not expanded.** `capture` records a bounded/truncated
+received proposal when raw arguments exceed 64 KiB, records `proposal_too_large`
+and rejects it with `proposalTooLarge` before authorization/intent/executor.
+It does not truncate and continue. Audit storage capability alone does not
+enable requiredAudit; legacy large-input correction and audited no-effect
+within existing limits are separate supported paths. Standard audit export
+remains a summary. Enterprise audit support for large bodies is not delivered.
+
+Host selects safe code/message/details, not credentials or raw backend errors.
+Restricted Journal may contain sensitive arguments and is not encrypted by this
+feature. These checksummed archival facts are not signatures, permissions or
+trusted timestamps. Decoding a proof never restores its live nonce.
+
+Additional source/Codable changes include the digest, operation-binding and
+receipt-summary types and `AgentJournal.noEffectProofVersion`. Optional-field
+consumers must handle compact v2. Existing policy/enum/exhaustive-switch impacts
+from #62 remain. Successful Receipt validation, stable operation identity,
+default failure behavior, budgets, audit/quarantine and physical drain remain.
+
+## Already-pending operations
+
+Installing this fix does not abort existing pending operations, erase Journal
+history or authorize replay. The Host must drain and release the old Session/Journal,
+reopen the same store, and enumerate
+`recoverPendingMutations(sessionID:)`, and investigate **each specific operation**
+against its real backend, original parameters and idempotency key. If the entire
+operation is freshly verified to have had no effect and no outstanding work,
+use the existing `AgentNoEffectConfirmation(basis:)` with
+`abortMutation(_:confirmedNoEffect:)`. If an effect occurred, supply the trusted
+original Receipt/output to `reconcileMutation`. If the result is partial,
+unknown or still in flight, leave it pending and continue investigation. A
+saved executor proof is not a new confirmation or execution permit. Create a
+fresh Session after reconciliation; do not continue a cached Session across
+these direct Journal changes. There is
+no bulk cleanup or automatic store migration in this fix.
 
 ## Acceptance categories
 

@@ -3,7 +3,7 @@
 Status: implemented on main by PR #62 (2026-10-01); unreleased
 
 PR #59 recorded the revised proposal; PR #62 subsequently implemented this
-contract on main. RC6 has not been released. The public API, explicit schema-6
+contract on main. RC6 has not been released. The public API, explicit schema-6 (now schema 7 for proof v2)
 format boundary, limits and integration are described in
 [the guide](../guides/swift-agent-confirmed-no-effect.md). ADRs 0011/0012 remain
 deferred and unimplemented.
@@ -181,3 +181,7 @@ Host code remains responsible for the truth of whole-operation no effect and
 absence of outstanding actions. Storage capability does not enable
 `requiredAudit`; the Host must configure that mode explicitly. This implementation
 is available on main but is not an RC6 release.
+
+Issue #65 adds bounded proof v2 with versioned argument/key bindings and schema 7
+for new no-effect stores. Valid schema-6/v1 data remains readable and is not
+migrated. See the [current format and pending recovery contract](../guides/swift-agent-confirmed-no-effect.md#format-and-limits).

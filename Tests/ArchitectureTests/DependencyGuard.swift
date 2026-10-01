@@ -32,6 +32,7 @@ enum DependencyGuard {
             allowed.insert("Darwin")
             allowed.insert("Glibc")
         }
+        if module == "AgentTools" { allowed.insert("Crypto") }
         if module == "AgentCore" { allowed.insert("Dispatch") }
         let pattern = #"\bimport\s+(?:(?:typealias|struct|class|enum|protocol|let|var|func)\s+)?([A-Za-z_][A-Za-z_0-9]*)"#
         let regex = try! NSRegularExpression(pattern: pattern)

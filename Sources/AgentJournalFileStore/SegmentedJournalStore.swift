@@ -528,6 +528,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     let operationDomain: String
     let supportsAdmissionRejections: Bool
     let supportsConfirmedNoEffect: Bool
+    let noEffectProofVersion: Int
     private var callsIndex: IndexKind<UInt64> { .init("calls", witnessed: supportsConfirmedNoEffect) }
     let supportsAuthorizationAudit: Bool
     private let policy: JournalMaintenancePolicy
@@ -557,7 +558,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         operationDomain = format.domain
         supportsAdmissionRejections = format.schema >= 4
         supportsAuthorizationAudit = format.schema >= 5
-        supportsConfirmedNoEffect = format.schema == 6
+        supportsConfirmedNoEffect = format.schema >= 6
+        noEffectProofVersion = format.schema == 7 ? 2 : format.schema == 6 ? 1 : 0
         expectedFormatDigest = formatDigest
         self.descriptor = descriptor
         self.policy = policy
@@ -584,7 +586,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
         }
         let descriptor = try lockStore(directory)
-        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsConfirmedNoEffect ? 6 : supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
+        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsConfirmedNoEffect ? 7 : supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
                             storeID: UUID(), domain: domain)
         let formatBytes = try JSONEncoder().encode(format)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -652,7 +654,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard format.magic == "SWIFTAGENT-SEGMENTED-JOURNAL", !format.domain.isEmpty else {
             throw AgentJournalError.invalidHeader
         }
-        guard format.schema == 3 || format.schema == 4 || format.schema == 5 || format.schema == 6 else { throw AgentJournalError.unsupportedFormat }
+        guard format.schema == 3 || format.schema == 4 || format.schema == 5 || format.schema == 6 || format.schema == 7 else { throw AgentJournalError.unsupportedFormat }
         observer?(.formatValidated)
         let descriptor = try lockStore(directory, retry: lockRetry, observer: observer)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -1140,7 +1142,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let batch = try JSONDecoder().decode(BatchV2.self, from: payload)
         counters.add(decoded: 1)
         guard batch.schema == 2,
-              supportsConfirmedNoEffect || batch.mutation?.executorNoEffectProof == nil,
+              batch.mutation?.executorNoEffectProof.map({ (1...2).contains($0.version) && $0.version <= noEffectProofVersion }) ?? true,
               supportsAuthorizationAudit || (batch.auditRecords == nil && batch.auditCheckpoint == nil),
               location.commitID.map({ $0 == batch.commitID }) ?? true else {
             throw AgentJournalError.invalidRecord
@@ -2199,6 +2201,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                           }
                           return false
                       }) else { throw AgentJournalError.invalidRecord }
+            }
+            guard change.mutation?.abortConfirmation?.executorProof.map({ (1...2).contains($0.version) && $0.version <= store.noEffectProofVersion }) ?? true else {
+                throw AgentJournalError.unsupportedFormat
             }
             let next = root.sequence + 1
             let oldHistoryHead = try header(change.sessionID)?.historyHead
