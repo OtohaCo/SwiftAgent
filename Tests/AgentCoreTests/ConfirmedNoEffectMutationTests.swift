@@ -311,10 +311,10 @@ struct NoEffectFileTool: RuntimeAgentTool {
     let file: URL; let counts: NoEffectCounts
     let mode: String
     let beforeReturn: (@Sendable () async -> Void)?
-    init(file: URL, counts: NoEffectCounts, mode: String = "conflict", optIn: Bool = true, name: String = "no_effect_file", beforeReturn: (@Sendable () async -> Void)? = nil) throws {
+    init(file: URL, counts: NoEffectCounts, mode: String = "conflict", optIn: Bool = true, name: String = "no_effect_file", timeout: Duration = .seconds(5), beforeReturn: (@Sendable () async -> Void)? = nil) throws {
         self.file = file; self.counts = counts; self.mode = mode; self.beforeReturn = beforeReturn
         runtimeDefinition = .init(name: name, description: "Controlled temporary file", inputSchema: ToolSchema.object(properties: [:]).json, outputSchema: ToolSchema.string.json)
-        policy = try .mutation(evidence: .none, recoverableErrors: optIn ? .confirmedNoEffect : .failClosed)
+        policy = try .mutation(timeout: timeout, evidence: .none, recoverableErrors: optIn ? .confirmedNoEffect : .failClosed)
     }
     func resourceRequirements(for input: JSONValue) throws -> [ToolResource] {
         if let error = counts.bindingState.preparationError { throw error }

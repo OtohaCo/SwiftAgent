@@ -53,14 +53,14 @@ struct ConfirmedNoEffectFaultTests {
         #expect(try await journal.pendingMutations().map(\.state) == [.needsReconciliation])
         try await journal.close()
     }
-    @Test(arguments: ["deadline", "revoke"])
+    @Test(arguments: ["deadline", "revoke", "tool_timeout"])
     func lateProofCannotContinuePastDeadlineOrScopeRevoke(_ stop: String) async throws {
         let directory = auditTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "stopped", supportsConfirmedNoEffect: true)
         let gate = NoEffectReturnGate(), counts = NoEffectCounts()
         let provider = ScriptedProvider { request, _ in toolResponse(request, [noEffectCall("A")]) }
         let tool = try NoEffectFileTool(file: directory.appendingPathComponent("effect"), counts: counts,
-            beforeReturn: { await gate.enterAndWait() })
+            timeout: stop == "tool_timeout" ? .seconds(2) : .seconds(5), beforeReturn: { await gate.enterAndWait() })
         let session = try Agent(model: fixtureModel, provider: provider, tools: []).makeSession(journal: journal)
         let scope = try await session.bindCapabilities(identity: "controlled", version: "1", backendInstanceID: "fixture-backend",
             backendVersion: "1", allowedResources: [.global], tools: [.init(id: "write", version: "1", tool: tool)])
@@ -69,7 +69,8 @@ struct ConfirmedNoEffectFaultTests {
             budget: AgentBudget(maxModelTurns: 4, maxToolCalls: 4, deadline: stop == "deadline" ? deadline : .now.advanced(by: .seconds(30))))
         try await gate.waitUntilEntered()
         if stop == "revoke" { await scope.revoke() }
-        else { try await ContinuousClock().sleep(until: deadline) } // Absolute budget trigger, never stage hunting.
+        else if stop == "deadline" { try await ContinuousClock().sleep(until: deadline) } // Absolute budget trigger, never stage hunting.
+        else { await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await run.wait() } }
         #expect(await scope.status().activeRuns == 1)
         await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
         await gate.release()
