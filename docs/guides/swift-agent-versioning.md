@@ -1,6 +1,6 @@
 # SwiftAgent Semantic Versioning
 
-last-verified: 2026-10-01
+last-verified: 2026-10-02
 
 ## RC6 Decision evaluation (unreleased)
 
@@ -245,6 +245,29 @@ The original overload (including function-reference signature) and fail-fast
 default remain. Waiting changes no schema 3/4/5, mutation identity or recovery
 rule. The new C POSIX helper target is test-process support only, not a library
 executor or production lock implementation.
+
+## Provider context overflow (unreleased)
+
+`ModelProviderError.Kind` adds `contextWindowExceeded` (Codable raw value
+`"contextWindowExceeded"`). It is a source break for exhaustive switches over
+the kind; older decoders of an encoded `Kind` reject the new value. Behavior
+changes for the same wire input:
+
+- OpenAI `context_length_exceeded` was `invalidRequest` (HTTP 400) or
+  `invalidResponse` (stream); it is now `contextWindowExceeded`.
+- LM Studio's overflow was `unavailable` (HTTP 500, retried and eligible for
+  fallback by `ModelProviderRoute`) or `invalidResponse` (stream); it is now
+  `contextWindowExceeded`, which is never retried and never falls back.
+- llama.cpp server `exceed_context_size_error` and Anthropic "prompt is too
+  long" were `invalidRequest`; they are now `contextWindowExceeded`.
+- Responses stream `error` events with the nested `error` object were always
+  `invalidResponse`; they are now classified by their code like the flat shape.
+- On HTTP 400 and 500, OpenAI, Local Responses and Anthropic adapters read up
+  to 64 KiB of the error body before failing. Other statuses still fail on the
+  header. DeepSeek is unchanged.
+
+No message carries the provider's text. See
+[Provider context overflow](swift-agent-errors.md#provider-context-overflow).
 
 ## Confirmed no-effect on main (unreleased)
 

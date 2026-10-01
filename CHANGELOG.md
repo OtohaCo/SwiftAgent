@@ -4,6 +4,15 @@ All notable changes to SwiftAgent are recorded here.
 
 ## [Unreleased]
 
+- Add `ModelProviderError.Kind.contextWindowExceeded` for requests the provider
+  rejects as larger than the model's context window: OpenAI
+  `context_length_exceeded`, LM Studio's "tokens to keep" overflow (HTTP 500 or
+  stream), llama.cpp server `exceed_context_size_error` and Anthropic "prompt is
+  too long". It is never retried or used for fallback. Responses stream `error`
+  events nested under `error` (the live OpenAI shape) are now classified by
+  their code instead of `invalidResponse`. New enum case: exhaustive switches
+  must handle it. See the errors guide.
+
 - Implement ADR 0010 on main (unreleased): explicit
   confirmed-no-effect mutation feedback, atomic proof/abort/checkpoint/audit,
   Host per-call queries and public controlled fixture. Default behavior remains

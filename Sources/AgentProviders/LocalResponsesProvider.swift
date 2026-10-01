@@ -166,13 +166,16 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
             )
             var validation = ModelEventAccumulator()
             var receivedHeader = false
-            for try await event in transport.stream(http) {
+            var events = transport.stream(http).makeAsyncIterator()
+            while let event = try await events.next() {
                 try Task.checkCancellation()
                 switch event {
                 case .response(let status, let headers):
                     guard !receivedHeader else { throw ProviderJSON.invalid() }
                     guard status == 200 else {
-                        throw ProviderHTTPFailure.classify(status, headers: headers)
+                        throw try await ProviderHTTPFailure.classify(
+                            status, headers: headers, remainingBody: &events, signals: .responses
+                        )
                     }
                     receivedHeader = true
                 case .data(let data):

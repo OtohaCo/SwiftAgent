@@ -1,6 +1,6 @@
 # SwiftAgent Model Event Contract
 
-last-verified: 2026-09-18
+last-verified: 2026-10-02
 
 This contract applies to one normalized model response, produced by a provider
 adapter and consumed by the agent loop. The data types live in
@@ -123,7 +123,10 @@ namespace matching `ModelID.provider`. Capabilities describe the adapter's curre
 configuration, not every model from that vendor. Adapters reject unsupported
 requests explicitly rather than silently discarding tools or output constraints.
 
-Adapters translate native failures into `ModelProviderError.Kind`. `retryAfter`
+Adapters translate native failures into `ModelProviderError.Kind`. A request
+the provider rejects as larger than the model's context window is
+`.contextWindowExceeded`; classify it from a structured code or a narrow,
+documented message, and never copy the provider's message. `retryAfter`
 is a Duration hint, never permission to retry or replay a mutation. Retry and
 fallback decisions belong to the agent loop's policy. Cancellation remains
 `CancellationError`; adapters must not reclassify it as transport failure.
