@@ -237,10 +237,10 @@ Separate real Foundation Process/posix_spawn tests verify the existing long-chil
 noninheritance behavior. These tests run on macOS/Linux, not iOS. No OS lock
 primitive has been replaced, no other descriptor unlocked or lock file deleted.
 
-## Executor no-effect candidate
+## Executor no-effect on main (unreleased)
 
 [Explicit schema-6 creation](swift-agent-confirmed-no-effect.md) stores bounded
 typed executor proof and abort/error/checkpoint/audit associations together.
 Schema 3/4/5 defaults remain and no existing store is migrated. Per-call Host
-queries restore facts, never permission or automatic replay. This candidate is
-not available on main until its independent feature PR merges.
+queries restore facts, never permission or automatic replay. PR #62 implemented
+this capability on main; RC6 remains unreleased.
