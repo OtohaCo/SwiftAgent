@@ -1142,7 +1142,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let batch = try JSONDecoder().decode(BatchV2.self, from: payload)
         counters.add(decoded: 1)
         guard batch.schema == 2,
-              batch.mutation?.executorNoEffectProof.map({ $0.version <= noEffectProofVersion }) ?? true,
+              batch.mutation?.executorNoEffectProof.map({ (1...2).contains($0.version) && $0.version <= noEffectProofVersion }) ?? true,
               supportsAuthorizationAudit || (batch.auditRecords == nil && batch.auditCheckpoint == nil),
               location.commitID.map({ $0 == batch.commitID }) ?? true else {
             throw AgentJournalError.invalidRecord
@@ -2202,7 +2202,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                           return false
                       }) else { throw AgentJournalError.invalidRecord }
             }
-            guard change.mutation?.abortConfirmation?.executorProof.map({ $0.version <= store.noEffectProofVersion }) ?? true else {
+            guard change.mutation?.abortConfirmation?.executorProof.map({ (1...2).contains($0.version) && $0.version <= store.noEffectProofVersion }) ?? true else {
                 throw AgentJournalError.unsupportedFormat
             }
             let next = root.sequence + 1

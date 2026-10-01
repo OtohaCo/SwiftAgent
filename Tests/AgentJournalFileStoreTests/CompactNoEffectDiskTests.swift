@@ -6,7 +6,7 @@ import Testing
 @testable import AgentJournalFileStore
 
 struct CompactNoEffectDiskTests {
-    @Test(arguments: ["arguments", "key", "digest", "bytes", "rawBytes", "session", "run", "call"])
+    @Test(arguments: ["arguments", "key", "digest", "bytes", "rawBytes", "session", "run", "call", "negativeVersion", "futureVersion"])
     func restoredProofIsIndependentlyBoundToTheDiskIntent(_ tamper: String) throws {
         let (disk, _) = try fixture(version: 2)
         let encoded = try JSONEncoder().encode(disk)
@@ -24,6 +24,8 @@ struct CompactNoEffectDiskTests {
             var digest = proof["argumentBinding"] as! [String: Any]
             digest[tamper == "digest" ? "sha256" : "utf8Bytes"] = tamper == "digest" ? "incorrect" : 143_015
             proof["argumentBinding"] = digest; json["executorNoEffectProof"] = proof
+        case "negativeVersion": proof["version"] = -1; json["executorNoEffectProof"] = proof
+        case "futureVersion": proof["version"] = 3; json["executorNoEffectProof"] = proof
         case "rawBytes": proof["originalArgumentsUTF8Bytes"] = 1; json["executorNoEffectProof"] = proof
         case "session": json["sessionID"] = UUID().uuidString
         case "run": json["runID"] = UUID().uuidString
