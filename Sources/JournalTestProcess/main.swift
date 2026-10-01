@@ -33,8 +33,8 @@ import Glibc
             case "no-effect-before-publication", "no-effect-after-publication":
                 let id = UUID(uuidString: "00000000-0000-0000-0000-000000000610")!
                 let agent = try Agent(model: .init(provider: "no-effect-process", name: "fixed"),
-                    provider: NoEffectProcessProvider(large: CommandLine.arguments.count > 3), tools: [NoEffectProcessTool(hold: mode == "no-effect-before-publication")],
-                    configuration: .init(runTimeout: .seconds(120), authorization: .init(mode: CommandLine.arguments.count > 3 ? .legacy : .requiredAudit,
+                    provider: NoEffectProcessProvider(large: CommandLine.arguments.last == "large"), tools: [NoEffectProcessTool(hold: mode == "no-effect-before-publication")],
+                    configuration: .init(runTimeout: .seconds(120), authorization: .init(mode: CommandLine.arguments.last == "large" ? .legacy : .requiredAudit,
                         authorizer: AuditProcessAuthorizer(deny: false),
                         identity: .init(securityDomain: "process-fixture", subjectID: "user", actingSubjectID: "agent",
                             backend: .init(instanceID: "local", version: "1", accountID: "fixture", credentialGeneration: "1")))))
@@ -68,7 +68,7 @@ import Glibc
                 let file = URL(fileURLWithPath: CommandLine.arguments[3])
                 let agent = try Agent(model: .init(provider: "queue-process", name: "fixed"), provider: AuditProcessProvider(),
                     tools: [AuditProcessWrite(file: file, hold: mode == "audit-write-and-wait")],
-                    configuration: .init(runTimeout: .seconds(120), authorization: .init(mode: CommandLine.arguments.count > 3 ? .legacy : .requiredAudit,
+                    configuration: .init(runTimeout: .seconds(120), authorization: .init(mode: .requiredAudit,
                         authorizer: AuditProcessAuthorizer(deny: mode == "audit-deny-and-exit"),
                         identity: .init(securityDomain: "process-fixture", subjectID: "user", actingSubjectID: "agent",
                             backend: .init(instanceID: "local", version: "1", accountID: "fixture", credentialGeneration: "1")))))

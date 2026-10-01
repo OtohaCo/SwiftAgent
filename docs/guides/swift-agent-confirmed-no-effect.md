@@ -175,7 +175,8 @@ default failure behavior, budgets, audit/quarantine and physical drain remain.
 ## Already-pending operations
 
 Installing this fix does not abort existing pending operations, erase Journal
-history or authorize replay. The Host must drain/reopen the same store, enumerate
+history or authorize replay. The Host must drain and release the old Session/Journal,
+reopen the same store, and enumerate
 `recoverPendingMutations(sessionID:)`, and investigate **each specific operation**
 against its real backend, original parameters and idempotency key. If the entire
 operation is freshly verified to have had no effect and no outstanding work,
@@ -183,7 +184,9 @@ use the existing `AgentNoEffectConfirmation(basis:)` with
 `abortMutation(_:confirmedNoEffect:)`. If an effect occurred, supply the trusted
 original Receipt/output to `reconcileMutation`. If the result is partial,
 unknown or still in flight, leave it pending and continue investigation. A
-saved executor proof is not a new confirmation or execution permit. There is
+saved executor proof is not a new confirmation or execution permit. Create a
+fresh Session after reconciliation; do not continue a cached Session across
+these direct Journal changes. There is
 no bulk cleanup or automatic store migration in this fix.
 
 ## Acceptance categories
