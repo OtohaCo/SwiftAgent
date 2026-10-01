@@ -241,6 +241,11 @@ struct ConfirmedNoEffectMutationTests {
         #expect(try await journal.executorNoEffectConfirmation(sessionID: first.id, runID: a.id, callID: .init(rawValue: "A")) != nil)
         #expect(try await journal.executorNoEffectConfirmation(sessionID: second.id, runID: b.id, callID: .init(rawValue: "A")) == nil)
         #expect(try await journal.pendingMutations(sessionID: second.id).map(\.state) == [.needsReconciliation])
+        let old = try #require(await journal.executorNoEffectConfirmation(sessionID: first.id, runID: a.id, callID: .init(rawValue: "A")))
+        let archived = try JSONDecoder().decode(AgentNoEffectConfirmation.self, from: JSONEncoder().encode(old))
+        let pending = try #require(await journal.pendingMutations(sessionID: second.id).first)
+        await #expect(throws: AgentJournalError.invalidRecord) { try await journal.abortMutation(pending, confirmedNoEffect: archived) }
+        #expect(try await journal.pendingMutations(sessionID: second.id).map(\.state) == [.needsReconciliation])
         try await journal.close()
     }
 

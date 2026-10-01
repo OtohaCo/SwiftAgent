@@ -74,7 +74,8 @@ let audit = try await journal.auditRecords(matching: .init(runID: runID))
 
 These are trusted Host management reads; Host access control/tenant isolation is
 required. Executor confirmation has `executorProof`; reconciliation confirmation
-has basis and no executor proof. Audit result references distinguish
+has basis and no executor proof. `abortMutation` rejects decoded executor proof;
+the Host must make a fresh reconciliation confirmation through its existing API. Audit result references distinguish
 `settlementSource: executor` from `reconciliation`; older nil-source records do
 not retrospectively acquire proven executor provenance. Standard audit export
 remains a summary, with no raw proof/arguments or extra-field ACK claim.

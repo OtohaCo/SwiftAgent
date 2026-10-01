@@ -655,6 +655,9 @@ public actor AgentJournal {
     /// logical idempotency identity to start a new durable lifecycle.
     public func abortMutation(_ pending: PendingMutationRecovery,
                               confirmedNoEffect: AgentNoEffectConfirmation) throws {
+        // Archival executor proof is query data, not a reusable reconciliation
+        // decision. Only the live executor-result commit can publish that origin.
+        guard confirmedNoEffect.executorProof == nil else { throw AgentJournalError.invalidRecord }
         let key = MutationKey(sessionID: pending.sessionID, runID: pending.runID, callID: pending.intent.call.id)
         guard let record = try mutationRecord(for: key), record.intent == pending.intent else {
             throw AgentJournalError.mutationIntentConflict
