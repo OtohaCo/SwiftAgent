@@ -36,7 +36,11 @@ actor AgentToolBatchProgress {
             var proposed = results
             proposed[index] = message
             let committedHistory = history(proposed)
-            if let commitAudit = lifecycle?.commitAuditedResult, call.auditAuthorization != nil {
+            if result.confirmedNoEffect != nil {
+                guard let commit = lifecycle?.commitNoEffectResult else { throw AgentJournalError.invalidRecord }
+                let canonical = try await commit(call, result, committedHistory)
+                updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+            } else if let commitAudit = lifecycle?.commitAuditedResult, call.auditAuthorization != nil {
                 let canonical = try await commitAudit(call, result, committedHistory)
                 updateCanonicalPrefix(canonical, committedHistory: committedHistory)
                 if call.policy.effect == .mutation, !result.isIdempotentReplay { executedMutation = true }
@@ -73,15 +77,23 @@ actor AgentToolBatchProgress {
         } catch {
             // The executor already returned. Quarantine persistence must not
             // pin the emitter's reserved completion, or finish() waits forever.
+            // A no-effect result reached the executor but failed its atomic publication.
+            // Scheduler onFailed only handles invocation failures, not this completion path.
+            let settlement: any Error
+            if result.confirmedNoEffect != nil {
+                settlement = await AgentAuditPersistenceError.capturing(original: error) {
+                    try await call.auditAuthorization?.failed(error)
+                }
+            } else { settlement = error }
             let exposed: any Error
             if call.policy.effect == .mutation, !result.isIdempotentReplay {
                 let mark = lifecycle?.markMutationNeedsReconciliation
                 let callID = call.call.id
-                exposed = await AgentMutationPersistenceError.capturing(settlement: error) {
+                exposed = await AgentMutationPersistenceError.capturing(settlement: settlement) {
                     if let mark { try await mark(callID) }
                 }
             } else {
-                exposed = error
+                exposed = settlement
             }
             if reserved {
                 await emitter?.abortCompletion(call.call.id, failure: AgentFailure(exposed))

@@ -249,12 +249,13 @@ struct DiskMutationV1: Codable {
     let receipt: DiskReceiptV1?
     let output: JSONValue?
     let noEffectBasis: String?
+    let executorNoEffectProof: ToolNoEffectProof?
     let auditLinks: AuditRecordLinks?
     init(_ value: JournalStoredMutation) throws {
         sessionID = value.sessionID; runID = value.runID
         intent = try DiskIntentV1(value.intent); sequence = value.sequence
         state = value.state.rawValue; receipt = value.receipt.map(DiskReceiptV1.init)
-        output = value.output; noEffectBasis = value.abortConfirmation?.basis; auditLinks = value.auditLinks
+        output = value.output; executorNoEffectProof = value.abortConfirmation?.executorProof; noEffectBasis = value.abortConfirmation?.basis; auditLinks = value.auditLinks
     }
     func value() throws -> JournalStoredMutation {
         guard let state = AgentMutationState(rawValue: state) else { throw AgentJournalError.invalidRecord }
@@ -276,10 +277,17 @@ struct DiskMutationV1: Codable {
                 throw AgentJournalError.invalidRecord
             }
         }
+        if let proof = executorNoEffectProof {
+            try proof.validate(sessionID: sessionID, runID: runID, callID: restoredIntent.call.id,
+                name: restoredIntent.call.name, operationID: restoredIntent.idempotencyKey,
+                arguments: JSONValue.decodeToolArguments(restoredIntent.call.argumentsJSON), resources: restoredIntent.resources, expectation: restoredIntent.receiptExpectation)
+            guard proof.basis == noEffectBasis, auditLinks == nil || auditLinks?.invocationID == proof.invocationID else { throw AgentJournalError.invalidRecord }
+        }
+        guard executorNoEffectProof == nil || state == .aborted else { throw AgentJournalError.invalidRecord }
         return try JournalStoredMutation(sessionID: sessionID, runID: runID, intent: restoredIntent,
                                          sequence: sequence, state: state, receipt: restoredReceipt,
                                          output: output,
-                                         abortConfirmation: noEffectBasis.map { try AgentNoEffectConfirmation(basis: $0) }, auditLinks: auditLinks)
+                                         abortConfirmation: executorNoEffectProof.map { AgentNoEffectConfirmation(executorProof: $0) } ?? noEffectBasis.map { try AgentNoEffectConfirmation(basis: $0) }, auditLinks: auditLinks)
     }
 }
 

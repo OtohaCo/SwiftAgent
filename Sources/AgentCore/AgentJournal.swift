@@ -25,11 +25,20 @@ public enum AgentMutationSettlementSource: String, Codable, Equatable, Sendable 
 /// An unknown outcome is never a valid basis for abort.
 public struct AgentNoEffectConfirmation: Codable, Equatable, Sendable {
     public let basis: String
+    public let executorProof: ToolNoEffectProof?
     public init(basis: String) throws {
         guard !basis.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentJournalError.invalidRecord
         }
         self.basis = basis
+        executorProof = nil
+    }
+}
+
+extension AgentNoEffectConfirmation {
+    package init(executorProof: ToolNoEffectProof) {
+        basis = executorProof.basis
+        self.executorProof = executorProof
     }
 }
 
@@ -246,6 +255,7 @@ public actor AgentJournal {
     /// Immutable configured capability. A durable commit can still fail.
     public nonisolated let storage: AgentJournalStorage
     package nonisolated let supportsAdmissionRejections: Bool
+    public nonisolated let supportsConfirmedNoEffect: Bool
     public nonisolated let supportsAuthorizationAudit: Bool
 
     private struct MutationKey: Hashable {
@@ -274,6 +284,7 @@ public actor AgentJournal {
         storage = .memory
         supportsAdmissionRejections = false
         supportsAuthorizationAudit = false
+        supportsConfirmedNoEffect = false
     }
 
     package init(store: any JournalStore) {
@@ -285,6 +296,7 @@ public actor AgentJournal {
         storage = .durable
         supportsAdmissionRejections = store.supportsAdmissionRejections
         supportsAuthorizationAudit = store.supportsAuthorizationAudit
+        supportsConfirmedNoEffect = store.supportsConfirmedNoEffect
     }
 
     package func acquireSessionLease(sessionID: UUID, dispatcherID: UUID? = nil) throws {
@@ -563,6 +575,41 @@ public actor AgentJournal {
         )
     }
 
+    /// Reads the original invocation lifecycle, independent of the latest logical-operation identity.
+    public func mutationStatus(sessionID: UUID, runID: UUID, callID: ToolCallID) throws -> JournalMutationStatus? {
+        guard let record = try mutationRecord(for: .init(sessionID: sessionID, runID: runID, callID: callID)) else { return nil }
+        return .init(state: record.state, receipt: record.receipt, replayOutput: record.output, abortConfirmation: record.abortConfirmation)
+    }
+
+    /// Restricted Host query. Restores facts, never an execution handle or error replay permit.
+    public func executorNoEffectConfirmation(sessionID: UUID, runID: UUID, callID: ToolCallID) throws -> AgentNoEffectConfirmation? {
+        guard let confirmation = try mutationRecord(for: .init(sessionID: sessionID, runID: runID, callID: callID))?.abortConfirmation,
+              confirmation.executorProof != nil else { return nil }
+        return confirmation
+    }
+
+    package func commitExecutorNoEffect(sessionID: UUID, runID: UUID, callID: ToolCallID,
+        proof: ToolNoEffectProof, message: ToolResultMessage, history: [ModelMessage],
+        auditDrafts: [JournalAuditDraft]) throws {
+        guard supportsConfirmedNoEffect else { throw AgentJournalError.unsupportedFormat }
+        let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
+        guard let record = try mutationRecord(for: key), record.state == .intent,
+              proof.sessionID == sessionID, proof.runID == runID, proof.modelCallID == callID,
+              proof.receipt.operationID == record.intent.idempotencyKey,
+              proof.definition.name == record.intent.call.name, proof.resources == record.intent.resources,
+              proof.canonicalArguments == (try JSONValue.decodeToolArguments(record.intent.call.argumentsJSON)),
+              message.callID == callID, message.isError else { throw AgentJournalError.invalidRecord }
+        try proof.validate(sessionID: sessionID, runID: runID, callID: callID, name: record.intent.call.name,
+            operationID: record.intent.idempotencyKey, arguments: JSONValue.decodeToolArguments(record.intent.call.argumentsJSON),
+            resources: record.intent.resources, expectation: record.intent.receiptExpectation)
+        if let links = record.auditLinks { guard links.invocationID == proof.invocationID else { throw AgentJournalError.invalidRecord } }
+        _ = try appendCheckpoint([
+            .mutationAborted(callID: callID, confirmation: .init(executorProof: proof)),
+            .toolCompleted(message), .checkpoint(history: history, steeringIDs: []),
+        ], sessionID: sessionID, runID: runID, timestamp: Date(), durability: .durable,
+           allowMutationSettlement: false, auditDrafts: auditDrafts)
+    }
+
     /// Reconciles an uncertain external effect with a trusted receipt and an
     /// explicit replay result. The conversation and ledger settle together.
     public func reconcileMutation(_ pending: PendingMutationRecovery,
@@ -608,6 +655,9 @@ public actor AgentJournal {
     /// logical idempotency identity to start a new durable lifecycle.
     public func abortMutation(_ pending: PendingMutationRecovery,
                               confirmedNoEffect: AgentNoEffectConfirmation) throws {
+        // Archival executor proof is query data, not a reusable reconciliation
+        // decision. Only the live executor-result commit can publish that origin.
+        guard confirmedNoEffect.executorProof == nil else { throw AgentJournalError.invalidRecord }
         let key = MutationKey(sessionID: pending.sessionID, runID: pending.runID, callID: pending.intent.call.id)
         guard let record = try mutationRecord(for: key), record.intent == pending.intent else {
             throw AgentJournalError.mutationIntentConflict
@@ -1242,9 +1292,9 @@ extension AgentJournal {
                         sourceSessionID: mutation.sessionID, sourceRunID: mutation.runID,
                         sourceModelCallID: mutation.intent.call.id.rawValue, receipt: receipt,
                         outputDigest: try mutation.output.map { try auditDigest(AuditEncoding.encode($0)) }, settlementSource: source))))
-                case .mutationAborted:
+                case .mutationAborted where !auditDrafts.contains(where: { if case .result(let r) = $0.fact { return r.kind == .noEffectConfirmation }; return false }):
                     finalAuditDrafts.append(.init(links: links, fact: .result(.init(kind: .noEffectConfirmation,
-                        sourceSessionID: mutation.sessionID, sourceRunID: mutation.runID, sourceModelCallID: mutation.intent.call.id.rawValue))))
+                        sourceSessionID: mutation.sessionID, sourceRunID: mutation.runID, sourceModelCallID: mutation.intent.call.id.rawValue, settlementSource: .reconciliation))))
                 default: break
                 }
             }

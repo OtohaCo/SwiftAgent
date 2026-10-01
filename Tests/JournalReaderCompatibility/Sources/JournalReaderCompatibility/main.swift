@@ -13,6 +13,11 @@ import Foundation
         do {
             let journal: AgentJournal
             switch mode {
+            #if NO_EFFECT_RUNTIME
+            case "create-no-effect-empty":
+                journal = try AgentIncrementalJournal.create(at: directory,
+                    operationDomain: "reader-matrix", supportsConfirmedNoEffect: true)
+            #endif
             case "create-default":
                 journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix")
             #if NEW_RUNTIME
@@ -52,6 +57,9 @@ import Foundation
             #endif
             #if AUDIT_RUNTIME
             case "create-audit-empty": break
+            #if NO_EFFECT_RUNTIME
+            case "create-no-effect-empty": break
+            #endif
             case "create-audit-denial":
                 let agent = try Agent(model: .init(provider: "reader-matrix", name: "script"),
                     provider: MatrixAuditProvider(), tools: [try MatrixSearch()],

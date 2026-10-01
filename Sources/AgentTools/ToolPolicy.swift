@@ -6,7 +6,7 @@ public struct ToolPolicy: Hashable, Codable, Sendable {
     public enum Idempotency: String, Hashable, Codable, Sendable { case safe, keyed, requiresReceipt }
     public enum Authorization: String, Hashable, Codable, Sendable { case required, notRequired }
     public enum EvidencePolicy: String, Hashable, Codable, Sendable { case none, required }
-    public enum RecoverableErrors: String, Hashable, Codable, Sendable { case failClosed, modelVisible }
+    public enum RecoverableErrors: String, Hashable, Codable, Sendable { case failClosed, modelVisible, confirmedNoEffect }
 
     public let effect: Effect
     public let execution: Execution
@@ -34,8 +34,11 @@ public struct ToolPolicy: Hashable, Codable, Sendable {
         guard effect != .mutation || execution == .exclusive else {
             throw ToolPolicyError.mutationRequiresExclusiveExecution
         }
-        guard effect == .readOnly || recoverableErrors == .failClosed else {
+        guard effect == .readOnly || recoverableErrors != .modelVisible else {
             throw ToolPolicyError.mutationCannotExposeRecoverableErrors
+        }
+        guard recoverableErrors != .confirmedNoEffect || effect == .mutation else {
+            throw ToolPolicyError.confirmedNoEffectRequiresMutation
         }
         self.effect = effect
         self.execution = execution
@@ -66,11 +69,12 @@ public struct ToolPolicy: Hashable, Codable, Sendable {
         idempotency: Idempotency = .requiresReceipt,
         timeout: Duration = .seconds(5),
         authorization: Authorization = .required,
-        evidence: EvidencePolicy = .required
+        evidence: EvidencePolicy = .required,
+        recoverableErrors: RecoverableErrors = .failClosed
     ) throws -> ToolPolicy {
         try ToolPolicy(
             effect: .mutation, execution: .exclusive, idempotency: idempotency,
-            timeout: timeout, authorization: authorization, evidence: evidence
+            timeout: timeout, authorization: authorization, evidence: evidence, recoverableErrors: recoverableErrors
         )
     }
 
@@ -100,6 +104,7 @@ public struct ToolPolicy: Hashable, Codable, Sendable {
 }
 
 public enum ToolPolicyError: Error, Equatable, Sendable {
+    case confirmedNoEffectRequiresMutation
     case invalidTimeout
     case mutationRequiresExclusiveExecution
     case mutationCannotExposeRecoverableErrors

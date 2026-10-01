@@ -12,6 +12,7 @@ struct AgentLoopLifecycle: Sendable {
     let recordAdmissionRejection: @Sendable (ToolPreAdmissionRejection, [ModelMessage]) async throws -> [ModelMessage]
     let recordMutationReceipt: @Sendable (ToolCallID, ToolReceipt, JSONValue) async throws -> Void
     let commitMutation: (@Sendable (ToolCallID, ToolReceipt, JSONValue, [ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage])?
+    let commitNoEffectResult: (@Sendable (PreparedToolCall, ToolResult<JSONValue>, [ModelMessage]) async throws -> [ModelMessage])?
     let commitAuditedResult: (@Sendable (PreparedToolCall, ToolResult<JSONValue>, [ModelMessage]) async throws -> [ModelMessage])?
     let markMutationNeedsReconciliation: @Sendable (ToolCallID) async throws -> Void
     let recordReadOnlyResult: @Sendable (ToolCall, ToolResultMessage) async -> Void
@@ -29,6 +30,7 @@ struct AgentLoopLifecycle: Sendable {
         recordAdmissionRejection: @escaping @Sendable (ToolPreAdmissionRejection, [ModelMessage]) async throws -> [ModelMessage] = { _, _ in throw AgentJournalError.persistenceUnavailable("rejection commit unavailable") },
         recordMutationReceipt: @escaping @Sendable (ToolCallID, ToolReceipt, JSONValue) async throws -> Void = { _, _, _ in },
         commitMutation: (@Sendable (ToolCallID, ToolReceipt, JSONValue, [ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage])? = nil,
+        commitNoEffectResult: (@Sendable (PreparedToolCall, ToolResult<JSONValue>, [ModelMessage]) async throws -> [ModelMessage])? = nil,
         commitAuditedResult: (@Sendable (PreparedToolCall, ToolResult<JSONValue>, [ModelMessage]) async throws -> [ModelMessage])? = nil,
         markMutationNeedsReconciliation: @escaping @Sendable (ToolCallID) async throws -> Void = { _ in },
         recordReadOnlyResult: @escaping @Sendable (ToolCall, ToolResultMessage) async -> Void = { _, _ in },
@@ -43,6 +45,7 @@ struct AgentLoopLifecycle: Sendable {
         self.recordAdmissionRejection = recordAdmissionRejection
         self.recordMutationReceipt = recordMutationReceipt
         self.commitMutation = commitMutation
+        self.commitNoEffectResult = commitNoEffectResult
         self.commitAuditedResult = commitAuditedResult
         self.markMutationNeedsReconciliation = markMutationNeedsReconciliation
         self.recordReadOnlyResult = recordReadOnlyResult

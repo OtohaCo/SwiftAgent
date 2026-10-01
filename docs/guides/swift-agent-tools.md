@@ -183,3 +183,11 @@ are classified separately, and executor errors and CancellationError propagate.
 Tools can return [Evidence](swift-agent-evidence.md) with their output and declare
 typed evidence requirements. Publication happens after output validation; the
 runtime supplies run/session scope rather than trusting scope in model arguments.
+
+## Confirmed no-effect mutation candidate
+
+[ADR 0010 implementation candidate](swift-agent-confirmed-no-effect.md) provides
+a mutation-only explicit opt-in, with whole-operation trusted executor
+confirmation and one reliable proof/abort/error/history/audit commit. Ordinary
+mutation errors stay closed; failed/empty-target Receipt alone is insufficient.
+Read-only classification cannot be used to bypass mutation guarantees.

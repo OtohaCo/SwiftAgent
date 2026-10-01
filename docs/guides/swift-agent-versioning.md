@@ -245,3 +245,14 @@ The original overload (including function-reference signature) and fail-fast
 default remain. Waiting changes no schema 3/4/5, mutation identity or recovery
 rule. The new C POSIX helper target is test-process support only, not a library
 executor or production lock implementation.
+
+## Confirmed no-effect implementation candidate
+
+The separate ADR 0010 candidate adds explicit mutation-only `.confirmedNoEffect`,
+bounded executor-context confirmation and Host queries, `AgentFailure.noEffect`
+and `AgentSessionError.confirmedNoEffectJournalRequired` enum cases. Exhaustive
+switches/new policy Codable values require source consideration. Ordinary
+creation still uses schema 3; rejection 4; audit 5. Explicit confirmation-capable
+creation selects schema 6, rejected by older readers. No automatic migration or
+new ledger for existing operations. See [contract, limits and format](swift-agent-confirmed-no-effect.md).
+This branch is pending review, not main feature delivery or an RC6 release.

@@ -88,13 +88,14 @@ public enum AgentIncrementalJournal {
     public static func createAsync(at directory: URL, operationDomain: String,
                                    policy: JournalMaintenancePolicy = .default,
                                    supportsAdmissionRejections: Bool = false,
-                                   supportsAuthorizationAudit: Bool = false,
+                       supportsAuthorizationAudit: Bool = false,
+                       supportsConfirmedNoEffect: Bool = false,
                                    deadline: ContinuousClock.Instant? = nil) async throws -> AgentJournal {
         try Task.checkCancellation()
         if let deadline, ContinuousClock.now >= deadline { throw AgentJournalError.deadlineExceeded }
         let journal = try await openOwned(deadline: deadline) { _ in
             try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy,
-                                             supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit)
+                                             supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect)
         }
         try Task.checkCancellation()
         return journal
@@ -179,10 +180,11 @@ public enum AgentIncrementalJournal {
     public static func create(at directory: URL, operationDomain: String,
                               policy: JournalMaintenancePolicy = .default,
                               supportsAdmissionRejections: Bool = false,
-                              supportsAuthorizationAudit: Bool = false) throws -> AgentJournal {
+                              supportsAuthorizationAudit: Bool = false,
+                              supportsConfirmedNoEffect: Bool = false) throws -> AgentJournal {
         do {
             return AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
-                policy: policy, supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit))
+                policy: policy, supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect))
         } catch { throw normalized(error) }
     }
 
@@ -195,12 +197,14 @@ public enum AgentIncrementalJournal {
     package static func createForTesting(at directory: URL, operationDomain: String,
                                          policy: JournalMaintenancePolicy = .default,
                                          supportsAdmissionRejections: Bool = false,
-                                   supportsAuthorizationAudit: Bool = false,
+                                         supportsAuthorizationAudit: Bool = false,
+                                         supportsConfirmedNoEffect: Bool = false,
                                          fault: @escaping @Sendable (JournalFileFaultStage) throws -> Void) throws -> AgentJournal {
         AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
                                                               policy: policy,
                                                               supportsAdmissionRejections: supportsAdmissionRejections,
                                                               supportsAuthorizationAudit: supportsAuthorizationAudit,
+                                                              supportsConfirmedNoEffect: supportsConfirmedNoEffect,
                                                               fault: fault))
     }
 }
@@ -373,9 +377,9 @@ private struct AnyIndexKind {
         }
     }
 
-    static func all(supportsAdmissionRejections: Bool, supportsAuthorizationAudit: Bool = false) -> [AnyIndexKind] {
+    static func all(supportsAdmissionRejections: Bool, supportsAuthorizationAudit: Bool = false, supportsConfirmedNoEffect: Bool = false) -> [AnyIndexKind] {
         [
-            .init(IndexKind<UInt64>.sessions), .init(IndexKind<UInt64>.operations), .init(IndexKind<UInt64>.calls),
+            .init(IndexKind<UInt64>.sessions), .init(IndexKind<UInt64>.operations), .init(IndexKind<UInt64>("calls", witnessed: supportsConfirmedNoEffect)),
             .init(IndexKind<MessagePointer>.messages), .init(IndexKind<Location>.positions),
             .init(IndexKind<UInt64>.blobIndex), .init(IndexKind<UInt64>.queueHeads),
             .init(IndexKind<UInt64>.queueIDs), .init(IndexKind<UInt64>.queueOrder),
@@ -523,6 +527,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     let storeID: UUID
     let operationDomain: String
     let supportsAdmissionRejections: Bool
+    let supportsConfirmedNoEffect: Bool
+    private var callsIndex: IndexKind<UInt64> { .init("calls", witnessed: supportsConfirmedNoEffect) }
     let supportsAuthorizationAudit: Bool
     private let policy: JournalMaintenancePolicy
     private let lock = NSLock()
@@ -550,7 +556,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         storeID = format.storeID
         operationDomain = format.domain
         supportsAdmissionRejections = format.schema >= 4
-        supportsAuthorizationAudit = format.schema == 5
+        supportsAuthorizationAudit = format.schema >= 5
+        supportsConfirmedNoEffect = format.schema == 6
         expectedFormatDigest = formatDigest
         self.descriptor = descriptor
         self.policy = policy
@@ -561,8 +568,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     static func create(at url: URL, domain: String, policy: JournalMaintenancePolicy,
                        supportsAdmissionRejections: Bool = false,
-                                   supportsAuthorizationAudit: Bool = false,
+                       supportsAuthorizationAudit: Bool = false,
+                       supportsConfirmedNoEffect: Bool = false,
                        fault: (@Sendable (JournalFileFaultStage) throws -> Void)? = nil) throws -> SegmentedJournalStore {
+        let supportsAuthorizationAudit = supportsAuthorizationAudit || supportsConfirmedNoEffect
         guard !domain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentJournalError.invalidRecord
         }
@@ -571,11 +580,11 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             throw AgentJournalError.persistenceUnavailable("create requires a new directory")
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections || supportsAuthorizationAudit, supportsAuthorizationAudit: supportsAuthorizationAudit) {
+        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections || supportsAuthorizationAudit, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect) {
             try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
         }
         let descriptor = try lockStore(directory)
-        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
+        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsConfirmedNoEffect ? 6 : supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
                             storeID: UUID(), domain: domain)
         let formatBytes = try JSONEncoder().encode(format)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -643,7 +652,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard format.magic == "SWIFTAGENT-SEGMENTED-JOURNAL", !format.domain.isEmpty else {
             throw AgentJournalError.invalidHeader
         }
-        guard format.schema == 3 || format.schema == 4 || format.schema == 5 else { throw AgentJournalError.unsupportedFormat }
+        guard format.schema == 3 || format.schema == 4 || format.schema == 5 || format.schema == 6 else { throw AgentJournalError.unsupportedFormat }
         observer?(.formatValidated)
         let descriptor = try lockStore(directory, retry: lockRetry, observer: observer)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -819,13 +828,13 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         return data
     }
 
-    private static func managedDirectories(supportsAdmissionRejections: Bool, supportsAuthorizationAudit: Bool = false) -> [String] {
+    private static func managedDirectories(supportsAdmissionRejections: Bool, supportsAuthorizationAudit: Bool = false, supportsConfirmedNoEffect: Bool = false) -> [String] {
         ["roots", "layouts", "segments", "state", "blobs", "tmp", "witnesses"]
-            + AnyIndexKind.all(supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit).map(\.name)
+            + AnyIndexKind.all(supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect).map(\.name)
     }
 
     private func validateManagedDirectories() throws {
-        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections || supportsAuthorizationAudit, supportsAuthorizationAudit: supportsAuthorizationAudit) {
+        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections || supportsAuthorizationAudit, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect) {
             try validateManagedDirectory(directoryURL.appendingPathComponent(name))
         }
     }
@@ -1131,6 +1140,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let batch = try JSONDecoder().decode(BatchV2.self, from: payload)
         counters.add(decoded: 1)
         guard batch.schema == 2,
+              supportsConfirmedNoEffect || batch.mutation?.executorNoEffectProof == nil,
               supportsAuthorizationAudit || (batch.auditRecords == nil && batch.auditCheckpoint == nil),
               location.commitID.map({ $0 == batch.commitID }) ?? true else {
             throw AgentJournalError.invalidRecord
@@ -1255,7 +1265,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let callHead: UInt64?
         if let mutation = batch.mutation {
             let key = "\(mutation.sessionID.uuidString)/\(mutation.runID.uuidString)/\(mutation.intent.call.id)"
-            callHead = try pointer(.calls, key: key, root: root)
+            callHead = try pointer(callsIndex, key: key, root: root)
         } else { callHead = nil }
         if let rejection = batch.admissionRejection {
             let key = "\(batch.sessionID.uuidString)/\(rejection.runID.uuidString)/\(rejection.callID)"
@@ -1811,7 +1821,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     private func cleanupUnpublishedIndexesLocked(root: Root) throws {
         let shard = String(format: "%02x", garbageIndexShard)
-        let kinds = AnyIndexKind.all(supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit)
+        let kinds = AnyIndexKind.all(supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect)
         for kind in kinds {
             if finishedIndexKinds.contains(kind.name) { continue }
             let directory = directoryURL.appendingPathComponent("\(kind.name)/\(shard)")
@@ -1888,7 +1898,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
 
         func mutation(sessionID: UUID, runID: UUID, callID: ToolCallID) throws -> JournalStoredMutation? {
-            try indexedMutation(.calls, key: Self.callKey(sessionID, runID, callID))
+            try indexedMutation(store.callsIndex, key: Self.callKey(sessionID, runID, callID))
         }
 
         func admissionRejection(sessionID: UUID, runID: UUID,
@@ -2326,9 +2336,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             if let mutation = batch.mutation {
                 try store.updateIndex(.operations, key: mutation.intent.identity, value: next,
                                       version: next, root: root, commitID: batch.commitID)
-                try store.updateIndex(.calls, key: Self.callKey(mutation.sessionID, mutation.runID,
+                try store.updateIndex(store.callsIndex, key: Self.callKey(mutation.sessionID, mutation.runID,
                     .init(rawValue: mutation.intent.call.id)),
-                                      value: next, version: next, root: root)
+                                      value: next, version: next, root: root, commitID: batch.commitID)
             }
             if let rejection = batch.admissionRejection {
                 try store.updateIndex(.rejections,

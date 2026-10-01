@@ -12,9 +12,10 @@ print(json.dumps({"checkoutSHA": subprocess.check_output(["git", "rev-parse", "H
 PY
 # Main CI already runs the full test suite. Standalone acceptance also runs its targeted cases.
 if [[ "${SWIFTAGENT_AUDIT_TESTS_ALREADY_RUN:-0}" != "1" ]]; then
-  swift test --filter 'Audit|AgentPreAdmissionReplanningTests.requiredAudit' --disable-sandbox --no-parallel
+  swift test --filter 'Audit|ConfirmedNoEffect|AgentPreAdmissionReplanningTests.requiredAudit' --disable-sandbox --no-parallel
 fi
 swift run --package-path Examples/ExternalClient EnterpriseAuthorizationFixture
+swift run --package-path Examples/ExternalClient ConfirmedNoEffectFixture
 swift run -c release AuditAuthorizationBenchmark 20 > .build/ci-logs/audited-authorization-performance.json
 cat .build/ci-logs/audited-authorization-performance.json
 baseline=24447b8298ccea84f9f8056374857c5c47d8f64c
@@ -28,6 +29,12 @@ shutil.rmtree(sys.argv[1])
 PY
 }
 trap cleanup EXIT
-git clone --quiet --shared --no-checkout "$root" "$scratch/rc5"
-git -C "$scratch/rc5" checkout --quiet --detach "$baseline"
-bash Scripts/verify-rc6-compatibility.sh "$scratch/rc5" "$root"
+python3 -m unittest discover Scripts -p 'test_reader_checkout.py'
+bash Scripts/checkout-reader-baseline.sh "$root" "$scratch/rc5" "$baseline"
+# Actual schema-5 runtime, not a reader whose format check was patched for this test.
+pre_feature=ffac71407dfaff22cd4480f1c48bb2c73811b36a
+if ! git cat-file -e "$pre_feature^{commit}" 2>/dev/null; then
+  git fetch origin "$pre_feature"
+fi
+bash Scripts/checkout-reader-baseline.sh "$root" "$scratch/schema5" "$pre_feature"
+bash Scripts/verify-rc6-compatibility.sh "$scratch/rc5" "$root" "$scratch/schema5"

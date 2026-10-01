@@ -132,6 +132,7 @@ public struct AgentCapabilityBinding: Sendable {
 /// This actor's synchronous state transitions linearize final admission and
 /// revoke. Neither operation holds a lock through Host or storage work.
 package actor AgentCapabilityScope: ToolExecutionAdmission {
+    package nonisolated var scopeInstanceID: UUID? { instanceID }
     private let instanceID: UUID
     private let sessionID: UUID
     private let sessionInstanceID: UUID

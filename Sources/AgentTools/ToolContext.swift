@@ -9,6 +9,7 @@ public struct ToolContext: Sendable, Equatable {
     public let idempotencyKey: String?
     /// The exact model arguments retained for durable mutation intent.
     public let argumentsJSON: String?
+    package var noEffectBinding: ToolNoEffectBinding? = nil
     package let evidenceLedger: EvidenceLedger?
     package let mutationAdmission: (any ToolMutationAdmission)?
     package let executionAdmission: (any ToolExecutionAdmission)?

@@ -11,6 +11,7 @@ SwiftAgent は、特定のモデルベンダーに依存しない Swift 向け A
 | 目的 | 最初に読むもの | 次に読むもの |
 | --- | --- | --- |
 | Host によるツール認可、監査とアーカイブ | [Audited Authorization (RC6 candidate, unreleased)](docs/guides/swift-agent-authorization-audit.md) |
+| 信頼する executor による操作全体の無効果確認後の mutation 訂正 | [Confirmed no-effect（実装候補、未マージ・未リリース）](docs/guides/swift-agent-confirmed-no-effect.md) |
 | App に SwiftAgent を組み込む | [App 統合の入口](INTEGRATION.md) | [統合レシピ](docs/ai/consumer-recipes.md) |
 | Codex、Claude などのコーディング AI に統合を実装させる | [AI 向け統合ガイド](docs/ai/start-here.md) | [受け入れチェックリスト](docs/ai/acceptance-checklist.md) |
 | SDK 自体を変更する | [コントリビューションガイド](CONTRIBUTING.md) | [テストガイド](docs/testing.md)と[セキュリティモデル](docs/security-model.md) |

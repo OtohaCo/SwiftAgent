@@ -503,6 +503,9 @@ public actor AgentSession {
                 store: store, sessionID: id, runID: runID, capability: capabilities?.info)
         } else { audit = nil }
         let selectedTools = capabilities?.registry ?? tools
+        if selectedTools.hasConfirmedNoEffectMutation, journal?.supportsConfirmedNoEffect != true {
+            throw AgentSessionError.confirmedNoEffectJournalRequired
+        }
         if selectedTools.hasMutation, journal?.storage != .durable {
             throw AgentSessionError.durableJournalRequired
         }
@@ -663,6 +666,23 @@ public actor AgentSession {
             commitMutation: { callID, receipt, output, messages, steering in
                 try await self.commitMutation(callID, receipt: receipt, output: output,
                                               history: messages, steering: steering, runID: runID)
+            },
+            commitNoEffectResult: { call, result, messages in
+                guard let journal, let proof = result.confirmedNoEffect else { throw AgentJournalError.invalidRecord }
+                let drafts = try await (call.auditAuthorization as? AgentAuditInvocation)?.resultDrafts(result) ?? []
+                let prepared = try await self.prepareCheckpoint(messages)
+                await self.beginCommittedWrite(runID)
+                do {
+                    try await journal.commitExecutorNoEffect(sessionID: self.id, runID: runID, callID: call.call.id,
+                        proof: proof, message: .init(callID: call.call.id, content: [.json(result.output)], isError: true),
+                        history: prepared, auditDrafts: drafts)
+                    await self.applyCommittedHistory(prepared, steering: [], runID: runID)
+                    await self.endCommittedWrite(runID)
+                    return prepared
+                } catch {
+                    await self.endCommittedWrite(runID)
+                    throw error
+                }
             },
             commitAuditedResult: { call, result, messages in
                 guard let owner = call.auditAuthorization as? AgentAuditInvocation, let journal else {
@@ -976,6 +996,7 @@ private actor AgentSessionIdentityRegistry {
 }
 
 public enum AgentSessionError: Error, Equatable, Sendable {
+    case confirmedNoEffectJournalRequired
     case emptyInput
     case runInProgress
     case durableJournalRequired
