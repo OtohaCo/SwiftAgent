@@ -1,13 +1,14 @@
 # ADR 0010: Confirmed no-effect mutation outcomes
 
-Status: proposed (2026-10-01); separate implementation candidate pending review; not merged into main
+Status: implemented on main by PR #62 (2026-10-01); unreleased
 
-Merging this ADR records a revised proposal, not accepted runtime behavior or
-RC6 feature delivery. The separate implementation candidate is described in
-[the guide](../guides/swift-agent-confirmed-no-effect.md); only its eventual
-merge can make the capability available on main.
+PR #59 recorded the revised proposal; PR #62 subsequently implemented this
+contract on main. RC6 has not been released. The public API, explicit schema-6
+format boundary, limits and integration are described in
+[the guide](../guides/swift-agent-confirmed-no-effect.md). ADRs 0011/0012 remain
+deferred and unimplemented.
 
-## Context and current behavior
+## Context and pre-implementation behavior
 
 The OtohaAI Host report (OAI-257) describes a need to return a conflict to the
 model after a correctly classified mutation has definitively produced no
@@ -18,8 +19,8 @@ wrappers behave.
 Declaring a side-effecting tool `readOnly` to expose errors is a Host
 classification bypass to correct, not a legitimate alternative: it loses the
 SDK's mutation intent, Receipt validation and reconciliation guarantees.
-Until this proposal is implemented, real side effects must remain mutations;
-conflict feedback is no justification for lowering the effect classification.
+Real side effects must remain mutations; conflict feedback is no justification
+for lowering the effect classification.
 
 At the fixed source baseline `74771806ea410f1648eba8d9b5d244f87b001815`:
 
@@ -39,10 +40,10 @@ At the fixed source baseline `74771806ea410f1648eba8d9b5d244f87b001815`:
   `noEffectConfirmation`; it does not supply a structured executor proof or
   distinguish its origin. That is a foundation, not this feature's delivery.
 
-## Proposed no-effect contract
+## No-effect contract
 
-A mutation may explicitly opt into a dedicated, tentatively named
-`confirmedNoEffect` policy and typed executor outcome/error channel. Default
+A mutation may explicitly opt into the `confirmedNoEffect` policy and the
+executor-context `ConfirmedNoEffectToolError` channel. Default
 failure behavior is unchanged; ordinary `modelVisible` remains read-only only.
 Unknown, partial or unconfirmed effects remain closed for reconciliation.
 
@@ -131,7 +132,7 @@ of whether a conflict could otherwise be corrected.
 
 ## Failure and batch constraints
 
-| Boundary | Required behavior / future regression |
+| Boundary | Required behavior / regression |
 | --- | --- |
 | Timeout, cancellation, revoke or expired budget | Not no-effect proof; no next model request after stop, including a late result |
 | Noncooperative or late executor | Original owner retains executor, Session and Journal lease until physical drain; recording/cleanup cannot release working resources early |
@@ -166,10 +167,17 @@ ignore new fields to claim compatibility, automatically migrate existing stores
 or resume an old operation on a new empty ledger. Record public enum/API/Codable
 changes and preserve an opt-out/default legacy comparison.
 
-## Open implementation questions and responsibility
+## Implementation decisions and responsibility
 
-Exact public policy/outcome names, bounded proof representation and query
-surface, invocation redelivery recognition, atomic batch integration and any
-required format boundary belong to the independent implementation PR and its
-acceptance matrix. These choices must satisfy this proposal rather than weaken
-success validation, authorization, recovery or physical drain.
+PR #62 implements `ToolContext.confirmNoEffect`, bounded `ToolNoEffectProof`,
+read-only per-call queries, live executor nonce/invocation binding, existing
+batch-progress atomic publication and explicit schema 6. Its
+[per-head acceptance record](https://github.com/OtohaCo/SwiftAgent/pull/62#issuecomment-5924397610)
+records actual reader, recovery, fault and physical-drain validation. No
+per-invocation error replay or automatic Run replay API was added. These choices
+preserve success validation, authorization, recovery and physical drain.
+
+Host code remains responsible for the truth of whole-operation no effect and
+absence of outstanding actions. Storage capability does not enable
+`requiredAudit`; the Host must configure that mode explicitly. This implementation
+is available on main but is not an RC6 release.
