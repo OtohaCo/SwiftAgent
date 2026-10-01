@@ -260,3 +260,10 @@ input ahead of its text. After `commitUnknown`, only the Journal can say whether
 they became history: the Session refuses `conversationSnapshot()`, context
 provenance and new Runs until the Journal is closed, reopened and inspected. Full follow-up queues
 and configurable drain policies remain separate from this Run control API.
+
+## Same-Run confirmed conflict correction candidate
+
+[Confirmed no-effect mutations](swift-agent-confirmed-no-effect.md) retain the
+original turn/call/deadline budgets, require new invocation and authorization,
+and commit paired feedback before continuing. Restoring a Session does not
+execute old calls; unknown/pending still requires reconciliation.

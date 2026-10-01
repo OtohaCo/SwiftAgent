@@ -51,6 +51,14 @@ struct ToolPolicyTests {
         #expect(mutation.recoverableErrors == .failClosed)
     }
 
+    @Test func confirmedNoEffectIsAnExplicitMutationOnlyChannel() throws {
+        let policy = try ToolPolicy.mutation(recoverableErrors: .confirmedNoEffect)
+        #expect(try JSONDecoder().decode(ToolPolicy.self, from: JSONEncoder().encode(policy)) == policy)
+        #expect(throws: ToolPolicyError.confirmedNoEffectRequiresMutation) {
+            try ToolPolicy.readOnly(recoverableErrors: .confirmedNoEffect)
+        }
+    }
+
     @Test func legacyCodablePayloadDefaultsToFailClosed() throws {
         let policy = try ToolPolicy.readOnly(recoverableErrors: .modelVisible)
         let encoded = try JSONEncoder().encode(policy)

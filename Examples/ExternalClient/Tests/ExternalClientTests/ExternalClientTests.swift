@@ -1,3 +1,4 @@
+import ConfirmedNoEffectFixture
 import AgentCore
 import AgentJournalFileStore
 import AgentCatalog
@@ -705,5 +706,18 @@ struct JournalLockWaitPublicAPITests {
             writerLockWait: .until(deadline), deadline: deadline)
         #expect(waited.storage == .durable)
         try await waited.close()
+    }
+}
+
+struct ConfirmedNoEffectPublicClientTests {
+    @Test func controlledModesUseOnlyThePublicSessionAndRunAPI() async throws {
+        for mode in ["corrected", "default", "unknown"] {
+            let counts = try await ConfirmedNoEffectFixture.runFixture(mode: mode)
+            #expect(counts["providerRequests"] == (mode == "corrected" ? 3 : 1))
+            #expect(counts["executorEntered"] == (mode == "corrected" ? 2 : 1))
+            #expect(counts["fileEffects"] == (mode == "corrected" ? 1 : 0))
+            #expect(counts["abort"] == (mode == "corrected" ? 1 : 0))
+            #expect(counts["Receipt"] == (mode == "corrected" ? 1 : 0))
+        }
     }
 }

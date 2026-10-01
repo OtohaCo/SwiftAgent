@@ -123,6 +123,7 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
     public let receipt: ToolReceipt?
     package let isIdempotentReplay: Bool
     package let isModelVisibleError: Bool
+    package var confirmedNoEffect: ToolNoEffectProof? = nil
 
     public init(output: Output, evidence: [Evidence] = [], receipt: ToolReceipt? = nil) {
         self.output = output

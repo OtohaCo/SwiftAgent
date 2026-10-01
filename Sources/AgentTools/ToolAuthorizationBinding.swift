@@ -56,6 +56,7 @@ package enum ToolAuditFailureOrigin: Sendable {
 
 /// Core supplies this process-local owner. A Host cannot manufacture one through ToolContext.
 package protocol ToolAuditAuthorization: Sendable {
+    var invocationID: UUID { get }
     func beginEvaluation()
     func noteFailureOrigin(_ origin: ToolAuditFailureOrigin)
     func authorize(context: ToolContext) async throws

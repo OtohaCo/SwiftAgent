@@ -33,6 +33,7 @@ package protocol JournalStore: Sendable {
     var operationDomain: String { get }
     var supportsAdmissionRejections: Bool { get }
     var supportsAuthorizationAudit: Bool { get }
+    var supportsConfirmedNoEffect: Bool { get }
     func auditDigest(_ bytes: Data) -> String
     func read<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
     func write<T>(_ body: (any JournalStoreView) throws -> T) throws -> T

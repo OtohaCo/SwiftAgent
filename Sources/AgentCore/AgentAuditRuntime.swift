@@ -357,13 +357,15 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
         try await journal.appendAudit(drafts)
     }
 
+    var invocationID: UUID { links.invocationID }
+
     func resultDrafts(_ result: ToolResult<JSONValue>) async throws -> [JournalAuditDraft] {
         let source = lock.withLock { replaySource }
-        let kind: AuditResultReference.Kind = result.isIdempotentReplay ? .replay : request.toolPolicy.effect == .mutation ? .settlement : .readOnlyOutput
+        let kind: AuditResultReference.Kind = result.confirmedNoEffect != nil ? .noEffectConfirmation : result.isIdempotentReplay ? .replay : request.toolPolicy.effect == .mutation ? .settlement : .readOnlyOutput
         let reference = AuditResultReference(kind: kind, sourceSessionID: source?.sessionID ?? links.sessionID,
             sourceRunID: source?.runID ?? links.runID, sourceModelCallID: source?.intent.call.id.rawValue ?? links.modelCallID,
             receipt: result.receipt, outputDigest: try await journal.auditDigest(AuditEncoding.encode(result.output)),
-            settlementSource: kind == .settlement ? .executor : nil)
+            settlementSource: kind == .settlement || kind == .noEffectConfirmation ? .executor : nil)
         var drafts: [JournalAuditDraft] = []
         if lock.withLock({ executorObserved }) { drafts.append(.init(links: links, fact: .disposition(.init(state: .executorObserved)))) }
         drafts.append(.init(links: links, fact: .result(reference)))

@@ -9,6 +9,12 @@ let package = Package(
         .package(name: "SwiftAgentExecutionReportingSupport", path: "../ExecutionReportingSupport"),
     ],
     targets: [
+        .executableTarget(name: "ConfirmedNoEffectFixture", dependencies: [
+            .product(name: "AgentCore", package: "SwiftAgent"),
+            .product(name: "AgentJournalFileStore", package: "SwiftAgent"),
+            .product(name: "AgentModels", package: "SwiftAgent"),
+            .product(name: "AgentTools", package: "SwiftAgent"),
+        ]),
         .executableTarget(name: "EnterpriseAuthorizationFixture", dependencies: [
             .product(name: "AgentCore", package: "SwiftAgent"),
             .product(name: "AgentJournalFileStore", package: "SwiftAgent"),
@@ -67,6 +73,7 @@ let package = Package(
                 .product(name: "AgentTools", package: "SwiftAgent"),
                 .product(name: "AgentUsage", package: "SwiftAgent"),
                 .product(name: "ExecutionReportingSupport", package: "SwiftAgentExecutionReportingSupport"),
+                "ConfirmedNoEffectFixture",
                 "JournalReplayFixture",
                 "BoundedReplanningFixture",
             ]

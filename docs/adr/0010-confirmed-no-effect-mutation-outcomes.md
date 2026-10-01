@@ -1,9 +1,11 @@
 # ADR 0010: Confirmed no-effect mutation outcomes
 
-Status: proposed (2026-10-01); not implemented; implementation planned separately
+Status: proposed (2026-10-01); separate implementation candidate pending review; not merged into main
 
 Merging this ADR records a revised proposal, not accepted runtime behavior or
-RC6 feature delivery. Implementation and acceptance require a separate PR.
+RC6 feature delivery. The separate implementation candidate is described in
+[the guide](../guides/swift-agent-confirmed-no-effect.md); only its eventual
+merge can make the capability available on main.
 
 ## Context and current behavior
 

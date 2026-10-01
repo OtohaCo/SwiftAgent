@@ -33,6 +33,10 @@ package struct ToolRegistry: Sendable {
         tools.values.map(\.tool.definition).sorted { $0.name < $1.name }
     }
 
+    package var hasConfirmedNoEffectMutation: Bool {
+        tools.values.contains { $0.tool.policy.recoverableErrors == .confirmedNoEffect }
+    }
+
     package var hasMutation: Bool {
         tools.values.contains { $0.tool.policy.effect == .mutation }
     }

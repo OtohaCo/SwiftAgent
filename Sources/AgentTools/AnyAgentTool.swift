@@ -41,7 +41,7 @@ package struct AnyAgentTool: Sendable {
             try ToolResource.validate(resources)
             if policy.evidence == .required { try EvidenceLedger.checkRequirements(requirements) }
             let receiptExpectation = try tool.receiptExpectation(for: input)
-            let binding = prepareAuthorizationBinding ? try tool.authorizationBinding(for: input) : .init()
+            let binding = (prepareAuthorizationBinding || policy.recoverableErrors == .confirmedNoEffect) ? try tool.authorizationBinding(for: input) : .init()
             let requiresReceipt = policy.effect == .mutation || policy.idempotency == .requiresReceipt || receiptExpectation != nil
             if policy.effect == .readOnly && requiresReceipt && receiptExpectation == nil {
                 throw ToolInvocationError.receiptValidationUnavailable
@@ -145,6 +145,19 @@ package struct AnyAgentTool: Sendable {
                     _ = try await audit.apply(mutation: nil)
                 }
                 let result: ToolResult<T.Output>
+                var enteredContext: ToolContext?
+                func executorContext() throws -> ToolContext {
+                    var value = context
+                    if policy.recoverableErrors == .confirmedNoEffect {
+                        guard tool.definition == definition, tool.policy == policy,
+                              try tool.resourceRequirements(for: input) == resources,
+                              try tool.receiptExpectation(for: input) == receiptExpectation,
+                              try tool.authorizationBinding(for: input) == binding else { throw ToolNoEffectError.invalidBinding }
+                        value.noEffectBinding = .init(token: UUID(), invocationID: context.auditAuthorization?.invocationID ?? UUID(), definition: definition,
+                            canonicalArguments: arguments, resources: resources, action: binding, expectation: receiptExpectation)
+                    }
+                    return value
+                }
                 do {
                     if let audit = context.auditAuthorization {
                         try audit.checkPreparedAction(definition: tool.definition, policy: tool.policy,
@@ -160,8 +173,9 @@ package struct AnyAgentTool: Sendable {
                                 try audit.checkPreparedAction(definition: tool.definition, policy: tool.policy,
                         resources: tool.resourceRequirements(for: input), expectation: tool.receiptExpectation(for: input),
                         binding: tool.authorizationBinding(for: input))
+                                enteredContext = try executorContext()
                                 audit.observeExecutor()
-                                result = try await tool.execute(input, context: context)
+                                result = try await tool.execute(input, context: enteredContext!)
                                 audit.releaseFinal(ticket)
                             } catch { audit.releaseFinal(ticket); throw error }
                             if let scopeTicket { await context.executionAdmission?.release(scopeTicket) }
@@ -173,15 +187,31 @@ package struct AnyAgentTool: Sendable {
                         let ticket = try await admission.admit(runID: context.runID, resources: resources)
                         do {
                             try context.checkActive()
-                            result = try await tool.execute(input, context: context)
+                            enteredContext = try executorContext()
+                            result = try await tool.execute(input, context: enteredContext!)
                             await admission.release(ticket)
                         } catch {
                             await admission.release(ticket)
                             throw error
                         }
                     } else {
-                        result = try await tool.execute(input, context: context)
+                        enteredContext = try executorContext()
+                        result = try await tool.execute(input, context: enteredContext!)
                     }
+                } catch let error as ConfirmedNoEffectToolError {
+                    try context.checkActive()
+                    guard policy.recoverableErrors == .confirmedNoEffect,
+                          let enteredContext, let captured = enteredContext.noEffectBinding,
+                          captured.token == error.token, captured.invocationID == error.proof.invocationID,
+                          error.proof.sessionID == context.sessionID, error.proof.runID == context.runID,
+                          error.proof.modelCallID == context.callID,
+                          try tool.receiptExpectation(for: input) == receiptExpectation,
+                          try tool.authorizationBinding(for: input) == binding,
+                          try tool.resourceRequirements(for: input) == resources,
+                          tool.definition == definition, tool.policy == policy else { throw ToolNoEffectError.invalidBinding }
+                    var result = ToolResult<JSONValue>(modelVisibleError: error.error.payload)
+                    result.confirmedNoEffect = error.proof
+                    return result
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let error as RecoverableToolError {

@@ -20,6 +20,26 @@ import Glibc
             case "probe":
                 try await journal.close()
                 exit(0)
+            case "read-no-effect":
+                guard CommandLine.arguments.count == 5, let sessionID = UUID(uuidString: CommandLine.arguments[3]),
+                      let runID = UUID(uuidString: CommandLine.arguments[4]) else { exit(64) }
+                let confirmation = try await journal.executorNoEffectConfirmation(sessionID: sessionID, runID: runID, callID: .init(rawValue: "no-effect"))
+                let history = try await journal.latestCheckpoint(sessionID: sessionID)?.history ?? []
+                let paired = history.contains { if case .tool(let r) = $0 { return r.isError && r.callID.rawValue == "no-effect" }; return false }
+                let page = try await journal.auditRecords(matching: .init(runID: runID))
+                let executor = page.records.filter { if case .result(let r) = $0.fact { return r.kind == .noEffectConfirmation && r.settlementSource == .executor }; return false }.count
+                print("proof=\(confirmation?.executorProof?.version ?? 0) paired=\(paired) executor=\(executor) pending=\(try await journal.pendingMutations().count)")
+                try await journal.close(); exit(0)
+            case "no-effect-before-publication", "no-effect-after-publication":
+                let id = UUID(uuidString: "00000000-0000-0000-0000-000000000610")!
+                let agent = try Agent(model: .init(provider: "no-effect-process", name: "fixed"),
+                    provider: NoEffectProcessProvider(), tools: [NoEffectProcessTool(hold: mode == "no-effect-before-publication")],
+                    configuration: .init(runTimeout: .seconds(120), authorization: .init(mode: .requiredAudit,
+                        authorizer: AuditProcessAuthorizer(deny: false),
+                        identity: .init(securityDomain: "process-fixture", subjectID: "user", actingSubjectID: "agent",
+                            backend: .init(instanceID: "local", version: "1", accountID: "fixture", credentialGeneration: "1")))))
+                let run = try await agent.makeSession(id: id, journal: journal).run("conflict", operationID: "no-effect-process")
+                _ = try await run.wait(); try await run.waitForDrain(); try await journal.close(); exit(0)
             case "read-audit":
                 var cursor: AuditCursor?, count = 0, allowed = 0, denied = 0, applied = 0, observed = 0, results = 0
                 var operationIDs: Set<String> = []
@@ -226,5 +246,41 @@ private struct AuditProcessWrite: AgentTool {
         }
         return .init(output: "effect", receipt: .init(operationID: context.idempotencyKey!, status: .succeeded,
             confirmedTargets: [.init(namespace: "audit.process", id: input.id)], revision: "1"))
+    }
+}
+
+private struct NoEffectProcessProvider: ModelProvider {
+    let descriptor = ModelProviderDescriptor(id: "no-effect-process", capabilities: [.streaming, .multiTurn, .tools])
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            if request.messages.last?.role == .tool {
+                // The next dispatch is the barrier proving complete publication; SIGKILL is not power loss.
+                FileHandle.standardOutput.write(Data("NO-EFFECT-COMMITTED\n".utf8))
+                while true { try await Task.sleep(for: .seconds(60)) }
+            }
+            let info = ResponseInfo(id: "no-effect", model: request.model)
+            let call = ToolCall(id: .init(rawValue: "no-effect"), name: "no_effect_process", argumentsJSON: "{}", completeness: .complete)
+            try emit(.responseStarted(info)); try emit(.toolCallStarted(call.id, name: call.name))
+            try emit(.toolCallArgumentsDelta(call.id, call.argumentsJSON)); try emit(.toolCallCompleted(call))
+            try emit(.responseCompleted(.init(info: info, toolCalls: [call], stopReason: .toolCalls)))
+        }
+    }
+}
+private struct NoEffectProcessTool: RuntimeAgentTool {
+    let runtimeDefinition = ModelToolDefinition(name: "no_effect_process", description: "Synthetic confirmed conflict",
+        inputSchema: ToolSchema.object(properties: [:]).json, outputSchema: ToolSchema.string.json)
+    let policy = try! ToolPolicy.mutation(authorization: .notRequired, evidence: .none, recoverableErrors: .confirmedNoEffect)
+    let hold: Bool
+    func receiptExpectation(for input: JSONValue) throws -> ToolReceiptExpectation? { try .init(targets: [.init(namespace: "fixture", id: "file")]) }
+    func authorizationBinding(for input: JSONValue) throws -> ToolAuthorizationBinding {
+        .init(implementationVersion: "1", backend: .init(instanceID: "local", version: "1", accountID: "fixture", credentialGeneration: "1"))
+    }
+    func execute(_ input: JSONValue, context: ToolContext) async throws -> ToolResult<JSONValue> {
+        let error = try context.confirmNoEffect(receipt: .init(operationID: context.idempotencyKey!, status: .failed, confirmedTargets: [], failure: .conflict),
+            error: .init(code: "conflict", message: "Synthetic conflict"), wholeOperationHadNoEffect: true, noOutstandingEffects: true,
+            basis: "whole operation rejected before effect")
+        FileHandle.standardOutput.write(Data("NO-EFFECT-PREPARED session=\(context.sessionID) run=\(context.runID)\n".utf8))
+        if hold { while true { try await Task.sleep(for: .seconds(60)) } }
+        throw error
     }
 }
