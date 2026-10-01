@@ -184,9 +184,9 @@ Tools can return [Evidence](swift-agent-evidence.md) with their output and decla
 typed evidence requirements. Publication happens after output validation; the
 runtime supplies run/session scope rather than trusting scope in model arguments.
 
-## Confirmed no-effect mutation candidate
+## Confirmed no-effect mutation (implemented, unreleased)
 
-[ADR 0010 implementation candidate](swift-agent-confirmed-no-effect.md) provides
+[ADR 0010 implementation](swift-agent-confirmed-no-effect.md) provides
 a mutation-only explicit opt-in, with whole-operation trusted executor
 confirmation and one reliable proof/abort/error/history/audit commit. Ordinary
 mutation errors stay closed; failed/empty-target Receipt alone is insufficient.

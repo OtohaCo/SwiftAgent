@@ -261,7 +261,7 @@ they became history: the Session refuses `conversationSnapshot()`, context
 provenance and new Runs until the Journal is closed, reopened and inspected. Full follow-up queues
 and configurable drain policies remain separate from this Run control API.
 
-## Same-Run confirmed conflict correction candidate
+## Same-Run confirmed conflict correction (implemented, unreleased)
 
 [Confirmed no-effect mutations](swift-agent-confirmed-no-effect.md) retain the
 original turn/call/deadline budgets, require new invocation and authorization,
