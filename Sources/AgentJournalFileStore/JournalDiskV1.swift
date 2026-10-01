@@ -280,7 +280,8 @@ struct DiskMutationV1: Codable {
         if let proof = executorNoEffectProof {
             try proof.validate(sessionID: sessionID, runID: runID, callID: restoredIntent.call.id,
                 name: restoredIntent.call.name, operationID: restoredIntent.idempotencyKey,
-                arguments: JSONValue.decodeToolArguments(restoredIntent.call.argumentsJSON), resources: restoredIntent.resources, expectation: restoredIntent.receiptExpectation)
+                arguments: JSONValue.decodeToolArguments(restoredIntent.call.argumentsJSON), resources: restoredIntent.resources, expectation: restoredIntent.receiptExpectation,
+                originalArgumentsUTF8Bytes: restoredIntent.call.argumentsJSON.utf8.count)
             guard proof.basis == noEffectBasis, auditLinks == nil || auditLinks?.invocationID == proof.invocationID else { throw AgentJournalError.invalidRecord }
         }
         guard executorNoEffectProof == nil || state == .aborted else { throw AgentJournalError.invalidRecord }

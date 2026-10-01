@@ -32,6 +32,7 @@ extension AgentTool {
 
 /// Trusted runtime admission required immediately before a mutation executor runs.
 package protocol ToolMutationAdmission: Sendable {
+    var noEffectProofVersion: Int { get }
     @discardableResult
     func admit(_ request: ToolMutationAdmissionRequest) async throws -> ToolMutationAdmissionResult
 }
@@ -166,4 +167,8 @@ extension RuntimeAgentTool {
     public static var description: String { "" }
     public static var inputSchema: ToolSchema { .object(properties: [:]) }
     public static var outputSchema: ToolSchema { .object(properties: [:]) }
+}
+
+extension ToolMutationAdmission {
+    package var noEffectProofVersion: Int { 1 }
 }

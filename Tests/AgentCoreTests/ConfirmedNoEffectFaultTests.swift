@@ -7,18 +7,18 @@ import XCTest
 @testable import AgentCore
 
 struct ConfirmedNoEffectFaultTests {
-    @Test(arguments: [false, true])
-    func publicationFailureOrUnknownNeverContinuesOrExposesHalfAFact(_ unknown: Bool) async throws {
+    @Test(arguments: [false, true], [false, true])
+    func publicationFailureOrUnknownNeverContinuesOrExposesHalfAFact(_ unknown: Bool, _ large: Bool) async throws {
         let directory = auditTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
         let fault = NoEffectPublicationFault(unknown: unknown)
         let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "no-effect-fault",
             supportsConfirmedNoEffect: true, fault: { try fault.check($0) })
         let counts = NoEffectCounts()
-        let provider = ScriptedProvider { request, _ in toolResponse(request, [noEffectCall("A")]) }
+        let provider = ScriptedProvider { request, _ in toolResponse(request, [noEffectFaultCall(large)]) }
         let tool = try NoEffectFileTool(file: directory.appendingPathComponent("effect"), counts: counts,
-                                      beforeReturn: { fault.arm() })
+                                      largeArguments: large, beforeReturn: { fault.arm() })
         let session = try Agent(model: fixtureModel, provider: provider, tools: [tool],
-            configuration: .init(authorization: auditTestConfiguration())).makeSession(journal: journal)
+            configuration: large ? .init() : .init(authorization: auditTestConfiguration())).makeSession(journal: journal)
         let run = try await session.run("write", operationID: "same")
         await #expect(throws: (any Error).self) { try await run.wait() }; try await run.waitForDrain()
         #expect(await provider.log.requests.count == 1); #expect(await counts.effects == 0); #expect(await counts.executions == 1)
@@ -29,19 +29,19 @@ struct ConfirmedNoEffectFaultTests {
         let error = history.contains { if case .tool(let r) = $0 { return r.isError && r.callID.rawValue == "A" }; return false }
         let page = try await reopened.auditRecords(matching: .init(runID: run.id))
         let reference = page.records.contains { if case .result(let r) = $0.fact { return r.kind == .noEffectConfirmation && r.settlementSource == .executor }; return false }
-        #expect((proof != nil) == unknown); #expect(error == unknown); #expect(reference == unknown)
+        #expect((proof != nil) == unknown); #expect(error == unknown); #expect(reference == (unknown && !large))
         #expect(try await reopened.pendingMutations().map(\.state) == (unknown ? [] : [.needsReconciliation]))
         try await reopened.close()
     }
 
-    @Test func cancelledLateProofDoesNotReleaseTheOwnerOrStartAnotherTurn() async throws {
+    @Test(arguments: [false, true]) func cancelledLateProofDoesNotReleaseTheOwnerOrStartAnotherTurn(_ large: Bool) async throws {
         let directory = auditTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "late", supportsConfirmedNoEffect: true)
         let gate = NoEffectReturnGate(); let counts = NoEffectCounts()
-        let provider = ScriptedProvider { request, _ in toolResponse(request, [noEffectCall("A")]) }
+        let provider = ScriptedProvider { request, _ in toolResponse(request, [noEffectFaultCall(large)]) }
         let session = try Agent(model: fixtureModel, provider: provider,
             tools: [try NoEffectFileTool(file: directory.appendingPathComponent("effect"), counts: counts,
-                beforeReturn: { await gate.enterAndWait() })]).makeSession(journal: journal)
+                largeArguments: large, beforeReturn: { await gate.enterAndWait() })]).makeSession(journal: journal)
         let run = try await session.run("write")
         try await gate.waitUntilEntered(); await run.cancel()
         await #expect(throws: (any Error).self) { try await session.run("must not overlap") }
@@ -53,14 +53,14 @@ struct ConfirmedNoEffectFaultTests {
         #expect(try await journal.pendingMutations().map(\.state) == [.needsReconciliation])
         try await journal.close()
     }
-    @Test(arguments: ["deadline", "revoke", "tool_timeout"])
-    func lateProofCannotContinuePastDeadlineOrScopeRevoke(_ stop: String) async throws {
+    @Test(arguments: ["deadline", "revoke", "tool_timeout"], [false, true])
+    func lateProofCannotContinuePastDeadlineOrScopeRevoke(_ stop: String, _ large: Bool) async throws {
         let directory = auditTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "stopped", supportsConfirmedNoEffect: true)
         let gate = NoEffectReturnGate(), counts = NoEffectCounts()
-        let provider = ScriptedProvider { request, _ in toolResponse(request, [noEffectCall("A")]) }
+        let provider = ScriptedProvider { request, _ in toolResponse(request, [noEffectFaultCall(large)]) }
         let tool = try NoEffectFileTool(file: directory.appendingPathComponent("effect"), counts: counts,
-            timeout: stop == "tool_timeout" ? .seconds(2) : .seconds(5), beforeReturn: { await gate.enterAndWait() })
+            timeout: stop == "tool_timeout" ? .seconds(2) : .seconds(5), largeArguments: large, beforeReturn: { await gate.enterAndWait() })
         let session = try Agent(model: fixtureModel, provider: provider, tools: []).makeSession(journal: journal)
         let scope = try await session.bindCapabilities(identity: "controlled", version: "1", backendInstanceID: "fixture-backend",
             backendVersion: "1", allowedResources: [.global], tools: [.init(id: "write", version: "1", tool: tool)])
@@ -139,4 +139,8 @@ actor NoEffectReturnGate {
         guard await XCTWaiter.fulfillment(of: [entrance], timeout: 10) == .completed else { throw ToolNoEffectError.unavailable }
     }
     func release() { released = true; exits.forEach { $0.resume() }; exits.removeAll() }
+}
+
+private func noEffectFaultCall(_ large: Bool) -> ToolCall {
+    .init(id: .init(rawValue: "A"), name: "no_effect_file", argumentsJSON: large ? "{\"content\":\"" + String(repeating: "x", count: 143_000) + "\"}" : "{}", completeness: .complete)
 }

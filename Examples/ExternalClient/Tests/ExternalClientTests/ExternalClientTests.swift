@@ -721,3 +721,28 @@ struct ConfirmedNoEffectPublicClientTests {
         }
     }
 }
+
+
+struct LargeNoEffectPublicClientTests {
+    @Test(arguments: [16, 127_000, 131_072, 143_000, 250_000, 256_001], [false, true])
+    func acceptedLargeArgumentsReachTheModelAfterAtomicAbort(_ bytes: Int, _ stable: Bool) async throws {
+        let counts = try await ConfirmedNoEffectFixture.runFixture(mode: "large", contentBytes: bytes, stableOperationID: stable)
+        #expect(counts["providerRequests"] == 3)
+        #expect(counts["toolAuthorization"] == 2)
+        #expect(counts["executorEntered"] == 2)
+        #expect(counts["intent"] == 2 && counts["abort"] == 1)
+        #expect(counts["fileEffects"] == 1 && counts["Receipt"] == 1 && counts["pending"] == 0)
+        #expect((counts["proofBytes"] ?? Int.max) < 4096)
+        #expect(counts["canonicalBytes"] == bytes + 14)
+        if bytes >= 127_000 { #expect((counts["maintenanceGeneration"] ?? 0) > 0) }
+        if stable { #expect(counts["operationKeyBytes"] == bytes + 57) }
+    }
+    @Test(arguments: [143_000, 250_000], [false, true])
+    func requiredAuditRetainsItsExistingOversizeRejection(_ bytes: Int, _ stable: Bool) async throws {
+        let counts = try await ConfirmedNoEffectFixture.runFixture(mode: "large-audit", contentBytes: bytes, stableOperationID: stable)
+        #expect(counts["providerRequests"] == 1)
+        #expect(counts["executorEntered"] == 0 && counts["intent"] == 0)
+        #expect(counts["enterpriseAuthorization"] == 0 && counts["toolAuthorization"] == 0)
+        #expect(counts["proof"] == 0 && counts["pending"] == 0)
+    }
+}

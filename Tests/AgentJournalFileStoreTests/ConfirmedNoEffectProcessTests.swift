@@ -9,15 +9,15 @@ import Glibc
 #endif
 
 struct ConfirmedNoEffectProcessTests {
-    @Test(arguments: [false, true])
-    func sigkillBeforeAndAfterPublicationReopensAllOrNoTypedFacts(_ committed: Bool) async throws {
+    @Test(arguments: [false, true], [false, true])
+    func sigkillBeforeAndAfterPublicationReopensAllOrNoTypedFacts(_ committed: Bool, _ large: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("no-effect-process-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "process", supportsConfirmedNoEffect: true)
         try await journal.close()
         let process = Process(), output = Pipe(), errors = Pipe()
         process.executableURL = try executable()
-        process.arguments = [committed ? "no-effect-after-publication" : "no-effect-before-publication", directory.path]
+        process.arguments = [committed ? "no-effect-after-publication" : "no-effect-before-publication", directory.path] + (large ? ["large"] : [])
         process.standardOutput = output; process.standardError = errors
         let child = BoundedChild(process, errors: errors)
         try process.run(); defer { child.stopIfRunning() }
@@ -39,7 +39,7 @@ struct ConfirmedNoEffectProcessTests {
         let line = try readChild.firstOutput(from: readOutput, within: 15)
         try readChild.waitForExit(within: 15)
         #expect(reader.terminationStatus == 0)
-        #expect(line.contains(committed ? "proof=1 paired=true executor=1 pending=0" : "proof=0 paired=false executor=0 pending=1"))
+        #expect(line.contains(committed ? (large ? "proof=2 paired=true executor=0 pending=0" : "proof=2 paired=true executor=1 pending=0") : "proof=0 paired=false executor=0 pending=1"))
     }
     private func executable() throws -> URL {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

@@ -21,7 +21,7 @@ struct ConfirmedNoEffectMutationTests {
                 #expect(feedback.callID.rawValue == "A" && feedback.isError)
                 #expect(!FileManager.default.fileExists(atPath: file.path))
                 let proof = try #require(await journal.executorNoEffectConfirmation(sessionID: await counts.sessionID!, runID: await counts.runID!, callID: .init(rawValue: "A")))
-                #expect(proof.executorProof?.receipt.failure == .conflict)
+                #expect(proof.executorProof?.receipt?.failure == .conflict)
                 #expect(try await journal.pendingMutations().isEmpty)
                 return toolResponse(request, [noEffectCall("B")])
             }
@@ -57,7 +57,7 @@ struct ConfirmedNoEffectMutationTests {
         #expect(await counts.executions == 2); #expect(await counts.effects == 1)
         #expect(await counts.authorizations == 3); #expect(await authorizer.requests.count == 3)
         let original = try #require(await journal.executorNoEffectConfirmation(sessionID: session.id, runID: run.id, callID: .init(rawValue: "A")))
-        #expect(original.executorProof?.receipt.operationID == result.receipts.first?.receipt.operationID)
+        #expect(original.executorProof?.receipt?.operationID == result.receipts.first?.receipt.operationID)
         #expect(try JSONDecoder().decode(ToolNoEffectProof.self, from: JSONEncoder().encode(original.executorProof!)) == original.executorProof)
         let sink = ExportTestSink(loseFirstAck: true, partial: true)
         let exporter = try await journal.startAuditExporter(configuration: .init(id: "no-effect", destinationID: "fixture",
@@ -70,7 +70,7 @@ struct ConfirmedNoEffectMutationTests {
         try await journal.close()
         let reopened = try AgentIncrementalJournal.open(at: directory)
         let proof = try #require(await reopened.executorNoEffectConfirmation(sessionID: session.id, runID: run.id, callID: .init(rawValue: "A")))
-        #expect(proof.executorProof?.receipt.status == .failed)
+        #expect(proof.executorProof?.receipt?.status == .failed)
         let restored = try await Agent(model: fixtureModel, provider: provider, tools: []).makeSession(id: session.id, journal: reopened).conversationSnapshot()
         #expect(restored.messages == finalHistory.messages)
         try await reopened.close()
@@ -174,7 +174,7 @@ struct ConfirmedNoEffectMutationTests {
         #expect(result.receipts.count == 1); #expect(result.receipts.first?.callID.rawValue == "success")
         #expect(await success.effects == 1); #expect(await conflict.effects == 0)
         let proof = try #require(await journal.executorNoEffectConfirmation(sessionID: session.id, runID: run.id, callID: .init(rawValue: "A")))
-        #expect(proof.executorProof?.receipt.failure == (mode == "rejected" ? .rejected : .conflict))
+        #expect(proof.executorProof?.receipt?.failure == (mode == "rejected" ? .rejected : .conflict))
         for _ in 0..<32 { if try await journal.requestMaintenance()?.sealedSegments == 0 { break } }
         #expect(try await (journal.storeStatus()?.layoutGeneration ?? 0) > 0)
         try await journal.close()
@@ -215,7 +215,7 @@ struct ConfirmedNoEffectMutationTests {
         for _ in 0..<32 { if try await journal.requestMaintenance()?.sealedSegments == 0 { break } }
         #expect(try await (journal.storeStatus()?.layoutGeneration ?? 0) > 0)
         let proof = try #require(await journal.executorNoEffectConfirmation(sessionID: session.id, runID: run.id, callID: .init(rawValue: "A")))
-        #expect(proof.executorProof?.version == 1)
+        #expect(proof.executorProof?.version == 2)
         try await journal.close()
         let family = directory.appendingPathComponent(missing == "index" ? "calls" : "witnesses")
         let entries = try #require(FileManager.default.enumerator(at: family, includingPropertiesForKeys: nil))
@@ -311,9 +311,9 @@ struct NoEffectFileTool: RuntimeAgentTool {
     let file: URL; let counts: NoEffectCounts
     let mode: String
     let beforeReturn: (@Sendable () async -> Void)?
-    init(file: URL, counts: NoEffectCounts, mode: String = "conflict", optIn: Bool = true, name: String = "no_effect_file", timeout: Duration = .seconds(5), beforeReturn: (@Sendable () async -> Void)? = nil) throws {
+    init(file: URL, counts: NoEffectCounts, mode: String = "conflict", optIn: Bool = true, name: String = "no_effect_file", timeout: Duration = .seconds(5), largeArguments: Bool = false, beforeReturn: (@Sendable () async -> Void)? = nil) throws {
         self.file = file; self.counts = counts; self.mode = mode; self.beforeReturn = beforeReturn
-        runtimeDefinition = .init(name: name, description: "Controlled temporary file", inputSchema: ToolSchema.object(properties: [:]).json, outputSchema: ToolSchema.string.json)
+        runtimeDefinition = .init(name: name, description: "Controlled temporary file", inputSchema: ToolSchema.object(properties: largeArguments ? ["content": .string] : [:]).json, outputSchema: ToolSchema.string.json)
         policy = try .mutation(timeout: timeout, evidence: .none, recoverableErrors: optIn ? .confirmedNoEffect : .failClosed)
     }
     func resourceRequirements(for input: JSONValue) throws -> [ToolResource] {

@@ -38,3 +38,5 @@ if ! git cat-file -e "$pre_feature^{commit}" 2>/dev/null; then
 fi
 bash Scripts/checkout-reader-baseline.sh "$root" "$scratch/schema5" "$pre_feature"
 bash Scripts/verify-rc6-compatibility.sh "$scratch/rc5" "$root" "$scratch/schema5"
+
+bash Scripts/ci-compact-no-effect.sh

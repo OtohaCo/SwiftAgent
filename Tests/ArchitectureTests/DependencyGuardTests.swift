@@ -24,10 +24,12 @@ final class DependencyGuardTests: XCTestCase {
         }
     }
 
-    func testCryptoKitIsLimitedToWorkspaceHost() {
+    func testCryptoIsLimitedToHostStorageAndProofBinding() {
         XCTAssertEqual(DependencyGuard.violations("import CryptoKit", module: "WorkspaceAgent"), [])
         XCTAssertEqual(DependencyGuard.violations("import Crypto", module: "WorkspaceAgent"), [])
-        for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders", "AgentAppleProvider", "AgentDecisions", "AgentJevProvider", "AgentUsage", "AgentCatalog"] {
+        XCTAssertEqual(DependencyGuard.violations("import Crypto", module: "AgentTools"), [])
+        XCTAssertFalse(DependencyGuard.violations("import CryptoKit", module: "AgentTools").isEmpty)
+        for module in ["AgentModels", "AgentCore", "AgentProviders", "AgentAppleProvider", "AgentDecisions", "AgentJevProvider", "AgentUsage", "AgentCatalog"] {
             XCTAssertFalse(DependencyGuard.violations("import CryptoKit", module: module).isEmpty)
             XCTAssertFalse(DependencyGuard.violations("import Crypto", module: module).isEmpty)
         }
@@ -135,7 +137,7 @@ final class DependencyGuardTests: XCTestCase {
                 }
             }
             XCTAssertEqual(moduleNames, DependencyGuard.dependencies[name], name)
-            if name == "WorkspaceAgent" || name == "AgentJournalFileStore" {
+            if name == "WorkspaceAgent" || name == "AgentJournalFileStore" || name == "AgentTools" {
                 XCTAssertEqual(productNames, ["Crypto"], name)
             } else {
                 XCTAssertEqual(productNames, [], "\(name) must not link extra packages")

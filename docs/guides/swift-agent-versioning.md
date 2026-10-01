@@ -253,7 +253,11 @@ bounded executor-context confirmation and Host queries, `AgentFailure.noEffect`
 and `AgentSessionError.confirmedNoEffectJournalRequired` enum cases. Exhaustive
 switches/new policy Codable values require source consideration. Ordinary
 creation still uses schema 3; rejection 4; audit 5. Explicit confirmation-capable
-creation selects schema 6, rejected by older readers. No automatic migration or
+creation now selects schema 7/proof v2, rejected by the actual pre-fix schema-6
+reader. Existing schema 6 stays v1 and rejects unrepresentable new calls before
+executor entry; new readers preserve valid v1 data. ToolNoEffectProof
+canonicalArguments/receipt are optional for compact v2; argumentBinding,
+originalArgumentsUTF8Bytes and receiptSummary explicitly bind the original intent. No automatic migration or
 new ledger for existing operations. See [contract, limits and format](swift-agent-confirmed-no-effect.md).
 PR #62 implemented this capability on main; RC6 remains unreleased. Storage
 audit capability does not enable the Host-configured `requiredAudit` mode.

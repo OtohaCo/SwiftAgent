@@ -256,6 +256,8 @@ public actor AgentJournal {
     public nonisolated let storage: AgentJournalStorage
     package nonisolated let supportsAdmissionRejections: Bool
     public nonisolated let supportsConfirmedNoEffect: Bool
+    /// 0: unsupported; 1: schema 6; 2: schema 7. Existing stores are never migrated.
+    public nonisolated let noEffectProofVersion: Int
     public nonisolated let supportsAuthorizationAudit: Bool
 
     private struct MutationKey: Hashable {
@@ -285,6 +287,7 @@ public actor AgentJournal {
         supportsAdmissionRejections = false
         supportsAuthorizationAudit = false
         supportsConfirmedNoEffect = false
+        noEffectProofVersion = 0
     }
 
     package init(store: any JournalStore) {
@@ -297,6 +300,7 @@ public actor AgentJournal {
         supportsAdmissionRejections = store.supportsAdmissionRejections
         supportsAuthorizationAudit = store.supportsAuthorizationAudit
         supportsConfirmedNoEffect = store.supportsConfirmedNoEffect
+        noEffectProofVersion = store.noEffectProofVersion
     }
 
     package func acquireSessionLease(sessionID: UUID, dispatcherID: UUID? = nil) throws {
@@ -591,17 +595,16 @@ public actor AgentJournal {
     package func commitExecutorNoEffect(sessionID: UUID, runID: UUID, callID: ToolCallID,
         proof: ToolNoEffectProof, message: ToolResultMessage, history: [ModelMessage],
         auditDrafts: [JournalAuditDraft]) throws {
-        guard supportsConfirmedNoEffect else { throw AgentJournalError.unsupportedFormat }
+        guard supportsConfirmedNoEffect, proof.version <= noEffectProofVersion else { throw AgentJournalError.unsupportedFormat }
         let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
         guard let record = try mutationRecord(for: key), record.state == .intent,
               proof.sessionID == sessionID, proof.runID == runID, proof.modelCallID == callID,
-              proof.receipt.operationID == record.intent.idempotencyKey,
               proof.definition.name == record.intent.call.name, proof.resources == record.intent.resources,
-              proof.canonicalArguments == (try JSONValue.decodeToolArguments(record.intent.call.argumentsJSON)),
               message.callID == callID, message.isError else { throw AgentJournalError.invalidRecord }
         try proof.validate(sessionID: sessionID, runID: runID, callID: callID, name: record.intent.call.name,
             operationID: record.intent.idempotencyKey, arguments: JSONValue.decodeToolArguments(record.intent.call.argumentsJSON),
-            resources: record.intent.resources, expectation: record.intent.receiptExpectation)
+            resources: record.intent.resources, expectation: record.intent.receiptExpectation,
+            originalArgumentsUTF8Bytes: record.intent.call.argumentsJSON.utf8.count)
         if let links = record.auditLinks { guard links.invocationID == proof.invocationID else { throw AgentJournalError.invalidRecord } }
         _ = try appendCheckpoint([
             .mutationAborted(callID: callID, confirmation: .init(executorProof: proof)),

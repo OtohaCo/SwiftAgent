@@ -239,7 +239,7 @@ primitive has been replaced, no other descriptor unlocked or lock file deleted.
 
 ## Executor no-effect on main (unreleased)
 
-[Explicit schema-6 creation](swift-agent-confirmed-no-effect.md) stores bounded
+[Explicit schema-7 creation (v1 schema 6 remains readable)](swift-agent-confirmed-no-effect.md) stores bounded
 typed executor proof and abort/error/checkpoint/audit associations together.
 Schema 3/4/5 defaults remain and no existing store is migrated. Per-call Host
 queries restore facts, never permission or automatic replay. PR #62 implemented

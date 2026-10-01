@@ -43,7 +43,7 @@ def main():
             store = root / mode
             result = run(new_binary, mode, store, session)
             verify(result["exit"] == 0, f"audit store creation failed: {result}")
-            verify(json.loads((store / "format.json").read_text())["schema"] == (6 if mode == "create-no-effect-empty" else 5), "capability schema must be reserved at creation")
+            verify(json.loads((store / "format.json").read_text())["schema"] == (7 if mode == "create-no-effect-empty" else 5), "capability schema must be reserved at creation")
             for action in ["inspect", "append", "maintain"]:
                 copy = root / f"{mode}-{action}"
                 shutil.copytree(store, copy)
