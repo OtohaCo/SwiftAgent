@@ -64,7 +64,8 @@ package struct AgentLoop: Sendable {
             conversationRevision: conversationRevision,
             contextEpoch: conversationRevision,
             modelTurn: 1,
-            structuredOutput: structuredOutput
+            structuredOutput: structuredOutput,
+            declaredTools: tools.initiallyDeclaredNames
         )
     }
 
@@ -171,6 +172,9 @@ package struct AgentLoop: Sendable {
         var receipts: [AgentToolReceipt] = []
         var projectionRevision = initialRequest?.projection.plan.sourceRevision ?? 0
         var contextEpoch = initialRequest?.projection.plan.contextEpoch ?? 0
+        // Run-local and only growing: a committed tool result can declare deferred tools for the
+        // next request. A new Run starts again from its registry's declarations.
+        var declaredTools = tools.initiallyDeclaredNames
         var usedCallIDs = Set<ToolCallID>()
         for message in messages {
             switch message {
@@ -217,6 +221,7 @@ package struct AgentLoop: Sendable {
                     contextEpoch: contextEpoch,
                     modelTurn: modelTurns,
                     structuredOutput: structuredOutput,
+                    declaredTools: declaredTools,
                     allowUnresolvedToolTail: initialRequest == nil && modelTurns == 1
                 )
             }
@@ -305,7 +310,8 @@ package struct AgentLoop: Sendable {
                     idempotencyKey: Self.idempotencyKey(operationID: operationID, runID: runID, call: call),
                     argumentsJSON: call.argumentsJSON, evidenceLedger: evidenceLedger,
                     mutationAdmission: lifecycle?.mutationAdmission,
-                    executionAdmission: capabilityScope), prepareAuthorizationBinding: audit != nil)
+                    executionAdmission: capabilityScope), declared: declaredTools,
+                    prepareAuthorizationBinding: audit != nil)
                 if let allowedResources, !Set(prepared.resources).isSubset(of: allowedResources) {
                     throw AgentCapabilityError.resourceOutsideScope
                 }
@@ -403,6 +409,7 @@ package struct AgentLoop: Sendable {
                 contextEpoch: contextEpoch
             )
             receipts.append(contentsOf: completed.receipts)
+            declaredTools.formUnion(completed.declaredTools)
             mutationObserved = mutationObserved || completed.executedMutation
                 || completed.receipts.contains { $0.effect == .mutation }
             toolCalls += completed.count
@@ -448,6 +455,7 @@ package struct AgentLoop: Sendable {
         contextEpoch: UInt64,
         modelTurn: Int,
         structuredOutput: StructuredOutputSchema?,
+        declaredTools: Set<String>,
         allowUnresolvedToolTail: Bool = false
     ) async throws -> AgentPreparedModelRequest {
         try Task.checkCancellation()
@@ -458,7 +466,7 @@ package struct AgentLoop: Sendable {
                 messages: messages, sessionID: sessionID, runID: runID,
                 conversationRevision: conversationRevision, contextEpoch: contextEpoch,
                 modelTurn: modelTurn, structuredOutput: structuredOutput,
-                allowUnresolvedToolTail: allowUnresolvedToolTail)
+                declaredTools: declaredTools, allowUnresolvedToolTail: allowUnresolvedToolTail)
             await projectionDrain.finish()
             return prepared
         } catch {
@@ -475,13 +483,16 @@ package struct AgentLoop: Sendable {
         contextEpoch: UInt64,
         modelTurn: Int,
         structuredOutput: StructuredOutputSchema?,
+        declaredTools: Set<String>,
         allowUnresolvedToolTail: Bool
     ) async throws -> AgentPreparedModelRequest {
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else {
             throw AgentLoopError.providerMismatch
         }
+        // Requests, capability checks and token estimates see the declared tools only.
+        let toolDefinitions = tools.definitions(declared: declaredTools)
         var required: ModelCapabilities = []
-        if !tools.definitions.isEmpty { required.formUnion([.tools, .multiTurn]) }
+        if !toolDefinitions.isEmpty { required.formUnion([.tools, .multiTurn]) }
         if messages.contains(where: { $0.role == .assistant || $0.role == .tool }) { required.insert(.multiTurn) }
         if structuredOutput != nil { required.insert(.structuredOutput) }
         let missing = required.subtracting(provider.descriptor.capabilities)
@@ -579,7 +590,7 @@ package struct AgentLoop: Sendable {
             do {
                 estimate = try await budget.estimator.estimate(.init(
                     model: model, messages: projection.messages,
-                    tools: tools.definitions, structuredOutput: structuredOutput
+                    tools: toolDefinitions, structuredOutput: structuredOutput
                 ))
             } catch {
                 if let report = projection.report, let sink = binding.contextReports {
@@ -604,7 +615,7 @@ package struct AgentLoop: Sendable {
         let request = ModelRequest(
             model: model,
             messages: projection.messages,
-            tools: tools.definitions,
+            tools: toolDefinitions,
             structuredOutput: structuredOutput,
             sessionID: sessionID,
             runID: runID

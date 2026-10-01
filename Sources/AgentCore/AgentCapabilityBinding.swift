@@ -17,11 +17,15 @@ public struct AgentCapabilityTool: Sendable {
     public let id: String
     public let version: String
     public let tool: any AgentTool
+    /// `.deferred` binds the tool without sending its definition to the model until a tool result
+    /// of the Run declares it. Either way it is part of the binding's reach and resource scope.
+    public let exposure: ToolExposure
 
-    public init(id: String, version: String, tool: any AgentTool) {
+    public init(id: String, version: String, tool: any AgentTool, exposure: ToolExposure = .declared) {
         self.id = id
         self.version = version
         self.tool = tool
+        self.exposure = exposure
     }
 }
 
@@ -32,6 +36,37 @@ public struct AgentCapabilityInfo: Codable, Equatable, Sendable {
         public let version: String
         public let name: String
         public let effect: ToolPolicy.Effect
+        /// Encoded only when `.deferred`, so a binding without deferred tools encodes as before;
+        /// a value without it decodes as `.declared`.
+        public let exposure: ToolExposure
+
+        init(id: String, version: String, name: String, effect: ToolPolicy.Effect, exposure: ToolExposure) {
+            self.id = id
+            self.version = version
+            self.name = name
+            self.effect = effect
+            self.exposure = exposure
+        }
+
+        private enum CodingKeys: String, CodingKey { case id, version, name, effect, exposure }
+
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            version = try container.decode(String.self, forKey: .version)
+            name = try container.decode(String.self, forKey: .name)
+            effect = try container.decode(ToolPolicy.Effect.self, forKey: .effect)
+            exposure = try container.decodeIfPresent(ToolExposure.self, forKey: .exposure) ?? .declared
+        }
+
+        public func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(id, forKey: .id)
+            try container.encode(version, forKey: .version)
+            try container.encode(name, forKey: .name)
+            try container.encode(effect, forKey: .effect)
+            if exposure != .declared { try container.encode(exposure, forKey: .exposure) }
+        }
     }
 
     public let identity: String
@@ -92,6 +127,7 @@ public struct AgentCapabilityBinding: Sendable {
         var names = Set<String>()
         var descriptors: [AgentCapabilityInfo.Tool] = []
         var erased: [AnyAgentTool] = []
+        var deferred = Set<String>()
         for entry in tools {
             guard Self.valid(entry.id), Self.valid(entry.version) else {
                 throw AgentCapabilityError.invalidIdentity("tool")
@@ -100,11 +136,12 @@ public struct AgentCapabilityBinding: Sendable {
             // Known by its definition, read once: a tool defined at runtime has no name of its type.
             let tool = try AnyAgentTool(entry.tool)
             guard names.insert(tool.definition.name).inserted else { throw AgentCapabilityError.duplicateToolName }
-            descriptors.append(.init(id: entry.id, version: entry.version,
-                                     name: tool.definition.name, effect: tool.policy.effect))
+            descriptors.append(.init(id: entry.id, version: entry.version, name: tool.definition.name,
+                                     effect: tool.policy.effect, exposure: entry.exposure))
             erased.append(tool)
+            if entry.exposure == .deferred { deferred.insert(tool.definition.name) }
         }
-        registry = try ToolRegistry(tools: erased)
+        registry = try ToolRegistry(tools: erased, deferred: deferred)
         let instance = UUID()
         info = .init(identity: identity, version: version, scopeID: resolvedScopeID,
                      scopeInstanceID: instance, sessionID: sessionID, runID: nil,

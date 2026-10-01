@@ -4,6 +4,15 @@ All notable changes to SwiftAgent are recorded here.
 
 ## [Unreleased]
 
+- Add deferred tools: a capability binding can bind a tool with
+  `exposure: .deferred`, so its definition is left out of model requests and
+  token estimates until a committed tool result declares it with
+  `ToolResult(declaredTools:)`, from the Run's next request on. Undeclared calls
+  fail as unknown tools; declared ones keep authorization, Evidence, mutation
+  admission, Receipts and audit unchanged. The declared set is per Run and not
+  journaled. Defaults keep every tool declared; no Journal format change. See
+  the tools guide.
+
 - Implement ADR 0010 on main (unreleased): explicit
   confirmed-no-effect mutation feedback, atomic proof/abort/checkpoint/audit,
   Host per-call queries and public controlled fixture. Default behavior remains
