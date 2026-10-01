@@ -1,89 +1,173 @@
 # ADR 0010: Confirmed no-effect mutation outcomes
 
-Status: proposed (draft, 2026-10-01); not implemented
+Status: proposed (2026-10-01); not implemented; implementation planned separately
 
-## Context
+Merging this ADR records a revised proposal, not accepted runtime behavior or
+RC6 feature delivery. Implementation and acceptance require a separate PR.
 
-A mutation tool often learns that its request was refused before anything
-changed: an optimistic-concurrency check found a newer revision, the target
-already exists, or the external system validated and rejected the input. The
-model can usually recover by reading again and issuing a corrected call.
+## Context and current behavior
 
-SwiftAgent currently gives such a tool two choices. It can declare
-`effect: .mutation`; then `ToolPolicy` refuses `recoverableErrors:
-.modelVisible` (`mutationCannotExposeRecoverableErrors`), and any receipt other
-than `succeeded` throws `ToolReceiptError.unsuccessful`, which fails the Run.
-Or it can declare `effect: .readOnly` to keep the model loop going, and lose the
-durable intent, receipt validation and crash reconciliation that make mutations
-safe.
+The OtohaAI Host report (OAI-257) describes a need to return a conflict to the
+model after a correctly classified mutation has definitively produced no
+business effect. We have not independently inspected or reproduced that Host
+integration. This report does not establish how other Hosts, MCP servers or CLI
+wrappers behave.
 
-Hosts take the second option in practice. A Host that wraps third-party apps
-declares their actions read-only so that a conflict can reach the model; a
-timed-out action then reaches the model as "may still finish; check before
-trying again", which leaves the decision not to repeat an external side effect
-to the model. MCP servers and CLI wrappers make this the common case.
+Declaring a side-effecting tool `readOnly` to expose errors is a Host
+classification bypass to correct, not a legitimate alternative: it loses the
+SDK's mutation intent, Receipt validation and reconciliation guarantees.
+Until this proposal is implemented, real side effects must remain mutations;
+conflict feedback is no justification for lowering the effect classification.
 
-The journal already models the outcome the tool needs.
-`AgentNoEffectConfirmation` is a trusted Host decision that an operation did not
-take effect; `mutationAborted` moves a record to `aborted`; the reducer accepts
-that event from `intent` as well as `needsReconciliation`; and an aborted
-idempotency identity may be admitted again. Only the executor path cannot reach
-it: `abortMutation` is a reconciliation API that requires `needsReconciliation`.
+At the fixed source baseline `74771806ea410f1648eba8d9b5d244f87b001815`:
 
-## Decision
+- [ToolPolicy](../../Sources/AgentTools/ToolPolicy.swift) rejects mutation
+  `recoverableErrors: .modelVisible`. [AnyAgentTool](../../Sources/AgentTools/AnyAgentTool.swift)
+  exposes that error channel only for opted-in read-only executor failures.
+- [ToolReceiptValidator](../../Sources/AgentTools/ToolReceipt.swift) validates
+  success; a failed Receipt is not accepted as successful execution.
+- [AgentJournal](../../Sources/AgentCore/AgentJournal.swift) restores formal
+  history from a canonical checkpoint. An isolated `toolCompleted` event does
+  not persist formal history. Successful mutation settlement includes output,
+  Receipt and checkpoint and supports settled result replay.
+- The reducer permits `intent` or `needsReconciliation` to become `aborted`;
+  public `abortMutation` requires a quarantined `needsReconciliation` intent.
+  An aborted operation identity permits new admission, not old-error replay.
+- The current default audit reference for `mutationAborted` has kind
+  `noEffectConfirmation`; it does not supply a structured executor proof or
+  distinguish its origin. That is a foundation, not this feature's delivery.
 
-A mutation tool may opt in to report a confirmed no-effect outcome to the model.
-Every other failure keeps failing closed.
+## Proposed no-effect contract
 
-1. **Opt-in.** `ToolPolicy.RecoverableErrors` gains a mutation-only case,
-   tentatively `confirmedNoEffect`. `modelVisible` stays read-only only, and the
-   regression that forbids it on mutations stays.
-2. **Proof.** The executor ends the call by throwing a no-effect error that
-   carries a `RecoverableToolError` (code, message, optional details) and a
-   `ToolReceipt` with the call's operation ID, `status: .failed`,
-   `failure: .rejected` or `.conflict`, and no confirmed targets. A revision,
-   when present, is the revision the executor observed.
-3. **Validation.** Core checks the proof against the call's operation ID with a
-   dedicated no-effect check. `ToolReceiptValidator.validate` keeps its success
-   semantics. These stay unchanged and quarantine the intent for reconciliation
-   as today: `indeterminate`, `unavailable` or `unknown`; a missing or
-   mismatched receipt; any confirmed target; a thrown error without the proof;
-   timeout; cancellation.
-4. **Settlement.** On a valid proof Core appends, in one durable batch as
-   reconciliation settlement already does, `mutationAborted` for the pending
-   intent (basis naming the executor receipt and failure) and a canonical error
-   `toolCompleted` (`isError: true`) with the `RecoverableToolError` payload,
-   then continues the model loop. It publishes no Evidence and no success
-   receipt event.
-5. **Retry.** Because the identity is aborted, the model may issue the same call
-   again; a changed call gets a new identity as usual. Replaying the Run returns
-   the recorded error and never re-executes.
-6. **Audit.** Under `requiredAudit`, the abort is recorded with the existing
-   no-effect confirmation result kind and an executor source, so audit export
-   distinguishes executor proofs from Host reconciliation.
+A mutation may explicitly opt into a dedicated, tentatively named
+`confirmedNoEffect` policy and typed executor outcome/error channel. Default
+failure behavior is unchanged; ordinary `modelVisible` remains read-only only.
+Unknown, partial or unconfirmed effects remain closed for reconciliation.
 
-## Alternatives rejected
+A `failed` Receipt with `failure: rejected` or `conflict` and
+`confirmedTargets: []` is an allowed payload shape, **not proof of no effect**.
+Trusted Host executor/adapter code must explicitly confirm all of the following:
 
-- **Allow `modelVisible` on mutations.** A thrown error does not prove the
-  absence of an effect; timeouts and transport failures would become
-  model-visible text.
-- **Settle a failed receipt with `mutationSettled`.** Settled identities replay
-  their stored output, so a corrected retry with the same arguments would never
-  execute.
-- **Leave it to Hosts.** They already route around the rule by declaring
-  mutations read-only, which is strictly worse.
+- The whole business operation represented by this invocation produced no
+  business effect, not merely that its final step failed.
+- There is no partial effect and no queued, in-flight or background action
+  that could still produce an effect later.
+- The confirmation belongs to this exact invocation, logical operation
+  identity, tool/backend, resource scope and frozen action conditions.
 
-## Consequences
+For example, step A writes a file and step B encounters a conflict. A final
+failed Receipt with empty targets cannot certify the whole operation as having
+no effect: A already changed state.
 
-- Hosts can classify external actions honestly and keep intent, receipts and
-  reconciliation for them.
-- The proof is as trustworthy as the executor, the same rule as receipts: it is
-  supplied by trusted Host code, never decoded from model output or external
-  text.
-- Journal schemas 3 to 5 already accept `intent → aborted`. The implementation
-  must confirm that reducer, recovery and audit closure accept the error
-  `toolCompleted` after an executor abort, and gate any new persisted field
-  behind schema negotiation as ADRs 0008 and 0009 do.
-- Tests keep `mutationCannotOptIntoModelVisibleErrors` and add regressions for
-  conflict and rejection proofs, each refused proof shape, retry after abort,
-  a crash before and after the batch, and the audit facts.
+Do not infer confirmation from HTTP 409/422, MCP `isError`, CLI nonzero exit,
+empty targets, absence of a successful Receipt, timeout/cancellation, ordinary
+error text or model output. A missing, mismatched, stale or insufficient proof
+keeps the ordinary closed failure path. Success Receipt validation stays intact.
+
+The dedicated proof can acquire executor origin only at the actual trusted
+executor return boundary. Preparation, enterprise authorizer, tool authorize,
+other callbacks and model text cannot acquire that origin by returning or
+throwing a same-named public type. Follow the actual-stage classification in
+[ADR 0008](0008-bounded-pre-admission-replanning.md) and
+[AgentAuditRuntime](../../Sources/AgentCore/AgentAuditRuntime.swift), not Error
+names. The Host owns backend truth; the SDK binds and validates the declared
+facts and execution boundaries. This proposes neither a signature platform nor
+an ability to detect a malicious Host executor.
+
+## One reliable publication boundary
+
+Extend the existing [batch-progress](../../Sources/AgentCore/AgentToolBatchProgress.swift)
+and settlement chain. When a valid executor confirmation is accepted, the
+following must become committed facts in **one authoritative Journal root /
+transaction publication**:
+
+1. Typed no-effect confirmation and recoverable proof or immutable proof link,
+   with current invocation/backend/resource/action associations.
+2. `mutationAborted` for that intent.
+3. Correctly paired assistant tool call and `isError` tool result.
+4. Canonical checkpoint containing those formal messages.
+5. Under `requiredAudit`, result association, executor provenance and necessary
+   structured proof information.
+
+Do not abort first and later commit history/audit. An enum case, `recordCount`,
+in-memory observation or isolated `toolCompleted` is not disk persistence; an
+unstructured `basis` alone is not the proof model. After reliable publication,
+the Session adopts committed state and only then may request the next model
+turn. On definite commit failure or `commitUnknown`, continuation stops and
+existing recovery/drain ownership remains; do not clear intent because error
+feedback was constructed or observed elsewhere.
+
+There is one execution ledger, no second success state machine. Audit must
+distinguish executor-confirmed no effect from Host reconciliation-confirmed no
+effect, with one accurate result association rather than an ambiguous default
+plus duplicate or contradictory records. No successful Receipt event, success
+Evidence or read-only provenance is created. A no-effect mutation is still a
+mutation and cannot become eligible for read-only history projection.
+
+## Recovery, replay and a new attempt
+
+Restoring formal history or querying an existing invocation does not execute
+anything. A new attempt is a new runtime call instance, with a new invocation
+identity. A model call ID is an untrusted correlation label, not permission or
+a globally unique attempt identity; Run ID locates its owning budget/lifecycle.
+The stable operation identity keeps the existing semantic idempotency rules,
+independent of a new approval or invocation. Do not overwrite the previous
+aborted invocation's history or audit associations.
+
+Every new attempt rechecks authorization (enterprise and tool where required),
+Evidence, scope, resource/action conditions and durable admission. Old-call
+redelivery must not be mistaken for a new attempt, and unknown results cannot
+be bypassed by changing call ID or operation ID. An aborted identity's ability
+to admit a new call does not establish an error replay contract. Any additional
+per-invocation error replay API needs a separately defined and verified contract;
+this first version does not promise automatic Run replay.
+
+Continue under the original absolute deadline, model-turn and tool-attempt
+budgets. Failed attempts count; no budget reset or automatic unbounded retry.
+Host deny, scope revoke and cancellation remain execution stops, irrespective
+of whether a conflict could otherwise be corrected.
+
+## Failure and batch constraints
+
+| Boundary | Required behavior / future regression |
+| --- | --- |
+| Timeout, cancellation, revoke or expired budget | Not no-effect proof; no next model request after stop, including a late result |
+| Noncooperative or late executor | Original owner retains executor, Session and Journal lease until physical drain; recording/cleanup cannot release working resources early |
+| Definite publication failure / commitUnknown | Stop; reopen the real root as required; never partially expose abort/error/audit or automatically retry effects |
+| Audit persistence failure | Preserve execution, audit and persistence errors; do not short-circuit quarantine/recovery responsibility or claim a failed quarantine succeeded |
+| Mixed batch | Preserve completed siblings' Receipt and paired history; distinguish unstarted, in-flight and unknown calls, never relabel all as no effect |
+| Model feedback privacy | Bound and redact error content; raw proof material is not automatically model-visible |
+| Effect qualification | No successful Evidence/Receipt or read-only projection proof from an aborted mutation |
+
+Implementation acceptance must include valid rejected/conflict confirmations;
+all insufficient forms including partial effects and still-running background
+work; stale/wrong binding and error-origin impersonation; legitimate new attempts
+versus duplicate old calls; exhausted budgets and repeated conflicts; failures
+before and after publication and `commitUnknown`; SIGKILL/reopen (not power-loss
+validation); cancellation/return races; mixed batches; audit failure; and
+maintenance/GC/index integrity followed by recovery. Use barriers and controlled
+fault injection rather than timing-dependent sleeps.
+
+## Disk and source compatibility
+
+Existing schema 3–5 `intent → aborted` support proves a state-transition basis
+only. It does not establish compatibility for new proof payloads, error replay,
+executor audit provenance or old readers. Before implementation claims
+compatibility, verify actual disk representation, atomic associations,
+maintenance/GC, reopen and old-reader behavior.
+
+If new persisted fields or semantics cannot be safely understood by an older
+reader, use a format boundary that the old binary actually checks, as in
+[ADR 0008](0008-bounded-pre-admission-replanning.md) and
+[ADR 0009](0009-audited-authorization.md). Do not mechanically upgrade schemas,
+ignore new fields to claim compatibility, automatically migrate existing stores
+or resume an old operation on a new empty ledger. Record public enum/API/Codable
+changes and preserve an opt-out/default legacy comparison.
+
+## Open implementation questions and responsibility
+
+Exact public policy/outcome names, bounded proof representation and query
+surface, invocation redelivery recognition, atomic batch integration and any
+required format boundary belong to the independent implementation PR and its
+acceptance matrix. These choices must satisfy this proposal rather than weaken
+success validation, authorization, recovery or physical drain.

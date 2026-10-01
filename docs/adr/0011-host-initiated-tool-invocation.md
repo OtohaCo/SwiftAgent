@@ -1,47 +1,59 @@
 # ADR 0011: Host-initiated tool invocation
 
-Status: proposed (draft, 2026-10-01); deferred until a Host lets embedded UI or
-a user invoke mutation tools outside a model turn
+Status: proposed (2026-10-01); deferred; not implemented
+
+Document merge records a proposal only. No public entry point or RC6 capability
+is delivered here; future implementation/acceptance requires a separate PR.
 
 ## Context
 
-Hosts show tool-specific UI next to the conversation: embedded views served by
-an MCP server, or native panels. A user action in that UI may call a tool
-directly, for example moving a clip, saving settings or starting an export.
+Embedded MCP UI or native panels may request tools outside a model turn. As
+[ADR 0006](0006-run-scoped-capability-binding.md) explains, a Host can directly
+call its own trusted tool outside the SDK, but then the Host owns authorization,
+resource restrictions and audit for **both read-only and mutation** calls.
+Read-only does not imply permission-free. UI calls needing SwiftAgent's same
+guarantees should use a future controlled entry point regardless of effect.
 
-ADR 0006 states that a Host can call a trusted tool directly outside the SDK and
-that the guarantees apply to the Agent execution path. For read-only calls this
-is enough. For mutations the Host would have to build its own durable intent,
-receipt validation and reconciliation, a second ledger beside the journal, and
-the model would not learn that the effect happened.
+## Proposal and trust boundary
 
-## Proposal
+A future Session entry point would accept a Host-origin call without requiring
+a model proposal. Host-origin identifies request source; it does not prove user
+approval. Embedded UI/MCP UI is a requester, not a trusted permission issuer.
+The Host must validate subject, tool, arguments, scope and approval basis. This
+proposal does not put enterprise UI or an approval platform inside the SDK.
 
-`AgentSession` gains an entry point that executes one call of a tool from the
-Session's current capability binding without a model turn.
+The caller must explicitly supply an immutable capability binding belonging to
+that Session **instance**, not a mutable “current tool list”. Existing binding
+code captures tools, policies, backend and resources for a Run. The future
+entry point must verify version, scope generation and revocation before
+execution. Waiting cannot silently switch to a new tool or broader permission.
+It cannot invoke an unbound tool or revive an old scope/approval.
 
-- The call goes through the same checks as a model call: tool authorization,
-  `AgentAuthorizer` under `requiredAudit`, resource and mutation admission,
-  receipt validation, Evidence, cancellation and deadlines.
-- It is journaled with a Host-origin marker, so recovery reconciles it like any
-  mutation and audit export shows who initiated it.
-- Its canonical result can be appended to history as a Host-originated record so
-  the next model turn sees the effect, or kept out of history when the Host
-  chooses.
-- It serializes with Runs through the existing Session admission; it never runs
-  concurrently with a Run's exclusive tools.
-- It cannot add tools. Only tools in the binding are invocable, so UI cannot
-  reach anything the Host did not bind.
+- Reuse ordinary tool authorization, requiredAudit enterprise authorization,
+  Evidence where required, resource checks, durable mutation admission,
+  Receipt validation, cancellation and the original absolute deadline.
+- Coordinate same-Session calls with Run/queue admission and physical drain;
+  retain actual owners/leases while work remains. Cross-Session operations
+  continue using the existing shared resource scheduler/domain.
+- Do not introduce a second lock system, executor or mutation ledger.
+- Intent, Receipt, recovery and requiredAudit facts remain authoritative even
+  if the Host elects not to show the result to the model. Model visibility is
+  a request-view choice, not permission to omit execution facts.
+- Formal history must represent Host origin honestly, never forge an assistant
+  tool call as though the model proposed the action. Existing summary export
+  must not be claimed to include identity/origin fields it does not export.
 
 ## Open questions
 
-- Whether a Host-initiated invocation is a Run (simplest reuse of journal and
-  audit) or a new journal unit.
-- How history represents the result without impersonating the user or the
-  assistant.
-- Interaction with the follow-up queue and pre-admission replanning.
+Whether this is a Run, how Host-origin formal history is represented, and how it
+interacts with follow-up queues/replanning remain open. No new public API is
+selected in this docs-only proposal. These are implementation decisions with
+independent acceptance, not existing runtime guarantees.
 
 ## Until then
 
-Hosts let embedded UI call read-only tools only. A mutation requested from UI
-becomes a message to the model, which goes through the normal Agent path.
+A UI mutation request can become input to the existing Agent path, where the
+model may propose a subsequent action. That input is not already authorized;
+normal Host authorization and all SDK gates still apply. Do not declare a
+mutation read-only to bypass them. Hosts executing either effect outside that
+path must explicitly accept their own authorization/resource/audit obligations.
