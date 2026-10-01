@@ -10,3 +10,5 @@ Examples/**/.env.live
 
 # Per-attempt CI evidence must survive SwiftPM package clean.
 /.ci-logs/
+__pycache__/
+/Examples/DecisionEvaluation/results/

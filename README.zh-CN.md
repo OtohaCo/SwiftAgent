@@ -29,6 +29,7 @@ SwiftAgent 是一个不绑定模型厂商的 Swift Agent 运行时，提供类�
 | 选择对话 Provider 并确认能力边界 | [Provider 矩阵](docs/providers.md) |
 | 发现模型、为 Run 选择配置或使用 Jev 路由 | [动态模型选择](docs/guides/swift-agent-dynamic-model-selection.md) |
 | 通过 TypeSafe Jev 获取 Noul、Choice、Score 建议 | [Decision Providers](docs/guides/swift-agent-decisions.md) |
+| 无凭据、无外网的可复现 Decision 评测与真实 SDK HTTP fixture | [DecisionEvaluation](Examples/DecisionEvaluation) |
 | 运行示例、配置 key、区分 fixture 与真实调用 | [示例与真实服务验收](docs/guides/swift-agent-examples-and-live.md) |
 | 规划 App 自己的语音、图像、视频或音乐服务 | [Host 服务工具](docs/guides/swift-agent-host-service-tools.md)——仅文档，不是媒体 SDK |
 

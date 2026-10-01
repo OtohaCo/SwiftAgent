@@ -2,6 +2,20 @@ import Foundation
 import XCTest
 
 final class DependencyGuardTests: XCTestCase {
+    func testDecisionEvaluationRemainsAnOptionalPublicHostConsumer() throws {
+        let root = packageRoot.appendingPathComponent("Examples/DecisionEvaluation")
+        let manifest = try String(contentsOf: root.appendingPathComponent("Package.swift"), encoding: .utf8)
+        for module in ["AgentModels", "AgentDecisions", "AgentJevProvider"] {
+            XCTAssertTrue(manifest.contains(".product(name: \"\(module)\""))
+        }
+        for module in ["AgentCore", "AgentTools", "WorkspaceAgent", "AgentProviders"] {
+            XCTAssertFalse(manifest.contains(module))
+        }
+        let consumer = try String(contentsOf: root.appendingPathComponent("Sources/DecisionEvalTrial/main.swift"), encoding: .utf8)
+        XCTAssertFalse(consumer.contains("@testable"))
+        XCTAssertFalse(consumer.contains("import AgentCore"))
+    }
+
     func testNetworkSDKIsLimitedToHTTPProviders() {
         XCTAssertEqual(DependencyGuard.violations("import FoundationNetworking", module: "AgentProviders"), [])
         XCTAssertEqual(DependencyGuard.violations("import FoundationNetworking", module: "AgentJevProvider"), [])
