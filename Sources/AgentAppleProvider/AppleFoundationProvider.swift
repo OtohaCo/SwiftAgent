@@ -6,6 +6,20 @@ public struct AppleFoundationProvider: ModelProvider {
     public static let modelID = ModelID(provider: "apple-foundation", name: "on-device")
     public static let privateCloudComputeModelID = ModelID(provider: "apple-foundation", name: "private-cloud-compute")
     public let descriptor = ModelProviderDescriptor(id: "apple-foundation", capabilities: [.multiTurn, .tools])
+    /// The fixed instructions the adapter puts before the host's system and developer messages in every
+    /// native session. A host budgeting the model's small context counts them with its own.
+    public static let plannerInstructions = """
+    You are the planner for an external tool runtime. Produce exactly one plan for the supplied conversation.
+    The runtime executes the tool action you propose and sends you its real result in the next request.
+    If the user asks to use a tool, choose tool unless its actual result is already in the conversation.
+    Request a tool by selecting the tool case with its name and argumentsJSON.
+    Choose tool when an operation is needed, using a name from the supplied tool declarations.
+    Choose answer when the requested operations already have actual results, or no tool is needed.
+    Each argumentsJSON is a valid JSON object string matching that tool's inputSchema.
+    Never invent a tool result. Use actual tool messages when answering after a tool call.
+    Do not repeat a successful call already present in the conversation unless newer data was requested.
+    Choose refusal to decline a request.
+    """
     private let acceptedModelID: ModelID
     let generate: @Sendable (ModelRequest) async throws -> AppleGeneratedTurn
 

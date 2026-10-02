@@ -6,7 +6,21 @@ import Foundation
 enum ApplePromptEncoding {
     struct PromptInput: Encodable {
         let messages: [PromptMessage]
-        let tools: [ModelToolDefinition]
+        let tools: [PromptTool]
+    }
+
+    /// What the model plans with. The output schema is the runtime's to check, so it stays out of the
+    /// small on-device context, as other adapters leave it out of their requests.
+    struct PromptTool: Encodable {
+        let name: String
+        let description: String
+        let inputSchema: JSONValue
+
+        init(_ definition: ModelToolDefinition) {
+            name = definition.name
+            description = definition.description
+            inputSchema = definition.inputSchema
+        }
     }
 
     struct PromptMessage: Encodable {
@@ -55,6 +69,6 @@ enum ApplePromptEncoding {
         let messages = try request.messages
             .filter { $0.role != .system && $0.role != .developer }
             .map(PromptMessage.init)
-        return try JSONEncoder().encode(PromptInput(messages: messages, tools: request.tools))
+        return try JSONEncoder().encode(PromptInput(messages: messages, tools: request.tools.map(PromptTool.init)))
     }
 }

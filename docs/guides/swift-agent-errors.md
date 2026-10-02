@@ -84,10 +84,11 @@ Adapters set it only from these signals, and drop the provider's message:
 | LM Studio (Local Responses) | Matched by message, since the code is only `unknown`: HTTP 500 body or `error` / `response.failed` event starting "The number of tokens to keep from the initial prompt is greater than the context length"; older servers' "Trying to keep the first N tokens when context the overflows." |
 | llama.cpp server (Local Responses) | Error `type` `exceed_context_size_error` |
 | Anthropic Messages | `invalid_request_error` whose message starts "prompt is too long" (HTTP 400 or `error` event) |
+| Apple Foundation Models | `LanguageModelSession.GenerationError.exceededContextWindowSize`, or `LanguageModelError.contextSizeExceeded` (SDK 27) |
 
 Error bodies are read only for HTTP 400 and 500, up to 64 KiB; other statuses,
-longer or malformed bodies keep the status classification. DeepSeek and Apple
-Foundation Models have no documented signal and are not classified; Anthropic's
+longer or malformed bodies keep the status classification. DeepSeek has no
+documented signal and is not classified; Anthropic's
 successful stop reason `model_context_window_exceeded` remains `StopReason.unknown`.
 
 A Host transport that turns failed responses into its own errors before the

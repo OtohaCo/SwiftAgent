@@ -30,7 +30,8 @@ enum AppleNativeErrors {
         if #available(macOS 27, iOS 27, *), let error = error as? LanguageModelError {
             switch error {
             case .refusal, .guardrailViolation: return refusal
-            case .contextSizeExceeded, .unsupportedTranscriptContent: throw failure(.invalidRequest)
+            case .contextSizeExceeded: throw failure(.contextWindowExceeded)
+            case .unsupportedTranscriptContent: throw failure(.invalidRequest)
             case .rateLimited: throw failure(.rateLimited)
             case .unsupportedCapability, .unsupportedGenerationGuide, .unsupportedLanguageOrLocale:
                 throw failure(.unsupportedCapability)
@@ -42,7 +43,8 @@ enum AppleNativeErrors {
         if let error = error as? LanguageModelSession.GenerationError {
             switch error {
             case .refusal, .guardrailViolation: return refusal
-            case .exceededContextWindowSize, .concurrentRequests: throw failure(.invalidRequest)
+            case .exceededContextWindowSize: throw failure(.contextWindowExceeded)
+            case .concurrentRequests: throw failure(.invalidRequest)
             case .rateLimited: throw failure(.rateLimited)
             case .unsupportedGuide, .unsupportedLanguageOrLocale: throw failure(.unsupportedCapability)
             case .decodingFailure: throw failure(.invalidResponse)

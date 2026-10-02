@@ -65,6 +65,15 @@ remain Core responsibilities. The adapter does not open the mutation gate.
 - SDK refusals remain refusals. Errors are classified without copying private
   native diagnostics. Cancellation reaches generation; as with other Swift tasks,
   cancelling a caller does not prove native work stopped immediately.
+- The native session's instructions are `AppleFoundationProvider.plannerInstructions`
+  followed by the host's system and developer messages; the prompt is the other
+  messages and the tool declarations (name, description, input schema; output
+  schemas stay out) as JSON. A host budgeting the on-device model's small context
+  counts the planner instructions with its own, plus the plan schema the framework
+  adds.
+- A prompt larger than the context (`exceededContextWindowSize`, or
+  `contextSizeExceeded` on SDK 27) fails with
+  `ModelProviderError.Kind.contextWindowExceeded`, never retried.
 - On-device and PCC identities are explicit. SwiftAgent does not silently route
   between them, and neither backend owns a host application's domain tool catalog.
 
