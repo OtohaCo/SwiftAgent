@@ -12,6 +12,7 @@ struct AppleLegacyErrorTests {
             let cases: [(LanguageModelSession.GenerationError, ModelProviderError.Kind)] = [
                 (.rateLimited(context), .rateLimited), (.decodingFailure(context), .invalidResponse),
                 (.unsupportedLanguageOrLocale(context), .unsupportedCapability),
+                (.exceededContextWindowSize(context), .contextWindowExceeded), (.concurrentRequests(context), .invalidRequest),
             ]
             for (native, expected) in cases {
                 let provider = AppleFoundationProvider { _ in throw native }

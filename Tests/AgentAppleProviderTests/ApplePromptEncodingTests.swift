@@ -23,6 +23,22 @@ struct ApplePromptEncodingTests {
         #expect(messages.last?["callID"] as? String == call.id.rawValue)
     }
 
+    /// What a tool returns is checked by the runtime, not planned by the model: its schema stays out of
+    /// the small on-device prompt, as other adapters leave it out of their requests.
+    @Test func toolDeclarationsLeaveTheOutputSchemaOut() throws {
+        let input: JSONValue = .object(["type": .string("object"), "properties": .object(["query": .object(["type": .string("string")])])])
+        let request = ModelRequest(
+            model: AppleFoundationProvider.modelID,
+            messages: [.user([.text("Find it")])],
+            tools: [.init(name: "search_resource", description: "Find resources", inputSchema: input,
+                          outputSchema: .object(["type": .string("object"), "description": .string("Every resource found.")]))]
+        )
+        let encoded = try JSONSerialization.jsonObject(with: ApplePromptEncoding.encode(request)) as? [String: Any]
+        let tools = try #require(encoded?["tools"] as? [[String: Any]])
+        #expect(Set(tools[0].keys) == ["name", "description", "inputSchema"])
+        #expect(tools[0]["name"] as? String == "search_resource")
+    }
+
     @Test func syntheticSummaryStaysAUserRowBetweenConversationTurns() throws {
         let search = ToolCall(
             id: .init(rawValue: "search-1"),

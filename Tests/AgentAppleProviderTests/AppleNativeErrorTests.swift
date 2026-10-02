@@ -10,7 +10,7 @@ struct AppleNativeErrorTests {
     func nativeFailuresAreClassifiedWithoutLeakingDiagnostics() async throws {
         if #available(macOS 27, iOS 27, *) {
             let cases: [(any Error, ModelProviderError.Kind)] = [
-                (LanguageModelError.contextSizeExceeded(.init(contextSize: 10, tokenCount: 11, debugDescription: "private input")), .invalidRequest),
+                (LanguageModelError.contextSizeExceeded(.init(contextSize: 10, tokenCount: 11, debugDescription: "private input")), .contextWindowExceeded),
                 (LanguageModelError.rateLimited(.init(resetDate: nil, debugDescription: "private input")), .rateLimited),
                 (LanguageModelError.unsupportedGenerationGuide(.init(schemaName: nil, debugDescription: "private input")), .unsupportedCapability),
                 (GeneratedContent.ParsingError(rawContent: "private input", debugDescription: "private input"), .invalidResponse),

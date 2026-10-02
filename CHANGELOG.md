@@ -12,6 +12,11 @@ All notable changes to SwiftAgent are recorded here.
   events nested under `error` (the live OpenAI shape) are now classified by
   their code instead of `invalidResponse`. New enum case: exhaustive switches
   must handle it. See the errors guide.
+- Apple Foundation Models: a prompt larger than the context
+  (`exceededContextWindowSize`, `contextSizeExceeded`) now fails with
+  `contextWindowExceeded` instead of `invalidRequest`; tool declarations in the
+  on-device prompt leave output schemas out; `AppleFoundationProvider.plannerInstructions`
+  is public so a host can budget the small context. See the Apple provider guide.
 - Add `ProviderContextOverflow.isOverflow(httpStatus:body:signals:)`, the
   adapters' context overflow rules for a Host transport that reads failed HTTP
   responses itself before the provider sees them. See the errors guide.
