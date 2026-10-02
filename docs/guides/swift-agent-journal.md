@@ -275,3 +275,42 @@ typed executor proof and abort/error/checkpoint/audit associations together.
 Schema 3/4/5 defaults remain and no existing store is migrated. Per-call Host
 queries restore facts, never permission or automatic replay. PR #62 implemented
 this capability on main; RC6 remains unreleased.
+
+## Run record storage and query contract
+
+`supportsRunRecords: true` creation selects schema 9; default creation and
+existing stores retain their formats. Schema 9 includes schema-8 identity,
+audit and confirmed-no-effect capabilities. It adds explicit disk DTOs and
+three witnessed indexes (admission, exact correlation, terminal) in the same
+batch/index/CURRENT transaction. A Run association and its formal user message
+publish atomically. The actual owner publishes its final checkpoint and typed
+logical terminal atomically after retained steering and started writes resolve.
+No second ledger is introduced. Run records retain only association/fingerprint
+and bounded terminal metadata, not a full history array for every Run. Queries
+read indexes and the linked formal message; they do not scan historical Runs.
+
+| Query result | Meaning |
+| --- | --- |
+| `notAdmitted` | A valid supported store has no admission for this exact scope. |
+| `admitted(record)` | Admission exists; no logical terminal fact was published. |
+| `terminal(record, terminal)` | Both admission and logical terminal exist. |
+| Thrown error | Storage cannot answer reliably; not evidence of absence. |
+
+Memory-only or schema-3–8 stores return `unsupportedFormat`, even for old Runs
+that have existing checkpoints. Closed storage returns `storeClosed`; poisoned
+unknown storage returns `commitUnknown`; missing published index/message data
+returns `invalidRecord`. Never interpret these as `notAdmitted`. A crash after
+startup publication but before Host sees the Run ID still leaves the key
+queryable. A crash after a model checkpoint but before the terminal transaction
+leaves `admitted`; after terminal root publication, reopening returns terminal.
+
+Association keys and terminal metadata are retained for the entire store
+lifetime through packing/maintenance/reopen. No key deletion or expiry API is
+provided. Future body deletion must preserve identity tombstones or explicitly
+report insufficient capability, never convert past admission into absence.
+Old binaries reject schema 9 before writes, including empty stores. The actual
+schema-8 reader at `d3a8ef964aecd440934d51b7cd00f6552fe22002` is built by
+`Scripts/verify-run-record-compatibility.sh`; its open/append/maintenance all
+reject before and after new-reader maintenance without changing file bytes.
+No migration or new ledger may bypass prior operation/unsettled facts.
+See [ADR 0014](../adr/0014-durable-run-association.md).

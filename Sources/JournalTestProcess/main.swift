@@ -15,8 +15,26 @@ import Glibc
         let mode = CommandLine.arguments[1]
         let directory = URL(fileURLWithPath: CommandLine.arguments[2])
         do {
-            let journal = try AgentIncrementalJournal.open(at: directory)
+            let journal: AgentJournal
+            if mode.hasPrefix("run-record-") {
+                let terminalFault = RecordProcessTerminalBoundary(mode: mode)
+                journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "record-process", supportsRunRecords: true, fault: { stage in
+                    terminalFault.observe(stage)
+                    if mode == "run-record-checkpoint-crash", stage == .beforeRunTerminalPublish {
+                        FileHandle.standardOutput.write(Data("FINAL-CHECKPOINT-WRITTEN\n".utf8))
+                        // Deliberately park the owned Journal I/O queue at the injected crash boundary.
+                        // The parent kills this process; no cooperative executor is blocked.
+                        Thread.sleep(forTimeInterval: 120)
+                    }
+                })
+            } else { journal = try AgentIncrementalJournal.open(at: directory) }
             switch mode {
+            case "run-record-start-crash", "run-record-checkpoint-crash", "run-record-terminal-crash":
+                let id = UUID(uuidString: "00000000-0000-0000-0000-000000000321")!
+                let agent = try Agent(model: .init(provider: "record-process", name: "fixed"), provider: RecordProcessProvider(hold: mode == "run-record-start-crash"), configuration: .init(runTimeout: .seconds(120)))
+                let run = try await agent.makeSession(id: id, journal: journal).run("exact process input", correlation: .init(key: "attempt/1", payloadDigest: "same"))
+                if mode == "run-record-start-crash" { FileHandle.standardOutput.write(Data("ADMITTED-BEFORE-HOST-HANDOFF\n".utf8)) }
+                _ = try await run.wait(); exit(0)
             case "probe":
                 try await journal.close()
                 exit(0)
@@ -283,5 +301,36 @@ private struct NoEffectProcessTool: RuntimeAgentTool {
         FileHandle.standardOutput.write(Data("NO-EFFECT-PREPARED session=\(context.sessionID) run=\(context.runID)\n".utf8))
         if hold { while true { try await Task.sleep(for: .seconds(60)) } }
         throw error
+    }
+}
+
+private struct RecordProcessProvider: ModelProvider {
+    let hold: Bool
+    let descriptor = ModelProviderDescriptor(id: "record-process", capabilities: [.streaming, .multiTurn])
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            if hold { try await Task.sleep(for: .seconds(120)) }
+            let info = ResponseInfo(id: "record", model: request.model)
+            try emit(.responseStarted(info)); try emit(.textDelta("done"))
+            try emit(.responseCompleted(.init(info: info, content: [.text("done")], stopReason: .endTurn)))
+        }
+    }
+}
+
+private final class RecordProcessTerminalBoundary: @unchecked Sendable {
+    private let lock = NSLock()
+    private var terminalStarted = false
+    private let mode: String
+    init(mode: String) { self.mode = mode }
+    func observe(_ stage: JournalFileFaultStage) {
+        let stop = lock.withLock { () -> Bool in
+            if stage == .beforeRunTerminalPublish { terminalStarted = true }
+            return mode == "run-record-terminal-crash" && terminalStarted && stage == .afterCurrentReplace
+        }
+        if stop {
+            FileHandle.standardOutput.write(Data("TERMINAL-ROOT-PUBLISHED\n".utf8))
+            // Owned Journal I/O queue fault injection, terminated by the bounded parent test.
+            Thread.sleep(forTimeInterval: 120)
+        }
     }
 }

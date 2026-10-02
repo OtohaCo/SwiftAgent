@@ -142,7 +142,7 @@ package struct AgentLoop: Sendable {
         } catch {
             outcome = .failure(error)
         }
-        let finishFailure = await lifecycle?.beforeFinish()
+        let finishFailure = await lifecycle?.beforeFinish(outcome)
         await clearMutationBoundary(sessionID: sessionID, runID: runID)
         switch (outcome, finishFailure) {
         case (_, let failure?):

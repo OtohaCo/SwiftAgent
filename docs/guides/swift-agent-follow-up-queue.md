@@ -179,3 +179,13 @@ ownership remains with the old handle until a successful retry.
 This local single-writer format is not cross-device replication or an OS
 sandbox. See [ADR 0007](../adr/0007-durable-follow-up-queue.md) and
 [mutation recovery](swift-agent-mutation-recovery.md).
+
+## Querying dispatched Run facts
+
+An explicitly Run-record-capable schema-9 Journal records every dispatched Run
+for both per-call and operation identities. Query its admitted Run ID using
+`session.runRecord(runID:)` or the equivalent Journal entry point. The lookup
+contains the follow-up input ID; it does not dispatch, restore capabilities or
+release the interrupted-input barrier. Terminal is a logical fact and preserves
+existing drain/reconciliation rules. Older stores reject the query capability.
+See [durable Run records](swift-agent-sessions.md#durable-admission-and-logical-termination).

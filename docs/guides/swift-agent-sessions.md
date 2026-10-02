@@ -273,3 +273,58 @@ and commit paired feedback before continuing. Restoring a Session does not
 execute old calls; unknown/pending still requires reconciliation.
 
 Queued inputs can select per-call mutation identity; see [follow-up identity](swift-agent-follow-up-queue.md). This choice does not restore previous Run permissions or uncertain effects.
+
+## Durable admission and logical termination
+
+Create a supported store explicitly; opening an existing directory preserves
+its format and facts. `supportsRunRecords: true` selects schema 9 and includes
+per-call follow-up support. It does not enable required audit or automatic recovery.
+
+```swift
+let journal = try await AgentIncrementalJournal.createAsync(
+    at: directory, operationDomain: "approved-domain", supportsRunRecords: true)
+let session = try agent.makeSession(id: persistedSessionID, journal: journal)
+let correlation = try AgentRunCorrelation(key: "attempt/42", payloadDigest: "config-v3")
+let lookup = try await session.runRecord(correlationKey: correlation.key)
+// Host decides what to do with this fact; query performs no execution.
+let run = try await session.run("Exact formal text", correlation: correlation)
+let byID = try await session.runRecord(runID: run.id)
+```
+
+The complete compiling, offline [RunRecordFixture](../../Examples/ExternalClient/Sources/RunRecordFixture/main.swift)
+queries a cancelled read-only attempt, then lets Host-owned evidence justify a
+new Run with a new key. It preserves the old fact. Session queries are identical
+to `journal.runRecord(sessionID:runID:)` and
+`journal.runRecord(sessionID:correlationKey:)`, without restoring history or permission.
+
+Keys are exact, case-sensitive ASCII, 1...128 bytes, using letters/digits and
+`._:/-`; payload digests use the same alphabet, 1...256 bytes. The scope is
+actual store ID + Session ID + key. Host chooses a stable configuration digest;
+it declares configuration identity rather than proving that Host code is
+frozen. SDK SHA-256 independently binds exact formal text, operation mode/ID
+and the declared digest. Ephemeral model/capability binding instances are not
+payload identity, so reconstructing a binding on retry does not itself conflict.
+A duplicate returns `AgentRunAdmissionError.alreadyAdmitted` containing the
+original record; changed payload returns `.conflict`. Neither starts a Run nor
+restores the original authority. While startup is uncommitted, overlapping
+submission on that Session returns `.admissionInProgress`; query still reports
+the currently committed facts. Retry/query after that owner resolves. Admission
+failure before publication leaves no record. Unknown publication returns an
+owned failed Run and query throws `commitUnknown` until storage is reopened.
+
+On capable stores every Run gets a record, even without a correlation key;
+queued Runs include their input ID and are queryable using their existing Run ID.
+Logical terminal is written by the actual Run owner, without requiring a
+`wait()` caller. Final checkpoint and terminal share a transaction after all
+started writes and retained steering resolve. Persistence failure replaces the
+Run result with its error; no reliable completion is claimed. Cancellation of
+a waiter only cancels observation. Terminals are bounded enums:
+completed/refused/incomplete(reason)/cancelled/failed(category). Limits and
+deadline are incomplete, not successful completion. Provider bodies and error
+descriptions are never terminal payloads.
+
+Logical terminal does not prove physical drain, remote cancellation, external
+job termination, settled mutations or business acceptance. Drain keeps its
+existing leases/resources until actual workers exit. Trusted reconciliation
+may later add settlement facts without rewriting the logical terminal. Query
+never starts dispatch, releases a follow-up barrier or replays a tool.

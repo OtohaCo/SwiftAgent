@@ -28,7 +28,7 @@ struct AgentCompletionCommitTests {
                 await history.record(messages)
             }
             return messages
-        }, beforeFinish: { nil })
+        }, beforeFinish: { _ in nil })
         let response = ModelResponse(info: .init(id: "response", model: fixtureModel), toolCalls: [call], stopReason: .toolCalls)
         let progress = AgentToolBatchProgress(prefix: [], response: response, budget: budget, lifecycle: lifecycle, emitter: emitter)
         let recording = Task { try await progress.record(index: 0, call: prepared, result: result) }
@@ -72,7 +72,7 @@ struct AgentCompletionCommitTests {
         let lifecycle = AgentLoopLifecycle(control: AgentRunControl(), evidenceLedger: EvidenceLedger(), checkpoint: { messages, _ in
             try await history.record(messages)
             return messages
-        }, beforeFinish: { nil })
+        }, beforeFinish: { _ in nil })
         let response = ModelResponse(info: .init(id: "response", model: fixtureModel), toolCalls: calls, stopReason: .toolCalls)
         let progress = AgentToolBatchProgress(prefix: [], response: response, budget: budget, lifecycle: lifecycle, emitter: emitter)
         for call in calls { try await emitter.send(.toolStarted(call)) }

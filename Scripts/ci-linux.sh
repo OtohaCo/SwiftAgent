@@ -44,6 +44,7 @@ run_stage decision-eval-regressions python3 -m unittest discover Examples/Decisi
 run_stage context-pipeline swift run --package-path Examples/ExternalClient ContextPipelineFixture
 run_stage scoped-capability swift run --package-path Examples/ExternalClient ScopedCapabilityFixture
 run_stage follow-up-queue swift run --package-path Examples/ExternalClient FollowUpQueueFixture
+run_stage durable-run-records swift run --package-path Examples/ExternalClient RunRecordFixture
 
 echo "provider qualification example"
 run_stage provider-qualification swift test --package-path Examples/ProviderQualification --disable-sandbox --no-parallel
@@ -61,3 +62,5 @@ mkdir -p .build/ci-logs
 run_stage audited-authorization env SWIFTAGENT_AUDIT_TESTS_ALREADY_RUN=1 bash Scripts/ci-audited-authorization.sh 2>&1 | tee .build/ci-logs/audited-authorization.log
 
 bash Scripts/verify-per-call-compatibility.sh
+
+bash Scripts/verify-run-record-compatibility.sh

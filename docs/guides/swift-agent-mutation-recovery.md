@@ -62,3 +62,15 @@ has ended. An unknown root or damaged published data must be investigated,
 not reset to an older snapshot and used to run another mutation.
 
 Queued `.perCall` uses the existing Run/call identity, while `.operation(id)` retains semantic receipt replay. Old inputs stay in operation mode. An interrupted per-call intent still requires reconciliation; a new call never automatically replays it. See [follow-up identity](swift-agent-follow-up-queue.md).
+
+## Run facts do not settle mutations
+
+On schema-9 stores, `runRecord` reports durable admission and logical terminal
+independently of mutation recovery. An admitted Run without terminal did occur;
+an old format lacking this capability throws rather than guesses. Completed,
+cancelled or failed logical terminal does not attest drain or mutation settlement.
+Use the existing trusted mutation queries/reconciliation rules. A failed terminal
+write never authorizes repeating an already settled modification. Host may use
+its own trusted evidence to decide new work, with a new Run and current binding;
+query does not revive the old Run or restore permission. No automatic recovery
+is enabled. See [Session query contract](swift-agent-sessions.md#durable-admission-and-logical-termination).
