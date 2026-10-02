@@ -108,13 +108,14 @@ struct AgentRunRecordTests {
         await #expect(throws: ModelProviderError.self) { try await run.wait() }
         try await run.waitForDrain()
         guard case .terminal(_, .failed(.provider)) = try await session.runRecord(runID: run.id) else { Issue.record("missing sanitized failure"); return }
+        // Closing waits for background maintenance before inspecting all disk bytes.
+        try await h.journal.close()
         let enumerator = FileManager.default.enumerator(at: h.directory, includingPropertiesForKeys: [.isRegularFileKey])!
         for file in enumerator.allObjects.compactMap({ $0 as? URL }) {
             if (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
                 #expect(!(try Data(contentsOf: file)).contains(Data("credential-secret-raw-provider-body".utf8)))
             }
         }
-        try await h.journal.close()
     }
 
     @Test func budgetFailureAndRunCancellationHaveSeparateFacts() async throws {
