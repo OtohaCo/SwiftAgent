@@ -89,3 +89,9 @@ Error bodies are read only for HTTP 400 and 500, up to 64 KiB; other statuses,
 longer or malformed bodies keep the status classification. DeepSeek and Apple
 Foundation Models have no documented signal and are not classified; Anthropic's
 successful stop reason `model_context_window_exceeded` remains `StopReason.unknown`.
+
+A Host transport that turns failed responses into its own errors before the
+provider reads them can apply the same rules with
+`ProviderContextOverflow.isOverflow(httpStatus:body:signals:)` (`.responses` for
+OpenAI Responses and Local Responses, `.anthropic` for Anthropic Messages) and
+report `.contextWindowExceeded` itself.

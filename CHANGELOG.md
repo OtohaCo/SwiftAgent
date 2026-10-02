@@ -12,6 +12,9 @@ All notable changes to SwiftAgent are recorded here.
   events nested under `error` (the live OpenAI shape) are now classified by
   their code instead of `invalidResponse`. New enum case: exhaustive switches
   must handle it. See the errors guide.
+- Add `ProviderContextOverflow.isOverflow(httpStatus:body:signals:)`, the
+  adapters' context overflow rules for a Host transport that reads failed HTTP
+  responses itself before the provider sees them. See the errors guide.
 - Add deferred tools: a capability binding can bind a tool with
   `exposure: .deferred`, so its definition is left out of model requests and
   token estimates until a committed tool result declares it with
