@@ -4,6 +4,10 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/swiftagent-per-call.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 baseline=27ceea564740bca8deac841b9e8c0231c2cd13ef
+# Hosted PR checkouts can be shallow; fetch the immutable reader into our source first.
+if ! git -C "$root" cat-file -e "$baseline^{commit}" 2>/dev/null; then
+  git -C "$root" fetch origin "$baseline"
+fi
 bash "$root/Scripts/checkout-reader-baseline.sh" "$root" "$scratch/baseline" "$baseline"
 package="$root/Tests/JournalReaderCompatibility"
 for reader in old new; do
