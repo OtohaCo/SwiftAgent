@@ -22,6 +22,19 @@ public struct ModelProviderFallbackPolicy: Hashable, Codable, Sendable {
         self.maxRetriesPerProvider = maxRetriesPerProvider
         self.retryableKinds = retryableKinds
     }
+    private enum CodingKeys: String, CodingKey {
+        case maxAttempts, maxRetriesPerProvider, retryableKinds
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            maxAttempts: values.decode(Int.self, forKey: .maxAttempts),
+            maxRetriesPerProvider: values.decode(Int.self, forKey: .maxRetriesPerProvider),
+            retryableKinds: values.decode(Set<ModelProviderError.Kind>.self, forKey: .retryableKinds)
+        )
+    }
+
 }
 
 public enum ModelProviderFallbackPolicyError: Error, Equatable, Sendable {

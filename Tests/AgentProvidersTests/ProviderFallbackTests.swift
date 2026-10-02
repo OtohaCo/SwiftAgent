@@ -6,6 +6,75 @@ import Foundation
 import Testing
 
 struct ProviderFallbackTests {
+    @Test(arguments: ["contextWindowExceeded", "authentication", "invalidRequest", "cancelled"])
+    func decodedNonretryableKindsAreRejected(_ kind: String) throws {
+        let json = Data("{\"maxAttempts\":2,\"maxRetriesPerProvider\":1,\"retryableKinds\":[\"\(kind)\"]}".utf8)
+        #expect(throws: (any Error).self) { try JSONDecoder().decode(ModelProviderFallbackPolicy.self, from: json) }
+    }
+
+    @Test(arguments: [(0, 0), (-1, 1), (2, -1)])
+    func decodedInvalidLimitsAreRejected(_ attempts: Int, _ retries: Int) throws {
+        let json = Data("{\"maxAttempts\":\(attempts),\"maxRetriesPerProvider\":\(retries),\"retryableKinds\":[]}".utf8)
+        #expect(throws: ModelProviderFallbackPolicyError.invalidLimits) { try JSONDecoder().decode(ModelProviderFallbackPolicy.self, from: json) }
+    }
+
+    @Test func decodedContextPolicyCannotCauseASecondProviderRequest() async throws {
+        let data = Data(#"{"maxAttempts":2,"maxRetriesPerProvider":1,"retryableKinds":["contextWindowExceeded"]}"#.utf8)
+        let policy: ModelProviderFallbackPolicy
+        do { policy = try JSONDecoder().decode(ModelProviderFallbackPolicy.self, from: data) }
+        catch { #expect(error as? ModelProviderFallbackPolicyError == .invalidRetryableKinds); return }
+        let probe = RouteProviderProbe()
+        let provider = RouteFixtureProvider(probe: probe) { _, _, _ in
+            throw ModelProviderError(kind: .contextWindowExceeded, message: "fixture")
+        }
+        let route = try ModelProviderRoute(id: "fixture", candidates: [provider], policy: policy)
+        let request = ModelRequest(model: .init(provider: "fixture", name: "test"), messages: [])
+        await #expect(throws: ModelProviderError.self) { try await collectRouteEvents(route.stream(request: request)) }
+        #expect(await probe.requests.count == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func decodedContextPolicyIsRejectedForContinuationOwnerAndPinnedCandidate(_ pinned: Bool) async throws {
+        let data = Data(#"{"maxAttempts":2,"maxRetriesPerProvider":1,"retryableKinds":["contextWindowExceeded"]}"#.utf8)
+        let policy: ModelProviderFallbackPolicy
+        do { policy = try JSONDecoder().decode(ModelProviderFallbackPolicy.self, from: data) }
+        catch { #expect(error as? ModelProviderFallbackPolicyError == .invalidRetryableKinds); return }
+        let probe = RouteProviderProbe()
+        let provider = RouteFixtureProvider(probe: probe) { request, turn, emit in
+            if turn == 1 {
+                let info = ResponseInfo(id: "continuation", model: request.model)
+                let state = ModelProviderContinuation(model: request.model, format: "fixture", payload: Data("opaque".utf8))
+                try emit(.responseStarted(info))
+                try emit(.textDelta("ready"))
+                try emit(.providerContinuation(state))
+                try emit(.responseCompleted(.init(info: info, content: [.text("ready"), .providerContinuation(state)], stopReason: .endTurn)))
+            } else { throw ModelProviderError(kind: .contextWindowExceeded, message: "fixture") }
+        }
+        let route = try ModelProviderRoute(id: "fixture", candidates: [.init(id: "owner", provider: provider)], policy: policy)
+        let sessionID = UUID(), runID = UUID(), model = ModelID(provider: "fixture", name: "test")
+        let events = try await collectRouteEvents(route.stream(request: .init(model: model, messages: [], sessionID: sessionID, runID: runID)))
+        let response = try #require(events.compactMap { event -> ModelResponse? in if case .responseCompleted(let response) = event { return response }; return nil }.first)
+        if pinned { await route.markMutationBoundary(sessionID: sessionID, runID: runID) }
+        let request = ModelRequest(model: model, messages: [.assistant(content: response.content, toolCalls: [])], sessionID: sessionID, runID: runID)
+        do { _ = try await collectRouteEvents(route.stream(request: request)); Issue.record("expected overflow") }
+        catch { #expect((error as? ModelProviderError)?.kind == .contextWindowExceeded) }
+        #expect(await probe.requests.count == 2)
+    }
+
+    @Test func legalDecodedPolicyRoundTripsAndRetriesTransientErrors() async throws {
+        let policy = try ModelProviderFallbackPolicy(maxAttempts: 2, maxRetriesPerProvider: 1)
+        let decoded = try JSONDecoder().decode(ModelProviderFallbackPolicy.self, from: JSONEncoder().encode(policy))
+        #expect(decoded == policy)
+        let probe = RouteProviderProbe()
+        let provider = RouteFixtureProvider(probe: probe) { request, turn, emit in
+            if turn == 1 { throw ModelProviderError(kind: .unavailable, message: "fixture") }
+            try emitContents(textEvents(request, "retried"), emit: emit)
+        }
+        let route = try ModelProviderRoute(id: "fixture", candidates: [provider], policy: decoded)
+        _ = try await collectRouteEvents(route.stream(request: .init(model: .init(provider: "fixture", name: "test"), messages: [])))
+        #expect(await probe.requests.count == 2)
+    }
+
     @Test func routeDoesNotAdvertiseStreamingWhenItBuffersCandidateResponses() throws {
         let candidate = RouteFixtureProvider(probe: RouteProviderProbe()) { _, _, _ in }
 

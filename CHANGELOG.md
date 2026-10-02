@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased: fallback policy decoding (#70 follow-up)
+
+`ModelProviderFallbackPolicy` decoding now uses the same limits and retry-kind
+validation as its initializer. Invalid persisted policies throw; valid existing
+JSON still round-trips. Context overflow/authentication cannot become retryable
+through JSON. Route continuation and mutation ownership are unchanged.
+
 All notable changes to SwiftAgent are recorded here.
 
 ## [Unreleased]
