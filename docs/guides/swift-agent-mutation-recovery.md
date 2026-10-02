@@ -60,3 +60,5 @@ never enters the executor. An effect followed by an unconfirmed settlement is
 quarantined. Wait for physical drain even when `run.wait()` or its event stream
 has ended. An unknown root or damaged published data must be investigated,
 not reset to an older snapshot and used to run another mutation.
+
+Queued `.perCall` uses the existing Run/call identity, while `.operation(id)` retains semantic receipt replay. Old inputs stay in operation mode. An interrupted per-call intent still requires reconciliation; a new call never automatically replays it. See [follow-up identity](swift-agent-follow-up-queue.md).

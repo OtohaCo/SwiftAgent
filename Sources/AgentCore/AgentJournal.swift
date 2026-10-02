@@ -256,7 +256,9 @@ public actor AgentJournal {
     public nonisolated let storage: AgentJournalStorage
     package nonisolated let supportsAdmissionRejections: Bool
     public nonisolated let supportsConfirmedNoEffect: Bool
-    /// 0: unsupported; 1: schema 6; 2: schema 7. Existing stores are never migrated.
+    /// Whether this immutable store format can persist queued per-call identity.
+    public nonisolated let supportsPerCallFollowUps: Bool
+    /// 0: unsupported; 1: schema 6; 2: schema 7+. Existing stores are never migrated.
     public nonisolated let noEffectProofVersion: Int
     public nonisolated let supportsAuthorizationAudit: Bool
 
@@ -288,6 +290,7 @@ public actor AgentJournal {
         supportsAuthorizationAudit = false
         supportsConfirmedNoEffect = false
         noEffectProofVersion = 0
+        supportsPerCallFollowUps = false
     }
 
     package init(store: any JournalStore) {
@@ -301,6 +304,7 @@ public actor AgentJournal {
         supportsAuthorizationAudit = store.supportsAuthorizationAudit
         supportsConfirmedNoEffect = store.supportsConfirmedNoEffect
         noEffectProofVersion = store.noEffectProofVersion
+        supportsPerCallFollowUps = store.supportsPerCallFollowUps
     }
 
     package func acquireSessionLease(sessionID: UUID, dispatcherID: UUID? = nil) throws {
@@ -968,6 +972,7 @@ extension AgentJournal {
         try Task.checkCancellation()
         try input.validate()
         guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        if input.identity == .perCall, !supportsPerCallFollowUps { throw AgentJournalError.unsupportedFormat }
         guard !closing else { throw AgentJournalError.storeClosed }
         let result = try writeStore(store) { view -> AgentFollowUpRecord in
             if let existing = try view.followUp(sessionID: sessionID, inputID: input.inputID) {

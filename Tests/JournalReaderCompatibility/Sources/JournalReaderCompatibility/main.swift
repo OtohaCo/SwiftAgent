@@ -13,6 +13,10 @@ import Foundation
         do {
             let journal: AgentJournal
             switch mode {
+            #if PER_CALL_RUNTIME
+            case "create-per-call":
+                journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsPerCallFollowUps: true)
+            #endif
             #if NO_EFFECT_RUNTIME
             case "create-no-effect-empty", "create-no-effect":
                 journal = try AgentIncrementalJournal.create(at: directory,
@@ -90,6 +94,16 @@ import Foundation
                     guard await counter.executions == 0, try await journal.pendingMutations().isEmpty else { throw AgentJournalError.invalidRecord }
                     print("v1-large=refused-before-executor pending=0")
                 } else { _ = try await run.wait(); try await run.waitForDrain() }
+            #endif
+            #if PER_CALL_RUNTIME
+            case "create-per-call", "inspect-per-call":
+                let agent = try Agent(model: .init(provider: "reader-matrix", name: "script"), provider: MatrixProvider())
+                let session = try agent.makeSession(id: sessionID, journal: journal)
+                if mode == "create-per-call" {
+                    _ = try await session.enqueueFollowUp(.init(inputID: "per-call", text: "exact", identity: .perCall, configurationRef: "v1"))
+                }
+                guard try await session.followUp(inputID: "per-call")?.identity == .perCall else { throw AgentJournalError.invalidRecord }
+                print("identity=perCall")
             #endif
             case "maintain":
                 for _ in 0..<8 { _ = try await journal.requestMaintenance() }

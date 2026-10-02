@@ -18,13 +18,13 @@ import Foundation
         let agent = try Agent(model: model, provider: provider,
                               configuration: .init(scheduler: scheduler))
         let aID = UUID(), bID = UUID()
-        let journal = try AgentIncrementalJournal.create(at: store, operationDomain: "shared-example")
+        let journal = try AgentIncrementalJournal.create(at: store, operationDomain: "shared-example", supportsPerCallFollowUps: true)
         let a = try agent.makeSession(id: aID, journal: journal)
         _ = try agent.makeSession(id: bID, journal: journal)
         let current = try await a.run("current")
         await provider.currentEntered()
         let first = AgentFollowUpInput(inputID: "A-1", text: "read A first",
-                                       operationID: "read-A-first", configurationRef: "project-A")
+                                       identity: .perCall, configurationRef: "project-A")
         _ = try await a.enqueueFollowUp(first)
         _ = try await a.enqueueFollowUp(.init(inputID: "A-remove", text: "withdraw me",
             operationID: "remove-A", configurationRef: "project-A"))

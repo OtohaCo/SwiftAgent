@@ -27,8 +27,8 @@ priority, timer, dependency graph, implicit retry or background OS guarantee.
 
 A durable queue record is scoped by the actual persisted `storeID`, Session ID
 and caller-stable `inputID`. The `operationID` is a separate caller-stable
-logical mutation identity. Require a nonblank `operationID` on *all* queued
-entries: the tool effect may be chosen only at dispatch time, and a mutation
+logical mutation identity. Originally all entries required a nonblank operation ID. Issue #74 supersedes
+that restriction with an explicit per-call/operation choice (see ADR 0013). In operation mode: the tool effect may be chosen only at dispatch time, and a mutation
 retry must not silently fall back to a new Run/call key. Enqueue stores the
 exact UTF-8 input, operation ID, and a bounded, non-authorizing configuration
 reference. Those fields are the identity's immutable semantic payload. The

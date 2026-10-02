@@ -271,3 +271,5 @@ and configurable drain policies remain separate from this Run control API.
 original turn/call/deadline budgets, require new invocation and authorization,
 and commit paired feedback before continuing. Restoring a Session does not
 execute old calls; unknown/pending still requires reconciliation.
+
+Queued inputs can select per-call mutation identity; see [follow-up identity](swift-agent-follow-up-queue.md). This choice does not restore previous Run permissions or uncertain effects.

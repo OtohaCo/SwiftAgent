@@ -1,5 +1,36 @@
 # SwiftAgent Journal
 
+## Queued mutation identity (unreleased, Issue #74)
+
+Queued inputs now explicitly select `AgentOperationIdentity.perCall` or
+`.operation(String)`. The existing `operationID:` initializer keeps its
+operation semantics. `AgentFollowUpInput.operationID` and
+`AgentFollowUpRecord.operationID` change from `String` to `String?`: nil means
+per-call mode; it is never an empty/synthetic ID. This is a source break for
+clients requiring a nonoptional property. Both records expose `identity`.
+
+Per-call dispatch passes no operation ID to the existing Run algorithm; each
+new call ID uses that Run's ID/call ID. Duplicate call IDs remain protocol
+errors. There is no cross-call/Run deduplication, automatic replay or recovery.
+Same input ID retries compare exact text, configuration reference and identity
+(including exact operation ID bytes), and return the current durable record.
+An identity change conflicts even after admission/withdrawal.
+
+Explicit `supportsPerCallFollowUps: true` creation selects format schema 8,
+including schema-7 confirmed-no-effect and audit capabilities. Default and
+other creation options retain their formats. Existing schema 3–7 stores stay
+in their original format and reject per-call enqueue before publication with
+`unsupportedFormat`. Their records decode as `.operation(storedOperationID)`.
+There is no in-place migration, new-ledger escape hatch or identity reset.
+Schema 8 is needed because schema-7 binaries could otherwise ignore a new
+field and erase or misinterpret identity during maintenance. The actual
+unmodified `27ceea564740bca8deac841b9e8c0231c2cd13ef` reader is exercised by
+`Scripts/verify-per-call-compatibility.sh`: old open/append/maintain reject
+schema 8 before and after new-reader maintenance. New readers retain old
+operation records and per-call records on reopen. Pending intent,
+needs-reconciliation, settlement, confirmed-no-effect, cancellation and drain
+contracts remain unchanged; uncertain effects are inspected, never retried.
+
 ## RC6 candidate: authorization audit (opt-in)
 
 An explicit `supportsAuthorizationAudit: true` create selects schema 5 and

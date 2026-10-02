@@ -33,3 +33,5 @@ bash Scripts/ci-execution-reporting.sh
 
 mkdir -p .build/ci-logs
 run_stage audited-authorization env SWIFTAGENT_AUDIT_TESTS_ALREADY_RUN=1 bash Scripts/ci-audited-authorization.sh 2>&1 | tee .build/ci-logs/audited-authorization.log
+
+bash Scripts/verify-per-call-compatibility.sh

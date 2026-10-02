@@ -1,5 +1,36 @@
 # Durable follow-up inputs
 
+## Queued mutation identity (unreleased, Issue #74)
+
+Queued inputs now explicitly select `AgentOperationIdentity.perCall` or
+`.operation(String)`. The existing `operationID:` initializer keeps its
+operation semantics. `AgentFollowUpInput.operationID` and
+`AgentFollowUpRecord.operationID` change from `String` to `String?`: nil means
+per-call mode; it is never an empty/synthetic ID. This is a source break for
+clients requiring a nonoptional property. Both records expose `identity`.
+
+Per-call dispatch passes no operation ID to the existing Run algorithm; each
+new call ID uses that Run's ID/call ID. Duplicate call IDs remain protocol
+errors. There is no cross-call/Run deduplication, automatic replay or recovery.
+Same input ID retries compare exact text, configuration reference and identity
+(including exact operation ID bytes), and return the current durable record.
+An identity change conflicts even after admission/withdrawal.
+
+Explicit `supportsPerCallFollowUps: true` creation selects format schema 8,
+including schema-7 confirmed-no-effect and audit capabilities. Default and
+other creation options retain their formats. Existing schema 3–7 stores stay
+in their original format and reject per-call enqueue before publication with
+`unsupportedFormat`. Their records decode as `.operation(storedOperationID)`.
+There is no in-place migration, new-ledger escape hatch or identity reset.
+Schema 8 is needed because schema-7 binaries could otherwise ignore a new
+field and erase or misinterpret identity during maintenance. The actual
+unmodified `27ceea564740bca8deac841b9e8c0231c2cd13ef` reader is exercised by
+`Scripts/verify-per-call-compatibility.sh`: old open/append/maintain reject
+schema 8 before and after new-reader maintenance. New readers retain old
+operation records and per-call records on reopen. Pending intent,
+needs-reconciliation, settlement, confirmed-no-effect, cancellation and drain
+contracts remain unchanged; uncertain effects are inspected, never retried.
+
 ## RC6 candidate: required audit on queued work
 
 Required audit also checks configuration, storage and backlog before enqueue or
@@ -13,16 +44,16 @@ mutation retains settlement/drain ownership. See
 does not call a model or append to the formal conversation. `session.run(_:)`
 still starts immediately (or rejects overlap); `run.steer(_:)` still corrects
 the current Run. This queue is FIFO within one Session and is available only
-with a schema-3 `AgentJournalFileStore` durable Journal. A memory-only Agent
+with a supported `AgentJournalFileStore` durable Journal. A memory-only Agent
 can still run read-only work without a queue.
 
 ## Public API and identities
 
 `AgentFollowUpInput` has a stable caller-supplied `inputID`, exact UTF-8 text,
-nonblank `operationID` and bounded `configurationRef`. The identity scope is
+explicit `identity` and bounded `configurationRef`. The identity scope is
 the **actual store ID plus Session ID**; the operation ID names a separate
 logical tool effect. Repeating the same input ID and identical payload returns
-the existing ordinal and *current* state. Different text, operation ID or
+the existing ordinal and *current* state. Different text, identity mode, operation ID or
 configuration reference conflicts. Terminal IDs remain indexed for the life
 of the store's operation domain; there is no TTL or reset. A second directory
 with the same domain label has a different store and cannot share deduplication.

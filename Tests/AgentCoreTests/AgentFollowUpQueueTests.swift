@@ -90,15 +90,15 @@ struct AgentFollowUpQueueTests {
         try await journal.close()
     }
 
-    @Test func withdrawalWhileResolvingWinsTheAtomicAdmission() async throws {
+    @Test(arguments: [false, true]) func withdrawalWhileResolvingWinsTheAtomicAdmission(perCall: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-withdraw-race-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "withdraw-race")
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "withdraw-race", supportsPerCallFollowUps: perCall)
         let provider = QueueFixtureProvider(), gate = QueueResolverGate(cooperative: false)
         let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"), provider: provider)
         let session = try agent.makeSession(journal: journal)
         _ = try await session.enqueueFollowUp(.init(inputID: "remove", text: "must not run",
-            operationID: "never-run", configurationRef: "v1"))
+            identity: perCall ? .perCall : .operation("never-run"), configurationRef: "v1"))
         let dispatcher = try await session.startFollowUpDispatch(policy: .init(runTimeout: .seconds(10)),
             resolver: QueueFixtureResolver(session: session, provider: provider, gate: gate))
         await gate.waitUntilEntered()
@@ -515,10 +515,10 @@ struct AgentFollowUpQueueTests {
         try await journal.close()
     }
 
-    @Test func cancelledExistingDirectRunCannotStartQueuedInput() async throws {
+    @Test(arguments: [false, true]) func cancelledExistingDirectRunCannotStartQueuedInput(perCall: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-initial-cancel-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "initial-cancel")
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "initial-cancel", supportsPerCallFollowUps: perCall)
         let work = QueueResolverGate(cooperative: true), drain = QueuePhysicalDrainGate()
         let provider = QueueCancellableProvider(work: work, drain: drain)
         let session = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
@@ -526,7 +526,7 @@ struct AgentFollowUpQueueTests {
         let direct = try await session.run("first")
         await work.waitUntilEntered()
         _ = try await session.enqueueFollowUp(.init(inputID: "later", text: "second",
-            operationID: "op-second", configurationRef: "v1"))
+            identity: perCall ? .perCall : .operation("op-second"), configurationRef: "v1"))
         let dispatcher = try await session.startFollowUpDispatch(policy: .init(),
             resolver: QueueCancellableResolver(session: session, provider: provider))
         await direct.cancel()
@@ -666,19 +666,19 @@ struct AgentFollowUpQueueTests {
         try await journal.close()
     }
 
-    @Test func uncertainReceivePublicationIsRecoveredByTheSameInputID() async throws {
+    @Test(arguments: [false, true]) func uncertainReceivePublicationIsRecoveredByTheSameInputID(perCall: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-unknown-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let fault = QueueFaultProbe()
         var journal: AgentJournal? = try AgentIncrementalJournal.createForTesting(at: directory,
-            operationDomain: "unknown", fault: { try fault.check($0) })
+            operationDomain: "unknown", supportsPerCallFollowUps: perCall, fault: { try fault.check($0) })
         let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
                               provider: QueueFixtureProvider())
         let id = UUID()
         var session: AgentSession? = try agent.makeSession(id: id, journal: journal)
         fault.arm(.afterCurrentReplace)
         let input = AgentFollowUpInput(inputID: "stable", text: "received once",
-                                       operationID: "stable-operation", configurationRef: "v1")
+                                       identity: perCall ? .perCall : .operation("stable-operation"), configurationRef: "v1")
         await #expect(throws: AgentJournalError.commitUnknown) {
             try await session?.enqueueFollowUp(input)
         }
@@ -774,18 +774,18 @@ struct AgentFollowUpQueueTests {
         try await reopened.close()
     }
 
-    @Test func uncertainAtomicAdmissionDoesNotRequeueOrCallProviderAfterReopen() async throws {
+    @Test(arguments: [false, true]) func uncertainAtomicAdmissionDoesNotRequeueOrCallProviderAfterReopen(perCall: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-admit-unknown-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let fault = QueueFaultProbe()
         let journal = try AgentIncrementalJournal.createForTesting(at: directory,
-            operationDomain: "admit-unknown", fault: { try fault.check($0) })
+            operationDomain: "admit-unknown", supportsPerCallFollowUps: perCall, fault: { try fault.check($0) })
         let provider = QueueFixtureProvider()
         let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"), provider: provider)
         let id = UUID()
         let session = try agent.makeSession(id: id, journal: journal)
         _ = try await session.enqueueFollowUp(.init(inputID: "one", text: "committed once",
-            operationID: "stable-one", configurationRef: "v1"))
+            identity: perCall ? .perCall : .operation("stable-one"), configurationRef: "v1"))
         let dispatcher = try await session.startFollowUpDispatch(
             policy: .init(maxModelTurns: 2, maxToolCalls: 0, runTimeout: .seconds(10)),
             resolver: QueueFaultingResolver(session: session, provider: provider, fault: fault))
