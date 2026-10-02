@@ -180,6 +180,18 @@ type that already declares its own `definition` is affected. If it is a
 it is an internal or public `ModelToolDefinition`, it becomes the tool's
 definition. A member of another type is unaffected.
 
+Unreleased deferred tools are additive. `AgentCapabilityTool.init` gains a
+defaulted `exposure:` (`ToolExposure`, default `.declared`) and `ToolResult.init`
+a defaulted `declaredTools:` (default empty), so existing calls compile and keep
+their meaning. Code that names either initializer by its old compound name, for
+example `AgentCapabilityTool.init(id:version:tool:)` as a function value, no
+longer compiles. `AgentCapabilityInfo.Tool.exposure` is encoded only for
+`.deferred` and decodes as `.declared` when absent, so a binding without
+deferred tools encodes and decodes as before. Requests, token estimates and
+Provider capability checks carry only declared tools, which is every tool
+unless a Host defers some. No Journal format, schema or operation identity
+changes. See [Deferred Tools](swift-agent-tools.md#deferred-tools-unreleased).
+
 Treat as non-breaking when existing clients still compile and keep the same
 runtime meaning:
 

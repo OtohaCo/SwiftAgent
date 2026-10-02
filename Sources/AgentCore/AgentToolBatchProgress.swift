@@ -11,6 +11,7 @@ actor AgentToolBatchProgress {
     private var results: [Int: ToolResultMessage] = [:]
     private var receipts: [AgentToolReceipt] = []
     private var executedMutation = false
+    private var declaredTools: Set<String> = []
     private var canonicalHistory: [ModelMessage]?
 
     init(prefix: [ModelMessage], response: ModelResponse, budget: AgentBudget,
@@ -70,6 +71,8 @@ actor AgentToolBatchProgress {
                 }
             }
             results = proposed
+            // Declarations take effect only with a committed result.
+            declaredTools.formUnion(result.declaredTools)
             let receipt = result.receipt.map { AgentToolReceipt(callID: call.call.id, effect: call.policy.effect, receipt: $0) }
             if let receipt { receipts.append(receipt) }
             // A committed checkpoint must be reflected in events even if cancellation arrived afterward.
@@ -102,8 +105,9 @@ actor AgentToolBatchProgress {
         }
     }
 
-    func completed() -> (history: [ModelMessage], receipts: [AgentToolReceipt], count: Int, executedMutation: Bool) {
-        (canonicalHistory ?? history(results), receipts, results.count, executedMutation)
+    func completed() -> (history: [ModelMessage], receipts: [AgentToolReceipt], count: Int, executedMutation: Bool,
+                         declaredTools: Set<String>) {
+        (canonicalHistory ?? history(results), receipts, results.count, executedMutation, declaredTools)
     }
 
     private func history(_ results: [Int: ToolResultMessage]) -> [ModelMessage] {

@@ -131,6 +131,10 @@ status counts Run reservations and admissions; admission does not prove
 executor entry or a file write. Diagnostic `AgentCapabilityInfo` is not a
 recoverable permission credential.
 
+A bound tool can be `.deferred`: bound, but its definition is sent to the model
+only after a tool result of the same Run declares it. An undeclared call fails
+as an unknown tool. See [Deferred Tools](swift-agent-tools.md#deferred-tools-unreleased).
+
 Explicitly bound mutation tools recheck durable Journal availability before
 candidate input is committed, even when the Agent has no default mutations.
 The Session shares its scheduler and Journal across scopes. New scope versions

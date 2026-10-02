@@ -245,7 +245,8 @@ package struct AnyAgentTool: Sendable {
                     throw ToolInvocationError.invalidOutput
                 }
                 try context.checkActive()
-                return ToolResult(output: output, evidence: result.evidence, receipt: result.receipt)
+                return ToolResult(output: output, evidence: result.evidence, receipt: result.receipt,
+                                  declaredTools: result.declaredTools)
             }
         }
     }

@@ -11,7 +11,7 @@ for exact action binding. The Host executor must enforce immutable inputs or
 conditional writes itself. Approval does not freeze a mutable backend or cover
 Provider egress. See [Audited Authorization](swift-agent-authorization-audit.md).
 
-last-verified: 2026-09-29
+last-verified: 2026-10-02
 
 Implement [AgentTool](../../Sources/AgentTools/AgentTool.swift) with
 Codable, Sendable input and output types. Declare the JSON field names explicitly
@@ -94,6 +94,69 @@ placeholders, so one type can serve many tools.
 - A wrapper generic over `Base: AgentTool` must forward `definition`. Code must
   identify tools by `definition.name`, never by `T.name` or
   `type(of: tool).name`, which are placeholders for runtime tools.
+
+## Deferred Tools (unreleased)
+
+Every model request carries the definitions of the tools it may call. With many
+tools that can fill a small context window before the conversation starts. A
+capability binding can therefore bind a tool as `.deferred`: it is part of the
+Run, but its definition is not sent until a tool result declares it. This is the
+same idea as Anthropic's `defer_loading` with tool search.
+
+```swift
+// The Host binds a few core tools and defers the rest.
+let binding = try await session.bindCapabilities(
+    identity: "project-B", version: "v1",
+    backendInstanceID: "local-tools", backendVersion: "v1",
+    allowedResources: resources,
+    tools: [.init(id: "find_tools", version: "v1", tool: findTools)]
+        + others.map { .init(id: $0.definition.name, version: "v1", tool: $0, exposure: .deferred) }
+)
+
+// Its "find tools" tool declares what it found for the next request.
+func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
+    let names = index.search(input.task, limit: 5)
+    return ToolResult(output: Output(tools: names), declaredTools: names)
+}
+```
+
+- `AgentCapabilityTool.exposure` defaults to `.declared`. Tools given to
+  `Agent(tools:)` are always declared.
+- A Run starts with the binding's declared tools. Once a result that declares
+  tools is committed, the Run's next model request, its token estimate and the
+  Provider capability check include those definitions. Within a Run the set only
+  grows; the next Run starts again from its binding.
+- A declared name must be exactly the name of a tool the Run has. Otherwise the
+  call fails with `ToolRegistryError.unknownTool`, as an invalid output does.
+  Like output validation, this check follows the executor, so a mutation tool's
+  effect may already have happened and the call needs reconciliation.
+  Declaring grants nothing: the declared tool's calls still pass authorization,
+  Evidence, resource scope, mutation admission and Receipt validation.
+- Deferral is not an access boundary. Any tool result of the Run can declare
+  any bound tool, including a tool whose output comes from untrusted content.
+  Bind only tools the Run may use.
+- Declared definitions count toward the token budget from the next request. A
+  declaration that does not fit fails that request with `contextBudgetExceeded`,
+  and the set never shrinks within the Run, so declare a few tools at a time.
+  Each declaration also changes the request's tool list, which a Provider's
+  prompt cache treats as a new prefix.
+- A call naming a deferred tool that has not been declared fails exactly as a
+  call naming no bound tool: preparation throws `unknownTool` before any
+  authorization, required audit records the proposal as `preparation_rejected`,
+  and the Run fails. Bound but undeclared is not a weaker way to be callable.
+- A settled mutation replay returns its stored output and declares nothing. Put
+  discovery in a read-only tool.
+- The declared set is request view state of one Run and is not journaled. A Run
+  never resumes mid-loop: after a restart the Journal restores history, mutation
+  intents, Receipts and audit facts, each recorded per call whatever the tool's
+  exposure, and the next Run uses a new binding. Earlier calls to a deferred tool
+  stay in history; if the model calls it again in a later Run before it is
+  declared, that call fails as above. A Host can declare up front the tools a
+  conversation has already used.
+- `AgentCapabilityInfo.Tool.exposure` reports each tool's exposure. It is
+  encoded only for `.deferred`, so a binding without deferred tools encodes as
+  before. Deferred tools count toward the binding's reach: a deferred mutation
+  tool still requires a durable Journal at Run start.
 
 ## Registry Validation
 

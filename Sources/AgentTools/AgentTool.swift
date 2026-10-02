@@ -122,14 +122,24 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
     public let output: Output
     public let evidence: [Evidence]
     public let receipt: ToolReceipt?
+    /// Names of tools bound to this Run that the model is told about from the Run's next model
+    /// request on, typically deferred tools a Host's tool-search tool found. Each must be exactly the
+    /// name of a tool the Run has, or the call fails with `ToolRegistryError.unknownTool`; like output
+    /// validation, that check follows the executor, so for a mutation the effect may have happened.
+    /// Declaring grants nothing: a declared tool's call passes the same authorization, Evidence,
+    /// mutation admission and Receipt checks as any other. Applied only once this result is
+    /// committed; a settled mutation replay returns its stored output and declares nothing. Declare
+    /// from read-only tools.
+    public let declaredTools: [String]
     package let isIdempotentReplay: Bool
     package let isModelVisibleError: Bool
     package var confirmedNoEffect: ToolNoEffectProof? = nil
 
-    public init(output: Output, evidence: [Evidence] = [], receipt: ToolReceipt? = nil) {
+    public init(output: Output, evidence: [Evidence] = [], receipt: ToolReceipt? = nil, declaredTools: [String] = []) {
         self.output = output
         self.evidence = evidence
         self.receipt = receipt
+        self.declaredTools = declaredTools
         isIdempotentReplay = false
         isModelVisibleError = false
     }
@@ -138,6 +148,7 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
         self.output = output
         self.evidence = evidence
         self.receipt = receipt
+        declaredTools = []
         self.isIdempotentReplay = isIdempotentReplay
         isModelVisibleError = false
     }
@@ -146,6 +157,7 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
         self.output = output
         evidence = []
         receipt = nil
+        declaredTools = []
         isIdempotentReplay = false
         isModelVisibleError = true
     }

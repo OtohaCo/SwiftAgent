@@ -8,8 +8,11 @@ package struct ToolRegistry: Sendable {
         let output: ToolSchemaValidator
     }
     private let tools: [String: Registration]
+    /// Tools a Run declares to the model from its first request. Every other registered tool is
+    /// deferred: callable only once a tool result of the same Run declares it.
+    package let initiallyDeclaredNames: Set<String>
 
-    package init(tools: [AnyAgentTool]) throws {
+    package init(tools: [AnyAgentTool], deferred: Set<String> = []) throws {
         var registered: [String: Registration] = [:]
         for tool in tools {
             guard registered[tool.definition.name] == nil else {
@@ -27,10 +30,28 @@ package struct ToolRegistry: Sendable {
             }
         }
         self.tools = registered
+        try Self.checkRegistered(deferred, in: registered)
+        initiallyDeclaredNames = Set(registered.keys).subtracting(deferred)
+    }
+
+    /// Each name must be exactly a registered tool's name, compared without Unicode normalization.
+    private static func checkRegistered<Names: Sequence<String>>(_ names: Names,
+                                                                 in tools: [String: Registration]) throws {
+        for name in names {
+            guard let registration = tools[name],
+                  registration.tool.definition.name.utf8.elementsEqual(name.utf8) else {
+                throw ToolRegistryError.unknownTool(name)
+            }
+        }
     }
 
     package var definitions: [ModelToolDefinition] {
         tools.values.map(\.tool.definition).sorted { $0.name < $1.name }
+    }
+
+    /// What a model request carries: the definitions of the declared tools only.
+    package func definitions(declared: Set<String>) -> [ModelToolDefinition] {
+        tools.values.map(\.tool.definition).filter { declared.contains($0.name) }.sorted { $0.name < $1.name }
     }
 
     package var hasConfirmedNoEffectMutation: Bool {
@@ -47,11 +68,17 @@ package struct ToolRegistry: Sendable {
         }
     }
 
-    package func prepare(_ call: ToolCall, context: ToolContext, prepareAuthorizationBinding: Bool = false) throws -> PreparedToolCall {
+    /// `declared` is the set of tools the model has been told about in this Run (`nil`: those
+    /// declared from the start, so omitting it never reaches a deferred tool). A call to a registered
+    /// tool outside it is refused exactly as a call naming no registered tool: being bound is not
+    /// enough to be callable.
+    package func prepare(_ call: ToolCall, context: ToolContext, declared: Set<String>? = nil,
+                         prepareAuthorizationBinding: Bool = false) throws -> PreparedToolCall {
         try context.checkActive()
         guard call.completeness == .complete else { throw ToolRegistryError.truncatedCall }
         guard let registration = tools[call.name],
-              registration.tool.definition.name.utf8.elementsEqual(call.name.utf8) else {
+              registration.tool.definition.name.utf8.elementsEqual(call.name.utf8),
+              (declared ?? initiallyDeclaredNames).contains(call.name) else {
             throw ToolRegistryError.unknownTool(call.name)
         }
         guard call.id.rawValue.utf8.elementsEqual(context.callID.rawValue.utf8),
@@ -81,6 +108,8 @@ package struct ToolRegistry: Sendable {
                 do { try registration.output.validate(result.output) }
                 catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidOutput(error) }
             }
+            // A result can only declare tools this Run already has; it never adds one.
+            try Self.checkRegistered(result.declaredTools, in: tools)
             try executionContext.checkActive()
             if !result.evidence.isEmpty {
                 guard let ledger = executionContext.evidenceLedger else { throw ToolInvocationError.evidenceUnavailable }
