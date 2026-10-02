@@ -1,6 +1,6 @@
 # OpenAI Responses Provider
 
-> last-verified: 2026-09-19
+> last-verified: 2026-10-02
 
 `AgentProviders` includes `OpenAIResponsesProvider`, a stateless adapter for
 OpenAI's Responses API.
@@ -73,6 +73,12 @@ allowing a host to pass a newer vendor value without waiting for an enum case.
 Actual support remains model-dependent and an unsupported value is returned as
 a typed provider failure. Use `.disabled` for OpenAI's `"none"` effort value;
 the distinct Swift name avoids ambiguity with an absent optional configuration.
+
+OpenAI's `context_length_exceeded` code fails with
+`ModelProviderError.Kind.contextWindowExceeded`, whether it arrives in an HTTP
+400 body, an `error` stream event or `response.failed`. Stream `error` events
+are read in both the documented flat shape and the nested `error` object the
+live service sends. See [errors](swift-agent-errors.md#provider-context-overflow).
 
 ## Terminal And Continuation Validation
 

@@ -846,7 +846,8 @@ private func safeDeepSeekEvent(from message: String) -> String? {
 
 func shouldPauseProvider(after error: ModelProviderError) -> Bool {
     switch error.kind {
-    case .authentication, .permissionDenied, .invalidRequest, .unsupportedCapability, .invalidResponse:
+    case .authentication, .permissionDenied, .invalidRequest, .unsupportedCapability, .invalidResponse,
+         .contextWindowExceeded:
         true
     case .rateLimited, .unavailable, .transport, .fallbackBlocked:
         false
