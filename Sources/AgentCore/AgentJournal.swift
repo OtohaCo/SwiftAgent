@@ -77,6 +77,8 @@ public enum AgentJournalEvent: Codable, Equatable, Sendable {
     case mutationAborted(callID: ToolCallID, confirmation: AgentNoEffectConfirmation)
     case checkpoint(history: [ModelMessage], steeringIDs: [UUID])
     case runCompleted(AgentJournalRunOutcome)
+    /// Actual Run-owner logical termination; physical drain remains separate.
+    case runTerminated(AgentRunTerminal)
 }
 
 public struct PendingMutationIntent: Codable, Equatable, Sendable {
@@ -256,6 +258,8 @@ public actor AgentJournal {
     public nonisolated let storage: AgentJournalStorage
     package nonisolated let supportsAdmissionRejections: Bool
     public nonisolated let supportsConfirmedNoEffect: Bool
+    /// Whether this immutable store format supports durable Run admission/terminal queries.
+    public nonisolated let supportsRunRecords: Bool
     /// Whether this immutable store format can persist queued per-call identity.
     public nonisolated let supportsPerCallFollowUps: Bool
     /// 0: unsupported; 1: schema 6; 2: schema 7+. Existing stores are never migrated.
@@ -290,6 +294,7 @@ public actor AgentJournal {
         supportsAuthorizationAudit = false
         supportsConfirmedNoEffect = false
         noEffectProofVersion = 0
+        supportsRunRecords = false
         supportsPerCallFollowUps = false
     }
 
@@ -304,6 +309,7 @@ public actor AgentJournal {
         supportsAuthorizationAudit = store.supportsAuthorizationAudit
         supportsConfirmedNoEffect = store.supportsConfirmedNoEffect
         noEffectProofVersion = store.noEffectProofVersion
+        supportsRunRecords = store.supportsRunRecords
         supportsPerCallFollowUps = store.supportsPerCallFollowUps
     }
 
@@ -394,7 +400,8 @@ public actor AgentJournal {
         deadline: ContinuousClock.Instant,
         timestamp: Date = Date(),
         durability: AgentJournalDurability,
-        followUpInputID: String? = nil
+        followUpInputID: String? = nil,
+        runAdmission: JournalRunAdmission? = nil
     ) throws -> [AgentJournalRecord] {
         try appendCheckpoint(
             events,
@@ -405,7 +412,7 @@ public actor AgentJournal {
             allowMutationSettlement: false,
             admissionDeadline: deadline,
             checkAdmissionCancellation: true,
-            followUpInputID: followUpInputID
+            followUpInputID: followUpInputID, runAdmission: runAdmission
         )
     }
 
@@ -415,7 +422,8 @@ public actor AgentJournal {
         sessionID: UUID,
         runID: UUID,
         timestamp: Date = Date(),
-        durability: AgentJournalDurability = .memory
+        durability: AgentJournalDurability = .memory,
+        runTerminal: AgentRunTerminal? = nil
     ) throws -> [AgentJournalRecord] {
         if let store {
             let current = try store.read { try $0.header(sessionID)?.lastRunID }
@@ -429,7 +437,7 @@ public actor AgentJournal {
             runID: runID,
             timestamp: timestamp,
             durability: durability,
-            allowMutationSettlement: false
+            allowMutationSettlement: false, runTerminal: runTerminal
         )
     }
 
@@ -443,7 +451,8 @@ public actor AgentJournal {
         admissionDeadline: ContinuousClock.Instant? = nil,
         checkAdmissionCancellation: Bool = false,
         followUpInputID: String? = nil,
-        auditDrafts: [JournalAuditDraft] = []
+        auditDrafts: [JournalAuditDraft] = [],
+        runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil
     ) throws -> [AgentJournalRecord] {
         try checkStartupAdmission(deadline: admissionDeadline, checkCancellation: checkAdmissionCancellation)
         if let store {
@@ -454,7 +463,7 @@ public actor AgentJournal {
                                   allowMutationSettlement: allowMutationSettlement,
                                   followUpInputID: followUpInputID,
                                   admitsNewWork: checkAdmissionCancellation,
-                                  auditDrafts: auditDrafts)
+                                  auditDrafts: auditDrafts, runAdmission: runAdmission, runTerminal: runTerminal)
             }
             scheduleMaintenanceIfNeeded()
             return result
@@ -1196,7 +1205,8 @@ extension AgentJournal {
         _ events: [AgentJournalEvent], sessionID: UUID, runID: UUID?, timestamp: Date,
         view: any JournalStoreView, allowMutationSettlement: Bool,
         followUpInputID: String? = nil, admitsNewWork: Bool = false,
-        auditDrafts: [JournalAuditDraft] = []
+        auditDrafts: [JournalAuditDraft] = [],
+        runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil
     ) throws -> [AgentJournalRecord] {
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
@@ -1318,7 +1328,8 @@ extension AgentJournal {
                                             messageStart: messageStart, messages: changedMessages,
                                             mutation: mutation, records: committed,
                                             followUpAdmission: admission,
-                                            admitsNewWork: admitsNewWork, auditRecords: audits))
+                                            admitsNewWork: admitsNewWork, auditRecords: audits,
+                                            runAdmission: runAdmission, runTerminal: runTerminal))
         return committed
     }
 

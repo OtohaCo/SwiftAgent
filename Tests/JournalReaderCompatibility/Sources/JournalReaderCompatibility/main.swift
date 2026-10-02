@@ -13,6 +13,10 @@ import Foundation
         do {
             let journal: AgentJournal
             switch mode {
+            #if RUN_RECORD_RUNTIME
+            case "create-run-records", "create-run-records-empty":
+                journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsRunRecords: true)
+            #endif
             #if PER_CALL_RUNTIME
             case "create-per-call":
                 journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsPerCallFollowUps: true)
@@ -104,6 +108,19 @@ import Foundation
                 }
                 guard try await session.followUp(inputID: "per-call")?.identity == .perCall else { throw AgentJournalError.invalidRecord }
                 print("identity=perCall")
+            #endif
+            #if RUN_RECORD_RUNTIME
+            case "create-run-records-empty": break
+            case "create-run-records", "inspect-run-records":
+                let agent = try Agent(model: .init(provider: "reader-matrix", name: "script"), provider: MatrixProvider())
+                let session = try agent.makeSession(id: sessionID, journal: journal)
+                if mode == "create-run-records" {
+                    let run = try await session.run("exact", correlation: .init(key: "reader-key", payloadDigest: "config-v1"))
+                    try await run.waitForDrain()
+                }
+                guard case .terminal(let record, .completed) = try await session.runRecord(correlationKey: "reader-key"),
+                      try await session.runRecord(runID: record.runID) == .terminal(record, .completed) else { throw AgentJournalError.invalidRecord }
+                print("run=terminal-completed indexed=true")
             #endif
             case "maintain":
                 for _ in 0..<8 { _ = try await journal.requestMaintenance() }

@@ -6,14 +6,14 @@ import Testing
 @testable import AgentCore
 
 struct AuditCommitFaultTests {
-    @Test(arguments: ["proposal", "decision", "application", "settlement"])
-    func failedPublicationNeverGrantsPermissionOrRepeatsAnEffect(_ point: String) async throws {
+    @Test(arguments: ["proposal", "decision", "application", "settlement"], [false, true])
+    func failedPublicationNeverGrantsPermissionOrRepeatsAnEffect(_ point: String, runRecords: Bool) async throws {
         for uncertain in [false, true] {
             let directory = auditTestDirectory()
             defer { try? FileManager.default.removeItem(at: directory) }
             let fault = AuditRuntimePublicationFault(uncertain: uncertain)
             let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "audit-fault",
-                supportsAuthorizationAudit: true, fault: { try fault.check($0) })
+                supportsAuthorizationAudit: true, supportsRunRecords: runRecords, fault: { try fault.check($0) })
             let probe = AuditExecutionProbe(), hostCalls = AuditFaultCounter()
             var configuration = auditTestConfiguration(authorizer: FaultAuditAuthorizer(point: point, fault: fault, calls: hostCalls))
             if point == "application" { configuration.testingHooks = .init(beforeApplication: { fault.arm() }) }
@@ -32,6 +32,11 @@ struct AuditCommitFaultTests {
             #expect(await probe.effects == (point == "settlement" ? 1 : 0))
             try await journal.close()
             let reopened = try AgentIncrementalJournal.open(at: directory)
+            if runRecords {
+                let lookup = try await reopened.runRecord(sessionID: run.sessionID, runID: run.id)
+                if uncertain { guard case .admitted = lookup else { Issue.record("poisoned audit forged terminal"); return } }
+                else { guard case .terminal(_, .failed) = lookup else { Issue.record("audit failure lost terminal distinction"); return } }
+            }
             let records = try await reopened.auditRecords(matching: .init(runID: run.id)).records
             let applied = records.contains { if case .disposition(let value) = $0.fact { return value.state == .dispatchPrepared }; return false }
             let result = records.contains { if case .result(let value) = $0.fact { return value.kind == .settlement }; return false }

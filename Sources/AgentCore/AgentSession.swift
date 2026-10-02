@@ -115,14 +115,15 @@ public actor AgentSession {
     public func run(
         _ text: String,
         budget: AgentBudget? = nil,
-        operationID: String? = nil
+        operationID: String? = nil,
+        correlation: AgentRunCorrelation? = nil
     ) async throws -> AgentRun {
         try await run(
             text,
             using: defaultBinding,
             expectedConversationRevision: nil,
             budget: budget,
-            operationID: operationID
+            operationID: operationID, correlation: correlation
         )
     }
 
@@ -133,11 +134,12 @@ public actor AgentSession {
         using binding: AgentModelBinding,
         expectedConversationRevision: UInt64? = nil,
         budget: AgentBudget? = nil,
-        operationID: String? = nil
+        operationID: String? = nil,
+        correlation: AgentRunCorrelation? = nil
     ) async throws -> AgentRun {
         try await runInternal(text, using: binding, capabilities: nil,
                               expectedConversationRevision: expectedConversationRevision,
-                              budget: budget, operationID: operationID)
+                              budget: budget, operationID: operationID, correlation: correlation)
     }
 
     /// Runs with a fixed tool/backend/resource snapshot. An explicit binding
@@ -148,11 +150,12 @@ public actor AgentSession {
         using binding: AgentModelBinding? = nil,
         expectedConversationRevision: UInt64? = nil,
         budget: AgentBudget? = nil,
-        operationID: String? = nil
+        operationID: String? = nil,
+        correlation: AgentRunCorrelation? = nil
     ) async throws -> AgentRun {
         try await runInternal(text, using: binding ?? defaultBinding, capabilities: capabilities,
                               expectedConversationRevision: expectedConversationRevision,
-                              budget: budget, operationID: operationID)
+                              budget: budget, operationID: operationID, correlation: correlation)
     }
 
     public func bindCapabilities(identity: String, version: String,
@@ -173,10 +176,13 @@ public actor AgentSession {
         expectedConversationRevision: UInt64?,
         budget: AgentBudget?,
         operationID: String?,
+        correlation: AgentRunCorrelation? = nil,
         dispatchOwnerID: UUID? = nil,
         followUpInputID: String? = nil
     ) async throws -> AgentRun {
         try Task.checkCancellation()
+        if correlation != nil, journal == nil { throw AgentJournalError.unsupportedFormat }
+        let runAdmission = try await journal?.prepareRunAdmission(sessionID: id, text: text, operationID: operationID, correlation: correlation)
         try authorization.validate(journal: journal)
         if authorization.mode == .requiredAudit {
             try await journal?.checkAuditAvailability(backlog: authorization.backlog)
@@ -193,7 +199,10 @@ public actor AgentSession {
         if dispatchStarting || (dispatcherID != nil && dispatcherID != dispatchOwnerID) {
             throw AgentFollowUpError.dispatchOwned
         }
-        guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
+        guard activeRunID == nil, !startingRun else {
+            if correlation != nil { throw AgentRunAdmissionError.admissionInProgress }
+            throw AgentSessionError.runInProgress
+        }
         try runBudget.checkActive()
         startingRun = true
         let startupID = UUID()
@@ -208,13 +217,18 @@ public actor AgentSession {
                 )
                 try runBudget.checkActive()
             }
-            try await AgentSessionIdentityRegistry.shared.acquire(id, storeID: await journal?.storeIdentity()?.storeID)
+            do { try await AgentSessionIdentityRegistry.shared.acquire(id, storeID: await journal?.storeIdentity()?.storeID) }
+            catch AgentSessionError.runInProgress {
+                if correlation != nil { throw AgentRunAdmissionError.admissionInProgress }
+                throw AgentSessionError.runInProgress
+            }
             identityAcquired = true
             do {
                 if let journal {
                     do {
                         try await journal.acquireSessionLease(sessionID: id, dispatcherID: dispatchOwnerID)
                     } catch AgentJournalError.sessionLeaseUnavailable {
+                        if correlation != nil { throw AgentRunAdmissionError.admissionInProgress }
                         throw AgentSessionError.runInProgress
                     }
                     journalLeaseAcquired = true
@@ -229,7 +243,7 @@ public actor AgentSession {
                         budget: runBudget,
                         operationID: operationID,
                         startupID: startupID,
-                        followUpInputID: followUpInputID
+                        followUpInputID: followUpInputID, runAdmission: runAdmission
                     )
                     startupReservations.removeValue(forKey: startupID)
                     startupFinished()
@@ -450,7 +464,8 @@ public actor AgentSession {
         budget: AgentBudget,
         operationID: String?,
         startupID: UUID,
-        followUpInputID: String? = nil
+        followUpInputID: String? = nil,
+        runAdmission: JournalRunAdmission? = nil
     ) async throws -> AgentRun {
         try budget.checkActive()
         let restoredCheckpoint: (history: [ModelMessage], steeringIDs: [UUID])?
@@ -575,7 +590,7 @@ public actor AgentSession {
                     runID: runID,
                     deadline: budget.deadline,
                     durability: journal.storage == .durable ? .durable : .memory,
-                    followUpInputID: followUpInputID
+                    followUpInputID: followUpInputID, runAdmission: runAdmission
                 )
             } catch AgentJournalStartupAdmissionError.deadlineExceeded {
                 throw AgentLoopError.deadlineExceeded
@@ -713,9 +728,9 @@ public actor AgentSession {
                 guard await self.activeRunID == runID else { return }
                 await self.contextEffects.record(call: call, result: result)
             },
-            beforeFinish: {
+            beforeFinish: { outcome in
                 let pending = await control.beginFinish()
-                return await self.finish(runID: runID, pending: pending, control: control)
+                return await self.finish(runID: runID, pending: pending, control: control, outcome: outcome)
             }
         )
         do {
@@ -817,12 +832,21 @@ public actor AgentSession {
     }
 
     /// Returns a failure the Run must report instead of its own outcome.
-    private func finish(runID: UUID, pending: [AgentSteeringInput], control: AgentRunControl) async -> (any Error)? {
+    private func finish(runID: UUID, pending: [AgentSteeringInput], control: AgentRunControl, outcome: Result<AgentLoopResult, any Error>? = nil) async -> (any Error)? {
         guard activeRunID == runID else { return nil }
         await waitForCommittedWrites(runID)
         guard activeRunID == runID else { return nil }
         let retained = pending.filter { !appliedSteeringIDs.contains($0.id) }
-        let failure = retained.isEmpty ? nil : await retain(retained, runID: runID)
+        var failure = retained.isEmpty ? nil : await retain(retained, runID: runID)
+        if let outcome, let journal, journal.supportsRunRecords {
+            // Retained steering and all started checkpoint writes have resolved before this boundary.
+            // A poisoned store rejects this operation; no retry or synthetic terminal is attempted.
+            let terminal = AgentRunTerminal.from(failure.map { .failure($0) } ?? outcome)
+            do {
+                let prepared = try await prepareCheckpoint(history)
+                try await journal.commitRunTerminal(history: prepared, sessionID: id, runID: runID, terminal: terminal)
+            } catch { failure = error }
+        }
         activeRunID = nil
         appliedSteeringIDs.removeAll()
         drainingRunID = runID
@@ -1001,4 +1025,15 @@ public enum AgentSessionError: Error, Equatable, Sendable {
     case runInProgress
     case durableJournalRequired
     case admissionRejectionJournalRequired
+}
+
+extension AgentSession {
+    public func runRecord(correlationKey: String) async throws -> AgentRunLookup {
+        guard let journal else { throw AgentJournalError.unsupportedFormat }
+        return try await journal.runRecord(sessionID: id, correlationKey: correlationKey)
+    }
+    public func runRecord(runID: UUID) async throws -> AgentRunLookup {
+        guard let journal else { throw AgentJournalError.unsupportedFormat }
+        return try await journal.runRecord(sessionID: id, runID: runID)
+    }
 }

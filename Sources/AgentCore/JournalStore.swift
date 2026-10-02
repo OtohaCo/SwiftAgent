@@ -36,6 +36,7 @@ package protocol JournalStore: Sendable {
     var supportsConfirmedNoEffect: Bool { get }
     var noEffectProofVersion: Int { get }
     var supportsPerCallFollowUps: Bool { get }
+    var supportsRunRecords: Bool { get }
     func auditDigest(_ bytes: Data) -> String
     func read<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
     func write<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
@@ -104,6 +105,9 @@ public struct JournalStoreStatus: Sendable, Equatable {
 }
 
 package protocol JournalStoreView: AnyObject {
+    func runRecord(sessionID: UUID, runID: UUID) throws -> JournalStoredRun?
+    func runRecord(sessionID: UUID, correlationKey: String) throws -> JournalStoredRun?
+    func runTerminal(sessionID: UUID, runID: UUID) throws -> AgentRunTerminal?
     func session(_ id: UUID) throws -> JournalStoredSession?
     func header(_ id: UUID) throws -> JournalSessionHeader?
     func identity(_ key: String) throws -> JournalStoredMutation?
@@ -215,12 +219,15 @@ package struct JournalStoreChange: Sendable {
     /// pressure refuses new work first.
     package let admitsNewWork: Bool
     package let auditRecords: [AuditRecord]
+    package let runAdmission: JournalRunAdmission?
+    package let runTerminal: AgentRunTerminal?
 
     package init(sessionID: UUID, expectedRevision: UInt64, header: JournalSessionHeader,
                  messageStart: UInt64, messages: [JournalMessage],
                  mutation: JournalStoredMutation?, records: [AgentJournalRecord],
                  followUpAdmission: JournalFollowUpAdmission? = nil, admitsNewWork: Bool = false,
-                 auditRecords: [AuditRecord] = []) {
+                 auditRecords: [AuditRecord] = [],
+                 runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil) {
         self.sessionID = sessionID
         self.expectedRevision = expectedRevision
         self.header = header
@@ -231,6 +238,7 @@ package struct JournalStoreChange: Sendable {
         self.followUpAdmission = followUpAdmission
         self.admitsNewWork = admitsNewWork
         self.auditRecords = auditRecords
+        self.runAdmission = runAdmission; self.runTerminal = runTerminal
     }
 }
 
