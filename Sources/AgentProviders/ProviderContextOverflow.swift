@@ -5,8 +5,8 @@ import Foundation
 /// window". Each rule names the service that documents or was observed to send
 /// it. A match only selects `ModelProviderError.Kind.contextWindowExceeded`; the
 /// provider's message is read for the match and never copied into the error.
-enum ProviderContextOverflow {
-    enum Signals: Sendable {
+public enum ProviderContextOverflow {
+    public enum Signals: Sendable {
         /// OpenAI Responses and OpenAI-compatible local servers.
         case responses
         /// Anthropic Messages.
@@ -28,6 +28,16 @@ enum ProviderContextOverflow {
     static func isAnthropicOverflow(_ error: [String: JSONValue]) -> Bool {
         text(error["type"]) == "invalid_request_error"
             && text(error["message"])?.hasPrefix("prompt is too long") == true
+    }
+
+    /// Whether a failed HTTP response says the request does not fit the model's
+    /// context window, by the rules the built-in adapters use. For a Host
+    /// transport that reads failed responses itself before the provider sees
+    /// them. Only HTTP 400 and 500 bodies up to 64 KiB are read.
+    public static func isOverflow(httpStatus: Int, body: Data, signals: Signals) -> Bool {
+        ProviderHTTPFailure.contextOverflowStatuses.contains(httpStatus)
+            && body.count <= ProviderHTTPFailure.maximumErrorBodyBytes
+            && isOverflow(httpBody: body, signals: signals)
     }
 
     /// Classifies the bounded body of a non-200 HTTP response.
