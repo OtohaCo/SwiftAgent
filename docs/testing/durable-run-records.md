@@ -19,6 +19,7 @@ is involved.
 | Terminal publication error/commitUnknown | Definite failure remains admitted; unknown store throws, reopening reads committed terminal. No retry. |
 | Retained steering failure | Definite failure terminal is failed(journal); unknown store is poisoned and receives no terminal append. |
 | Audit proposal/decision/application/settlement failures | Both old and Run-record stores; no false completion or unearned permission; existing pending/settled effects preserved. |
+| Trusted settlement after terminal | Cancelled mutation executes once; Host verifies the real file and reconciles; cancelled fact remains unchanged through maintenance/reopen. |
 | Settled mutation + terminal failure | Both per-call and operation modes: one actual file effect, no pending, duplicate admission on reopen never executes again. |
 | Corrupt published indexes | Delete admission/correlation/terminal/message files: key and ID throw invalidRecord, never absence. |
 | Pack/maintain/reopen | Rotated segments, maintained index and formal message IDs still match. |

@@ -286,6 +286,34 @@ struct AgentRunRecordTests {
         try await reopened.close()
     }
 
+    @Test func trustedSettlementAfterLogicalTerminationKeepsTheOriginalTerminal() async throws {
+        let h = try Harness(); defer { h.remove() }
+        let file = h.directory.appendingPathComponent("late-effect")
+        let gate = RecordGate(), calls = RecordCalls()
+        let provider = ScriptedProvider { request, _ in toolResponse(request, [.init(id: .init(rawValue: "write"), name: RecordWriteTool.name, argumentsJSON: "{}", completeness: .complete)]) }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [try RecordWriteTool(file: file, calls: calls, gate: gate)]).makeSession(journal: h.journal)
+        let run = try await session.run("write")
+        #expect(await gate.waitUntilEntered()); await run.cancel()
+        await #expect(throws: CancellationError.self) { try await run.wait() }
+        let original = try await session.runRecord(runID: run.id)
+        guard case .terminal(_, .cancelled) = original else { Issue.record("missing logical cancellation"); await gate.release(); return }
+        #expect(try await h.journal.pendingMutations().map(\.state) == [.needsReconciliation])
+        await gate.release(); try await run.waitForDrain()
+        #expect(await calls.count == 1)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "effect")
+        let pending = try #require(try await h.journal.recoverPendingMutations().first)
+        // Host observed the actual file and supplies a trusted settlement; lookup itself never does this.
+        try await h.journal.reconcileMutation(pending, receipt: .init(operationID: pending.intent.idempotencyKey, status: .succeeded, confirmedTargets: [.init(namespace: "record", id: "file")], revision: "1"), output: .string("written"))
+        #expect(try await h.journal.pendingMutations().isEmpty)
+        #expect(try await session.runRecord(runID: run.id) == original)
+        _ = try await h.journal.requestMaintenance(); try await h.journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: h.directory)
+        #expect(try await reopened.runRecord(sessionID: session.id, runID: run.id) == original)
+        #expect(try await reopened.pendingMutations().isEmpty)
+        #expect(await calls.count == 1)
+        try await reopened.close()
+    }
+
     @Test func queryingAndCancellingOneSessionDoesNotAffectAnother() async throws {
         let h = try Harness(); defer { h.remove() }
         let gate = RecordGate()
@@ -405,12 +433,13 @@ private struct RecordWriteTool: AgentTool {
     static let outputSchema = ToolSchema.string
     let file: URL
     let calls: RecordCalls
+    let gate: RecordGate?
     let policy: ToolPolicy
-    init(file: URL, calls: RecordCalls) throws { self.file = file; self.calls = calls; policy = try .mutation(authorization: .notRequired, evidence: .none) }
+    init(file: URL, calls: RecordCalls, gate: RecordGate? = nil) throws { self.file = file; self.calls = calls; self.gate = gate; policy = try .mutation(authorization: .notRequired, evidence: .none) }
     func resourceRequirements(for input: Input) throws -> [ToolResource] { [.named(.init(namespace: "record", id: "file"))] }
     func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation? { try .init(targets: [.init(namespace: "record", id: "file")], revision: .present) }
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<String> {
-        await calls.entered(); try Data("effect".utf8).write(to: file)
+        await calls.entered(); await gate?.hold(); try Data("effect".utf8).write(to: file)
         return .init(output: "written", receipt: .init(operationID: context.idempotencyKey!, status: .succeeded, confirmedTargets: [.init(namespace: "record", id: "file")], revision: "1"))
     }
 }
