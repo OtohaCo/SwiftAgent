@@ -50,6 +50,7 @@ struct AnthropicStreamDecoder {
             let error = try ProviderJSON.object(object["error"])
             let kind: ModelProviderError.Kind
             switch try ProviderJSON.string(error["type"]) {
+            case _ where ProviderContextOverflow.isAnthropicOverflow(error): kind = .contextWindowExceeded
             case "authentication_error": kind = .authentication
             case "permission_error": kind = .permissionDenied
             case "invalid_request_error", "not_found_error": kind = .invalidRequest

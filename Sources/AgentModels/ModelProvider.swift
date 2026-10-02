@@ -60,6 +60,10 @@ public struct ModelProviderError: Error, Equatable, Sendable {
         case transport
         case invalidResponse
         case fallbackBlocked
+        /// The provider rejected the request because it does not fit the model's
+        /// context window. Retrying the same request cannot succeed; shorten the
+        /// conversation or use a model loaded with a larger context.
+        case contextWindowExceeded
     }
 
     public let kind: Kind

@@ -1,6 +1,6 @@
 # Anthropic Messages Provider
 
-last-verified: 2026-09-18
+last-verified: 2026-10-02
 
 `AnthropicProvider` implements one streaming Messages API request per ModelRequest.
 It does not execute tools, keep a second conversation history, retry requests or
@@ -23,6 +23,8 @@ The shared URLSession transport streams bytes, disables persistent caches/cookie
 and stored credentials, rejects redirects, and propagates cancellation. Debug
 descriptions omit provider credentials. HTTP and native API errors use sanitized
 ModelProviderError categories; numeric Retry-After hints do not authorize retries.
+An `invalid_request_error` whose message starts "prompt is too long" becomes
+`contextWindowExceeded`; the message itself is not kept.
 
 The native response model must match the requested model. Older Anthropic model
 aliases may resolve to a dated model ID; declare that relationship explicitly so

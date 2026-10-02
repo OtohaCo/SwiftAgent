@@ -155,12 +155,17 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
             var decoder = AnthropicStreamDecoder(model: request.model, responseModelName: responseModelName)
             var validation = ModelEventAccumulator()
             var receivedHeader = false
-            for try await event in transport.stream(http) {
+            var events = transport.stream(http).makeAsyncIterator()
+            while let event = try await events.next() {
                 try Task.checkCancellation()
                 switch event {
                 case .response(let status, let headers):
                     guard !receivedHeader else { throw ProviderJSON.invalid() }
-                    guard status == 200 else { throw ProviderHTTPFailure.classify(status, headers: headers) }
+                    guard status == 200 else {
+                        throw try await ProviderHTTPFailure.classify(
+                            status, headers: headers, remainingBody: &events, signals: .anthropic
+                        )
+                    }
                     receivedHeader = true
                 case .data(let data):
                     guard receivedHeader else { throw ProviderJSON.invalid() }

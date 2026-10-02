@@ -144,12 +144,10 @@ struct ResponsesStreamDecoder {
         case "response.created", "response.queued", "response.in_progress":
             return try consumeLifecycle(object)
         case "error":
-            let code = try optionalString(object["code"])
-            throw classifyFailure(code: code)
+            throw try classifyFailure(Self.errorEventPayload(object))
         case "response.failed":
             let response = try ProviderJSON.object(object["response"])
-            let error = try ProviderJSON.object(response["error"])
-            throw classifyFailure(code: try optionalString(error["code"]))
+            throw try classifyFailure(ProviderJSON.object(response["error"]))
         default:
             break
         }
@@ -891,6 +889,21 @@ struct ResponsesStreamDecoder {
                 message: "\(providerLabel) returned model '\(diagnostic(observed))' but expected '\(diagnostic(responseModelName))'."
             )
         }
+    }
+
+    /// OpenAI documents `code` and `message` at the top level of an `error`
+    /// event, but the live service (and LM Studio) nests them under `error`.
+    private static func errorEventPayload(_ object: [String: JSONValue]) -> [String: JSONValue] {
+        if case .object(let nested)? = object["error"] { return nested }
+        return object
+    }
+
+    private func classifyFailure(_ error: [String: JSONValue]) throws -> ModelProviderError {
+        if ProviderContextOverflow.isResponsesOverflow(error) {
+            return .init(kind: .contextWindowExceeded,
+                         message: "\(providerLabel) generation failed: the request exceeds the model's context window.")
+        }
+        return classifyFailure(code: try optionalString(error["code"]))
     }
 
     private func classifyFailure(code: String?) -> ModelProviderError {

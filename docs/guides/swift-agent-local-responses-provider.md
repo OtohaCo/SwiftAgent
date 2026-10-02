@@ -1,6 +1,6 @@
 # Local Responses Provider
 
-> last-verified: 2026-09-20
+> last-verified: 2026-10-02
 
 For model/backend selection, capability rollout, context and performance tradeoffs,
 device/network topology, debugging, and production re-qualification, see
@@ -109,7 +109,11 @@ does not discover a server or guess an address.
 
 The adapter covers Responses text streaming, Host function calls, canonical
 multi-turn replay, optional JSON Schema structured output, provider-reported
-usage, typed failures, and cancellation/stream termination. Unknown top-level
+usage, typed failures, and cancellation/stream termination. A prompt larger than
+the loaded context (LM Studio's "tokens to keep" message, llama.cpp server's
+`exceed_context_size_error`) fails with `ModelProviderError.Kind.contextWindowExceeded`
+instead of a retryable `unavailable`; see [errors](swift-agent-errors.md#provider-context-overflow).
+Unknown top-level
 metadata events may be ignored when they cannot affect semantics; unknown
 output item types, malformed tool state, terminal contradictions, or post-
 terminal data fail closed.
