@@ -9,7 +9,8 @@ struct DiskFollowUpV2: Codable {
     let ordinal: UInt64
     let inputID: String
     let text: String
-    let operationID: String
+    let operationID: String?
+    let identityMode: String?
     let configurationRef: String
     let status: String
     let runID: UUID?
@@ -21,6 +22,7 @@ struct DiskFollowUpV2: Codable {
         inputID = value.input.inputID
         text = value.input.text
         operationID = value.input.operationID
+        identityMode = value.input.identity == .perCall ? "perCall" : nil
         configurationRef = value.input.configurationRef
         switch value.state {
         case .queued: status = "queued"; runID = nil; formalMessageID = nil
@@ -31,8 +33,18 @@ struct DiskFollowUpV2: Codable {
     }
 
     func value() throws -> JournalStoredFollowUp {
+        let identity: AgentOperationIdentity
+        switch identityMode {
+        case nil, "operation":
+            guard let operationID else { throw AgentJournalError.invalidRecord }
+            identity = .operation(operationID)
+        case "perCall":
+            guard operationID == nil else { throw AgentJournalError.invalidRecord }
+            identity = .perCall
+        default: throw AgentJournalError.unsupportedFormat
+        }
         let input = AgentFollowUpInput(inputID: inputID, text: text,
-                                      operationID: operationID, configurationRef: configurationRef)
+                                      identity: identity, configurationRef: configurationRef)
         try input.validate()
         let state: AgentFollowUpState
         switch status {

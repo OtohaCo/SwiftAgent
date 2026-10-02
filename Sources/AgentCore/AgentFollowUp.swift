@@ -1,25 +1,54 @@
 import Foundation
 
+/// Mutation identity for one Run. This is not authorization or automatic recovery.
+public enum AgentOperationIdentity: Equatable, Sendable {
+    /// Each new call uses the existing Run ID / call ID identity.
+    case perCall
+    /// Equal semantic calls in this store reuse the same logical operation receipt.
+    case operation(String)
+
+    public var operationID: String? {
+        if case .operation(let id) = self { return id }
+        return nil
+    }
+
+    package func matches(_ other: Self) -> Bool {
+        switch (self, other) {
+        case (.perCall, .perCall): return true
+        case (.operation(let a), .operation(let b)): return a.utf8.elementsEqual(b.utf8)
+        default: return false
+        }
+    }
+}
+
 /// Stable caller identity and exact request payload; never an authorization.
 public struct AgentFollowUpInput: Equatable, Sendable {
     public let inputID: String
     public let text: String
-    public let operationID: String
+    public let identity: AgentOperationIdentity
+    /// nil for perCall; the exact caller ID for operation mode.
+    public var operationID: String? { identity.operationID }
     public let configurationRef: String
 
     public init(inputID: String, text: String, operationID: String, configurationRef: String) {
         self.inputID = inputID
         self.text = text
-        self.operationID = operationID
+        self.identity = .operation(operationID)
         self.configurationRef = configurationRef
     }
 
+    public init(inputID: String, text: String, identity: AgentOperationIdentity, configurationRef: String) {
+        self.inputID = inputID; self.text = text
+        self.identity = identity; self.configurationRef = configurationRef
+    }
+
     package func validate() throws {
+        if let operationID, operationID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || operationID.utf8.count > 256 {
+            throw AgentFollowUpError.invalidInput
+        }
         guard !inputID.isEmpty, inputID.utf8.count <= 128,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               text.utf8.count <= 256 * 1024,
-              !operationID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              operationID.utf8.count <= 256,
               !configurationRef.isEmpty, configurationRef.utf8.count <= 128,
               !inputID.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
               !configurationRef.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
@@ -30,7 +59,7 @@ public struct AgentFollowUpInput: Equatable, Sendable {
     package func matches(_ other: Self) -> Bool {
         inputID.utf8.elementsEqual(other.inputID.utf8)
             && text.utf8.elementsEqual(other.text.utf8)
-            && operationID.utf8.elementsEqual(other.operationID.utf8)
+            && identity.matches(other.identity)
             && configurationRef.utf8.elementsEqual(other.configurationRef.utf8)
     }
 }
@@ -47,7 +76,9 @@ public struct AgentFollowUpRecord: Equatable, Sendable {
     public let inputID: String
     public let ordinal: UInt64
     public let state: AgentFollowUpState
-    public let operationID: String
+    public let identity: AgentOperationIdentity
+    /// nil for perCall; the exact caller ID for operation mode.
+    public var operationID: String? { identity.operationID }
     public let configurationRef: String
 
     public init(storeID: UUID, sessionID: UUID, inputID: String, ordinal: UInt64,
@@ -57,9 +88,16 @@ public struct AgentFollowUpRecord: Equatable, Sendable {
         self.inputID = inputID
         self.ordinal = ordinal
         self.state = state
-        self.operationID = operationID
+        self.identity = .operation(operationID)
         self.configurationRef = configurationRef
     }
+    public init(storeID: UUID, sessionID: UUID, inputID: String, ordinal: UInt64,
+                state: AgentFollowUpState, identity: AgentOperationIdentity, configurationRef: String) {
+        self.storeID = storeID; self.sessionID = sessionID; self.inputID = inputID
+        self.ordinal = ordinal; self.state = state; self.identity = identity
+        self.configurationRef = configurationRef
+    }
+
 }
 
 public enum AgentFollowUpWithdrawal: Equatable, Sendable {
@@ -123,7 +161,7 @@ package struct JournalStoredFollowUp: Equatable, Sendable {
     package func publicRecord(storeID: UUID) -> AgentFollowUpRecord {
         AgentFollowUpRecord(storeID: storeID, sessionID: sessionID,
                             inputID: input.inputID, ordinal: ordinal, state: state,
-                            operationID: input.operationID, configurationRef: input.configurationRef)
+                            identity: input.identity, configurationRef: input.configurationRef)
     }
 }
 

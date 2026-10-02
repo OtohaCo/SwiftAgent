@@ -10,7 +10,7 @@ import Glibc
 #endif
 
 struct FollowUpProcessTests {
-    @Test func processKilledAfterQueuedMutationEffectRetainsAdmissionAndNeverReplays() async throws {
+    @Test(arguments: [false, true]) func processKilledAfterQueuedMutationEffectRetainsAdmissionAndNeverReplays(perCall: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("queue-process-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -18,12 +18,12 @@ struct FollowUpProcessTests {
         let file = root.appendingPathComponent("effect.txt")
         try Data().write(to: file)
         let sessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000321")!
-        let journal = try AgentIncrementalJournal.create(at: store, operationDomain: "queue-child")
+        let journal = try AgentIncrementalJournal.create(at: store, operationDomain: "queue-child", supportsPerCallFollowUps: perCall)
         let model = ModelID(provider: "queue-process", name: "fixed")
         let agent = try Agent(model: model, provider: QueueProbeProvider())
         let session = try agent.makeSession(id: sessionID, journal: journal)
         _ = try await session.enqueueFollowUp(.init(inputID: "one", text: "write B",
-            operationID: "stable-write", configurationRef: "child-fixture"))
+            identity: perCall ? .perCall : .operation("stable-write"), configurationRef: "child-fixture"))
         try await journal.close()
 
         let process = Process()
@@ -53,7 +53,7 @@ struct FollowUpProcessTests {
         #expect(try await reopened.readMessages(sessionID: sessionID).map(\.id) == [messageID])
         #expect(try await reopened.recoverPendingMutations(sessionID: sessionID).map(\.state) == [.needsReconciliation])
         #expect(try await restored.enqueueFollowUp(.init(inputID: "one", text: "write B",
-            operationID: "stable-write", configurationRef: "child-fixture")).state ==
+            identity: perCall ? .perCall : .operation("stable-write"), configurationRef: "child-fixture")).state ==
             .admitted(runID: runID, formalMessageID: messageID))
         let denied = QueueProbeResolver()
         let dispatch = try await restored.startFollowUpDispatch(policy: .init(), resolver: denied)
