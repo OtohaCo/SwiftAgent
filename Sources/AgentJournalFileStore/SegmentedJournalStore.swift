@@ -94,12 +94,13 @@ public enum AgentIncrementalJournal {
                                    supportsConfirmedNoEffect: Bool = false,
                                    supportsPerCallFollowUps: Bool = false,
                                    supportsRunRecords: Bool = false,
+                                   supportsImageContent: Bool = false,
                                    deadline: ContinuousClock.Instant? = nil) async throws -> AgentJournal {
         try Task.checkCancellation()
         if let deadline, ContinuousClock.now >= deadline { throw AgentJournalError.deadlineExceeded }
         let journal = try await openOwned(deadline: deadline) { _ in
             try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy,
-                                             supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps, supportsRunRecords: supportsRunRecords)
+                                             supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps, supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent)
         }
         try Task.checkCancellation()
         return journal
@@ -187,10 +188,11 @@ public enum AgentIncrementalJournal {
                               supportsAuthorizationAudit: Bool = false,
                               supportsConfirmedNoEffect: Bool = false,
                               supportsPerCallFollowUps: Bool = false,
-                              supportsRunRecords: Bool = false) throws -> AgentJournal {
+                              supportsRunRecords: Bool = false,
+                              supportsImageContent: Bool = false) throws -> AgentJournal {
         do {
             return AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
-                policy: policy, supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps, supportsRunRecords: supportsRunRecords))
+                policy: policy, supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps, supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent))
         } catch { throw normalized(error) }
     }
 
@@ -207,6 +209,7 @@ public enum AgentIncrementalJournal {
                                          supportsConfirmedNoEffect: Bool = false,
                                          supportsPerCallFollowUps: Bool = false,
                                          supportsRunRecords: Bool = false,
+                                         supportsImageContent: Bool = false,
                                          fault: @escaping @Sendable (JournalFileFaultStage) throws -> Void) throws -> AgentJournal {
         AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
                                                               policy: policy,
@@ -215,6 +218,7 @@ public enum AgentIncrementalJournal {
                                                               supportsConfirmedNoEffect: supportsConfirmedNoEffect,
                                                               supportsPerCallFollowUps: supportsPerCallFollowUps,
                                                               supportsRunRecords: supportsRunRecords,
+                                                              supportsImageContent: supportsImageContent,
                                                               fault: fault))
     }
 }
@@ -547,6 +551,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     let noEffectProofVersion: Int
     let supportsPerCallFollowUps: Bool
     let supportsRunRecords: Bool
+    /// Format schema 10: messages may carry images, kept once each by digest under `images/`.
+    let supportsImageContent: Bool
     private var callsIndex: IndexKind<UInt64> { .init("calls", witnessed: supportsConfirmedNoEffect) }
     let supportsAuthorizationAudit: Bool
     private let policy: JournalMaintenancePolicy
@@ -578,6 +584,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         supportsAuthorizationAudit = format.schema >= 5
         supportsConfirmedNoEffect = format.schema >= 6
         supportsRunRecords = format.schema >= 9
+        supportsImageContent = format.schema >= 10
         supportsPerCallFollowUps = format.schema >= 8
         noEffectProofVersion = format.schema >= 7 ? 2 : format.schema == 6 ? 1 : 0
         expectedFormatDigest = formatDigest
@@ -594,7 +601,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                        supportsConfirmedNoEffect: Bool = false,
                        supportsPerCallFollowUps: Bool = false,
                        supportsRunRecords: Bool = false,
+                       supportsImageContent: Bool = false,
                        fault: (@Sendable (JournalFileFaultStage) throws -> Void)? = nil) throws -> SegmentedJournalStore {
+        let supportsRunRecords = supportsRunRecords || supportsImageContent
         let supportsPerCallFollowUps = supportsPerCallFollowUps || supportsRunRecords
         let supportsConfirmedNoEffect = supportsConfirmedNoEffect || supportsPerCallFollowUps
         let supportsAuthorizationAudit = supportsAuthorizationAudit || supportsConfirmedNoEffect
@@ -606,11 +615,11 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             throw AgentJournalError.persistenceUnavailable("create requires a new directory")
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections || supportsAuthorizationAudit, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsRunRecords: supportsRunRecords) {
+        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections || supportsAuthorizationAudit, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent) {
             try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
         }
         let descriptor = try lockStore(directory)
-        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsRunRecords ? 9 : supportsPerCallFollowUps ? 8 : supportsConfirmedNoEffect ? 7 : supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
+        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsImageContent ? 10 : supportsRunRecords ? 9 : supportsPerCallFollowUps ? 8 : supportsConfirmedNoEffect ? 7 : supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
                             storeID: UUID(), domain: domain)
         let formatBytes = try JSONEncoder().encode(format)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -678,7 +687,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard format.magic == "SWIFTAGENT-SEGMENTED-JOURNAL", !format.domain.isEmpty else {
             throw AgentJournalError.invalidHeader
         }
-        guard format.schema == 3 || format.schema == 4 || format.schema == 5 || format.schema == 6 || format.schema == 7 || format.schema == 8 || format.schema == 9 else { throw AgentJournalError.unsupportedFormat }
+        guard format.schema == 3 || format.schema == 4 || format.schema == 5 || format.schema == 6 || format.schema == 7 || format.schema == 8 || format.schema == 9 || format.schema == 10 else { throw AgentJournalError.unsupportedFormat }
         observer?(.formatValidated)
         let descriptor = try lockStore(directory, retry: lockRetry, observer: observer)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -856,13 +865,14 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         return data
     }
 
-    private static func managedDirectories(supportsAdmissionRejections: Bool, supportsAuthorizationAudit: Bool = false, supportsConfirmedNoEffect: Bool = false, supportsRunRecords: Bool = false) -> [String] {
+    private static func managedDirectories(supportsAdmissionRejections: Bool, supportsAuthorizationAudit: Bool = false, supportsConfirmedNoEffect: Bool = false, supportsRunRecords: Bool = false, supportsImageContent: Bool = false) -> [String] {
         ["roots", "layouts", "segments", "state", "blobs", "tmp", "witnesses"]
+            + (supportsImageContent ? ["images"] : [])
             + AnyIndexKind.all(supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsRunRecords: supportsRunRecords).map(\.name)
     }
 
     private func validateManagedDirectories() throws {
-        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections || supportsAuthorizationAudit, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsRunRecords: supportsRunRecords) {
+        for name in Self.managedDirectories(supportsAdmissionRejections: supportsAdmissionRejections || supportsAuthorizationAudit, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent) {
             try validateManagedDirectory(directoryURL.appendingPathComponent(name))
         }
     }
@@ -893,6 +903,43 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func stateURL(_ id: UUID) -> URL { directoryURL.appendingPathComponent("state/\(managedName(id)).pack") }
     private func blobURL(_ id: UUID) -> URL {
         directoryURL.appendingPathComponent("blobs/\(id.uuidString.prefix(2))/\(managedName(id)).blob")
+    }
+
+    private func imageURL(_ digest: String) -> URL {
+        directoryURL.appendingPathComponent("images/\(digest.prefix(2))/\(storeID.uuidString)_\(digest).image")
+    }
+
+    /// Keeps an image's bytes once, named by their SHA-256, before any batch that refers to it is
+    /// published. An unreferenced file left by a failed commit is harmless; files are kept for the
+    /// store's lifetime.
+    fileprivate func storeImage(_ image: ModelImage) throws {
+        guard supportsImageContent else { throw AgentJournalError.unsupportedFormat }
+        guard Self.digest(image.data) == image.digest else { throw AgentJournalError.checksumMismatch }
+        let url = imageURL(image.digest)
+        let shard = url.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: shard.path) {
+            try FileManager.default.createDirectory(at: shard, withIntermediateDirectories: false)
+            try Self.syncDirectory(shard.deletingLastPathComponent())
+        }
+        try validateManagedDirectory(shard)
+        if FileManager.default.fileExists(atPath: url.path),
+           let existing = try? readData(url), Self.digest(existing) == image.digest { return }
+        try atomicWrite(image.data, at: url)
+    }
+
+    /// The image a message refers to, read back by digest and checked against it.
+    fileprivate func loadImage(_ disk: DiskImageV1) throws -> ModelImage {
+        guard supportsImageContent else { throw AgentJournalError.unsupportedFormat }
+        guard disk.digest.utf8.count == 64,
+              disk.digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              let mediaType = ModelImage.MediaType(rawValue: disk.mediaType) else { throw AgentJournalError.invalidRecord }
+        let url = imageURL(disk.digest)
+        try validateManagedDirectory(directoryURL.appendingPathComponent("images"))
+        let data = try readData(url)
+        guard data.count == disk.byteCount, Self.digest(data) == disk.digest else { throw AgentJournalError.checksumMismatch }
+        do {
+            return try ModelImage(data: data, mediaType: mediaType, description: disk.description, verifiedDigest: disk.digest)
+        } catch { throw AgentJournalError.invalidRecord }
     }
 
     private func indexURL(_ kind: String, _ key: String) -> URL {
@@ -2120,7 +2167,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                       cached.messages.indices.contains(pointer.offset) else {
                     throw AgentJournalError.invalidRecord
                 }
-                result.append(try cached.messages[pointer.offset].value())
+                result.append(try cached.messages[pointer.offset].value(images: store.loadImage))
             }
             return result
         }
@@ -2355,6 +2402,12 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 batch.runTerminal = .init(runID: runID, terminal: terminal)
             }
             if change.runTerminal != nil { try store.fault?(.beforeRunTerminalPublish) }
+            // Image bytes are kept by digest before the batch that names them; the batch holds only
+            // the digest, type, size and text alternative.
+            var kept: Set<String> = []
+            for image in change.messages.flatMap(\.value.images) where kept.insert(image.digest).inserted {
+                try store.storeImage(image)
+            }
             try publishBatch(batch, updateSession: true, admitsNewWork: admitsNewWork)
         }
 

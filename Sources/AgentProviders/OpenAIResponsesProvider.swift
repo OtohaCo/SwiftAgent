@@ -50,7 +50,7 @@ public struct OpenAIReasoningSummary: RawRepresentable, Hashable, Sendable, Coda
 /// conversation state and host tool execution.
 public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public var descriptor: ModelProviderDescriptor {
-        var capabilities: ModelCapabilities = [.streaming, .multiTurn, .tools, .structuredOutput]
+        var capabilities: ModelCapabilities = [.streaming, .multiTurn, .tools, .structuredOutput, .imageInput]
         if reasoningEffort != nil || reasoningSummary != nil { capabilities.insert(.reasoning) }
         return .init(id: "openai", capabilities: capabilities)
     }

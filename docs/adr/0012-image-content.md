@@ -1,50 +1,92 @@
 # ADR 0012: Image content in model messages
 
-Status: proposed (2026-10-01); deferred; not implemented
-
-Merging the document does not add image support to RC6 or select a final media
-API. Audio is outside this proposal. Implementation and acceptance are separate.
+Status: accepted (2026-10-04); implemented on `claude/image-content`. Proposed
+2026-10-01. Audio and video are outside this decision.
 
 ## Context
 
-At baseline `74771806ea410f1648eba8d9b5d244f87b001815`, `ModelContent` carries
+At baseline `74771806ea410f1648eba8d9b5d244f87b001815`, `ModelContent` carried
 text, reasoning, JSON and provider continuation, without a typed image payload.
-A Host needing screenshots or rendered-frame inspection needs a separately
-designed media path; a textual description is not native image evaluation.
+A Host needing screenshots or rendered-frame inspection needs a media path; a
+textual description is not native image evaluation.
 
-## Proposed direction and reference boundary
+## Decision
 
-An image case could carry MIME type, Host-provided data or a Host-resolved
-reference, immutable content identity and optional alternative text. Exact
-representation and permissible message roles remain implementation questions.
+**Content.** `ModelContent.image(ModelImage)` carries Host-supplied bytes. The
+initializer recognizes PNG, JPEG, GIF and WebP from the leading bytes (a
+declared type must match), refuses empty data and more than
+`ModelImage.maximumByteCount` (5 MiB), and requires a short text alternative
+(`description`, at most 1,024 UTF-8 bytes). Identity is the lowercase SHA-256 of
+the bytes (`digest`), computed without a crypto dependency in AgentModels.
+Pixel size is read from the header when present. Equality is digest, media type
+and description. Images belong in user messages and tool results; assistant
+content never carries them and adapters refuse it.
 
-A Host-resolved reference is **not** authorization to read arbitrary paths or
-URLs. The Host owns authorized resolution and immutable content identity.
-SDK/Provider adapters enforce necessary MIME, size, count and capability checks.
-Do not implicitly download, transmit images or perform OCR. A digest supports
-association/integrity; it does not prove retrievability or access permission.
+The SDK never downloads, resolves paths or URLs, or performs OCR. There is no
+Host-resolved reference case: bytes are always present in memory, and the Host
+remains responsible for authorizing what it reads before making an image.
 
-Support must be confirmed by both the actual model's capability and the working
-Provider adapter, not merely a catalog flag. Unsupported content or insufficient
-budget must fail explicitly before the relevant dispatch. A textual substitute
-requires an explicit Host choice; never silently discard an image.
+**Tools.** `ToolResult(images:)` adds at most
+`ModelImage.maximumImagesPerMessage` (8) images after the tool's output in its
+result message. More fail the call after the executor ran, like an invalid
+output. A settled mutation replay returns its stored output without images.
 
-Image persistence, material lifetime, authorized reference resolution, recovery,
-maintenance and any disk-format boundary must be independently verified in the
-implementation. Content-addressed storage may avoid repeated checkpoint copies,
-but this proposal neither delivers that store nor fixes its final API. Restricted
-image data is not automatically part of audit export; export policy remains
-explicit and a digest-only view is not a recoverable material backup.
+**Explicit choice per Run.** `AgentModelBinding(imageInput:)` takes an
+`AgentImageInputPolicy`, applied to the projected request just before token
+estimation and dispatch; the canonical conversation keeps every image:
 
-Token/resource estimates and costs are Provider/model-specific. Unknown values
-are not zero; an image token estimate is not a universal exact pricing guarantee.
-Validation of actual accounting belongs to the independent implementation stage.
+- `.reject` (default, also for `Agent(model:provider:)`): a request containing
+  an image fails before dispatch with
+  `AgentLoopError.unsupportedCapabilities(.imageInput)`.
+- `.describe`: each image is sent as `ModelImage.textSubstitute`. This is the
+  Host's explicit choice for a model that does not see images.
+- `.native(maximumImagesPerRequest:)` (1...100, default 20): images are sent.
+  The adapter must declare `ModelCapabilities.imageInput`, or the request fails
+  before dispatch. Beyond the limit, the oldest images in that request are sent
+  as their text substitutes.
 
-## Open questions
+Support therefore needs both the model (the Host's knowledge, e.g. its catalog)
+and the working adapter (`.imageInput`); neither alone sends an image.
 
-- Inline bytes versus immutable references and their authorized resolver.
-- MIME/size/count limits per message and Run; supported roles and adapters.
-- Persistence, lifecycle, recovery, budget estimation and compatibility.
+**Adapters.** Anthropic sends base64 `image` blocks in user turns and inside
+`tool_result` content. OpenAI Responses sends `input_image` data URLs in user
+messages and in an array `function_call_output.output`. The local Responses
+adapter does so only when configured with `.imageInput`. DeepSeek and Apple
+Foundation Models refuse images with `unsupportedCapability`. Requests without
+images keep their previous wire shapes.
 
-This document does not propose audio, implement media fetching or claim any
-image runtime capability in release notes.
+**Budget.** Request byte limits and the projection source digest encode images
+by identity only (`ModelImage.referenceOnlyEncoding`). Token estimates count
+them: `ModelImage.estimatedInputTokens` is the larger of the Anthropic
+pixel-area rule and the OpenAI high-detail tile rule, and 1,600 when the size is
+unknown; `AgentContextTokenEstimationInput.imageInputTokens` sums them for Host
+estimators. Estimates are not pricing guarantees.
+
+**Persistence.** A durable store created with `supportsImageContent: true` uses
+format schema 10 (which includes schema 9). Records hold only the image's media
+type, digest, size and description; the bytes are kept once per digest in the
+store's `images/` directory, written durably before the batch that refers to
+them. Reading a message loads and verifies the bytes against the digest
+(`checksumMismatch` otherwise), so a reopened Session or an unfinished Run's
+history gets the image back. Stores of schema 3–9 refuse an image with
+`unsupportedFormat` before publishing it; they are never migrated. Schema-9
+readers reject schema 10 before any write (checked by
+`Scripts/verify-image-content-compatibility.sh`). Memory journals keep images
+in memory. Image files live for the store's lifetime; maintenance does not
+collect them.
+
+**Audit.** A result record lists the image digests (`imageDigests`), never the
+bytes; regular export includes the digests only.
+
+## Consequences
+
+- Exhaustive switches over `ModelContent` must handle `.image`.
+- Hosts opt in per Run; nothing changes for Runs that never meet an image.
+- A Host keeping conversations on schema 3–9 stores must describe images
+  itself (or create new stores with image support).
+- Disk use grows with distinct images per store until the store is deleted.
+
+## Not decided here
+
+Audio and video, media fetching, image output from models, user-turn image
+input through `AgentSession.run(_:)`, and garbage collection of image files.

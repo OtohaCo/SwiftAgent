@@ -234,6 +234,7 @@ public actor AuditExporter {
             view["kind"] = .string("result"); view["referenceKind"] = .string(r.kind.rawValue)
             view["sourceRunID"] = .string(r.sourceRunID.uuidString)
             if let digest = r.outputDigest { view["outputDigest"] = .string(digest) }
+            if let images = r.imageDigests { view["imageDigests"] = .array(images.map(JSONValue.string)) }
         }
         return .init(version: 1, storeID: record.links.storeID, auditRecordID: record.auditRecordID,
             sequence: record.sequence, committedDigest: record.digest, view: .object(view))

@@ -54,6 +54,20 @@ The default policy requires authorization, and the default `authorize` hook deni
 access. Override that hook to inspect typed input and host permissions. The host
 injects service dependencies into the tool; ModelProvider never receives an executor.
 
+## Images in Results (ADR 0012)
+
+A tool may give the model images after its output, such as a screenshot or a
+video frame: `ToolResult(output:images:)` with up to
+`ModelImage.maximumImagesPerMessage` (8) `ModelImage` values. Make each image
+from bytes the tool was allowed to read (`ModelImage(data:description:)` checks
+type, the 5 MiB limit and the text alternative); the SDK fetches nothing. More
+images fail the call after the executor ran. The result message holds
+`.json(output)` followed by `.image` parts; whether the model is sent the
+images or their text substitutes is the Run's `AgentImageInputPolicy` (see the
+[context guide](swift-agent-context.md#images)). A durable journal needs
+`supportsImageContent` to keep them. A settled mutation replay returns its
+stored output without images.
+
 ## Schemas and Type Erasure
 
 The schema builder supports scalar types, objects, arrays and enumerations.

@@ -7,8 +7,11 @@ enum ResponsesCanonicalRequestEncoder {
         _ calls: [ToolCall]
     ) throws -> [JSONValue]?
 
+    /// `images`: whether this adapter sends images (`input_image` data URLs). Without it an image in the
+    /// request fails as an unsupported capability; a Run's image policy normally removes them first.
     static func encodeMessages(
         _ messages: [ModelMessage],
+        images: Bool,
         assistantNativeItems: AssistantNativeItems? = nil
     ) throws -> [JSONValue] {
         var input: [JSONValue] = []
@@ -19,8 +22,16 @@ enum ResponsesCanonicalRequestEncoder {
             case .developer(let text):
                 input.append(inputMessage(role: "developer", text: text))
             case .user(let content):
-                input.append(inputMessage(role: "user", text: try visibleText(content)))
+                if content.contains(where: \.isImage) {
+                    input.append(.object([
+                        "type": .string("message"), "role": .string("user"),
+                        "content": .array(try parts(content, images: images)),
+                    ]))
+                } else {
+                    input.append(inputMessage(role: "user", text: try visibleText(content)))
+                }
             case .assistant(let content, let calls):
+                guard !content.contains(where: \.isImage) else { throw ImageEncoding.assistantImage() }
                 if let native = try assistantNativeItems?(content, calls) {
                     input.append(contentsOf: native)
                     continue
@@ -31,7 +42,8 @@ enum ResponsesCanonicalRequestEncoder {
                 }
                 input.append(contentsOf: try functionCalls(calls))
             case .tool(let result):
-                var output = try visibleText(result.content)
+                let textual = result.content.filter { !$0.isImage }
+                var output = try visibleText(textual)
                 if result.isError {
                     let envelope = JSONValue.object([
                         "is_error": .bool(true),
@@ -39,10 +51,14 @@ enum ResponsesCanonicalRequestEncoder {
                     ])
                     output = String(decoding: try JSONEncoder().encode(envelope), as: UTF8.self)
                 }
+                let pictures = result.content.filter(\.isImage)
+                let value: JSONValue = pictures.isEmpty ? .string(output) : .array(
+                    (output.isEmpty ? [] : [.object(["type": .string("input_text"), "text": .string(output)])])
+                        + (try parts(pictures, images: images)))
                 input.append(.object([
                     "type": .string("function_call_output"),
                     "call_id": .string(result.callID.rawValue),
-                    "output": .string(output),
+                    "output": value,
                 ]))
             }
         }
@@ -115,7 +131,49 @@ enum ResponsesCanonicalRequestEncoder {
                 return String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
             case .reasoning, .providerContinuation:
                 return nil
+            case .image:
+                throw ImageEncoding.assistantImage()
             }
         }.joined(separator: "\n")
     }
+
+    /// Content parts in order: text as `input_text`, images as `input_image` data URLs.
+    private static func parts(_ content: [ModelContent], images: Bool) throws -> [JSONValue] {
+        try content.compactMap { part -> JSONValue? in
+            switch part {
+            case .text(let value): return .object(["type": .string("input_text"), "text": .string(value)])
+            case .json(let value):
+                return .object(["type": .string("input_text"),
+                                "text": .string(String(decoding: try JSONEncoder().encode(value), as: UTF8.self))])
+            case .reasoning, .providerContinuation: return nil
+            case .image(let image):
+                guard images else { throw ImageEncoding.unsupported() }
+                return .object(["type": .string("input_image"), "image_url": .string(ImageEncoding.dataURL(image))])
+            }
+        }
+    }
+}
+
+/// Shared image rules of the adapters (ADR 0012).
+enum ImageEncoding {
+    static func unsupported() -> ModelProviderError {
+        ModelProviderError(kind: .unsupportedCapability, message: "This adapter is not configured to send images to the model.")
+    }
+
+    static func assistantImage() -> ModelProviderError {
+        ModelProviderError(kind: .invalidRequest, message: "Assistant messages cannot carry images.")
+    }
+
+    static func dataURL(_ image: ModelImage) -> String {
+        "data:\(image.mediaType.rawValue);base64,\(image.data.base64EncodedString())"
+    }
+
+    /// Fails on any image in `messages`; for adapters that never send images.
+    static func refuse(_ messages: [ModelMessage]) throws {
+        if messages.contains(where: { !$0.images.isEmpty }) { throw unsupported() }
+    }
+}
+
+extension ModelContent {
+    var isImage: Bool { if case .image = self { true } else { false } }
 }

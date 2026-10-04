@@ -37,6 +37,7 @@ package protocol JournalStore: Sendable {
     var noEffectProofVersion: Int { get }
     var supportsPerCallFollowUps: Bool { get }
     var supportsRunRecords: Bool { get }
+    var supportsImageContent: Bool { get }
     func auditDigest(_ bytes: Data) -> String
     func read<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
     func write<T>(_ body: (any JournalStoreView) throws -> T) throws -> T

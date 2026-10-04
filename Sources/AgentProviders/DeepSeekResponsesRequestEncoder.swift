@@ -11,6 +11,7 @@ enum DeepSeekResponsesRequestEncoder {
               !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid DeepSeek model identifier.")
         }
+        try ImageEncoding.refuse(request.messages)
         var input: [JSONValue] = []
         for modelMessage in request.messages {
             switch modelMessage {
@@ -105,6 +106,7 @@ enum DeepSeekResponsesRequestEncoder {
             case .text(let value): return value
             case .json(let value): return String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
             case .reasoning, .providerContinuation: return nil
+            case .image: throw ImageEncoding.unsupported()
             }
         }.joined(separator: "\n")
     }

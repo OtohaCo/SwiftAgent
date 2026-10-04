@@ -38,3 +38,4 @@ run_stage audited-authorization env SWIFTAGENT_AUDIT_TESTS_ALREADY_RUN=1 bash Sc
 bash Scripts/verify-per-call-compatibility.sh
 
 bash Scripts/verify-run-record-compatibility.sh
+bash Scripts/verify-image-content-compatibility.sh

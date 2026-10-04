@@ -10,6 +10,9 @@ public struct ModelCapabilities: OptionSet, Hashable, Sendable, Codable {
     public static let tools = Self(rawValue: 1 << 2)
     public static let structuredOutput = Self(rawValue: 1 << 3)
     public static let reasoning = Self(rawValue: 1 << 4)
+    /// The adapter can send `ModelContent.image` in user messages and tool results. Whether the bound
+    /// model accepts images is the Host's knowledge, declared by the Run's image policy.
+    public static let imageInput = Self(rawValue: 1 << 5)
 }
 
 /// Reported counts for a model response. Nil means unreported, not zero.

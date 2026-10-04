@@ -262,6 +262,10 @@ public actor AgentJournal {
     public nonisolated let supportsRunRecords: Bool
     /// Whether this immutable store format can persist queued per-call identity.
     public nonisolated let supportsPerCallFollowUps: Bool
+    /// Whether messages may carry images: always in memory; for a durable store, format schema 10
+    /// (`supportsImageContent` at creation), which keeps each image once by digest. A store without
+    /// it fails explicitly on an image (`unsupportedFormat`); existing stores are never migrated.
+    public nonisolated let supportsImageContent: Bool
     /// 0: unsupported; 1: schema 6; 2: schema 7+. Existing stores are never migrated.
     public nonisolated let noEffectProofVersion: Int
     public nonisolated let supportsAuthorizationAudit: Bool
@@ -296,6 +300,7 @@ public actor AgentJournal {
         noEffectProofVersion = 0
         supportsRunRecords = false
         supportsPerCallFollowUps = false
+        supportsImageContent = true
     }
 
     package init(store: any JournalStore) {
@@ -311,6 +316,7 @@ public actor AgentJournal {
         noEffectProofVersion = store.noEffectProofVersion
         supportsRunRecords = store.supportsRunRecords
         supportsPerCallFollowUps = store.supportsPerCallFollowUps
+        supportsImageContent = store.supportsImageContent
     }
 
     package func acquireSessionLease(sessionID: UUID, dispatcherID: UUID? = nil) throws {

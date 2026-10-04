@@ -314,3 +314,23 @@ schema-8 reader at `d3a8ef964aecd440934d51b7cd00f6552fe22002` is built by
 reject before and after new-reader maintenance without changing file bytes.
 No migration or new ledger may bypass prior operation/unsettled facts.
 See [ADR 0014](../adr/0014-durable-run-association.md).
+
+## Images (format schema 10, ADR 0012)
+
+`supportsImageContent: true` creation selects schema 10, which includes schema
+9. A message's image record holds media type, SHA-256 digest, byte count and
+text alternative only. The bytes are written once per digest to
+`images/<2>/<storeID>_<digest>.image` (atomic write and directory sync) before
+the batch that names them is published; an unreferenced file left by a failed
+commit is harmless. Reading a message loads the file and checks its size and
+digest; a changed file fails the read (`checksumMismatch`) and never yields a
+different image. Reopened Sessions and unfinished Runs therefore get their
+images back from the digest.
+
+Schema 3–9 stores refuse a message carrying an image with `unsupportedFormat`
+before publication and are never migrated; `AgentJournal.supportsImageContent`
+tells a Host which kind it holds (memory journals: always). Image files are kept
+for the store's lifetime; maintenance does not collect them. Schema-9 readers
+reject schema 10 before writes (`Scripts/verify-image-content-compatibility.sh`
+against `3ad52332e71290abde108007a7ce34e7054b7bde`). Audit result records list
+`imageDigests` only. See [ADR 0012](../adr/0012-image-content.md).

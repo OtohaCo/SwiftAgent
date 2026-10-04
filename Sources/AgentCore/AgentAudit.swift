@@ -111,12 +111,16 @@ public struct AuditResultReference: Codable, Equatable, Sendable {
     public let receipt: ToolReceipt?
     public let outputDigest: String?
     public let settlementSource: AgentMutationSettlementSource?
+    /// SHA-256 digests of the images the result gave the model (ADR 0012); never their bytes.
+    /// Nil when there were none, so records without images keep their encoding.
+    public let imageDigests: [String]?
     package init(kind: Kind, sourceSessionID: UUID, sourceRunID: UUID, sourceModelCallID: String,
                  receipt: ToolReceipt? = nil, outputDigest: String? = nil,
-                 settlementSource: AgentMutationSettlementSource? = nil) {
+                 settlementSource: AgentMutationSettlementSource? = nil, imageDigests: [String]? = nil) {
         self.kind = kind; self.sourceSessionID = sourceSessionID; self.sourceRunID = sourceRunID
         self.sourceModelCallID = sourceModelCallID; self.receipt = receipt
         self.outputDigest = outputDigest; self.settlementSource = settlementSource
+        self.imageDigests = imageDigests?.isEmpty == true ? nil : imageDigests
     }
 }
 
@@ -156,7 +160,8 @@ public struct AuditRecord: Codable, Equatable, Sendable {
         case .proposal(let p): view = .proposal(p.regularView())
         case .result(let r):
             view = .result(.init(kind: r.kind, sourceSessionID: r.sourceSessionID, sourceRunID: r.sourceRunID,
-                sourceModelCallID: r.sourceModelCallID, outputDigest: r.outputDigest, settlementSource: r.settlementSource))
+                sourceModelCallID: r.sourceModelCallID, outputDigest: r.outputDigest, settlementSource: r.settlementSource,
+                imageDigests: r.imageDigests))
         default: view = fact
         }
         let boundedLinks = AuditRecordLinks(storeID: links.storeID, operationDomain: links.operationDomain,

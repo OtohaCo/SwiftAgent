@@ -161,6 +161,7 @@ enum DeepSeekResponsesContinuation {
                 append(String(decoding: try JSONEncoder().encode(value), as: UTF8.self), as: .text)
             case .reasoning(let value): append(value, as: .reasoning)
             case .providerContinuation: break
+            case .image: throw ImageEncoding.assistantImage()
             }
         }
         return result

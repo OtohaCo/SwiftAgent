@@ -572,8 +572,11 @@ package struct AgentLoop: Sendable {
             throw AgentModelBindingError.invalidProjection
         }
         try validateContinuations(projection.messages)
-        let requestBytes = sharesCanonicalMessageStorage(projection.messages, messages)
-            ? sourceEncoding.byteCount : try AgentContextWindow.encodedByteCount(projection.messages)
+        // Images reach the model, become text or stop the request here, per the Run's explicit choice.
+        let modelMessages = try binding.imageInput.apply(
+            to: projection.messages, adapterSendsImages: provider.descriptor.capabilities.contains(.imageInput))
+        let requestBytes = sharesCanonicalMessageStorage(modelMessages, messages)
+            ? sourceEncoding.byteCount : try AgentContextWindow.encodedByteCount(modelMessages)
         if let modelContextByteLimit {
             let bytes = requestBytes
             guard bytes <= modelContextByteLimit else {
@@ -589,7 +592,7 @@ package struct AgentLoop: Sendable {
             let estimate: AgentContextTokenEstimate
             do {
                 estimate = try await budget.estimator.estimate(.init(
-                    model: model, messages: projection.messages,
+                    model: model, messages: modelMessages,
                     tools: toolDefinitions, structuredOutput: structuredOutput
                 ))
             } catch {
@@ -614,7 +617,7 @@ package struct AgentLoop: Sendable {
         }
         let request = ModelRequest(
             model: model,
-            messages: projection.messages,
+            messages: modelMessages,
             tools: toolDefinitions,
             structuredOutput: structuredOutput,
             sessionID: sessionID,

@@ -32,7 +32,7 @@ struct DiskMessageV1: Codable {
         }
     }
 
-    func value() throws -> JournalMessage {
+    func value(images: ImageLoader) throws -> JournalMessage {
         let message: ModelMessage
         switch role {
         case "system":
@@ -43,48 +43,68 @@ struct DiskMessageV1: Codable {
             message = .developer(instructions)
         case "user":
             guard instructions == nil, calls.isEmpty, result == nil else { throw AgentJournalError.invalidRecord }
-            message = .user(try content.map { try $0.value() })
+            message = .user(try content.map { try $0.value(images: images) })
         case "assistant":
             guard instructions == nil, result == nil else { throw AgentJournalError.invalidRecord }
-            message = .assistant(content: try content.map { try $0.value() }, toolCalls: try calls.map { try $0.value() })
+            message = .assistant(content: try content.map { try $0.value(images: images) }, toolCalls: try calls.map { try $0.value() })
         case "tool":
             guard instructions == nil, content.isEmpty, calls.isEmpty, let result else { throw AgentJournalError.invalidRecord }
-            message = .tool(try result.value())
+            message = .tool(try result.value(images: images))
         default: throw AgentJournalError.unsupportedFormat
         }
         return JournalMessage(id: id, value: message)
     }
 }
 
+/// Reads an image's bytes back by its digest (format schema 10).
+typealias ImageLoader = (DiskImageV1) throws -> ModelImage
+
 struct DiskContentV1: Codable {
     let kind: String
     let text: String?
     let json: JSONValue?
     let continuation: DiskContinuationV1?
+    /// Schema 10 only. Never the bytes: those are kept once under `images/` by digest.
+    let image: DiskImageV1?
 
     init(_ content: ModelContent) {
         switch content {
-        case .text(let value): kind = "text"; text = value; json = nil; continuation = nil
-        case .reasoning(let value): kind = "reasoning"; text = value; json = nil; continuation = nil
-        case .json(let value): kind = "json"; text = nil; json = value; continuation = nil
-        case .providerContinuation(let value): kind = "continuation"; text = nil; json = nil
+        case .text(let value): kind = "text"; text = value; json = nil; continuation = nil; image = nil
+        case .reasoning(let value): kind = "reasoning"; text = value; json = nil; continuation = nil; image = nil
+        case .json(let value): kind = "json"; text = nil; json = value; continuation = nil; image = nil
+        case .providerContinuation(let value): kind = "continuation"; text = nil; json = nil; image = nil
             continuation = DiskContinuationV1(value)
+        case .image(let value): kind = "image"; text = nil; json = nil; continuation = nil
+            image = DiskImageV1(value)
         }
     }
 
-    func value() throws -> ModelContent {
+    func value(images: ImageLoader) throws -> ModelContent {
         switch kind {
-        case "text" where json == nil && continuation == nil:
+        case "text" where json == nil && continuation == nil && image == nil:
             guard let text else { break }; return .text(text)
-        case "reasoning" where json == nil && continuation == nil:
+        case "reasoning" where json == nil && continuation == nil && image == nil:
             guard let text else { break }; return .reasoning(text)
-        case "json" where text == nil && continuation == nil:
+        case "json" where text == nil && continuation == nil && image == nil:
             guard let json else { break }; return .json(json)
-        case "continuation" where text == nil && json == nil:
+        case "continuation" where text == nil && json == nil && image == nil:
             guard let continuation else { break }; return .providerContinuation(continuation.value())
+        case "image" where text == nil && json == nil && continuation == nil:
+            guard let image else { break }; return .image(try images(image))
         default: break
         }
         throw AgentJournalError.invalidRecord
+    }
+}
+
+struct DiskImageV1: Codable {
+    let mediaType: String
+    let digest: String
+    let byteCount: Int
+    let description: String
+    init(_ value: ModelImage) {
+        mediaType = value.mediaType.rawValue; digest = value.digest
+        byteCount = value.byteCount; description = value.description
     }
 }
 
@@ -147,8 +167,8 @@ struct DiskResultV1: Codable {
         callID = result.callID.rawValue; content = result.content.map(DiskContentV1.init)
         isError = result.isError
     }
-    func value() throws -> ToolResultMessage {
-        .init(callID: .init(rawValue: callID), content: try content.map { try $0.value() }, isError: isError)
+    func value(images: ImageLoader) throws -> ToolResultMessage {
+        .init(callID: .init(rawValue: callID), content: try content.map { try $0.value(images: images) }, isError: isError)
     }
 }
 

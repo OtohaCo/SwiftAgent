@@ -365,7 +365,8 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
         let reference = AuditResultReference(kind: kind, sourceSessionID: source?.sessionID ?? links.sessionID,
             sourceRunID: source?.runID ?? links.runID, sourceModelCallID: source?.intent.call.id.rawValue ?? links.modelCallID,
             receipt: result.receipt, outputDigest: try await journal.auditDigest(AuditEncoding.encode(result.output)),
-            settlementSource: kind == .settlement || kind == .noEffectConfirmation ? .executor : nil)
+            settlementSource: kind == .settlement || kind == .noEffectConfirmation ? .executor : nil,
+            imageDigests: result.images.map(\.digest))
         var drafts: [JournalAuditDraft] = []
         if lock.withLock({ executorObserved }) { drafts.append(.init(links: links, fact: .disposition(.init(state: .executorObserved)))) }
         drafts.append(.init(links: links, fact: .result(reference)))

@@ -1,5 +1,34 @@
 # Changelog
 
+## Image content (unreleased, ADR 0012)
+
+`ModelContent.image(ModelImage)` carries PNG, JPEG, GIF or WebP bytes (at most
+5 MiB) with a SHA-256 `digest`, header pixel size and a required short text
+alternative. Tools return up to eight with `ToolResult(images:)`; they follow
+the tool's output in its result message. Each Run chooses with
+`AgentModelBinding(imageInput:)`: `.reject` (default) fails before dispatch,
+`.describe` sends `ModelImage.textSubstitute`, `.native(maximumImagesPerRequest:)`
+sends images through an adapter declaring the new
+`ModelCapabilities.imageInput` and describes the oldest beyond the limit. The
+conversation always keeps the images.
+
+Anthropic and OpenAI Responses declare `.imageInput` and send base64 image
+blocks / `input_image` data URLs in user turns and tool results; the local
+Responses adapter does so when configured with it; DeepSeek and Apple refuse
+images. Request byte limits and source digests count images by identity
+(`ModelImage.referenceOnlyEncoding`); token estimators get
+`AgentContextTokenEstimationInput.imageInputTokens`.
+
+`supportsImageContent: true` creation selects journal format schema 10
+(including schema 9): records keep digest, type, size and description; bytes
+are kept once per digest under `images/` and verified on read, so reopened
+Sessions and unfinished Runs get them back. Schema 3–9 stores refuse images
+with `unsupportedFormat`; schema-9 readers reject schema 10 before writing
+(`Scripts/verify-image-content-compatibility.sh`). Audit result records list
+`imageDigests` only. Exhaustive switches over `ModelContent` and
+`AgentModelBindingError` (new `invalidImageLimit`) must handle the new cases;
+added parameters change stored function signatures.
+
 ## Durable Run association and logical terminal (unreleased, Issue #75)
 
 `AgentRunCorrelation` supplies a Host correlation key and declared payload

@@ -244,9 +244,12 @@ package struct AnyAgentTool: Sendable {
                 } catch {
                     throw ToolInvocationError.invalidOutput
                 }
+                guard result.images.count <= ModelImage.maximumImagesPerMessage else {
+                    throw ModelImageError.tooManyImages(count: result.images.count, limit: ModelImage.maximumImagesPerMessage)
+                }
                 try context.checkActive()
                 return ToolResult(output: output, evidence: result.evidence, receipt: result.receipt,
-                                  declaredTools: result.declaredTools)
+                                  declaredTools: result.declaredTools, images: result.images)
             }
         }
     }

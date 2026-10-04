@@ -86,6 +86,9 @@ public struct AgentModelBinding: Sendable {
     public let tokenBudget: AgentContextTokenBudget?
     public let contextReports: AgentContextReportBuffer?
     public let legacyContinuationPolicy: AgentLegacyContinuationPolicy
+    /// How this Run's requests carry images. Defaults to `.reject`: an image is sent, or replaced by
+    /// text, only by the Host's explicit choice.
+    public let imageInput: AgentImageInputPolicy
 
     public var profileID: String { info.profileID }
     public var profileRevision: String { info.profileRevision }
@@ -103,7 +106,8 @@ public struct AgentModelBinding: Sendable {
         projector: any AgentContextProjector = AgentIdentityContextProjector(),
         tokenBudget: AgentContextTokenBudget? = nil,
         contextReports: AgentContextReportBuffer? = nil,
-        legacyContinuationPolicy: AgentLegacyContinuationPolicy = .reject
+        legacyContinuationPolicy: AgentLegacyContinuationPolicy = .reject,
+        imageInput: AgentImageInputPolicy = .reject
     ) throws {
         guard Self.valid(profileID) else { throw AgentModelBindingError.invalidIdentity("profileID") }
         guard Self.valid(profileRevision) else { throw AgentModelBindingError.invalidIdentity("profileRevision") }
@@ -122,6 +126,7 @@ public struct AgentModelBinding: Sendable {
         self.tokenBudget = tokenBudget
         self.contextReports = contextReports
         self.legacyContinuationPolicy = legacyContinuationPolicy
+        self.imageInput = imageInput
     }
 
     private init(
@@ -138,6 +143,7 @@ public struct AgentModelBinding: Sendable {
         self.tokenBudget = tokenBudget
         self.contextReports = contextReports
         self.legacyContinuationPolicy = legacyContinuationPolicy
+        imageInput = .reject
     }
 
     var continuationOrigin: ModelProviderContinuationOrigin {
@@ -204,6 +210,8 @@ public enum AgentModelBindingError: Error, Equatable, Sendable {
     case contextWindowUnknown
     case invalidTokenBudget
     case invalidTokenEstimate
+    /// `AgentImageInputPolicy.native` needs 1...100 images per request.
+    case invalidImageLimit
     case contextBudgetExceeded(estimatedInputTokens: Int, availableInputTokens: Int)
 }
 

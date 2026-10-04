@@ -115,6 +115,8 @@ public enum AgentContextProjectionSource {
     package static func measure(messages: [ModelMessage]) throws -> AgentContextSourceEncoding {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
+        // An image is identified by its SHA-256 digest; its bytes are not re-encoded per request.
+        encoder.userInfo[ModelImage.referenceOnlyEncoding] = true
         let data = try encoder.encode(messages)
         AgentContextEncodingObservation.didEncode?("source", data.count)
         var value: UInt64 = 14_695_981_039_346_656_037

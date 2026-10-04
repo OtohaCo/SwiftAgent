@@ -29,7 +29,7 @@ actor AgentToolBatchProgress {
             try budget.checkActive()
             let message = ToolResultMessage(
                 callID: call.call.id,
-                content: [.json(result.output)],
+                content: [.json(result.output)] + result.images.map(ModelContent.image),
                 isError: result.isModelVisibleError
             )
             try await emitter?.reserveCompletion(call.call.id)

@@ -28,6 +28,7 @@ enum AnthropicRequestEncoder {
             case .user(let content):
                 try append(role: "user", content: textBlocks(content), to: &messages)
             case .assistant(let content, let calls):
+                guard !content.contains(where: \.isImage) else { throw ImageEncoding.assistantImage() }
                 if let restored = try AnthropicContinuation.restore(content: content, calls: calls, model: request.model) {
                     try append(role: "assistant", content: restored, to: &messages)
                     continue
@@ -47,12 +48,16 @@ enum AnthropicRequestEncoder {
                     switch part {
                     case .text(let value): return value
                     case .json(let value): return String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
-                    case .reasoning, .providerContinuation: return nil
+                    case .reasoning, .providerContinuation, .image: return nil
                     }
                 }.joined(separator: "\n")
+                let pictures = result.content.filter(\.isImage)
+                let value: JSONValue = pictures.isEmpty ? .string(text) : .array(
+                    (text.isEmpty ? [] : [.object(["type": .string("text"), "text": .string(text)])])
+                        + (try textBlocks(pictures)))
                 try append(role: "user", content: [.object([
                     "type": .string("tool_result"), "tool_use_id": .string(result.callID.rawValue),
-                    "content": .string(text), "is_error": .bool(result.isError),
+                    "content": value, "is_error": .bool(result.isError),
                 ])], to: &messages)
             }
         }
@@ -86,6 +91,7 @@ enum AnthropicRequestEncoder {
         else { messages.append(.init(role: role, content: content)) }
     }
 
+    /// Text blocks, and images as base64 image blocks in their place.
     private static func textBlocks(_ content: [ModelContent]) throws -> [JSONValue] {
         try content.compactMap { part in
             let text: String
@@ -93,6 +99,11 @@ enum AnthropicRequestEncoder {
             case .text(let value): text = value
             case .json(let value): text = String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
             case .reasoning, .providerContinuation: return nil
+            case .image(let image):
+                return .object(["type": .string("image"), "source": .object([
+                    "type": .string("base64"), "media_type": .string(image.mediaType.rawValue),
+                    "data": .string(image.data.base64EncodedString()),
+                ])])
             }
             return .object(["type": .string("text"), "text": .string(text)])
         }
