@@ -83,6 +83,103 @@ struct ResponsesContinuationIntegrityTests {
         #expect(restored.items == [deepSeekReasoning(id: "rs-1", text: "Considered.")])
     }
 
+    @Test func deepSeekToolCallWithoutReasoningIsReplayedAsItWasReturned() throws {
+        let model = ModelID(provider: "deepseek", name: "deepseek-flash")
+        let call = deepSeekCalculatorCall(id: "call-2")
+        let item = deepSeekFunctionCall(id: "fc-2", callID: "call-2")
+
+        let continuation = try #require(try DeepSeekResponsesContinuation.make(
+            items: [item], content: [], calls: [call], model: model,
+            retainsToolCallsWithoutReasoning: true
+        ))
+        let body = try DeepSeekResponsesRequestEncoder.encode(
+            .init(model: model, messages: [
+                .user([.text("Add")]),
+                .assistant(content: [.providerContinuation(continuation)], toolCalls: [call]),
+                .tool(.init(callID: call.id, content: [.text(#"{"sum":5}"#)], isError: false)),
+            ], tools: [deepSeekCalculatorDefinition]),
+            maximumOutputTokens: 100,
+            reasoningEffort: .high
+        )
+        guard case .object(let object) = body, case .array(let input) = object["input"] else {
+            Issue.record("Missing input")
+            return
+        }
+        #expect(input == [
+            .object(["type": .string("message"), "role": .string("user"), "content": .string("Add")]),
+            item,
+            .object(["type": .string("function_call_output"), "call_id": .string("call-2"),
+                     "output": .string(#"{"sum":5}"#)]),
+        ])
+    }
+
+    @Test func deepSeekContinuationWithoutReasoningMustStillMatchTheTurn() throws {
+        let model = ModelID(provider: "deepseek", name: "deepseek-flash")
+        let call = deepSeekCalculatorCall(id: "call-2")
+        let item = deepSeekFunctionCall(id: "fc-2", callID: "call-2")
+        let otherCall = deepSeekCalculatorCall(id: "call-3")
+
+        // Text-only turns without reasoning still carry no continuation.
+        #expect(try DeepSeekResponsesContinuation.make(
+            items: [nativeMessage(id: "msg-1", text: "Answer")], content: [.text("Answer")],
+            calls: [], model: model, retainsToolCallsWithoutReasoning: true
+        ) == nil)
+        // A stored function call must still match the canonical call.
+        let continuation = try #require(try DeepSeekResponsesContinuation.make(
+            items: [item], content: [], calls: [call], model: model,
+            retainsToolCallsWithoutReasoning: true
+        ))
+        #expect(throws: ModelProviderError.self) {
+            try DeepSeekResponsesContinuation.restore(
+                content: [.providerContinuation(continuation)], calls: [otherCall], model: model
+            )
+        }
+        // A continuation without reasoning cannot stand in for reasoning the turn had.
+        #expect(throws: ModelProviderError.self) {
+            try DeepSeekResponsesContinuation.restore(
+                content: [.reasoning("Reason"), .providerContinuation(continuation)], calls: [call], model: model
+            )
+        }
+        // A continuation with neither reasoning nor tool calls is not one SwiftAgent writes.
+        let textOnly = try deepSeekContinuation(model: model, items: [nativeMessage(id: "msg-1", text: "Answer")])
+        #expect(throws: ModelProviderError.self) {
+            try DeepSeekResponsesContinuation.restore(
+                content: [.text("Answer"), .providerContinuation(textOnly)], calls: [], model: model
+            )
+        }
+        // An empty reasoning item is malformed.
+        let emptyReasoning = try deepSeekContinuation(model: model, items: [
+            .object(["type": .string("reasoning"), "id": .string("rs-1"), "content": .array([])]), item,
+        ])
+        #expect(throws: ModelProviderError.self) {
+            try DeepSeekResponsesContinuation.restore(
+                content: [.providerContinuation(emptyReasoning)], calls: [call], model: model
+            )
+        }
+    }
+
+    @Test func deepSeekThinkingToolCallFromAnotherModelIsStillRefused() throws {
+        let model = ModelID(provider: "deepseek", name: "deepseek-flash")
+        let call = deepSeekCalculatorCall(id: "call-2")
+        for owner in [ModelID(provider: "deepseek", name: "deepseek-other"), ModelID(provider: "openai", name: "deepseek-flash")] {
+            let foreign = try deepSeekContinuation(model: owner, items: [deepSeekFunctionCall(id: "fc-2", callID: "call-2")])
+            do {
+                _ = try DeepSeekResponsesRequestEncoder.encode(
+                    .init(model: model, messages: [
+                        .user([.text("Add")]),
+                        .assistant(content: [.providerContinuation(foreign)], toolCalls: [call]),
+                        .tool(.init(callID: call.id, content: [.text(#"{"sum":5}"#)], isError: false)),
+                    ], tools: [deepSeekCalculatorDefinition]),
+                    maximumOutputTokens: 100,
+                    reasoningEffort: .high
+                )
+                Issue.record("Expected foreign continuation refusal for \(owner)")
+            } catch let error as ModelProviderError {
+                #expect(error.kind == .invalidRequest)
+            }
+        }
+    }
+
     @Test func openAIContinuationRejectsVisibleContentReordering() throws {
         let model = ModelID(provider: "openai", name: "fixture")
         let items: [JSONValue] = [
@@ -509,6 +606,26 @@ private func deepSeekReasoningTextFixture(responseID: String) -> Data {
         ("response.output_item.done", #"{"type":"response.output_item.done","output_index":1,"item":{"id":"\#(messageID)","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Answer","annotations":[]}]}}"#),
         ("response.completed", #"{"type":"response.completed","response":{"id":"\#(responseID)","model":"deepseek-flash","status":"completed","output":[{"id":"\#(reasoningID)","type":"reasoning","status":"completed","content":[{"type":"reasoning_text","text":"Considered."}]},{"id":"\#(messageID)","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Answer","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":2,"output_tokens_details":{"reasoning_tokens":1}}}}"#),
     ])
+}
+
+private let deepSeekCalculatorDefinition = ModelToolDefinition(
+    name: "calculator", description: "Add", inputSchema: .object([:])
+)
+
+private func deepSeekCalculatorCall(id: String) -> ToolCall {
+    .init(id: .init(rawValue: id), name: "calculator", argumentsJSON: #"{"a":2,"b":3}"#, completeness: .complete)
+}
+
+private func deepSeekFunctionCall(id: String, callID: String) -> JSONValue {
+    .object([
+        "type": .string("function_call"), "id": .string(id), "status": .string("completed"),
+        "call_id": .string(callID), "name": .string("calculator"), "arguments": .string(#"{"a":2,"b":3}"#),
+    ])
+}
+
+private func deepSeekContinuation(model: ModelID, items: [JSONValue]) throws -> ModelProviderContinuation {
+    let payload = try JSONEncoder().encode(JSONValue.object(["items": .array(items)]))
+    return .init(model: model, format: "deepseek.responses.v1", payload: payload)
 }
 
 private func continuationRequestBody(_ request: URLRequest) throws -> [String: JSONValue] {

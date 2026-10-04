@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased: DeepSeek tool calls without reasoning
+
+With thinking on and tools offered, DeepSeek can answer a tool step with
+function calls and no reasoning item (seen live with `deepseek-v4-pro`,
+`reasoning_tokens: 0`) and accepts those calls back without reasoning.
+`DeepSeekResponsesProvider` no longer fails such a completed response as
+`invalidResponse`: the turn returns its tool calls with stop reason
+`toolCalls` and keeps a DeepSeek continuation without a reasoning item, and the
+next request replays the calls as DeepSeek returned them. Reasoning DeepSeek
+did return is still sent back. With thinking and tools, tool calls without a
+matching DeepSeek continuation for the requested model (other providers, other
+models, stripped continuations) are still refused before the request; empty
+reasoning items, mismatched calls and wrong response models are still
+rejected. Thinking-off turns are unchanged. No public API change.
+
 ## Image content (unreleased, ADR 0012)
 
 `ModelContent.image(ModelImage)` carries PNG, JPEG, GIF or WebP bytes (at most

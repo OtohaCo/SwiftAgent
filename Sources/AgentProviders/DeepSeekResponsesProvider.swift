@@ -109,7 +109,7 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
             let responseModelName = resolvedModelIDsByAlias[request.model.name] ?? request.model.name
             var decoder = DeepSeekResponsesStreamDecoder(
                 model: request.model, responseModelName: responseModelName,
-                requiresReasoningForTools: reasoningEffort != .none && !request.tools.isEmpty
+                thinkingWithTools: reasoningEffort != .none && !request.tools.isEmpty
             )
             var validation = ModelEventAccumulator()
             var receivedHeader = false
