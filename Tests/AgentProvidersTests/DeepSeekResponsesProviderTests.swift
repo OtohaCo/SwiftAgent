@@ -229,22 +229,100 @@ struct DeepSeekResponsesProviderTests {
         #expect(input.contains(deepSeekFunctionOutput(call: 1)))
     }
 
-    @Test func thinkingToolCallWithoutReasoningStillFailsClosed() async throws {
+    // DeepSeek may answer a thinking tool step with a function call and no
+    // reasoning item (reasoning_tokens 0). It accepts that call back without
+    // reasoning, so the turn completes and keeps a DeepSeek continuation.
+    @Test func thinkingToolCallWithoutReasoningCompletesWithToolCalls() async throws {
+        let model = ModelID(provider: "deepseek", name: "deepseek-flash")
         let provider = try DeepSeekResponsesProvider(
             apiKey: "fixture-key",
             transport: FixtureHTTPTransport(
                 probe: ProviderRequestProbe(),
-                bodies: [openAIToolFixture]
+                bodies: [deepSeekToolWithoutReasoningFixture(call: 2)]
             )
         )
-
-        await #expect(throws: ModelProviderError.self) {
-            for try await _ in provider.stream(request: .init(
-                model: .init(provider: "deepseek", name: "fixture"),
-                messages: [.user([.text("Use the calculator")])],
-                tools: [.init(name: "calculator", description: "Add", inputSchema: .object([:]))]
-            )) {}
+        var accumulator = ModelEventAccumulator()
+        for try await event in provider.stream(request: .init(
+            model: model,
+            messages: [.user([.text("Use the calculator")])],
+            tools: [.init(name: "calculator", description: "Add", inputSchema: .object([:]))]
+        )) {
+            try accumulator.append(event)
         }
+
+        let response = try accumulator.finish()
+        let call = ToolCall(id: .init(rawValue: "call-2"), name: "calculator",
+                            argumentsJSON: #"{"a":2,"b":3}"#, completeness: .complete)
+        #expect(response.toolCalls == [call])
+        #expect(response.stopReason == .toolCalls)
+        #expect(!response.content.contains { if case .reasoning = $0 { true } else { false } })
+        let continuations = response.content.compactMap { part -> ModelProviderContinuation? in
+            if case .providerContinuation(let state) = part { state } else { nil }
+        }
+        #expect(continuations.count == 1)
+        #expect(continuations.first?.format == "deepseek.responses.v1")
+        let restored = try #require(try DeepSeekResponsesContinuation.restore(
+            content: response.content, calls: response.toolCalls, model: model
+        ))
+        #expect(restored.items == [deepSeekFunctionItem(call: 2)])
+    }
+
+    @Test func thinkingToolCallWithoutReasoningIsReplayedWithoutReasoning() async throws {
+        let probe = ProviderRequestProbe()
+        let provider = try DeepSeekResponsesProvider(
+            apiKey: "fixture-key",
+            transport: FixtureHTTPTransport(
+                probe: probe,
+                bodies: [deepSeekReasoningToolFixture(call: 1), deepSeekToolWithoutReasoningFixture(call: 2),
+                         deepSeekTextFixture]
+            )
+        )
+        let result = try await Agent(
+            model: .init(provider: "deepseek", name: "deepseek-flash"), provider: provider,
+            tools: [ProviderCalculator()],
+            configuration: .init(maxModelTurns: 3, maxToolCalls: 2)
+        ).makeSession().run("Add values twice").wait()
+        #expect(result.modelTurns == 3)
+        #expect(result.toolCalls == 2)
+
+        let requests = await probe.requests
+        #expect(requests.count == 3)
+        let third = try requestBody(requests[2])
+        #expect(third["reasoning"] == .object(["effort": .string("high")]))
+        guard case .array(let input) = third["input"] else {
+            Issue.record("Missing stateless input"); return
+        }
+        #expect(Array(input.suffix(5)) == [
+            deepSeekReasoningItem(call: 1), deepSeekFunctionItem(call: 1), deepSeekFunctionOutput(call: 1),
+            deepSeekFunctionItem(call: 2), deepSeekFunctionOutput(call: 2),
+        ])
+    }
+
+    @Test func thinkingToolCallWithoutReasoningKeepsNoContinuationWhenThinkingIsOff() async throws {
+        let provider = try DeepSeekResponsesProvider(
+            apiKey: "fixture-key", reasoningEffort: .none,
+            transport: FixtureHTTPTransport(
+                probe: ProviderRequestProbe(),
+                bodies: [deepSeekToolWithoutReasoningFixture(call: 2)]
+            )
+        )
+        var accumulator = ModelEventAccumulator()
+        for try await event in provider.stream(request: .init(
+            model: .init(provider: "deepseek", name: "deepseek-flash"),
+            messages: [.user([.text("Use the calculator")])],
+            tools: [.init(name: "calculator", description: "Add", inputSchema: .object([:]))]
+        )) {
+            try accumulator.append(event)
+        }
+
+        let response = try accumulator.finish()
+        #expect(response.toolCalls.count == 1)
+        #expect(!response.content.contains { if case .providerContinuation = $0 { true } else { false } })
+    }
+
+    @Test func thinkingToolCallWithMalformedReasoningOrWrongModelStillFailsClosed() async {
+        await expectInvalidToolStream(deepSeekToolWithEmptyReasoningFixture)
+        await expectInvalidToolStream(deepSeekToolWithoutReasoningFixture(call: 2, model: "deepseek-other"))
     }
 
     @Test func structuredOutputAndFunctionToolsUseDeepSeekShapes() async throws {
@@ -429,6 +507,20 @@ struct DeepSeekResponsesProviderTests {
         catch { Issue.record("Unexpected error: \(error)") }
     }
 
+    private func expectInvalidToolStream(_ body: Data) async {
+        do {
+            let provider = try DeepSeekResponsesProvider(apiKey: "key",
+                transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [body]))
+            for try await _ in provider.stream(request: .init(
+                model: .init(provider: "deepseek", name: "deepseek-flash"),
+                messages: [.user([.text("Use the calculator")])],
+                tools: [.init(name: "calculator", description: "Add", inputSchema: .object([:]))]
+            )) {}
+            Issue.record("Expected invalid response")
+        } catch let error as ModelProviderError { #expect(error.kind == .invalidResponse) }
+        catch { Issue.record("Unexpected error: \(error)") }
+    }
+
     private func expectUnsupportedStream(_ body: Data) async {
         do {
             let provider = try DeepSeekResponsesProvider(apiKey: "key",
@@ -517,6 +609,32 @@ private func deepSeekReasoningToolFixture(call: Int) -> Data {
         ("response.completed", #"{"type":"response.completed","response":{"id":"resp-tool-\#(call)","model":"deepseek-flash","status":"completed","output":[{"id":"rs-\#(call)","type":"reasoning","status":"completed","content":[{"type":"reasoning_text","text":"Reason \#(call)."}]},{"id":"fc-\#(call)","type":"function_call","call_id":"call-\#(call)","name":"calculator","arguments":"{\"a\":2,\"b\":3}","status":"completed"}],"usage":{"input_tokens":5,"output_tokens":4,"output_tokens_details":{"reasoning_tokens":2}}}}"#),
     ])
 }
+
+// Shaped after a live DeepSeek reply to a thinking tool step: one function
+// call, no reasoning item, reasoning_tokens 0.
+private func deepSeekToolWithoutReasoningFixture(call: Int, model: String = "deepseek-flash") -> Data {
+    providerNamedSSE([
+        ("response.created", #"{"type":"response.created","response":{"id":"resp-tool-\#(call)","model":"\#(model)","status":"in_progress","reasoning":{"effort":"high"}}}"#),
+        ("response.in_progress", #"{"type":"response.in_progress","response":{"id":"resp-tool-\#(call)","model":"\#(model)","status":"in_progress"}}"#),
+        ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"fc-\#(call)","type":"function_call","call_id":"call-\#(call)","name":"calculator","arguments":"","status":"in_progress"}}"#),
+        ("response.function_call_arguments.delta", #"{"type":"response.function_call_arguments.delta","item_id":"fc-\#(call)","output_index":0,"delta":"{\"a\":2,"}"#),
+        ("response.function_call_arguments.delta", #"{"type":"response.function_call_arguments.delta","item_id":"fc-\#(call)","output_index":0,"delta":"\"b\":3}"}"#),
+        ("response.function_call_arguments.done", #"{"type":"response.function_call_arguments.done","item_id":"fc-\#(call)","output_index":0,"arguments":"{\"a\":2,\"b\":3}"}"#),
+        ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"fc-\#(call)","type":"function_call","call_id":"call-\#(call)","name":"calculator","arguments":"{\"a\":2,\"b\":3}","status":"completed"}}"#),
+        ("response.completed", #"{"type":"response.completed","response":{"id":"resp-tool-\#(call)","model":"\#(model)","status":"completed","output":[{"id":"fc-\#(call)","type":"function_call","call_id":"call-\#(call)","name":"calculator","arguments":"{\"a\":2,\"b\":3}","status":"completed"}],"usage":{"input_tokens":9,"input_tokens_details":{"cached_tokens":4},"output_tokens":6,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":15}}}"#),
+    ])
+}
+
+private let deepSeekToolWithEmptyReasoningFixture = providerNamedSSE([
+    ("response.created", #"{"type":"response.created","response":{"id":"resp-empty","model":"deepseek-flash","status":"in_progress"}}"#),
+    ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"rs-empty","type":"reasoning","status":"in_progress","content":[]}}"#),
+    ("response.output_item.done", #"{"type":"response.output_item.done","output_index":0,"item":{"id":"rs-empty","type":"reasoning","status":"completed","content":[]}}"#),
+    ("response.output_item.added", #"{"type":"response.output_item.added","output_index":1,"item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"","status":"in_progress"}}"#),
+    ("response.function_call_arguments.delta", #"{"type":"response.function_call_arguments.delta","item_id":"fc-1","output_index":1,"delta":"{\"a\":2,\"b\":3}"}"#),
+    ("response.function_call_arguments.done", #"{"type":"response.function_call_arguments.done","item_id":"fc-1","output_index":1,"arguments":"{\"a\":2,\"b\":3}"}"#),
+    ("response.output_item.done", #"{"type":"response.output_item.done","output_index":1,"item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"{\"a\":2,\"b\":3}","status":"completed"}}"#),
+    ("response.completed", #"{"type":"response.completed","response":{"id":"resp-empty","model":"deepseek-flash","status":"completed","output":[{"id":"rs-empty","type":"reasoning","status":"completed","content":[]},{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"{\"a\":2,\"b\":3}","status":"completed"}],"usage":{"input_tokens":5,"output_tokens":4}}}"#),
+])
 
 private let deepSeekUsageFixture = providerNamedSSE([
     ("response.created", #"{"type":"response.created","response":{"id":"resp-usage","model":"deepseek-flash","status":"in_progress"}}"#),

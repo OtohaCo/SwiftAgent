@@ -1,6 +1,6 @@
 # DeepSeek Responses Provider
 
-> last-verified: 2026-09-19
+> last-verified: 2026-10-05
 
 `AgentProviders` includes `DeepSeekResponsesProvider`, an independent adapter
 for DeepSeek's stateless Responses API.
@@ -37,6 +37,14 @@ they still match the canonical assistant content and tool calls, and replays
 them in their original item order. It never fabricates reasoning and does not
 use OpenAI reasoning summaries or encrypted content.
 
+DeepSeek sends reasoning back only when it produced some. With thinking on, it
+may answer a tool step with function calls and no reasoning item
+(`reasoning_tokens: 0`), and it accepts those calls back without reasoning. When
+thinking and tools are both enabled, such a turn still completes and keeps a
+continuation without a reasoning item, so its calls are replayed exactly as
+DeepSeek returned them. The continuation records that DeepSeek produced the
+calls; it is not a substitute for reasoning that existed.
+
 DeepSeek responses may include `summary` or `encrypted_content` compatibility
 fields on an output reasoning item. The live service does not accept those
 output-only fields when the item is replayed as Responses input. SwiftAgent
@@ -50,10 +58,13 @@ published by the decoder. Adjacent fragments of one kind may merge, while
 reordering or splitting a stored kind run around another kind is rejected.
 Payloads written before this ordered projection was added remain readable.
 
-If required reasoning state is missing, request encoding fails with
-`ModelProviderError.invalidRequest` before network I/O. A `.developer` message
-also fails before network I/O because DeepSeek treats that role as `user`, which
-would weaken SwiftAgent's trusted developer-instruction semantics.
+With thinking on and tools offered, if an assistant turn with tool calls has
+no matching continuation for the requested DeepSeek model (for example history
+from another provider or model, or a turn whose continuation was removed),
+request encoding fails with `ModelProviderError.invalidRequest` before network
+I/O. A `.developer` message also fails before network I/O because DeepSeek
+treats that role as `user`, which would weaken SwiftAgent's trusted
+developer-instruction semantics.
 
 Function calls remain host-executed SwiftAgent tools. Provider-hosted tools and
 custom `apply_patch` calls are rejected as unsupported instead of entering the
@@ -89,15 +100,16 @@ bytes; it cannot extend or rewrite the item ID, content, or argument prefix.
 
 An incomplete turn is checkpointed without executable tool proposals or opaque
 continuation state. Its visible assistant text remains ordinary conversation,
-so a later Run can continue even when tools remain registered. Historical
-turns that contain tool calls still require their matching plaintext reasoning
-continuation and fail closed when that state is unavailable.
+so a later Run can continue even when tools remain registered. With thinking
+on and tools offered, historical turns that contain tool calls still require
+their matching DeepSeek continuation and fail closed when that state is
+unavailable.
 
-When thinking and host function tools are enabled, the adapter requires the
-same completed assistant turn to contain replayable plaintext reasoning, even
-if that turn returns only text. A missing reasoning item fails the response
-before an assistant checkpoint is committed. With thinking disabled, that
-extra requirement does not apply.
+A completed turn needs no reasoning item, with or without tool calls. A
+reasoning item that is present must be well formed (non-empty `reasoning_text`
+parts) and match the canonical content, or the response fails before an
+assistant checkpoint is committed. With thinking disabled, tool calls without
+reasoning keep no continuation and are replayed from the canonical transcript.
 
 ## Current Scope
 
@@ -114,6 +126,12 @@ the normalized continuation completed successfully after those output-only
 fields were omitted from replay. That run did not qualify live multi-turn,
 function-tool, restart, structured-output or incomplete-response shapes, so
 those surfaces remain fixture-verified rather than live-qualified.
+
+On 2026-10-05, `deepseek-v4-pro` with `reasoning.effort: high` and 40 function
+tools answered a follow-up tool step with one `function_call` and no reasoning
+item. A next request that replayed that call without reasoning (earlier calls
+keeping their reasoning items) returned 200 with a text reply. The fixtures in
+`DeepSeekResponsesProviderTests` follow that shape.
 
 Contract sources verified on 2026-09-19:
 

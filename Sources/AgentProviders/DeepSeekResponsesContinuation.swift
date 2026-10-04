@@ -13,14 +13,20 @@ enum DeepSeekResponsesContinuation {
         case legacy
     }
 
+    /// With thinking and tools, DeepSeek may return function calls without a
+    /// reasoning item. `retainsToolCallsWithoutReasoning` keeps such a turn
+    /// as a continuation so its calls replay exactly as DeepSeek returned them.
     static func make(
-        items: [JSONValue], content: [ModelContent], calls: [ToolCall], model: ModelID
+        items: [JSONValue], content: [ModelContent], calls: [ToolCall], model: ModelID,
+        retainsToolCallsWithoutReasoning: Bool = false
     ) throws -> ModelProviderContinuation? {
         let items = try replayableItems(items)
         let validated = try validate(
             items: items, content: content, calls: calls, contentBinding: .observed
         )
-        guard validated.hasReasoning else { return nil }
+        guard validated.hasReasoning || (retainsToolCallsWithoutReasoning && !calls.isEmpty) else {
+            return nil
+        }
         return .init(model: model, format: format, payload: try JSONEncoder().encode(JSONValue.object([
             "items": .array(items),
             "visible_content_order": encodeVisibleContent(try visibleContent(content)),
@@ -52,7 +58,9 @@ enum DeepSeekResponsesContinuation {
             let validated = try validate(
                 items: items, content: content, calls: calls, contentBinding: binding
             )
-            guard validated.hasReasoning else { throw ProviderJSON.invalid() }
+            // DeepSeek returns reasoning only when it produced some; a turn
+            // with neither reasoning nor tool calls never needs a continuation.
+            guard validated.hasReasoning || !calls.isEmpty else { throw ProviderJSON.invalid() }
             return .init(items: items)
         } catch {
             throw ModelProviderError(kind: .invalidRequest,

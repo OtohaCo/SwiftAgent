@@ -70,7 +70,9 @@ struct DeepSeekResponsesStreamDecoder {
 
     let model: ModelID
     let responseModelName: String
-    let requiresReasoningForTools: Bool
+    /// Thinking is on and host tools are offered: tool calls keep a
+    /// continuation even when DeepSeek returned them without reasoning.
+    let thinkingWithTools: Bool
     private var info: ResponseInfo?
     private var content: [ModelContent] = []
     private var items: [Int: ItemState] = [:]
@@ -79,10 +81,10 @@ struct DeepSeekResponsesStreamDecoder {
     private var ended = false
     private var lastSequenceNumber: Int?
 
-    init(model: ModelID, responseModelName: String? = nil, requiresReasoningForTools: Bool = false) {
+    init(model: ModelID, responseModelName: String? = nil, thinkingWithTools: Bool = false) {
         self.model = model
         self.responseModelName = responseModelName ?? model.name
-        self.requiresReasoningForTools = requiresReasoningForTools
+        self.thinkingWithTools = thinkingWithTools
     }
 
     mutating func consume(_ event: ProviderSSEEvent) throws -> [ModelEvent] {
@@ -362,16 +364,13 @@ struct DeepSeekResponsesStreamDecoder {
             throw deepSeekCompletedInvalid("usage")
         }
         let calls = orderedCalls()
-        if requiresReasoningForTools, !calls.isEmpty {
-            let reasoning = items.values.filter { $0.kind == .reasoning }.flatMap(\.parts.values).map(\.value).joined()
-            guard !reasoning.isEmpty else { throw DeepSeekResponseJSON.invalid() }
-        }
         ended = true
         var events = usageEvents
         let nativeItems = items.keys.sorted().compactMap { items[$0]?.native }
         do {
             if let continuation = try DeepSeekResponsesContinuation.make(
-                items: nativeItems, content: content, calls: calls, model: model
+                items: nativeItems, content: content, calls: calls, model: model,
+                retainsToolCallsWithoutReasoning: thinkingWithTools
             ) {
                 content.append(.providerContinuation(continuation))
                 events.append(.providerContinuation(continuation))
