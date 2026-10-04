@@ -92,9 +92,76 @@ struct ImageContentRunTests {
                                  .text(images[0].textSubstitute), .image(images[1]), .image(images[2])])
     }
 
-    @Test func theImageLimitPerRequestIsBounded() {
-        #expect(throws: AgentModelBindingError.self) { try AgentImageInputPolicy.native(maximumImagesPerRequest: 0) }
-        #expect(throws: AgentModelBindingError.self) { try AgentImageInputPolicy.native(maximumImagesPerRequest: 101) }
+    @Test func theImageLimitsPerRequestAreBounded() {
+        #expect(throws: AgentModelBindingError.invalidImageLimit) { try AgentImageInputPolicy.native(maximumImagesPerRequest: 0) }
+        #expect(throws: AgentModelBindingError.invalidImageLimit) { try AgentImageInputPolicy.native(maximumImagesPerRequest: 21) }
+        #expect(throws: AgentModelBindingError.invalidImageLimit) { try AgentImageInputPolicy.native(maximumImageBytesPerRequest: 0) }
+        #expect(throws: AgentModelBindingError.invalidImageLimit) {
+            try AgentImageInputPolicy.native(maximumImageBytesPerRequest: AgentImageInputPolicy.maximumImageBytesPerRequestLimit + 1)
+        }
+    }
+
+    @Test func onlyTheNewestImagesThatFitTheRequestsBytesAreSent() async throws {
+        let images = try (1...3).map { try Self.png(padding: 1_500_000, seed: UInt8($0)) }
+        let provider = Self.provider()
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [ScreenshotTool(images: images)]).makeSession()
+        let policy = try AgentImageInputPolicy.native(maximumImageBytesPerRequest: images[1].byteCount + images[2].byteCount)
+        _ = try await session.run("Look", using: Self.binding(provider, policy)).wait()
+        let sent = try #require(Self.toolMessage(await provider.log.requests.last))
+        #expect(sent.content == [.json(.object(["window": .string("Settings")])),
+                                 .text(images[0].textSubstitute), .image(images[1]), .image(images[2])])
+    }
+
+    @Test func aProjectionThatPutsAnImageInAnAssistantMessageIsRefusedBeforeDispatch() async throws {
+        let image = try Self.png()
+        let provider = Self.provider()
+        let binding = try AgentModelBinding(profileID: "vision", profileRevision: "1", model: fixtureModel, provider: provider,
+            deployment: .init(serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture"),
+            projector: AssistantImageProjector(image: image), imageInput: .native())
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [ScreenshotTool(images: [])]).makeSession()
+        await #expect(throws: AgentModelBindingError.invalidProjection) {
+            _ = try await session.run("Look", using: binding).wait()
+        }
+        #expect(await provider.log.requests.count == 1)
+    }
+
+    @Test func aMutationsImagesOnAJournalWithoutImagesAreKeptAsTextAndItsSettlementStands() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SwiftAgent-image-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = try Self.png()
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "images", supportsRunRecords: true)
+        let call = ToolCall(id: .init(rawValue: "paint-1"), name: PaintTool.name, argumentsJSON: "{}", completeness: .complete)
+        let provider = ScriptedProvider(descriptor: .init(id: "fixture", capabilities: [.streaming, .multiTurn, .tools, .imageInput])) { request, turn in
+            turn == 1 ? toolResponse(request, [call]) : textResponse(request, "painted")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [PaintTool(image: image)]).makeSession(journal: journal)
+        let run = try await session.run("Paint", using: Self.binding(provider, .native()), operationID: "paint-op")
+        let result = try await run.wait()
+        try await run.waitForDrain()
+        #expect(result.response.content == [.text("painted")])
+        #expect(try await journal.pendingMutations().isEmpty)
+        let sent = try #require(Self.toolMessage(await provider.log.requests.last))
+        #expect(sent.content.last == .text(image.textSubstitute))
+        try await journal.close()
+    }
+
+    @Test func afterAReadOnlyImageIsRefusedTheConversationGoesOn() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SwiftAgent-image-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "images", supportsRunRecords: true)
+        let provider = ScriptedProvider(descriptor: .init(id: "fixture", capabilities: [.streaming, .multiTurn, .tools, .imageInput])) { request, turn in
+            turn == 1 ? toolResponse(request, [Self.call]) : textResponse(request, "fine")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [ScreenshotTool(images: [try Self.png()])])
+            .makeSession(journal: journal)
+        let first = try await session.run("Look", using: Self.binding(provider, .native()))
+        await #expect(throws: AgentJournalError.unsupportedFormat) { _ = try await first.wait() }
+        try await first.waitForDrain()
+        let second = try await session.run("Just answer", using: Self.binding(provider, .native()))
+        let result = try await second.wait()
+        try await second.waitForDrain()
+        #expect(result.response.content == [.text("fine")])
+        try await journal.close()
     }
 
     @Test func aToolReturningTooManyImagesFails() async throws {
@@ -213,6 +280,38 @@ struct ImageContentRunTests {
         #expect(exported.contains(image.digest))
         #expect(!exported.contains(String(image.data.base64EncodedString().prefix(64))))
         try await journal.close()
+    }
+}
+
+private struct AssistantImageProjector: AgentContextProjector {
+    let image: ModelImage
+    func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
+        let messages = input.canonicalMessages.map { message -> ModelMessage in
+            guard case .assistant(let content, let calls) = message else { return message }
+            return .assistant(content: content + [.image(image)], toolCalls: calls)
+        }
+        return .init(messages: messages, plan: .init(projectionID: "assistant-image", version: "1",
+            sourceRevision: input.conversationRevision, sourceDigest: try input.sourceDigest(),
+            contextEpoch: input.contextEpoch, lossy: false))
+    }
+}
+
+private struct PaintTool: AgentTool {
+    struct Input: Codable, Sendable {}
+    struct Output: Codable, Sendable { let painted: Bool }
+    static let name = "paint"
+    static let description = "Paint the canvas"
+    static let inputSchema = ToolSchema.object(properties: [:])
+    static let outputSchema = ToolSchema.object(properties: ["painted": .boolean], required: ["painted"])
+    let image: ModelImage
+    let policy = try! ToolPolicy.mutation(authorization: .notRequired, evidence: .none)
+    func resourceRequirements(for input: Input) throws -> [ToolResource] { [.named(.init(namespace: "canvas", id: "one"))] }
+    func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation? {
+        try .init(targets: [.init(namespace: "canvas", id: "one")], revision: .present)
+    }
+    func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
+        ToolResult(output: .init(painted: true), receipt: .init(operationID: context.idempotencyKey ?? "missing", status: .succeeded,
+            confirmedTargets: [.init(namespace: "canvas", id: "one")], revision: "v1"), images: [image])
     }
 }
 

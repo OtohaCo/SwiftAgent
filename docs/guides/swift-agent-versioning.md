@@ -2,11 +2,13 @@
 
 ## Image content (unreleased, ADR 0012)
 
-Additive public API: `ModelImage`, `ModelImageError`, `ModelContent.image`,
+Additive public API: `ModelImage` (`maximumByteCount` 3.75 MiB,
+`maximumPixelSide` 8,000), `ModelImageError`, `ModelContent.image`,
 `ModelCapabilities.imageInput`, `ModelMessage.images`,
 `ModelContent.estimatedImageInputTokens`, `ToolResult.images` and its
 `images:` initializer parameter, `AgentImageInputPolicy`,
-`AgentModelBinding.imageInput` and its `imageInput:` parameter,
+`AgentModelBinding.imageInput` and its `imageInput:` parameter (`native`
+takes at most 20 images and 24 MiB a request),
 `AgentContextTokenEstimationInput.imageInputTokens`,
 `AgentJournal.supportsImageContent`, `supportsImageContent:` on
 `AgentIncrementalJournal.create`/`createAsync`, and

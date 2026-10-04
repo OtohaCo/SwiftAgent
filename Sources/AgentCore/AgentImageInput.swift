@@ -13,35 +13,48 @@ public struct AgentImageInputPolicy: Hashable, Sendable {
         /// does not see images.
         case describe
         /// Images are sent to the model. The adapter must declare `.imageInput`, or the request fails
-        /// before dispatch. Beyond `maximumImagesPerRequest`, older images are sent as their text substitutes.
+        /// before dispatch. The newest images are sent while they fit both request limits; older ones
+        /// are sent as their text substitutes.
         case native
     }
 
-    public static let maximumImagesPerRequestLimit = 100
+    /// At most 20 images a request: Anthropic lowers its pixel limit for requests with more.
+    public static let maximumImagesPerRequestLimit = 20
+    /// At most 24 MiB of image bytes a request, whose base64 form stays within Anthropic's 32 MB request.
+    public static let maximumImageBytesPerRequestLimit = 24 * 1024 * 1024
 
     public let mode: Mode
     public let maximumImagesPerRequest: Int
+    public let maximumImageBytesPerRequest: Int
 
-    public static let reject = Self(mode: .reject, maximumImagesPerRequest: 0)
-    public static let describe = Self(mode: .describe, maximumImagesPerRequest: 0)
+    public static let reject = Self(mode: .reject, images: 0, bytes: 0)
+    public static let describe = Self(mode: .describe, images: 0, bytes: 0)
 
-    public static func native(maximumImagesPerRequest: Int = 20) throws -> Self {
-        guard (1...maximumImagesPerRequestLimit).contains(maximumImagesPerRequest) else {
+    public static func native(maximumImagesPerRequest: Int = 20,
+                              maximumImageBytesPerRequest: Int = 20 * 1024 * 1024) throws -> Self {
+        guard (1...maximumImagesPerRequestLimit).contains(maximumImagesPerRequest),
+              (1...maximumImageBytesPerRequestLimit).contains(maximumImageBytesPerRequest) else {
             throw AgentModelBindingError.invalidImageLimit
         }
-        return Self(mode: .native, maximumImagesPerRequest: maximumImagesPerRequest)
+        return Self(mode: .native, images: maximumImagesPerRequest, bytes: maximumImageBytesPerRequest)
     }
 
-    private init(mode: Mode, maximumImagesPerRequest: Int) {
+    private init(mode: Mode, images: Int, bytes: Int) {
         self.mode = mode
-        self.maximumImagesPerRequest = maximumImagesPerRequest
+        maximumImagesPerRequest = images
+        maximumImageBytesPerRequest = bytes
     }
 
-    /// The request's messages under this policy. Messages without images are returned unchanged.
-    func apply(to messages: [ModelMessage], adapterSendsImages: Bool) throws -> [ModelMessage] {
-        let total = messages.reduce(0) { $0 + $1.images.count }
-        guard total > 0 else { return messages }
-        let keep: Int
+    /// The request's messages under this policy, and whether any image became text. Messages without
+    /// images are returned unchanged.
+    func apply(to messages: [ModelMessage], adapterSendsImages: Bool) throws -> (messages: [ModelMessage], described: Bool) {
+        let images = messages.flatMap(\.images)
+        guard !images.isEmpty else { return (messages, false) }
+        // Models never produce images; a projection that put one in assistant content is invalid.
+        guard !messages.contains(where: { $0.role == .assistant && !$0.images.isEmpty }) else {
+            throw AgentModelBindingError.invalidProjection
+        }
+        var keep = 0
         switch mode {
         case .reject:
             throw AgentLoopError.unsupportedCapabilities(.imageInput)
@@ -49,10 +62,15 @@ public struct AgentImageInputPolicy: Hashable, Sendable {
             keep = 0
         case .native:
             guard adapterSendsImages else { throw AgentLoopError.unsupportedCapabilities(.imageInput) }
-            keep = maximumImagesPerRequest
+            var bytes = 0
+            for image in images.reversed() {
+                guard keep < maximumImagesPerRequest, bytes + image.byteCount <= maximumImageBytesPerRequest else { break }
+                keep += 1
+                bytes += image.byteCount
+            }
         }
-        var describe = max(0, total - keep)
-        guard describe > 0 else { return messages }
+        var describe = images.count - keep
+        guard describe > 0 else { return (messages, false) }
         func rewrite(_ content: [ModelContent]) -> [ModelContent] {
             content.map { part in
                 guard describe > 0, case .image(let image) = part else { return part }
@@ -60,15 +78,15 @@ public struct AgentImageInputPolicy: Hashable, Sendable {
                 return .text(image.textSubstitute)
             }
         }
-        return messages.map { message in
+        let rewritten = messages.map { message -> ModelMessage in
             switch message {
             case .user(let content): return .user(rewrite(content))
             case .tool(let result):
                 return .tool(.init(callID: result.callID, content: rewrite(result.content), isError: result.isError))
-            case .assistant(let content, let calls): return .assistant(content: rewrite(content), toolCalls: calls)
-            case .system, .developer: return message
+            case .assistant, .system, .developer: return message
             }
         }
+        return (rewritten, true)
     }
 }
 

@@ -14,13 +14,17 @@ textual description is not native image evaluation.
 
 **Content.** `ModelContent.image(ModelImage)` carries Host-supplied bytes. The
 initializer recognizes PNG, JPEG, GIF and WebP from the leading bytes (a
-declared type must match), refuses empty data and more than
-`ModelImage.maximumByteCount` (5 MiB), and requires a short text alternative
-(`description`, at most 1,024 UTF-8 bytes). Identity is the lowercase SHA-256 of
+declared type must match), refuses empty data, more than
+`ModelImage.maximumByteCount` (3.75 MiB, so the base64 form fits the 5 MiB
+Anthropic allows for an image's encoded data) and more than 8,000 pixels a side
+when the header gives the size, and requires a short text alternative
+(`description`, at most 1,024 UTF-8 bytes). Only the header is checked: bytes
+damaged after it are accepted and fail at the provider. Identity is the lowercase SHA-256 of
 the bytes (`digest`), computed without a crypto dependency in AgentModels.
 Pixel size is read from the header when present. Equality is digest, media type
 and description. Images belong in user messages and tool results; assistant
-content never carries them and adapters refuse it.
+content never carries them: a projection that puts one there fails before
+dispatch (`invalidProjection`) and adapters refuse it.
 
 The SDK never downloads, resolves paths or URLs, or performs OCR. There is no
 Host-resolved reference case: bytes are always present in memory, and the Host
@@ -40,10 +44,14 @@ estimation and dispatch; the canonical conversation keeps every image:
   `AgentLoopError.unsupportedCapabilities(.imageInput)`.
 - `.describe`: each image is sent as `ModelImage.textSubstitute`. This is the
   Host's explicit choice for a model that does not see images.
-- `.native(maximumImagesPerRequest:)` (1...100, default 20): images are sent.
-  The adapter must declare `ModelCapabilities.imageInput`, or the request fails
-  before dispatch. Beyond the limit, the oldest images in that request are sent
-  as their text substitutes.
+- `.native(maximumImagesPerRequest:maximumImageBytesPerRequest:)` (1...20
+  images, default 20, since Anthropic lowers its pixel limit above 20; 1 byte to
+  24 MiB, default 20 MiB, so the base64 form stays within Anthropic's 32 MB
+  request): images are sent. The adapter must declare
+  `ModelCapabilities.imageInput`, or the request fails before dispatch. The
+  newest images are sent while they fit both limits; older ones in that request
+  are sent as their text substitutes. Such a request's projection plan is marked
+  lossy; context reports do not yet count described images.
 
 Support therefore needs both the model (the Host's knowledge, e.g. its catalog)
 and the working adapter (`.imageInput`); neither alone sends an image.
@@ -68,8 +76,11 @@ type, digest, size and description; the bytes are kept once per digest in the
 store's `images/` directory, written durably before the batch that refers to
 them. Reading a message loads and verifies the bytes against the digest
 (`checksumMismatch` otherwise), so a reopened Session or an unfinished Run's
-history gets the image back. Stores of schema 3–9 refuse an image with
-`unsupportedFormat` before publishing it; they are never migrated. Schema-9
+history gets the image back. Stores of schema 3–9 are never migrated. With
+them, a read-only tool's images fail its result with `unsupportedFormat` before
+anything is committed (the conversation can go on); a mutation's effect has
+already happened, so its settlement is committed with each image as its text
+substitute rather than quarantined. Schema-9
 readers reject schema 10 before any write (checked by
 `Scripts/verify-image-content-compatibility.sh`). Memory journals keep images
 in memory. Image files live for the store's lifetime; maintenance does not
@@ -85,6 +96,9 @@ bytes; regular export includes the digests only.
 - A Host keeping conversations on schema 3–9 stores must describe images
   itself (or create new stores with image support).
 - Disk use grows with distinct images per store until the store is deleted.
+- Every image in the history is held in memory, and reading the history reads
+  and verifies each image file; long image-heavy conversations cost memory and
+  I/O in proportion.
 
 ## Not decided here
 

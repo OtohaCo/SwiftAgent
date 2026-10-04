@@ -327,8 +327,10 @@ digest; a changed file fails the read (`checksumMismatch`) and never yields a
 different image. Reopened Sessions and unfinished Runs therefore get their
 images back from the digest.
 
-Schema 3–9 stores refuse a message carrying an image with `unsupportedFormat`
-before publication and are never migrated; `AgentJournal.supportsImageContent`
+Schema 3–9 stores are never migrated: with them a read-only tool result
+carrying images fails with `unsupportedFormat` before commit, and a mutation's
+settlement is committed with text substitutes instead (the store itself refuses
+any image with `unsupportedFormat`); `AgentJournal.supportsImageContent`
 tells a Host which kind it holds (memory journals: always). Image files are kept
 for the store's lifetime; maintenance does not collect them. Schema-9 readers
 reject schema 10 before writes (`Scripts/verify-image-content-compatibility.sh`

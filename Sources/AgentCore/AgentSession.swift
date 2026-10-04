@@ -664,6 +664,7 @@ public actor AgentSession {
         let lifecycle = AgentLoopLifecycle(
             control: control,
             evidenceLedger: evidenceLedger,
+            keepsImages: journal?.supportsImageContent ?? true,
             mutationAdmission: journal,
             checkpoint: { messages, steering in try await self.record(messages, steering: steering, runID: runID, budget: budget) },
             sourceRevision: { messages in try await self.projectionSourceRevision(messages, runID: runID) },

@@ -573,8 +573,17 @@ package struct AgentLoop: Sendable {
         }
         try validateContinuations(projection.messages)
         // Images reach the model, become text or stop the request here, per the Run's explicit choice.
-        let modelMessages = try binding.imageInput.apply(
+        let (modelMessages, described) = try binding.imageInput.apply(
             to: projection.messages, adapterSendsImages: provider.descriptor.capabilities.contains(.imageInput))
+        // Images sent as text make this request's view lossy, and its plan says so.
+        let sentProjection = described ? AgentContextProjection(
+            messages: modelMessages,
+            plan: .init(projectionID: projection.plan.projectionID, version: projection.plan.version,
+                        sourceRevision: projection.plan.sourceRevision, sourceDigest: projection.plan.sourceDigest,
+                        contextEpoch: projection.plan.contextEpoch, lossy: true,
+                        reason: projection.plan.reason ?? "Images were sent as their text substitutes."),
+            report: projection.report
+        ) : projection
         let requestBytes = sharesCanonicalMessageStorage(modelMessages, messages)
             ? sourceEncoding.byteCount : try AgentContextWindow.encodedByteCount(modelMessages)
         if let modelContextByteLimit {
@@ -627,7 +636,7 @@ package struct AgentLoop: Sendable {
         if let report = projection.report, let sink = binding.contextReports {
             await sink.append(report.withBudget(requestBytes: requestBytes, estimate: tokenEstimate))
         }
-        return .init(request: request, projection: projection, canonicalMessages: messages)
+        return .init(request: request, projection: sentProjection, canonicalMessages: messages)
     }
 
     private func validateContinuations(_ messages: [ModelMessage]) throws {

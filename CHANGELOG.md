@@ -3,14 +3,17 @@
 ## Image content (unreleased, ADR 0012)
 
 `ModelContent.image(ModelImage)` carries PNG, JPEG, GIF or WebP bytes (at most
-5 MiB) with a SHA-256 `digest`, header pixel size and a required short text
-alternative. Tools return up to eight with `ToolResult(images:)`; they follow
-the tool's output in its result message. Each Run chooses with
+3.75 MiB, whose base64 fits Anthropic's 5 MiB, and 8,000 pixels a side) with a
+SHA-256 `digest`, header pixel size and a required short text alternative.
+Tools return up to eight with `ToolResult(images:)`; they follow the tool's
+output in its result message. Each Run chooses with
 `AgentModelBinding(imageInput:)`: `.reject` (default) fails before dispatch,
-`.describe` sends `ModelImage.textSubstitute`, `.native(maximumImagesPerRequest:)`
-sends images through an adapter declaring the new
-`ModelCapabilities.imageInput` and describes the oldest beyond the limit. The
-conversation always keeps the images.
+`.describe` sends `ModelImage.textSubstitute`,
+`.native(maximumImagesPerRequest:maximumImageBytesPerRequest:)` (at most 20
+images and 24 MiB) sends the newest images that fit through an adapter
+declaring the new `ModelCapabilities.imageInput` and describes older ones.
+Assistant images are refused before dispatch. The conversation always keeps
+the images.
 
 Anthropic and OpenAI Responses declare `.imageInput` and send base64 image
 blocks / `input_image` data URLs in user turns and tool results; the local
@@ -22,8 +25,10 @@ images. Request byte limits and source digests count images by identity
 `supportsImageContent: true` creation selects journal format schema 10
 (including schema 9): records keep digest, type, size and description; bytes
 are kept once per digest under `images/` and verified on read, so reopened
-Sessions and unfinished Runs get them back. Schema 3–9 stores refuse images
-with `unsupportedFormat`; schema-9 readers reject schema 10 before writing
+Sessions and unfinished Runs get them back. With schema 3–9 stores a
+read-only result with images fails with `unsupportedFormat` before commit, and
+a mutation's settlement is committed with text substitutes instead; schema-9
+readers reject schema 10 before writing
 (`Scripts/verify-image-content-compatibility.sh`). Audit result records list
 `imageDigests` only. Exhaustive switches over `ModelContent` and
 `AgentModelBindingError` (new `invalidImageLimit`) must handle the new cases;

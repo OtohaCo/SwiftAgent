@@ -27,9 +27,17 @@ actor AgentToolBatchProgress {
         var reserved = false
         do {
             try budget.checkActive()
+            var images = result.images.map(ModelContent.image)
+            if !images.isEmpty, lifecycle?.keepsImages == false {
+                // A journal that cannot keep images (format schema 3-9). A read-only result fails here,
+                // before anything is committed. A mutation's effect already happened: its settlement is
+                // kept, with each image as its text substitute, rather than quarantined.
+                guard call.policy.effect == .mutation, !result.isIdempotentReplay else { throw AgentJournalError.unsupportedFormat }
+                images = result.images.map { .text($0.textSubstitute) }
+            }
             let message = ToolResultMessage(
                 callID: call.call.id,
-                content: [.json(result.output)] + result.images.map(ModelContent.image),
+                content: [.json(result.output)] + images,
                 isError: result.isModelVisibleError
             )
             try await emitter?.reserveCompletion(call.call.id)

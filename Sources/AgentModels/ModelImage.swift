@@ -23,9 +23,12 @@ public struct ModelImage: Hashable, Sendable, Codable {
         }
     }
 
-    /// The largest image accepted, in bytes: the smallest per-image limit of the adapters that send images.
-    public static let maximumByteCount = 5 * 1024 * 1024
-    /// The most images one message (a user turn or one tool result) may carry.
+    /// The largest image accepted, in bytes: 3.75 MiB, whose base64 form fits the 5 MiB that Anthropic
+    /// allows for an image's encoded data (OpenAI allows more).
+    public static let maximumByteCount = 3_932_160
+    /// The widest or tallest image accepted, in pixels: Anthropic refuses larger ones.
+    public static let maximumPixelSide = 8_000
+    /// The most images one tool result may carry.
     public static let maximumImagesPerMessage = 8
     /// The longest text alternative, in UTF-8 bytes.
     public static let maximumDescriptionBytes = 1_024
@@ -138,12 +141,17 @@ public struct ModelImage: Hashable, Sendable, Codable {
               description.utf8.count <= maximumDescriptionBytes else {
             throw ModelImageError.invalidDescription
         }
-        let bytes = [UInt8](data.prefix(64 * 1024))
+        // Only the header is read: bytes that start like an image but are damaged later are not detected.
+        let bytes = [UInt8](data)
         guard let actual = ModelImageHeader.mediaType(bytes) else { throw ModelImageError.unrecognizedData }
         if let mediaType, mediaType != actual {
             throw ModelImageError.mediaTypeMismatch(declared: mediaType, actual: actual)
         }
-        return (actual, ModelImageHeader.size(bytes, type: actual))
+        let size = ModelImageHeader.size(bytes, type: actual)
+        if let size, size.width > maximumPixelSide || size.height > maximumPixelSide {
+            throw ModelImageError.tooManyPixels(width: size.width, height: size.height, limit: maximumPixelSide)
+        }
+        return (actual, size)
     }
 
     private static func validDigest(_ value: String) -> Bool {
@@ -178,6 +186,7 @@ public enum ModelImageError: Error, Equatable, Sendable {
     case invalidDescription
     case digestMismatch
     case tooManyImages(count: Int, limit: Int)
+    case tooManyPixels(width: Int, height: Int, limit: Int)
 }
 
 extension ModelContent {
@@ -224,7 +233,7 @@ enum ModelImageHeader {
         case .jpeg:
             size = jpeg(b)
         }
-        guard let size, size.0 > 0, size.1 > 0, size.0 <= 1 << 20, size.1 <= 1 << 20 else { return nil }
+        guard let size, size.0 > 0, size.1 > 0 else { return nil }
         return size
     }
 

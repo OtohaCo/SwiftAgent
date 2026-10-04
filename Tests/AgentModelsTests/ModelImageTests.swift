@@ -96,6 +96,55 @@ final class ModelImageTests: XCTestCase {
         }
     }
 
+    func testTheLargestImageStillFitsAnthropicsLimitOnItsBase64Form() {
+        // Anthropic applies its 5 MiB per-image limit to the encoded data.
+        let largest = Data(repeating: 0xFF, count: ModelImage.maximumByteCount)
+        XCTAssertLessThanOrEqual(largest.base64EncodedString().utf8.count, 5 * 1024 * 1024)
+    }
+
+    func testAnImageWiderOrTallerThanProvidersTakeIsRefused() {
+        let limit = ModelImage.maximumPixelSide
+        XCTAssertNoThrow(try ModelImage(data: ImageFixture.png(width: limit, height: 10), description: "x"))
+        XCTAssertThrowsError(try ModelImage(data: ImageFixture.png(width: limit + 1, height: 10), description: "x")) {
+            XCTAssertEqual($0 as? ModelImageError, .tooManyPixels(width: limit + 1, height: 10, limit: limit))
+        }
+        XCTAssertThrowsError(try ModelImage(data: ImageFixture.gif(width: 10, height: limit + 1), description: "x"))
+    }
+
+    func testLossyAndExtendedWebPSizesAreRead() throws {
+        var lossy = Data(Array("RIFF".utf8)); lossy.append(contentsOf: [30, 0, 0, 0])
+        lossy.append(contentsOf: Array("WEBPVP8 ".utf8)); lossy.append(contentsOf: [10, 0, 0, 0, 0, 0, 0, 0x9D, 0x01, 0x2A])
+        lossy.append(contentsOf: [0x40, 0x01, 0xF0, 0x00])
+        let first = try ModelImage(data: lossy, description: "lossy")
+        XCTAssertEqual([first.pixelWidth, first.pixelHeight], [320, 240])
+
+        var extended = Data(Array("RIFF".utf8)); extended.append(contentsOf: [30, 0, 0, 0])
+        extended.append(contentsOf: Array("WEBPVP8X".utf8)); extended.append(contentsOf: [10, 0, 0, 0, 0, 0, 0, 0])
+        extended.append(contentsOf: [0x7F, 0x07, 0x00, 0x37, 0x04, 0x00])
+        let second = try ModelImage(data: extended, description: "extended")
+        XCTAssertEqual([second.pixelWidth, second.pixelHeight], [1920, 1080])
+    }
+
+    func testTruncatedOrDamagedHeadersNeverCrashAndGiveNoSize() throws {
+        let samples = [ImageFixture.png(width: 300, height: 200), ImageFixture.jpeg(width: 300, height: 200),
+                       ImageFixture.gif(width: 300, height: 200), ImageFixture.webpLossless(width: 300, height: 200)]
+        for sample in samples {
+            for length in 1...sample.count {
+                let prefix = Data(sample.prefix(length))
+                if let image = try? ModelImage(data: prefix, description: "x") {
+                    XCTAssertTrue(image.pixelWidth == nil || image.pixelWidth == 300)
+                }
+            }
+        }
+        // A JPEG whose segment lengths run past its end.
+        var broken = Data([0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xFF])
+        broken.append(Data(repeating: 0, count: 16))
+        XCTAssertNil(try ModelImage(data: broken, description: "x").pixelWidth)
+        var zero = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x00])
+        zero.append(Data(repeating: 0, count: 16))
+        XCTAssertNil(try ModelImage(data: zero, description: "x").pixelWidth)
+    }
+
     func testTheDescriptionIsRequiredAndBounded() {
         let png = ImageFixture.png(width: 2, height: 2)
         XCTAssertThrowsError(try ModelImage(data: png, description: "  \n")) {
