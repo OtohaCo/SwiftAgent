@@ -1,5 +1,30 @@
 # SwiftAgent Semantic Versioning
 
+## Image content (unreleased, ADR 0012)
+
+Additive public API: `ModelImage` (`maximumByteCount` 3.75 MiB,
+`maximumPixelSide` 8,000), `ModelImageError`, `ModelContent.image`,
+`ModelCapabilities.imageInput`, `ModelMessage.images`,
+`ModelContent.estimatedImageInputTokens`, `ToolResult.images` and its
+`images:` initializer parameter, `AgentImageInputPolicy`,
+`AgentModelBinding.imageInput` and its `imageInput:` parameter (`native`
+takes at most 20 images and 24 MiB a request),
+`AgentContextTokenEstimationInput.imageInputTokens`,
+`AgentJournal.supportsImageContent`, `supportsImageContent:` on
+`AgentIncrementalJournal.create`/`createAsync`, and
+`AuditResultReference.imageDigests`. Source breaks: exhaustive switches over
+`ModelContent` and `AgentModelBindingError` (`invalidImageLimit`); added
+parameters change stored function signatures. Behavior changes: the Anthropic
+and OpenAI Responses descriptors include `.imageInput`; the default image
+policy is `.reject`, so existing Runs without images are unchanged.
+
+Disk: format schema 10 is selected only by `supportsImageContent: true`;
+default and other creation options keep their schemas. Records without images
+keep their byte encoding; audit records without images are unchanged. The
+unmodified `3ad52332e71290abde108007a7ce34e7054b7bde` reader rejects schema 10
+on open, append and maintenance before and after new-reader maintenance
+(`Scripts/verify-image-content-compatibility.sh`).
+
 ## Queued mutation identity (unreleased, Issue #74)
 
 Queued inputs now explicitly select `AgentOperationIdentity.perCall` or

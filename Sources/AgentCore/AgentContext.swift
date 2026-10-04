@@ -51,8 +51,11 @@ enum AgentContextWindow {
         return restored
     }
 
+    /// Images count by their identity and metadata; their bytes are budgeted as tokens instead.
     static func encodedByteCount(_ messages: [ModelMessage]) throws -> Int {
-        let data = try JSONEncoder().encode(messages)
+        let encoder = JSONEncoder()
+        encoder.userInfo[ModelImage.referenceOnlyEncoding] = true
+        let data = try encoder.encode(messages)
         AgentContextEncodingObservation.didEncode?("projection", data.count)
         return data.count
     }

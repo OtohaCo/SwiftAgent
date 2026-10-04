@@ -572,8 +572,20 @@ package struct AgentLoop: Sendable {
             throw AgentModelBindingError.invalidProjection
         }
         try validateContinuations(projection.messages)
-        let requestBytes = sharesCanonicalMessageStorage(projection.messages, messages)
-            ? sourceEncoding.byteCount : try AgentContextWindow.encodedByteCount(projection.messages)
+        // Images reach the model, become text or stop the request here, per the Run's explicit choice.
+        let (modelMessages, described) = try binding.imageInput.apply(
+            to: projection.messages, adapterSendsImages: provider.descriptor.capabilities.contains(.imageInput))
+        // Images sent as text make this request's view lossy, and its plan says so.
+        let sentProjection = described ? AgentContextProjection(
+            messages: modelMessages,
+            plan: .init(projectionID: projection.plan.projectionID, version: projection.plan.version,
+                        sourceRevision: projection.plan.sourceRevision, sourceDigest: projection.plan.sourceDigest,
+                        contextEpoch: projection.plan.contextEpoch, lossy: true,
+                        reason: projection.plan.reason ?? "Images were sent as their text substitutes."),
+            report: projection.report
+        ) : projection
+        let requestBytes = sharesCanonicalMessageStorage(modelMessages, messages)
+            ? sourceEncoding.byteCount : try AgentContextWindow.encodedByteCount(modelMessages)
         if let modelContextByteLimit {
             let bytes = requestBytes
             guard bytes <= modelContextByteLimit else {
@@ -589,7 +601,7 @@ package struct AgentLoop: Sendable {
             let estimate: AgentContextTokenEstimate
             do {
                 estimate = try await budget.estimator.estimate(.init(
-                    model: model, messages: projection.messages,
+                    model: model, messages: modelMessages,
                     tools: toolDefinitions, structuredOutput: structuredOutput
                 ))
             } catch {
@@ -614,7 +626,7 @@ package struct AgentLoop: Sendable {
         }
         let request = ModelRequest(
             model: model,
-            messages: projection.messages,
+            messages: modelMessages,
             tools: toolDefinitions,
             structuredOutput: structuredOutput,
             sessionID: sessionID,
@@ -624,7 +636,7 @@ package struct AgentLoop: Sendable {
         if let report = projection.report, let sink = binding.contextReports {
             await sink.append(report.withBudget(requestBytes: requestBytes, estimate: tokenEstimate))
         }
-        return .init(request: request, projection: projection, canonicalMessages: messages)
+        return .init(request: request, projection: sentProjection, canonicalMessages: messages)
     }
 
     private func validateContinuations(_ messages: [ModelMessage]) throws {

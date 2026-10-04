@@ -34,6 +34,25 @@ default. A Host may explicitly use `AgentSemanticHandoffProjector` to remove
 private provider state for a semantic handoff, but this is lossy and never
 fabricates a native continuation or tool result.
 
+## Images
+
+The binding's `imageInput` (`AgentImageInputPolicy`, ADR 0012) decides how
+images in the projected request reach the model; the canonical conversation
+keeps them all. `.reject` (default) fails before dispatch with
+`AgentLoopError.unsupportedCapabilities(.imageInput)`. `.describe` sends each
+image's `textSubstitute`: choose it for a model whose catalog entry says it
+does not take images. `.native(maximumImagesPerRequest:maximumImageBytesPerRequest:)` sends the
+newest images that fit both limits (at most 20 images and 24 MiB) when the
+adapter declares `.imageInput` (otherwise it fails before dispatch) and
+describes older ones. An image in assistant content fails before dispatch with
+`invalidProjection`.
+
+Request byte limits and the source digest count an image by its identity and
+metadata (`ModelImage.referenceOnlyEncoding`), not its bytes. A token estimator
+should encode messages the same way and add
+`AgentContextTokenEstimationInput.imageInputTokens`, the sum of each image's
+conservative `estimatedInputTokens`.
+
 ## Request projection
 
 `AgentContextProjector` receives a canonical snapshot and produces the messages

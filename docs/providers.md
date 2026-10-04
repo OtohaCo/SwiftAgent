@@ -1,22 +1,24 @@
 # SwiftAgent Providers
 
-> last-verified: 2026-09-20
+> last-verified: 2026-10-04
 
 `ModelProvider` is the vendor-neutral request and event boundary. Provider
 adapters translate vendor transport and stream contracts into `ModelEvent`;
 `AgentLoop` remains the only tool-orchestration authority.
 
-| Provider | Product | Platforms | Streaming | Host tools | Structured output | Reasoning | Usage | Authentication | Normal CI evidence |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Anthropic Messages | AgentProviders | macOS, iOS, Linux | Yes | Yes | Yes | Signed thinking continuation | Yes | API key | Fixtures; operator live test available |
-| OpenAI Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Encrypted opaque continuation and visible summaries | Yes | API key | Fixtures; operator live test available |
-| DeepSeek Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Plaintext opaque continuation | Yes | API key | Fixtures; bounded terminal/usage live evidence |
-| Local Responses (LM Studio qualification target) | AgentProviders | macOS, iOS, Linux | Yes | Explicit model opt-in | Explicit model opt-in | Visible normalized content only; no opaque continuation | Yes when reported | None or bearer | Fixtures; operator live qualification available |
-| Apple on-device | AgentAppleProvider | macOS/iOS 26+ | No; one validated plan per request | Yes | No | Not advertised | SDK 27 where available | None | Compile and fixtures; operator live test available |
-| Apple Private Cloud Compute | AgentAppleProvider | macOS/iOS 27+ | No; one validated plan per request | Yes | No | Not advertised | Yes where reported by SDK | None | Compile and fixtures; operator live test available |
+| Provider | Product | Platforms | Streaming | Host tools | Structured output | Reasoning | Images in (ADR 0012) | Usage | Authentication | Normal CI evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Anthropic Messages | AgentProviders | macOS, iOS, Linux | Yes | Yes | Yes | Signed thinking continuation | Base64 image blocks in user turns and tool results | Yes | API key | Fixtures; operator live test available |
+| OpenAI Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Encrypted opaque continuation and visible summaries | `input_image` data URLs in user messages and tool outputs | Yes | API key | Fixtures; operator live test available |
+| DeepSeek Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Plaintext opaque continuation | No; refused | Yes | API key | Fixtures; bounded terminal/usage live evidence |
+| Local Responses (LM Studio qualification target) | AgentProviders | macOS, iOS, Linux | Yes | Explicit model opt-in | Explicit model opt-in | Visible normalized content only; no opaque continuation | Explicit `.imageInput` opt-in | Yes when reported | None or bearer | Fixtures; operator live qualification available |
+| Apple on-device | AgentAppleProvider | macOS/iOS 26+ | No; one validated plan per request | Yes | No | Not advertised | No; refused | SDK 27 where available | None | Compile and fixtures; operator live test available |
+| Apple Private Cloud Compute | AgentAppleProvider | macOS/iOS 27+ | No; one validated plan per request | Yes | No | Not advertised | No; refused | Yes where reported by SDK | None | Compile and fixtures; operator live test available |
 
 Provider capabilities describe the adapter's declared contract, not every
-feature offered by the vendor. OpenAI and DeepSeek provider-hosted tools such as
+feature offered by the vendor. `.imageInput` means the adapter can send images;
+whether the bound model takes them is the Host's choice per Run
+(`AgentImageInputPolicy`). OpenAI and DeepSeek provider-hosted tools such as
 web search, file search, computer use, MCP, and custom tools are not SwiftAgent
 `AgentTool` values. The current adapters reject those output item types rather
 than routing them into the Host executor.

@@ -32,7 +32,7 @@ public struct AnthropicEffort: RawRepresentable, Hashable, Sendable, Codable {
 
 public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public var descriptor: ModelProviderDescriptor {
-        var capabilities: ModelCapabilities = [.streaming, .multiTurn, .tools, .structuredOutput]
+        var capabilities: ModelCapabilities = [.streaming, .multiTurn, .tools, .structuredOutput, .imageInput]
         if thinking != .disabled || effort != nil { capabilities.insert(.reasoning) }
         return .init(id: "anthropic", capabilities: capabilities)
     }

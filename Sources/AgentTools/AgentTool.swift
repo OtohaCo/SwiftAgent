@@ -131,15 +131,22 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
     /// committed; a settled mutation replay returns its stored output and declares nothing. Declare
     /// from read-only tools.
     public let declaredTools: [String]
+    /// Images the model may look at after the output, such as a screenshot or a video frame (ADR 0012).
+    /// At most `ModelImage.maximumImagesPerMessage`; more fail the call after the executor ran, like an
+    /// invalid output. Whether the model is sent them or their text substitutes is the Run's image
+    /// policy. A settled mutation replay returns its stored output without images.
+    public let images: [ModelImage]
     package let isIdempotentReplay: Bool
     package let isModelVisibleError: Bool
     package var confirmedNoEffect: ToolNoEffectProof? = nil
 
-    public init(output: Output, evidence: [Evidence] = [], receipt: ToolReceipt? = nil, declaredTools: [String] = []) {
+    public init(output: Output, evidence: [Evidence] = [], receipt: ToolReceipt? = nil, declaredTools: [String] = [],
+                images: [ModelImage] = []) {
         self.output = output
         self.evidence = evidence
         self.receipt = receipt
         self.declaredTools = declaredTools
+        self.images = images
         isIdempotentReplay = false
         isModelVisibleError = false
     }
@@ -149,6 +156,7 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
         self.evidence = evidence
         self.receipt = receipt
         declaredTools = []
+        images = []
         self.isIdempotentReplay = isIdempotentReplay
         isModelVisibleError = false
     }
@@ -158,6 +166,7 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
         evidence = []
         receipt = nil
         declaredTools = []
+        images = []
         isIdempotentReplay = false
         isModelVisibleError = true
     }

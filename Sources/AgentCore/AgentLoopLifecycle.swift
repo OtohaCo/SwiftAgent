@@ -16,6 +16,8 @@ struct AgentLoopLifecycle: Sendable {
     let commitAuditedResult: (@Sendable (PreparedToolCall, ToolResult<JSONValue>, [ModelMessage]) async throws -> [ModelMessage])?
     let markMutationNeedsReconciliation: @Sendable (ToolCallID) async throws -> Void
     let recordReadOnlyResult: @Sendable (ToolCall, ToolResultMessage) async -> Void
+    /// Whether the Session's journal keeps images (ADR 0012): no journal, a memory journal or format schema 10.
+    let keepsImages: Bool
     /// Ends the Run's ownership of the Session. A returned error is a persistence outcome the Run
     /// must report instead of its own, such as an unknown commit of retained steering.
     let beforeFinish: @Sendable (Result<AgentLoopResult, any Error>) async -> (any Error)?
@@ -23,6 +25,7 @@ struct AgentLoopLifecycle: Sendable {
     init(
         control: AgentRunControl,
         evidenceLedger: EvidenceLedger,
+        keepsImages: Bool = true,
         mutationAdmission: (any ToolMutationAdmission)? = nil,
         checkpoint: @escaping @Sendable ([ModelMessage], [AgentSteeringInput]) async throws -> [ModelMessage],
         sourceRevision: (@Sendable ([ModelMessage]) async throws -> UInt64)? = nil,
@@ -49,6 +52,7 @@ struct AgentLoopLifecycle: Sendable {
         self.commitAuditedResult = commitAuditedResult
         self.markMutationNeedsReconciliation = markMutationNeedsReconciliation
         self.recordReadOnlyResult = recordReadOnlyResult
+        self.keepsImages = keepsImages
         self.beforeFinish = beforeFinish
     }
 }

@@ -13,6 +13,10 @@ import Foundation
         do {
             let journal: AgentJournal
             switch mode {
+            #if IMAGE_CONTENT_RUNTIME
+            case "create-image-content", "create-image-content-empty":
+                journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsImageContent: true)
+            #endif
             #if RUN_RECORD_RUNTIME
             case "create-run-records", "create-run-records-empty":
                 journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsRunRecords: true)
@@ -121,6 +125,24 @@ import Foundation
                 guard case .terminal(let record, .completed) = try await session.runRecord(correlationKey: "reader-key"),
                       try await session.runRecord(runID: record.runID) == .terminal(record, .completed) else { throw AgentJournalError.invalidRecord }
                 print("run=terminal-completed indexed=true")
+            #endif
+            #if IMAGE_CONTENT_RUNTIME
+            case "create-image-content-empty": break
+            case "create-image-content", "inspect-image-content":
+                if mode == "create-image-content" {
+                    let provider = MatrixImageProvider()
+                    let model = ModelID(provider: "reader-matrix", name: "script")
+                    let binding = try AgentModelBinding(profileID: "matrix", profileRevision: "1", model: model, provider: provider,
+                        deployment: .init(serviceInstanceID: "matrix", endpointScope: "local", apiDialect: "matrix"), imageInput: .native())
+                    let run = try await Agent(model: model, provider: provider, tools: [MatrixImageTool()])
+                        .makeSession(id: sessionID, journal: journal).run("image", using: binding)
+                    _ = try await run.wait(); try await run.waitForDrain()
+                }
+                let images = try await journal.readMessages(sessionID: sessionID).flatMap(\.message.images)
+                let expected = try MatrixImageTool.image()
+                guard journal.supportsImageContent, images.map(\.digest) == [expected.digest],
+                      images.first?.data == expected.data else { throw AgentJournalError.invalidRecord }
+                print("images=1 digest=\(expected.digest)")
             #endif
             case "maintain":
                 for _ in 0..<8 { _ = try await journal.requestMaintenance() }
@@ -280,6 +302,44 @@ private struct MatrixNoEffectTool: RuntimeAgentTool {
         await counter.entered()
         throw try context.confirmNoEffect(receipt: .init(operationID: context.idempotencyKey!, status: .failed, confirmedTargets: [], failure: .rejected),
             error: .init(code: "refused", message: "No write"), wholeOperationHadNoEffect: true, noOutstandingEffects: true, basis: "checked before writing")
+    }
+}
+#endif
+
+#if IMAGE_CONTENT_RUNTIME
+private struct MatrixImageProvider: ModelProvider {
+    let descriptor = ModelProviderDescriptor(id: "reader-matrix", capabilities: [.multiTurn, .tools, .imageInput])
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            let info = ResponseInfo(id: "image-matrix", model: request.model)
+            try emit(.responseStarted(info))
+            if case .user? = request.messages.last {
+                let call = ToolCall(id: .init(rawValue: "frame"), name: MatrixImageTool.name, argumentsJSON: "{}", completeness: .complete)
+                try emit(.toolCallStarted(call.id, name: call.name)); try emit(.toolCallArgumentsDelta(call.id, call.argumentsJSON))
+                try emit(.toolCallCompleted(call)); try emit(.responseCompleted(.init(info: info, toolCalls: [call], stopReason: .toolCalls)))
+            } else {
+                try emit(.textDelta("done")); try emit(.responseCompleted(.init(info: info, content: [.text("done")], stopReason: .endTurn)))
+            }
+        }
+    }
+}
+private struct MatrixImageTool: AgentTool {
+    struct Input: Codable, Sendable {}
+    typealias Output = String
+    static let name = "matrix_frame"
+    static let description = "One video frame"
+    static let inputSchema = ToolSchema.object(properties: [:])
+    static let outputSchema = ToolSchema.string
+    let policy = try! ToolPolicy.readOnly(authorization: .notRequired)
+    static func image() throws -> ModelImage {
+        var data = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13])
+        data.append(contentsOf: Array("IHDR".utf8))
+        data.append(contentsOf: [0, 0, 0, 16, 0, 0, 0, 9, 8, 2, 0, 0, 0, 0, 0, 0, 0])
+        data.append(Data(repeating: 0x42, count: 1_024))
+        return try ModelImage(data: data, description: "Reader matrix frame")
+    }
+    func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<String> {
+        .init(output: "frame", images: [try Self.image()])
     }
 }
 #endif

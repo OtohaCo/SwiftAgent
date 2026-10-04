@@ -135,7 +135,8 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
             do {
                 body = try JSONEncoder().encode(LocalResponsesRequestEncoder.encode(
                     request,
-                    maximumOutputTokens: maximumOutputTokens
+                    maximumOutputTokens: maximumOutputTokens,
+                    images: descriptor.capabilities.contains(.imageInput)
                 ))
             } catch let error as ModelProviderError {
                 throw error
@@ -233,19 +234,20 @@ extension LocalResponsesProvider: ModelProviderRequestValidator {
         if request.structuredOutput != nil, !descriptor.capabilities.contains(.structuredOutput) {
             throw ModelProviderError(kind: .unsupportedCapability, message: "The configured local model has not declared structured-output support.")
         }
-        _ = try LocalResponsesRequestEncoder.encode(request, maximumOutputTokens: maximumOutputTokens)
+        _ = try LocalResponsesRequestEncoder.encode(request, maximumOutputTokens: maximumOutputTokens,
+                                                    images: descriptor.capabilities.contains(.imageInput))
     }
 }
 
 enum LocalResponsesRequestEncoder {
-    static func encode(_ request: ModelRequest, maximumOutputTokens: Int) throws -> JSONValue {
+    static func encode(_ request: ModelRequest, maximumOutputTokens: Int, images: Bool) throws -> JSONValue {
         guard request.model.provider == "local-responses",
               !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid local Responses model identifier.")
         }
         var body: [String: JSONValue] = [
             "model": .string(request.model.name),
-            "input": .array(try ResponsesCanonicalRequestEncoder.encodeMessages(request.messages)),
+            "input": .array(try ResponsesCanonicalRequestEncoder.encodeMessages(request.messages, images: images)),
             "stream": .bool(true),
             "max_output_tokens": .number(Decimal(maximumOutputTokens)),
         ]

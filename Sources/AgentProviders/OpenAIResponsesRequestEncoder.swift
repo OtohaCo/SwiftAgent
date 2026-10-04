@@ -12,7 +12,7 @@ enum OpenAIResponsesRequestEncoder {
               !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid OpenAI model identifier.")
         }
-        let input = try ResponsesCanonicalRequestEncoder.encodeMessages(request.messages) { content, calls in
+        let input = try ResponsesCanonicalRequestEncoder.encodeMessages(request.messages, images: true) { content, calls in
             try OpenAIResponsesContinuation.restore(
                 content: content,
                 calls: calls,

@@ -7,6 +7,8 @@ public enum ModelContent: Hashable, Sendable, Codable {
     case reasoning(String)
     case json(JSONValue)
     case providerContinuation(ModelProviderContinuation)
+    /// An image in a user message or tool result. Assistant content never carries images.
+    case image(ModelImage)
 }
 
 /// Canonical message data. Tool results have their own role and call identity.

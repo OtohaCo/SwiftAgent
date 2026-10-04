@@ -345,6 +345,8 @@ enum OpenAIResponsesContinuation {
                 append(value, as: .reasoning)
             case .providerContinuation:
                 break
+            case .image:
+                throw ImageEncoding.assistantImage()
             }
         }
         return sequence
