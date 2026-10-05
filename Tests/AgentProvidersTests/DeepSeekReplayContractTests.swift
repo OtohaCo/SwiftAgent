@@ -105,9 +105,10 @@ struct DeepSeekReplayContractTests {
         let snapshot = try await session.conversationSnapshot()
         let probe = ProviderRequestProbe()
         let target = try provider(effort == .none ? .high : .none, probe: probe, bodies: [deepSeekTextWithoutReasoningFixture])
+        let sameEffortTarget = try provider(effort, probe: probe, bodies: [deepSeekTextWithoutReasoningFixture])
         let changes: [AgentModelBinding] = [
             try binding(target, revision: "changed-effort"),
-            try binding(target, revision: "changed-version"),
+            try binding(sameEffortTarget, revision: "changed-version"),
             try binding(target, revision: effort.rawValue, endpoint: "other-endpoint"),
             try binding(target, revision: effort.rawValue, targetModel: .init(provider: "deepseek", name: "deepseek-v4-pro")),
         ]
@@ -230,6 +231,19 @@ struct DeepSeekReplayContractTests {
         } catch let error as ModelProviderError {
             #expect(error.kind == .invalidResponse)
             #expect(error.diagnostic == .init(stage: .responseValidation, reason: .finalSnapshotMismatch))
+        }
+    }
+
+    @Test func invalidUsageKeepsItsValidationDiagnostic() async throws {
+        let body = Data(String(decoding: deepSeekTextWithoutReasoningFixture, as: UTF8.self)
+            .replacingOccurrences(of: "\"output_tokens\":1", with: "\"output_tokens\":1,\"output_tokens_details\":{\"reasoning_tokens\":2}").utf8)
+        let configured = try provider(.high, probe: ProviderRequestProbe(), bodies: [body])
+        do {
+            for try await _ in configured.stream(request: .init(model: model, messages: [.user([.text("Hello")])])) {}
+            Issue.record("Expected invalid usage")
+        } catch let error as ModelProviderError {
+            #expect(error.kind == .invalidResponse)
+            #expect(error.diagnostic == .init(stage: .responseValidation, reason: .invalidUsage))
         }
     }
 
