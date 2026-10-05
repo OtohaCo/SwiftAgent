@@ -160,7 +160,7 @@ struct AnthropicStreamDecoder {
             let completed = stopReason == .toolCalls
             var modelCalls: [ToolCall] = []
             for call in calls {
-                let arguments = try call.arguments ?? String(decoding: JSONEncoder().encode(call.initialInput), as: UTF8.self)
+                let arguments = try call.arguments ?? ProviderJSON.text(call.initialInput)
                 if call.arguments == nil { events.append(.toolCallArgumentsDelta(call.id, arguments)) }
                 let value = ToolCall(id: call.id, name: call.name, argumentsJSON: arguments, completeness: completed ? .complete : .incomplete)
                 if completed {

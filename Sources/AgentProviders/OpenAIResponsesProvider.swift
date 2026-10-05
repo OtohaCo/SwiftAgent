@@ -125,7 +125,7 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         ModelEventStream.make { emit in
             let body: Data
             do {
-                body = try JSONEncoder().encode(OpenAIResponsesRequestEncoder.encode(
+                body = try ProviderJSON.encode(OpenAIResponsesRequestEncoder.encode(
                     request, maximumOutputTokens: maximumOutputTokens,
                     reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary
                 ))

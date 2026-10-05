@@ -44,7 +44,7 @@ enum DeepSeekResponsesRequestEncoder {
             case .tool(let result):
                 var output = try text(result.content)
                 if result.isError {
-                    output = String(decoding: try JSONEncoder().encode(JSONValue.object([
+                    output = String(decoding: try ProviderJSON.encode(JSONValue.object([
                         "is_error": .bool(true), "content": .string(output),
                     ])), as: UTF8.self)
                 }
@@ -105,7 +105,7 @@ enum DeepSeekResponsesRequestEncoder {
         try content.compactMap { part -> String? in
             switch part {
             case .text(let value): return value
-            case .json(let value): return String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+            case .json(let value): return try ProviderJSON.text(value)
             case .reasoning, .providerContinuation: return nil
             case .image: throw ImageEncoding.unsupported()
             }
