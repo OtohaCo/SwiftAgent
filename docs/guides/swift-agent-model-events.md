@@ -1,6 +1,6 @@
 # SwiftAgent Model Event Contract
 
-last-verified: 2026-10-02
+last-verified: 2026-10-05
 
 This contract applies to one normalized model response, produced by a provider
 adapter and consumed by the agent loop. The data types live in
@@ -37,6 +37,14 @@ and payload must be nonempty. Its corresponding ModelContent part is preserved i
 canonical history, but Core never parses a native frame from it. A provider must
 validate a restored snapshot against its canonical message before reuse. These
 bytes are not user-visible text, tool authorization, evidence or receipts.
+
+Request options, observed output and replay requirements are independent.
+Requesting reasoning does not require a reasoning event on every accepted turn.
+Retention follows the owning protocol's replay needs, including native tool
+identity without visible reasoning. Under the same supported binding, a complete
+accepted tool response plus legal results must construct the next request after
+File Journal close/reopen as well as in memory. This local contract does not
+authorize arbitrary model/configuration transitions or promise remote success.
 
 If Core discards proposed calls, including partial-batch checkpoints and interrupted
 turns, it also removes continuation state bound to the original whole response.

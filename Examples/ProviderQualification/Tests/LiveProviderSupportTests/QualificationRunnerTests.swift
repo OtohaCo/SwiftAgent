@@ -361,29 +361,22 @@ struct QualificationRunnerTests {
     }
 
     @Test func providerFailureNotesStaySanitizedAndPauseProtocolFailures() {
-        let schema = ModelProviderError(kind: .invalidResponse, message: "Invalid provider response.")
-        let redirect = ModelProviderError(kind: .invalidResponse, message: "HTTP redirects are not allowed.")
-        let model = ModelProviderError(
-            kind: .invalidResponse,
-            message: "DeepSeek returned model 'vendor-private-value' but expected 'configured-value'."
-        )
+        let schema = ModelProviderError(kind: .invalidResponse, message: "private payload",
+            diagnostic: .init(stage: .responseDecoding, reason: .invalidShape))
+        let renamed = ModelProviderError(kind: schema.kind, message: "Different presentation", diagnostic: schema.diagnostic)
+        let server = ModelProviderError(kind: .invalidResponse, message: "private server detail",
+            diagnostic: .init(stage: .server, reason: .serverFailure))
+        let model = ModelProviderError(kind: .invalidResponse, message: "private model name",
+            diagnostic: .init(stage: .responseValidation, reason: .modelMismatch))
         let unavailable = ModelProviderError(kind: .unavailable, message: "Provider detail must not escape.")
-        let event = ModelProviderError(
-            kind: .invalidResponse,
-            message: "Invalid DeepSeek event 'response.content_part.done'."
-        )
-        let completed = ModelProviderError(
-            kind: .invalidResponse,
-            message: "Invalid DeepSeek completed continuation."
-        )
-
-        #expect(providerFailureNote(schema) == "provider_invalidResponse_schema")
-        #expect(providerFailureNote(redirect) == "provider_invalidResponse_redirect")
-        #expect(providerFailureNote(model) == "provider_invalidResponse_model_identity")
+        let legacyProse = ModelProviderError(kind: .invalidResponse, message: "Invalid provider response.")
+        #expect(providerFailureNote(schema) == "provider_invalidResponse_responseDecoding_invalidShape")
+        #expect(providerFailureNote(renamed) == providerFailureNote(schema))
+        #expect(providerFailureNote(server) == "provider_invalidResponse_server_serverFailure")
+        #expect(providerFailureNote(model) == "provider_invalidResponse_responseValidation_modelMismatch")
         #expect(providerFailureNote(unavailable) == "provider_unavailable")
-        #expect(providerFailureNote(event) == "provider_invalidResponse_event_response.content_part.done")
-        #expect(providerFailureNote(completed) == "provider_invalidResponse_completed_continuation")
-        #expect(!providerFailureNote(model).contains("vendor-private-value"))
+        #expect(providerFailureNote(legacyProse) == "provider_invalidResponse")
+        #expect(!providerFailureNote(schema).contains("private"))
         #expect(shouldPauseProvider(after: schema))
         #expect(shouldPauseProvider(after: .init(kind: .authentication, message: "x")))
         #expect(!shouldPauseProvider(after: .init(kind: .transport, message: "x")))

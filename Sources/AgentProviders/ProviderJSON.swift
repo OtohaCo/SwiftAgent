@@ -26,6 +26,7 @@ enum ProviderJSON {
     }
 
     static func invalid() -> ModelProviderError {
-        .init(kind: .invalidResponse, message: "Invalid provider response.")
+        .init(kind: .invalidResponse, message: "Invalid provider response.",
+              diagnostic: .init(stage: .responseDecoding, reason: .invalidShape))
     }
 }

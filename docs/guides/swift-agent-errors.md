@@ -96,3 +96,30 @@ provider reads them can apply the same rules with
 `ProviderContextOverflow.isOverflow(httpStatus:body:signals:)` (`.responses` for
 OpenAI Responses and Local Responses, `.anthropic` for Anthropic Messages) and
 report `.contextWindowExceeded` itself.
+
+## Optional provider diagnostics
+
+`ModelProviderError.diagnostic` adds fixed `stage` and `reason` enums. The
+existing initializer and stored function-reference signature remain available;
+a separate overload accepts `diagnostic:`;
+`kind`, retry hints and fallback policy retain their behavior. Synthesized
+error equality now includes the optional diagnostic, so an error with detail
+is unequal to one constructed with the same kind/message but no detail.
+There is no Journal schema change or new error persistence requirement.
+
+DeepSeek distinguishes server failures (`server/httpFailure` or
+`server/serverFailure`), rejected shapes (`responseDecoding/invalidShape`),
+terminal/lifecycle/snapshot/usage rejection (`responseValidation`), missing
+terminal at EOF (`streamLifecycle/invalidLifecycle`), native content mismatch
+(`continuation/continuationMismatch`) and unsupported thinking tool history
+(`requestValidation/missingContinuation`). Existing origin preflight remains
+`AgentFailure.modelBinding(.incompatibleContinuation)`. The diagnostic contains
+no prompt, reasoning, arguments, credential, raw response or provider-provided
+metadata. It does not authorize retry, provider switching or tool re-execution.
+
+Qualification now classifies by kind plus optional fixed codes, never by
+`message`. Adapters without detail report only their existing kind. In
+particular, a server-reported unknown failure can retain `.invalidResponse`
+with stage `.server`; it does not become retryable. Hosts should present safe
+copy separately and preserve previously committed tool results/receipts when a
+later model turn fails, following ADR 0003.

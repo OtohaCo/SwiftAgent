@@ -14,7 +14,7 @@ struct DeepSeekResponsesStreamDecoder {
 
         mutating func seed(_ text: String) throws -> String {
             guard !finalized else { throw DeepSeekResponseJSON.invalid() }
-            guard value.isEmpty || value == text else { throw DeepSeekResponseJSON.invalid() }
+            guard value.isEmpty || value.utf8.elementsEqual(text.utf8) else { throw DeepSeekResponseJSON.invalid() }
             let suffix = value.isEmpty ? text : ""
             value = text
             return suffix
@@ -33,8 +33,8 @@ struct DeepSeekResponsesStreamDecoder {
         }
 
         mutating func finish(_ text: String) throws -> String {
-            guard !finalized, text.hasPrefix(value) else { throw DeepSeekResponseJSON.invalid() }
-            let suffix = String(text.dropFirst(value.count))
+            guard !finalized, text.utf8.starts(with: value.utf8) else { throw DeepSeekResponseJSON.invalid() }
+            let suffix = String(decoding: text.utf8.dropFirst(value.utf8.count), as: UTF8.self)
             value = text
             finalized = true
             return suffix
@@ -42,7 +42,7 @@ struct DeepSeekResponsesStreamDecoder {
 
         mutating func reconcile(_ text: String) throws -> String {
             if finalized {
-                guard value == text else { throw DeepSeekResponseJSON.invalid() }
+                guard value.utf8.elementsEqual(text.utf8) else { throw DeepSeekResponseJSON.invalid() }
                 return ""
             }
             return try finish(text)
@@ -70,9 +70,6 @@ struct DeepSeekResponsesStreamDecoder {
 
     let model: ModelID
     let responseModelName: String
-    /// Thinking is on and host tools are offered: tool calls keep a
-    /// continuation even when DeepSeek returned them without reasoning.
-    let thinkingWithTools: Bool
     private var info: ResponseInfo?
     private var content: [ModelContent] = []
     private var items: [Int: ItemState] = [:]
@@ -81,10 +78,9 @@ struct DeepSeekResponsesStreamDecoder {
     private var ended = false
     private var lastSequenceNumber: Int?
 
-    init(model: ModelID, responseModelName: String? = nil, thinkingWithTools: Bool = false) {
+    init(model: ModelID, responseModelName: String? = nil) {
         self.model = model
         self.responseModelName = responseModelName ?? model.name
-        self.thinkingWithTools = thinkingWithTools
     }
 
     mutating func consume(_ event: ProviderSSEEvent) throws -> [ModelEvent] {
@@ -129,7 +125,12 @@ struct DeepSeekResponsesStreamDecoder {
         }
     }
 
-    func finish() throws { guard ended else { throw ProviderJSON.invalid() } }
+    func finish() throws {
+        guard ended else {
+            throw ModelProviderError(kind: .invalidResponse, message: "DeepSeek stream ended without a terminal response.",
+                                     diagnostic: .init(stage: .streamLifecycle, reason: .invalidLifecycle))
+        }
+    }
 
     private mutating func validateSequence(_ object: [String: JSONValue]) throws {
         guard let sequence = try DeepSeekResponseJSON.count(object["sequence_number"]) else {
@@ -148,7 +149,7 @@ struct DeepSeekResponsesStreamDecoder {
         }
         try validateModel(observedModel)
         if let info {
-            guard info.id == id else { throw DeepSeekResponseJSON.invalid() }
+            guard info.id.utf8.elementsEqual(id.utf8) else { throw DeepSeekResponseJSON.invalid() }
             return []
         }
         let started = ResponseInfo(id: id, model: model)
@@ -210,7 +211,7 @@ struct DeepSeekResponsesStreamDecoder {
         let itemIndex = try index(object["output_index"])
         let partIndex = try index(object["content_index"])
         let itemID = try DeepSeekResponseJSON.string(object["item_id"])
-        guard var state = items[itemIndex], state.id == itemID, !state.done else { throw DeepSeekResponseJSON.invalid() }
+        guard var state = items[itemIndex], state.id.utf8.elementsEqual(itemID.utf8), !state.done else { throw DeepSeekResponseJSON.invalid() }
         let expected: PartKind = state.kind == .reasoning ? .reasoningText : .outputText
         guard state.kind != .functionCall else { throw DeepSeekResponseJSON.invalid() }
         let part = try DeepSeekResponseJSON.object(object["part"])
@@ -229,7 +230,7 @@ struct DeepSeekResponsesStreamDecoder {
         let itemIndex = try index(object["output_index"])
         let partIndex = try index(object["content_index"])
         let itemID = try DeepSeekResponseJSON.string(object["item_id"])
-        guard var state = items[itemIndex], state.id == itemID, !state.done,
+        guard var state = items[itemIndex], state.id.utf8.elementsEqual(itemID.utf8), !state.done,
               var part = state.parts[partIndex], part.kind == kind else { throw DeepSeekResponseJSON.invalid() }
         let appended = try part.append(try DeepSeekResponseJSON.string(object["delta"]))
         state.parts[partIndex] = part
@@ -241,7 +242,7 @@ struct DeepSeekResponsesStreamDecoder {
         let itemIndex = try index(object["output_index"])
         let partIndex = try index(object["content_index"])
         let itemID = try DeepSeekResponseJSON.string(object["item_id"])
-        guard var state = items[itemIndex], state.id == itemID, !state.done,
+        guard var state = items[itemIndex], state.id.utf8.elementsEqual(itemID.utf8), !state.done,
               var part = state.parts[partIndex], part.kind == kind else { throw DeepSeekResponseJSON.invalid() }
         let appended = try part.finish(try DeepSeekResponseJSON.string(object["text"]))
         state.parts[partIndex] = part
@@ -253,7 +254,7 @@ struct DeepSeekResponsesStreamDecoder {
         let itemIndex = try index(object["output_index"])
         let partIndex = try index(object["content_index"])
         let itemID = try DeepSeekResponseJSON.string(object["item_id"])
-        guard var state = items[itemIndex], state.id == itemID, !state.done,
+        guard var state = items[itemIndex], state.id.utf8.elementsEqual(itemID.utf8), !state.done,
               state.kind != .functionCall, var existing = state.parts[partIndex] else {
             throw DeepSeekResponseJSON.invalid()
         }
@@ -270,7 +271,7 @@ struct DeepSeekResponsesStreamDecoder {
     private mutating func argumentsDelta(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         let itemIndex = try index(object["output_index"])
         let itemID = try DeepSeekResponseJSON.string(object["item_id"])
-        guard var state = items[itemIndex], state.id == itemID, !state.done,
+        guard var state = items[itemIndex], state.id.utf8.elementsEqual(itemID.utf8), !state.done,
               var call = state.call, !call.argumentsDone, !call.completed else { throw DeepSeekResponseJSON.invalid() }
         let delta = try DeepSeekResponseJSON.string(object["delta"])
         call.arguments += delta
@@ -282,11 +283,11 @@ struct DeepSeekResponsesStreamDecoder {
     private mutating func argumentsDone(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         let itemIndex = try index(object["output_index"])
         let itemID = try DeepSeekResponseJSON.string(object["item_id"])
-        guard var state = items[itemIndex], state.id == itemID, !state.done,
+        guard var state = items[itemIndex], state.id.utf8.elementsEqual(itemID.utf8), !state.done,
               var call = state.call, !call.argumentsDone, !call.completed else { throw DeepSeekResponseJSON.invalid() }
         let final = try DeepSeekResponseJSON.string(object["arguments"])
-        guard final.hasPrefix(call.arguments) else { throw DeepSeekResponseJSON.invalid() }
-        let suffix = String(final.dropFirst(call.arguments.count))
+        guard final.utf8.starts(with: call.arguments.utf8) else { throw DeepSeekResponseJSON.invalid() }
+        let suffix = String(decoding: final.utf8.dropFirst(call.arguments.utf8.count), as: UTF8.self)
         call.arguments = final
         call.argumentsDone = true
         state.call = call
@@ -298,7 +299,7 @@ struct DeepSeekResponsesStreamDecoder {
         let itemIndex = try index(object["output_index"])
         guard var state = items[itemIndex], !state.done else { throw DeepSeekResponseJSON.invalid() }
         let item = try DeepSeekResponseJSON.object(object["item"])
-        guard try DeepSeekResponseJSON.string(item["id"]) == state.id else { throw DeepSeekResponseJSON.invalid() }
+        guard try DeepSeekResponseJSON.string(item["id"]).utf8.elementsEqual(state.id.utf8) else { throw DeepSeekResponseJSON.invalid() }
         var events: [ModelEvent] = []
         let status = try optionalString(item["status"])
         let terminalStatus = status.flatMap(ItemTerminalStatus.init(rawValue:))
@@ -318,10 +319,10 @@ struct DeepSeekResponsesStreamDecoder {
         case .functionCall:
             try validateItemStatus(item["status"], expected: status ?? "completed")
             guard try DeepSeekResponseJSON.string(item["type"]) == "function_call", var call = state.call,
-                  try DeepSeekResponseJSON.string(item["call_id"]) == call.id.rawValue,
-                  try DeepSeekResponseJSON.string(item["name"]) == call.name else { throw DeepSeekResponseJSON.invalid() }
+                  try DeepSeekResponseJSON.string(item["call_id"]).utf8.elementsEqual(call.id.rawValue.utf8),
+                  try DeepSeekResponseJSON.string(item["name"]).utf8.elementsEqual(call.name.utf8) else { throw DeepSeekResponseJSON.invalid() }
             let final = try DeepSeekResponseJSON.string(item["arguments"])
-            guard final.hasPrefix(call.arguments) else { throw DeepSeekResponseJSON.invalid() }
+            guard final.utf8.starts(with: call.arguments.utf8) else { throw DeepSeekResponseJSON.invalid() }
             call.arguments = final
             if !incomplete {
                 guard call.argumentsDone,
@@ -343,25 +344,25 @@ struct DeepSeekResponsesStreamDecoder {
 
     private mutating func completed(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         let response = try DeepSeekResponseJSON.object(object["response"])
-        guard let info, try DeepSeekResponseJSON.string(response["id"]) == info.id,
+        guard let info, try DeepSeekResponseJSON.string(response["id"]).utf8.elementsEqual(info.id.utf8),
               try DeepSeekResponseJSON.string(response["status"]) == "completed" else {
-            throw deepSeekCompletedInvalid("identity")
+            throw deepSeekCompletedInvalid("identity", reason: .invalidTerminal)
         }
         try validateModel(try DeepSeekResponseJSON.string(response["model"]))
         guard items.values.allSatisfy({ $0.done && $0.terminalStatus != .incomplete }),
               items.values.allSatisfy({ $0.call?.completed != false }) else {
-            throw deepSeekCompletedInvalid("lifecycle")
+            throw deepSeekCompletedInvalid("lifecycle", reason: .invalidLifecycle)
         }
         do {
             try validateFinalOutput(response["output"], completed: true)
         } catch is DeepSeekResponseShapeError {
-            throw deepSeekCompletedInvalid("output snapshot")
+            throw deepSeekCompletedInvalid("output snapshot", reason: .finalSnapshotMismatch)
         }
         let usageEvents: [ModelEvent]
         do {
             usageEvents = try updateUsage(response["usage"])
         } catch is DeepSeekResponseShapeError {
-            throw deepSeekCompletedInvalid("usage")
+            throw deepSeekCompletedInvalid("usage", reason: .invalidUsage)
         }
         let calls = orderedCalls()
         ended = true
@@ -369,14 +370,13 @@ struct DeepSeekResponsesStreamDecoder {
         let nativeItems = items.keys.sorted().compactMap { items[$0]?.native }
         do {
             if let continuation = try DeepSeekResponsesContinuation.make(
-                items: nativeItems, content: content, calls: calls, model: model,
-                retainsToolCallsWithoutReasoning: thinkingWithTools
+                items: nativeItems, content: content, calls: calls, model: model
             ) {
                 content.append(.providerContinuation(continuation))
                 events.append(.providerContinuation(continuation))
             }
         } catch let error as ModelProviderError where error.kind == .invalidResponse {
-            throw deepSeekCompletedInvalid("continuation")
+            throw deepSeekCompletedInvalid("continuation", reason: .continuationMismatch)
         }
         events.append(.responseCompleted(.init(
             info: info, content: content, toolCalls: calls, usage: usage,
@@ -385,13 +385,14 @@ struct DeepSeekResponsesStreamDecoder {
         return events
     }
 
-    private func deepSeekCompletedInvalid(_ stage: String) -> ModelProviderError {
-        .init(kind: .invalidResponse, message: "Invalid DeepSeek completed \(stage).")
+    private func deepSeekCompletedInvalid(_ stage: String, reason: ModelProviderError.Diagnostic.Reason) -> ModelProviderError {
+        .init(kind: .invalidResponse, message: "Invalid DeepSeek completed \(stage).",
+              diagnostic: .init(stage: .responseValidation, reason: reason))
     }
 
     private mutating func incomplete(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         let response = try DeepSeekResponseJSON.object(object["response"])
-        guard let info, try DeepSeekResponseJSON.string(response["id"]) == info.id,
+        guard let info, try DeepSeekResponseJSON.string(response["id"]).utf8.elementsEqual(info.id.utf8),
               try DeepSeekResponseJSON.string(response["status"]) == "incomplete" else { throw DeepSeekResponseJSON.invalid() }
         try validateModel(try DeepSeekResponseJSON.string(response["model"]))
         try validateFinalOutput(response["output"], completed: false)
@@ -451,7 +452,7 @@ struct DeepSeekResponsesStreamDecoder {
             guard let state = items[index] else { throw DeepSeekResponseJSON.invalid() }
             if completed && !state.done { throw DeepSeekResponseJSON.invalid() }
             let item = try DeepSeekResponseJSON.object(output[index])
-            guard try DeepSeekResponseJSON.string(item["id"]) == state.id else { throw DeepSeekResponseJSON.invalid() }
+            guard try DeepSeekResponseJSON.string(item["id"]).utf8.elementsEqual(state.id.utf8) else { throw DeepSeekResponseJSON.invalid() }
             try validateFinalItem(item, against: state, completed: completed)
         }
     }
@@ -476,16 +477,16 @@ struct DeepSeekResponsesStreamDecoder {
             for index in parts.indices {
                 let part = try DeepSeekResponseJSON.object(parts[index])
                 guard PartKind(rawValue: try DeepSeekResponseJSON.string(part["type"])) == expectedPart,
-                      try DeepSeekResponseJSON.string(part["text"]) == state.parts[index]?.value else {
+                      try DeepSeekResponseJSON.string(part["text"]).utf8.elementsEqual((state.parts[index]?.value ?? "").utf8) else {
                     throw DeepSeekResponseJSON.invalid()
                 }
             }
         case .functionCall:
             guard try DeepSeekResponseJSON.string(item["type"]) == "function_call",
                   let call = state.call,
-                  try DeepSeekResponseJSON.string(item["call_id"]) == call.id.rawValue,
-                  try DeepSeekResponseJSON.string(item["name"]) == call.name,
-                  try DeepSeekResponseJSON.string(item["arguments"]) == call.arguments else {
+                  try DeepSeekResponseJSON.string(item["call_id"]).utf8.elementsEqual(call.id.rawValue.utf8),
+                  try DeepSeekResponseJSON.string(item["name"]).utf8.elementsEqual(call.name.utf8),
+                  try DeepSeekResponseJSON.string(item["arguments"]).utf8.elementsEqual(call.arguments.utf8) else {
                 throw DeepSeekResponseJSON.invalid()
             }
         }
@@ -554,14 +555,16 @@ struct DeepSeekResponsesStreamDecoder {
         case "insufficient_quota": kind = .permissionDenied
         default: kind = .invalidResponse
         }
-        return .init(kind: kind, message: "DeepSeek generation failed with code '\(diagnostic(code))'.")
+        return .init(kind: kind, message: "DeepSeek generation failed with code '\(diagnostic(code))'.",
+                     diagnostic: .init(stage: .server, reason: .serverFailure))
     }
 
     private func validateModel(_ observed: String) throws {
-        guard observed == responseModelName else {
+        guard observed.utf8.elementsEqual(responseModelName.utf8) else {
             throw ModelProviderError(
                 kind: .invalidResponse,
-                message: "DeepSeek returned model '\(diagnostic(observed))' but expected '\(diagnostic(responseModelName))'."
+                message: "DeepSeek returned model '\(diagnostic(observed))' but expected '\(diagnostic(responseModelName))'.",
+                diagnostic: .init(stage: .responseValidation, reason: .modelMismatch)
             )
         }
     }

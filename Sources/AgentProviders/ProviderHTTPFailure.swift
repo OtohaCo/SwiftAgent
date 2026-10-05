@@ -21,7 +21,7 @@ enum ProviderHTTPFailure {
         }
         let retry = headers.first { $0.key.lowercased() == "retry-after" }.flatMap { ProviderRetryAfter.parse($0.value, now: now) }
         return .init(kind: kind, message: "Provider HTTP request failed (\(status)).",
-                     retryAfter: retry)
+                     retryAfter: retry, diagnostic: .init(stage: .server, reason: .httpFailure))
     }
 
     /// Classifies a non-200 response. For a status that can carry a context

@@ -10,6 +10,28 @@ import XCTest
 @testable import AgentProviders
 
 struct DeepSeekResponsesProviderTests {
+    @Test func thinkingDisabledToolTurnPreservesNativeItemsInNextRequest() async throws {
+        let probe = ProviderRequestProbe()
+        let provider = try DeepSeekResponsesProvider(
+            apiKey: "fixture-key", reasoningEffort: .none,
+            transport: FixtureHTTPTransport(probe: probe, bodies: [
+                deepSeekToolWithoutReasoningFixture(call: 1), deepSeekTextWithoutReasoningFixture,
+            ])
+        )
+        let execution = ProviderExecutionProbe()
+        let run = try await Agent(
+            model: .init(provider: "deepseek", name: "deepseek-flash"), provider: provider,
+            tools: [ProviderCalculator(probe: execution)]
+        ).makeSession().run("Add")
+        _ = try await run.wait()
+        try await run.waitForDrain()
+        let requests = await probe.requests
+        let body = try requestBody(requests[1])
+        guard case .array(let input) = body["input"] else { Issue.record("Missing input"); return }
+        #expect(Array(input.suffix(2)) == [deepSeekFunctionItem(call: 1), deepSeekFunctionOutput(call: 1)])
+        #expect(await execution.count == 1)
+    }
+
     @Test func textRequestIsStatelessAndUsesDefaultHighReasoning() async throws {
         let probe = ProviderRequestProbe()
         let provider = try DeepSeekResponsesProvider(
@@ -133,7 +155,7 @@ struct DeepSeekResponsesProviderTests {
         #expect(thirdInput.contains(deepSeekFunctionOutput(call: 2)))
     }
 
-    @Test func missingReasoningForThinkingToolHistoryFailsBeforeNetwork() async throws {
+    @Test func missingContinuationForThinkingToolHistoryFailsBeforeNetwork() async throws {
         let probe = ProviderRequestProbe()
         let provider = try DeepSeekResponsesProvider(
             apiKey: "fixture-key",
@@ -152,9 +174,10 @@ struct DeepSeekResponsesProviderTests {
         )
         do {
             for try await _ in provider.stream(request: request) {}
-            Issue.record("Expected missing reasoning rejection")
+            Issue.record("Expected missing continuation rejection")
         } catch let error as ModelProviderError {
             #expect(error.kind == .invalidRequest)
+            #expect(error.diagnostic == .init(stage: .requestValidation, reason: .missingContinuation))
         }
         #expect(await probe.requests.isEmpty)
     }
@@ -298,7 +321,7 @@ struct DeepSeekResponsesProviderTests {
         ])
     }
 
-    @Test func thinkingToolCallWithoutReasoningKeepsNoContinuationWhenThinkingIsOff() async throws {
+    @Test func thinkingDisabledToolTurnKeepsContinuationForNativeReplay() async throws {
         let provider = try DeepSeekResponsesProvider(
             apiKey: "fixture-key", reasoningEffort: .none,
             transport: FixtureHTTPTransport(
@@ -317,12 +340,12 @@ struct DeepSeekResponsesProviderTests {
 
         let response = try accumulator.finish()
         #expect(response.toolCalls.count == 1)
-        #expect(!response.content.contains { if case .providerContinuation = $0 { true } else { false } })
+        #expect(response.content.contains { if case .providerContinuation = $0 { true } else { false } })
     }
 
     @Test func thinkingToolCallWithMalformedReasoningOrWrongModelStillFailsClosed() async {
-        await expectInvalidToolStream(deepSeekToolWithEmptyReasoningFixture)
-        await expectInvalidToolStream(deepSeekToolWithoutReasoningFixture(call: 2, model: "deepseek-other"))
+        await expectInvalidToolStream(deepSeekToolWithEmptyReasoningFixture, reason: .init(stage: .responseDecoding, reason: .invalidShape))
+        await expectInvalidToolStream(deepSeekToolWithoutReasoningFixture(call: 2, model: "deepseek-other"), reason: .init(stage: .responseValidation, reason: .modelMismatch))
     }
 
     @Test func structuredOutputAndFunctionToolsUseDeepSeekShapes() async throws {
@@ -392,6 +415,7 @@ struct DeepSeekResponsesProviderTests {
         } catch let error as ModelProviderError {
             #expect(error.kind == .invalidResponse)
             #expect(error.message == "Invalid DeepSeek event 'response.output_text.delta'.")
+            #expect(error.diagnostic == .init(stage: .responseDecoding, reason: .invalidShape))
             #expect(!error.message.contains("private-item"))
             #expect(!error.message.contains("private-response-text"))
         }
@@ -422,6 +446,7 @@ struct DeepSeekResponsesProviderTests {
         } catch let error as ModelProviderError {
             #expect(error.kind == .invalidResponse)
             #expect(error.message == "Invalid DeepSeek completed output snapshot.")
+            #expect(error.diagnostic == .init(stage: .responseValidation, reason: .finalSnapshotMismatch))
             #expect(!error.message.contains("private-rewrite"))
         }
     }
@@ -507,7 +532,7 @@ struct DeepSeekResponsesProviderTests {
         catch { Issue.record("Unexpected error: \(error)") }
     }
 
-    private func expectInvalidToolStream(_ body: Data) async {
+    private func expectInvalidToolStream(_ body: Data, reason: ModelProviderError.Diagnostic) async {
         do {
             let provider = try DeepSeekResponsesProvider(apiKey: "key",
                 transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [body]))
@@ -517,7 +542,10 @@ struct DeepSeekResponsesProviderTests {
                 tools: [.init(name: "calculator", description: "Add", inputSchema: .object([:]))]
             )) {}
             Issue.record("Expected invalid response")
-        } catch let error as ModelProviderError { #expect(error.kind == .invalidResponse) }
+        } catch let error as ModelProviderError {
+            #expect(error.kind == .invalidResponse)
+            #expect(error.diagnostic == reason)
+        }
         catch { Issue.record("Unexpected error: \(error)") }
     }
 
@@ -568,7 +596,7 @@ private func makeDeepSeekTextFixture(model: String = "deepseek-flash") -> Data {
 
 private let deepSeekTextFixture = makeDeepSeekTextFixture()
 
-private let deepSeekTextWithoutReasoningFixture = providerNamedSSE([
+let deepSeekTextWithoutReasoningFixture = providerNamedSSE([
     ("response.created", #"{"type":"response.created","response":{"id":"resp-plain","model":"deepseek-flash","status":"in_progress"}}"#),
     ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"msg-plain","type":"message","role":"assistant","status":"in_progress","content":[]}}"#),
     ("response.content_part.added", #"{"type":"response.content_part.added","item_id":"msg-plain","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}"#),
@@ -577,25 +605,25 @@ private let deepSeekTextWithoutReasoningFixture = providerNamedSSE([
     ("response.completed", #"{"type":"response.completed","response":{"id":"resp-plain","model":"deepseek-flash","status":"completed","output":[{"id":"msg-plain","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Hello","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1}}}"#),
 ])
 
-private func deepSeekReasoningItem(call: Int) -> JSONValue {
+func deepSeekReasoningItem(call: Int) -> JSONValue {
     .object(["type": .string("reasoning"), "id": .string("rs-\(call)"),
              "status": .string("completed"), "content": .array([
                  .object(["type": .string("reasoning_text"), "text": .string("Reason \(call).")]),
              ])])
 }
 
-private func deepSeekFunctionItem(call: Int) -> JSONValue {
+func deepSeekFunctionItem(call: Int) -> JSONValue {
     .object(["type": .string("function_call"), "id": .string("fc-\(call)"),
              "call_id": .string("call-\(call)"), "name": .string("calculator"),
              "arguments": .string(#"{"a":2,"b":3}"#), "status": .string("completed")])
 }
 
-private func deepSeekFunctionOutput(call: Int) -> JSONValue {
+func deepSeekFunctionOutput(call: Int) -> JSONValue {
     .object(["type": .string("function_call_output"), "call_id": .string("call-\(call)"),
              "output": .string(#"{"sum":5}"#)])
 }
 
-private func deepSeekReasoningToolFixture(call: Int) -> Data {
+func deepSeekReasoningToolFixture(call: Int) -> Data {
     providerNamedSSE([
         ("response.created", #"{"type":"response.created","response":{"id":"resp-tool-\#(call)","model":"deepseek-flash","status":"in_progress"}}"#),
         ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"rs-\#(call)","type":"reasoning","status":"in_progress","content":[]}}"#),
@@ -612,7 +640,7 @@ private func deepSeekReasoningToolFixture(call: Int) -> Data {
 
 // Shaped after a live DeepSeek reply to a thinking tool step: one function
 // call, no reasoning item, reasoning_tokens 0.
-private func deepSeekToolWithoutReasoningFixture(call: Int, model: String = "deepseek-flash") -> Data {
+func deepSeekToolWithoutReasoningFixture(call: Int, model: String = "deepseek-flash") -> Data {
     providerNamedSSE([
         ("response.created", #"{"type":"response.created","response":{"id":"resp-tool-\#(call)","model":"\#(model)","status":"in_progress","reasoning":{"effort":"high"}}}"#),
         ("response.in_progress", #"{"type":"response.in_progress","response":{"id":"resp-tool-\#(call)","model":"\#(model)","status":"in_progress"}}"#),

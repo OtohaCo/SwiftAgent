@@ -108,8 +108,7 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
             var sse = try ProviderSSEDecoder()
             let responseModelName = resolvedModelIDsByAlias[request.model.name] ?? request.model.name
             var decoder = DeepSeekResponsesStreamDecoder(
-                model: request.model, responseModelName: responseModelName,
-                thinkingWithTools: reasoningEffort != .none && !request.tools.isEmpty
+                model: request.model, responseModelName: responseModelName
             )
             var validation = ModelEventAccumulator()
             var receivedHeader = false
@@ -125,6 +124,9 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
                     for frame in try sse.consume(data) {
                         for normalized in try decoder.consume(frame) {
                             do { try validation.append(normalized) }
+                            catch let error as ModelStreamError {
+                                throw deepSeekEventDiagnostic(frame: frame, validationError: error)
+                            }
                             catch { throw deepSeekEventDiagnostic(frame: frame) }
                             try emit(normalized)
                         }
@@ -149,13 +151,18 @@ extension DeepSeekResponsesProvider: ModelProviderRequestValidator {
     }
 }
 
-func deepSeekEventDiagnostic(frame: ProviderSSEEvent) -> ModelProviderError {
+func deepSeekEventDiagnostic(frame: ProviderSSEEvent, validationError: ModelStreamError? = nil) -> ModelProviderError {
+    if validationError == .invalidUsage {
+        return .init(kind: .invalidResponse, message: "Invalid DeepSeek completed usage.",
+                     diagnostic: .init(stage: .responseValidation, reason: .invalidUsage))
+    }
     let rawType = (try? ProviderJSON.string(ProviderJSON.decode(frame.data)["type"])) ?? "unknown"
     let safeType = String(String.UnicodeScalarView(rawType.unicodeScalars.lazy.filter { scalar in
         CharacterSet.alphanumerics.contains(scalar) || scalar == "." || scalar == "_" || scalar == "-"
     }.prefix(96)))
     return .init(
         kind: .invalidResponse,
-        message: "Invalid DeepSeek event '\(safeType.isEmpty ? "unknown" : safeType)'."
+        message: "Invalid DeepSeek event '\(safeType.isEmpty ? "unknown" : safeType)'.",
+        diagnostic: .init(stage: .responseDecoding, reason: .invalidShape)
     )
 }

@@ -50,6 +50,28 @@ public struct ModelProviderDescriptor: Hashable, Sendable, Codable {
 /// Adapter-classified failure. Retry hints never authorize replay of external effects.
 /// Cancellation is represented by CancellationError, not a provider failure kind.
 public struct ModelProviderError: Error, Equatable, Sendable {
+    /// Optional machine-readable detail. Fixed codes carry no provider payload,
+    /// and never grant permission to retry or replay an external effect.
+    public struct Diagnostic: Equatable, Sendable, Codable {
+        public enum Stage: String, Sendable, Codable {
+            case server, transport, streamLifecycle, responseDecoding, responseValidation
+            case continuation, requestValidation
+        }
+        public enum Reason: String, Sendable, Codable {
+            case httpFailure, serverFailure, invalidShape, modelMismatch
+            case invalidTerminal, invalidLifecycle, finalSnapshotMismatch, invalidUsage
+            case continuationMismatch, missingContinuation
+            case redirect, invalidHTTPResponse, missingHTTPResponse
+        }
+        public let stage: Stage
+        public let reason: Reason
+
+        public init(stage: Stage, reason: Reason) {
+            self.stage = stage
+            self.reason = reason
+        }
+    }
+
     public enum Kind: String, Codable, Sendable {
         case authentication
         case permissionDenied
@@ -70,10 +92,16 @@ public struct ModelProviderError: Error, Equatable, Sendable {
     /// Sanitized diagnostic; adapters must exclude credentials and request payloads.
     public let message: String
     public let retryAfter: Duration?
+    public let diagnostic: Diagnostic?
 
     public init(kind: Kind, message: String, retryAfter: Duration? = nil) {
+        self.init(kind: kind, message: message, retryAfter: retryAfter, diagnostic: nil)
+    }
+
+    public init(kind: Kind, message: String, retryAfter: Duration? = nil, diagnostic: Diagnostic?) {
         self.kind = kind
         self.message = message
         self.retryAfter = retryAfter
+        self.diagnostic = diagnostic
     }
 }

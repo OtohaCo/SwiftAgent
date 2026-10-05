@@ -804,44 +804,8 @@ private func withAttempts(_ result: QualificationCaseResult, attempts: Int) -> Q
 }
 
 func providerFailureNote(_ error: ModelProviderError) -> String {
-    let suffix: String?
-    switch error.message {
-    case "Invalid provider response.": suffix = "schema"
-    case "HTTP redirects are not allowed.": suffix = "redirect"
-    case "Invalid HTTP response.": suffix = "http_response"
-    case "Missing HTTP response.": suffix = "missing_http_response"
-    default:
-        if error.message.hasPrefix("DeepSeek returned model '") {
-            suffix = "model_identity"
-        } else if let event = safeDeepSeekEvent(from: error.message) {
-            suffix = "event_\(event)"
-        } else if let stage = safeDeepSeekCompletedStage(from: error.message) {
-            suffix = "completed_\(stage)"
-        } else {
-            suffix = nil
-        }
-    }
-    return "provider_\(error.kind.rawValue)\(suffix.map { "_\($0)" } ?? "")"
-}
-
-private func safeDeepSeekCompletedStage(from message: String) -> String? {
-    let stages = ["identity", "lifecycle", "output snapshot", "usage", "continuation"]
-    guard let stage = stages.first(where: { message == "Invalid DeepSeek completed \($0)." }) else {
-        return nil
-    }
-    return stage.replacingOccurrences(of: " ", with: "_")
-}
-
-private func safeDeepSeekEvent(from message: String) -> String? {
-    let prefix = "Invalid DeepSeek event '"
-    guard message.hasPrefix(prefix), message.hasSuffix("'.") else { return nil }
-    let start = message.index(message.startIndex, offsetBy: prefix.count)
-    let end = message.index(message.endIndex, offsetBy: -2)
-    let event = String(message[start..<end])
-    guard !event.isEmpty, event.unicodeScalars.allSatisfy({ scalar in
-        CharacterSet.alphanumerics.contains(scalar) || scalar == "." || scalar == "_" || scalar == "-"
-    }) else { return nil }
-    return event
+    guard let diagnostic = error.diagnostic else { return "provider_\(error.kind.rawValue)" }
+    return "provider_\(error.kind.rawValue)_\(diagnostic.stage.rawValue)_\(diagnostic.reason.rawValue)"
 }
 
 func shouldPauseProvider(after error: ModelProviderError) -> Bool {

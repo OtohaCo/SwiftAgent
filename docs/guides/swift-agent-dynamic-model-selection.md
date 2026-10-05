@@ -1,6 +1,6 @@
 # Dynamic model selection
 
-> last-verified: 2026-09-21
+> last-verified: 2026-10-05
 
 This guide describes the RC.2 model-selection slice. It is intentionally a
 Host capability: `AgentCore` captures an immutable execution binding for each
@@ -154,3 +154,20 @@ Journal schema, mutation identity, Evidence, Receipt, and usage accounting are
 unchanged. Provider-native append-only cache configuration is not implemented.
 Cache hit, price, and lifetime usage remain Host observations; an identical
 Session ID or a new Provider instance does not prove a server cache hit.
+
+## History compatibility is separate from model capability
+
+Tools/reasoning capabilities do not prove a target can replay current native
+history. Continue to use `session.run(_:using:)` and its actual-history preflight
+before committing new input. Scoped native state is bound to model, service,
+endpoint, dialect/version and configuration revision. DeepSeek now retains
+native tool-only turns even with thinking off; that additional information does
+not permit changing its origin. Strict effort/revision switches are still
+rejected. Hosts must version configuration honestly rather than reuse a revision
+to evade this check.
+
+`AgentSemanticHandoffProjector` explicitly removes provider state and reasoning
+while preserving paired calls/results. DeepSeek with thinking+tools refuses
+that history as `missingContinuation`; a thinking-off canonical request can
+encode it. Neither route silently removes execution facts. See the tested
+[DeepSeek history matrix](swift-agent-deepseek-provider.md#actual-historyconfiguration-checks).

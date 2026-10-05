@@ -13,18 +13,16 @@ enum DeepSeekResponsesContinuation {
         case legacy
     }
 
-    /// With thinking and tools, DeepSeek may return function calls without a
-    /// reasoning item. `retainsToolCallsWithoutReasoning` keeps such a turn
-    /// as a continuation so its calls replay exactly as DeepSeek returned them.
+    /// Retention follows replay requirements, independently of request thinking
+    /// configuration. Tool-only turns still carry native identity and status.
     static func make(
-        items: [JSONValue], content: [ModelContent], calls: [ToolCall], model: ModelID,
-        retainsToolCallsWithoutReasoning: Bool = false
+        items: [JSONValue], content: [ModelContent], calls: [ToolCall], model: ModelID
     ) throws -> ModelProviderContinuation? {
         let items = try replayableItems(items)
         let validated = try validate(
             items: items, content: content, calls: calls, contentBinding: .observed
         )
-        guard validated.hasReasoning || (retainsToolCallsWithoutReasoning && !calls.isEmpty) else {
+        guard validated.hasReasoning || !calls.isEmpty else {
             return nil
         }
         return .init(model: model, format: format, payload: try JSONEncoder().encode(JSONValue.object([
@@ -38,12 +36,12 @@ enum DeepSeekResponsesContinuation {
     ) throws -> Restored? {
         let matching = content.compactMap { part -> ModelProviderContinuation? in
             guard case .providerContinuation(let state) = part,
-                  state.model.provider == model.provider, state.model.name == model.name else { return nil }
+                  state.model == model else { return nil }
             return state
         }
         guard !matching.isEmpty else { return nil }
         do {
-            guard matching.count == 1, let state = matching.first, state.format == format,
+            guard matching.count == 1, let state = matching.first, state.format.utf8.elementsEqual(format.utf8),
                   let payload = try? JSONDecoder().decode(JSONValue.self, from: state.payload),
                   case .object(let object) = payload, case .array(let storedItems) = object["items"] else {
                 throw ProviderJSON.invalid()
@@ -64,7 +62,8 @@ enum DeepSeekResponsesContinuation {
             return .init(items: items)
         } catch {
             throw ModelProviderError(kind: .invalidRequest,
-                                     message: "DeepSeek continuation does not match the canonical message.")
+                                     message: "DeepSeek continuation does not match the canonical message.",
+                                     diagnostic: .init(stage: .continuation, reason: .continuationMismatch))
         }
     }
 
@@ -129,9 +128,9 @@ enum DeepSeekResponsesContinuation {
               functionItems.count == calls.count else { throw ProviderJSON.invalid() }
         for (item, call) in zip(functionItems, calls) {
             guard call.completeness == .complete,
-                  try ProviderJSON.string(item["call_id"]) == call.id.rawValue,
-                  try ProviderJSON.string(item["name"]) == call.name,
-                  try ProviderJSON.string(item["arguments"]) == call.argumentsJSON else {
+                  try ProviderJSON.string(item["call_id"]).utf8.elementsEqual(call.id.rawValue.utf8),
+                  try ProviderJSON.string(item["name"]).utf8.elementsEqual(call.name.utf8),
+                  try ProviderJSON.string(item["arguments"]).utf8.elementsEqual(call.argumentsJSON.utf8) else {
                 throw ProviderJSON.invalid()
             }
         }
@@ -144,6 +143,11 @@ enum DeepSeekResponsesContinuation {
     private static func replayableItems(_ items: [JSONValue]) throws -> [JSONValue] {
         try items.map { value in
             var object = try ProviderJSON.object(value)
+            // Omission is permitted by the Responses schema. An explicit status
+            // must agree with the complete canonical turn; partial items never replay.
+            if let status = object["status"], status != .string("completed") {
+                throw ProviderJSON.invalid()
+            }
             if try ProviderJSON.string(object["type"]) == "reasoning" {
                 // DeepSeek may return output-only compatibility metadata that its
                 // Responses input does not accept. Plaintext reasoning remains
@@ -180,7 +184,7 @@ enum DeepSeekResponsesContinuation {
         canonical: [(ContentKind, String)]
     ) -> Bool {
         for kind in [ContentKind.text, .reasoning] {
-            guard contentValue(native, kind: kind) == contentValue(canonical, kind: kind) else {
+            guard contentValue(native, kind: kind).utf8.elementsEqual(contentValue(canonical, kind: kind).utf8) else {
                 return false
             }
         }
@@ -218,7 +222,7 @@ enum DeepSeekResponsesContinuation {
     ) -> Bool {
         guard lhs.count == rhs.count else { return false }
         return zip(lhs, rhs).allSatisfy { left, right in
-            left.0 == right.0 && left.1 == right.1
+            left.0 == right.0 && left.1.utf8.elementsEqual(right.1.utf8)
         }
     }
 

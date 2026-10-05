@@ -89,8 +89,7 @@ struct ResponsesContinuationIntegrityTests {
         let item = deepSeekFunctionCall(id: "fc-2", callID: "call-2")
 
         let continuation = try #require(try DeepSeekResponsesContinuation.make(
-            items: [item], content: [], calls: [call], model: model,
-            retainsToolCallsWithoutReasoning: true
+            items: [item], content: [], calls: [call], model: model
         ))
         let body = try DeepSeekResponsesRequestEncoder.encode(
             .init(model: model, messages: [
@@ -122,12 +121,11 @@ struct ResponsesContinuationIntegrityTests {
         // Text-only turns without reasoning still carry no continuation.
         #expect(try DeepSeekResponsesContinuation.make(
             items: [nativeMessage(id: "msg-1", text: "Answer")], content: [.text("Answer")],
-            calls: [], model: model, retainsToolCallsWithoutReasoning: true
+            calls: [], model: model
         ) == nil)
         // A stored function call must still match the canonical call.
         let continuation = try #require(try DeepSeekResponsesContinuation.make(
-            items: [item], content: [], calls: [call], model: model,
-            retainsToolCallsWithoutReasoning: true
+            items: [item], content: [], calls: [call], model: model
         ))
         #expect(throws: ModelProviderError.self) {
             try DeepSeekResponsesContinuation.restore(
