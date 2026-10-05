@@ -189,6 +189,79 @@ struct ProviderHTTPTransportTests {
     }
 }
 
+extension ProviderHTTPTransportTests {
+    /// A transport made with this configuration, as a provider holds one for all its requests.
+    private func sharedTransport() -> URLSessionProviderHTTPTransport {
+        URLSessionProviderHTTPTransport(configurationFactory: {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [ProviderHTTPURLProtocol.self]
+            return configuration
+        })
+    }
+
+    /// One session serves a transport's requests, one after another (a session per request triggers a Foundation bug
+    /// on Linux, swift-corelibs-foundation PR #5491); each finished request is forgotten.
+    @Test func oneTransportCarriesRequestsOneAfterAnother() async throws {
+        let transport = sharedTransport()
+        for text in ["first", "second", "third"] {
+            let fixture = ProviderHTTPFixture()
+            defer { fixture.remove() }
+            let received = ProviderHTTPReceived()
+            let consumer = Task {
+                for try await event in transport.stream(fixture.request) { await received.append(event) }
+            }
+            try await fixture.waitForStart()
+            fixture.respond()
+            fixture.send(text)
+            fixture.finish()
+            try await consumer.value
+            let events = await received.events
+            guard events.count == 2, case .data(let data) = events[1] else {
+                Issue.record("Expected a response and its body for \(text)")
+                return
+            }
+            #expect(data == Data(text.utf8))
+            try await eventually { transport.activeRequests == 0 }
+        }
+    }
+
+    /// Requests of one transport do not touch each other: one stopped, the other goes on.
+    @Test func stoppingOneRequestLeavesTheOtherGoing() async throws {
+        let transport = sharedTransport()
+        let kept = ProviderHTTPFixture()
+        let stopped = ProviderHTTPFixture()
+        defer { kept.remove(); stopped.remove() }
+        let receivedKept = ProviderHTTPReceived()
+        let receivedStopped = ProviderHTTPReceived()
+        let keptConsumer = Task {
+            do {
+                for try await event in transport.stream(kept.request) { await receivedKept.append(event) }
+                await receivedKept.complete(nil)
+            } catch { await receivedKept.complete(error) }
+        }
+        let stoppedConsumer = Task {
+            do {
+                for try await event in transport.stream(stopped.request) { await receivedStopped.append(event) }
+                await receivedStopped.complete(nil)
+            } catch { await receivedStopped.complete(error) }
+        }
+        try await kept.waitForStart()
+        try await stopped.waitForStart()
+        #expect(transport.activeRequests == 2)
+        stoppedConsumer.cancel()
+        try await eventually { await receivedStopped.completed }
+        try await eventually { stopped.stopped }
+        kept.respond()
+        kept.send("still here")
+        kept.finish()
+        try await eventually { await receivedKept.completed }
+        #expect(await receivedKept.error == nil)
+        #expect(await receivedKept.count == 2)
+        try await eventually { transport.activeRequests == 0 }
+        keptConsumer.cancel()
+    }
+}
+
 private func collect(_ fixture: ProviderHTTPFixture, into received: ProviderHTTPReceived) -> Task<Void, Never> {
     Task {
         do {
