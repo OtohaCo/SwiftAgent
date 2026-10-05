@@ -84,3 +84,24 @@ long-term map so a later bug does not require moving files.
 
 When a new production bug lands, add a row here and a focused test next to the
 domain tests. Prefer a precise name over a `Regressions/` directory move.
+
+## Provider replay contract after PR #80
+
+`DeepSeekReplayContractTests` checks real encoder inputs across reasoning /
+no-reasoning / reasoning tool turns, strict model/endpoint/configuration preflight,
+semantic handoff and actual File Journal close/reopen. The mutation test commits
+an accepted receipt, observes a later typed provider failure, reopens a new store
+and Session, then proves native input replay and executor count one. Integrity
+negatives distinguish continuation mismatch and contradictory snapshots,
+including canonically equivalent Unicode with different argument bytes.
+
+`thinkingDisabledToolTurnPreservesNativeItemsInNextRequest` reproduced the loss
+of native ID/status on the current main baseline. The old thinking-off test
+asserted the optimization of storing no continuation; it now asserts native
+retention because replay requirements are independent of request options.
+Text-only no-reasoning turns still need no native state; empty reasoning,
+stripped continuation, wrong model, incomplete response and clean-EOF guards
+remain covered. Qualification tests assert fixed codes and unchanged results
+when display wording changes. Keep the existing
+`committedMutationSurvivesLaterProviderFailureAndReplayDoesNotWriteAgain` Host
+regression; no second execution-reporting framework is introduced.

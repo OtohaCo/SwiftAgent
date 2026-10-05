@@ -33,7 +33,8 @@ enum DeepSeekResponsesRequestEncoder {
                     if reasoningEffort != .none && !request.tools.isEmpty && !calls.isEmpty {
                         throw ModelProviderError(
                             kind: .invalidRequest,
-                            message: "DeepSeek thinking with tools requires the original DeepSeek continuation."
+                            message: "DeepSeek thinking with tools requires the original DeepSeek continuation.",
+                            diagnostic: .init(stage: .requestValidation, reason: .missingContinuation)
                         )
                     }
                     let value = try text(content)

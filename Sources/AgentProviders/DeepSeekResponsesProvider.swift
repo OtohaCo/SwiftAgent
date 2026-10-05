@@ -108,8 +108,7 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
             var sse = try ProviderSSEDecoder()
             let responseModelName = resolvedModelIDsByAlias[request.model.name] ?? request.model.name
             var decoder = DeepSeekResponsesStreamDecoder(
-                model: request.model, responseModelName: responseModelName,
-                thinkingWithTools: reasoningEffort != .none && !request.tools.isEmpty
+                model: request.model, responseModelName: responseModelName
             )
             var validation = ModelEventAccumulator()
             var receivedHeader = false
@@ -156,6 +155,7 @@ func deepSeekEventDiagnostic(frame: ProviderSSEEvent) -> ModelProviderError {
     }.prefix(96)))
     return .init(
         kind: .invalidResponse,
-        message: "Invalid DeepSeek event '\(safeType.isEmpty ? "unknown" : safeType)'."
+        message: "Invalid DeepSeek event '\(safeType.isEmpty ? "unknown" : safeType)'.",
+        diagnostic: .init(stage: .responseDecoding, reason: .invalidShape)
     )
 }

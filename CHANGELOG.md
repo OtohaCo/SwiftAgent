@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased: provider replay and diagnostics
+
+DeepSeek now retains native state for every accepted complete tool turn, including
+thinking-off turns. Restore binds raw argument bytes and explicit completion
+status; final snapshots preserve original UTF-8 bytes. File Journal recovery
+contracts cover committed mutation results/receipts surviving a later model
+failure without executing the completed mutation again. Optional fixed provider
+diagnostics replace qualification's parsing of display messages. Strict origin
+and configuration preflight, error kinds and retry rules remain unchanged.
+
 ## Unreleased: DeepSeek tool calls without reasoning
 
 With thinking on and tools offered, DeepSeek can answer a tool step with

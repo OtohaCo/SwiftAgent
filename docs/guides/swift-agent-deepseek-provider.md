@@ -39,10 +39,9 @@ use OpenAI reasoning summaries or encrypted content.
 
 DeepSeek sends reasoning back only when it produced some. With thinking on, it
 may answer a tool step with function calls and no reasoning item
-(`reasoning_tokens: 0`), and it accepts those calls back without reasoning. When
-thinking and tools are both enabled, such a turn still completes and keeps a
-continuation without a reasoning item, so its calls are replayed exactly as
-DeepSeek returned them. The continuation records that DeepSeek produced the
+(`reasoning_tokens: 0`), and it accepts those calls back without reasoning. Such a complete tool turn keeps a continuation regardless of the request
+thinking effort or offered tools. Native call identity, argument bytes, status
+and item order survive the next request, including thinking-off turns. The continuation records that DeepSeek produced the
 calls; it is not a substitute for reasoning that existed.
 
 DeepSeek responses may include `summary` or `encrypted_content` compatibility
@@ -108,8 +107,9 @@ unavailable.
 A completed turn needs no reasoning item, with or without tool calls. A
 reasoning item that is present must be well formed (non-empty `reasoning_text`
 parts) and match the canonical content, or the response fails before an
-assistant checkpoint is committed. With thinking disabled, tool calls without
-reasoning keep no continuation and are replayed from the canonical transcript.
+assistant checkpoint is committed. Completed tool turns without reasoning also keep native state when thinking
+is disabled. Canonical history without native state remains accepted with
+thinking off; it is a compatibility path, not how new native tool turns are stored.
 
 ## Current Scope
 
@@ -153,3 +153,55 @@ validation stage; they do not inspect error message prose. Public error kinds,
 safe event labels, model mismatch diagnostics and unknown-event behavior are
 unchanged. This corrects diagnostic wrapping, without claiming a new confirmed
 error-category defect.
+
+## Acceptance, retention and replay are separate decisions
+
+A request's thinking effort and tools describe what was requested. A response
+records what actually arrived. Native retention records what this adapter needs
+to replay that accepted response; it never invents reasoning or a signature.
+OpenAI currently retains native tool calls even without reasoning, encrypted
+reasoning and relevant message metadata. Anthropic retains accepted native
+blocks, including tool-use IDs and thinking signatures/redacted blocks. Each
+adapter continues to own its output-to-input conversion.
+
+The local contract is: a complete accepted tool response plus legal results can
+construct the next request under the same supported provider, model,
+configuration and origin binding, including after real File Journal close and
+reopen. This is not a promise that a remote service accepts arbitrary history
+or a configuration switch. `DeepSeekReplayContractTests` exercises both `.high`
+and `.none`, with a committed mutation receipt followed by provider failure;
+recovery does not execute that mutation again.
+
+### Rules and evidence (checked 2026-10-05)
+
+| Rule and protected property | Basis and scope | Positive / negative and refusal | Still unverified |
+| --- | --- | --- | --- |
+| Reasoning may be absent on a completed tool turn; retain its native calls | PR #80's anonymized `deepseek-v4-pro/high` observation and accepted follow-up; local replay contract for DeepSeek Responses | No reasoning + completed calls accepted; stripped state with thinking+tools gets `requestValidation/missingContinuation` | No new live observation in this work; `.none` verified locally only |
+| A present completed reasoning item requires nonempty plaintext parts | SwiftAgent support limit; official schema describes plaintext parts but does not establish a nonempty-output invariant | Nonempty item accepted; empty array/text rejected as invalid shape or continuation mismatch | Remote empty reasoning behavior; this limit is not a vendor prohibition |
+| Native visible content must match canonical text/reasoning and stored visible order | SwiftAgent execution-integrity contract; adjacent fragments may merge | Same content/order accepted; removed/replaced reasoning or reordered content gets `continuation/continuationMismatch` | No inference about arbitrary transcript transformations |
+| Native calls match complete canonical calls by UTF-8 ID, name, argument bytes, count and order; explicit status must be completed | SwiftAgent integrity contract; official Responses output status is optional | Original calls and omitted status accepted; changed bytes/order/count or partial status rejected as `continuationMismatch` | Missing status is supported; unknown metadata is not qualified as input |
+| Terminal snapshot agrees with observed identities, arguments, content and lifecycle; clean EOF precedes execution | Model Event Contract + official Responses terminal events | Complete ordered stream accepted; contradictory final output gets `responseValidation/finalSnapshotMismatch`; missing terminal gets `streamLifecycle/invalidLifecycle` | Arbitrary gateway dialects |
+| Continuation model/format and scoped origin must match the target | ADR 0002 support boundary, including endpoint and configuration revision | Same binding restores; model/origin changes get typed `AgentModelBindingError.incompatibleContinuation` before input commit; malformed native state gets `continuationMismatch` | Automatic cross-configuration migration |
+| Remove reasoning `summary` and `encrypted_content` from replay; keep verified plaintext content | Official Responses input table plus prior bounded live evidence | Output metadata is accepted then omitted from input; existing metadata contract tests assert the actual encoder result | Other output-only fields beyond the supported conversion |
+
+The official [Responses guide](https://api-docs.deepseek.com/guides/responses_api/)
+allows reasoning input through plaintext content and does not support its
+summary/encrypted fields. The [thinking guide](https://api-docs.deepseek.com/guides/thinking_mode/)
+describes returning previously produced reasoning when tools are present. Its
+Chat Completions wording and the general Responses description of thinking
+output do not prove that every tool response contains reasoning. PR #80 records
+the narrower field observation; no new live requests were made for this work.
+
+### Actual history/configuration checks
+
+These are local request-construction results, not remote qualification:
+
+| History and target | Result | Evidence |
+| --- | --- | --- |
+| `.high`, reasoning+call → no-reasoning call → reasoning+call → next request, same strict binding | Supported | Four real HTTP inputs retain native order, call/result pairing and earlier reasoning |
+| No-reasoning tool response, same `.high` or `.none` binding, file close/reopen | Supported | New store and Session restore settled output/receipt; encoded next input retains native ID/status; executor count stays one |
+| `.none` → `.high`, `.high` → `.none`, or revision/model/endpoint change with native history | Explicitly rejected | Strict binding preflight refuses before new input commit/network; saved state does not authorize its use under a different origin |
+| Closed call/result history through semantic handoff → `.none` | Supported | Real encoder emits canonical paired calls/results; canonical Session history keeps native state and facts |
+| Same handoff → `.high` with tools | Explicitly rejected | Handoff strips native state; encoder returns `missingContinuation` without committing the new input |
+| Unresolved call/result history | Restricted | Existing Core pair validation allows an unresolved tool tail only in its designated execution/recovery phase; it is not a completed handoff |
+| Arbitrary provider/model switching, undocumented empty reasoning variants or remote acceptance of these configuration conversions | Unverified | No fabricated continuation, silent history reset or live claim |

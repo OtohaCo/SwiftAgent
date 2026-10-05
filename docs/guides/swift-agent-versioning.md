@@ -1,5 +1,23 @@
 # SwiftAgent Semantic Versioning
 
+## Provider replay diagnostics (unreleased)
+
+Adds `ModelProviderError.Diagnostic`, its fixed `Stage`/`Reason` enums, and the
+optional `diagnostic` property. The original three-parameter initializer and
+stored function-reference signature remain available; a separate overload
+accepts `diagnostic:`. Ordinary old calls produce nil detail. Error equality
+now includes detail, so consumers comparing entire errors must account for it.
+Existing kind cases, retry/fallback policy and `AgentFailure.provider` are
+unchanged. Qualification uses fixed codes and falls back to kind when absent.
+
+DeepSeek complete tool turns now retain native state even with thinking off.
+The `deepseek.responses.v1` format and Journal schema do not change; existing
+payloads remain readable when valid, including omitted item status. Restoring
+changed argument bytes or an explicitly incomplete native item is now rejected.
+Legacy thinking-off canonical history still encodes; it cannot manufacture the
+native state required by thinking with tools. Scoped model/origin/revision
+boundaries and explicit handoff remain unchanged. No Core public API changes.
+
 ## Image content (unreleased, ADR 0012)
 
 Additive public API: `ModelImage` (`maximumByteCount` 3.75 MiB,

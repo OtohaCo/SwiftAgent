@@ -90,7 +90,7 @@ private final class ProviderHTTPSessionDelegate: NSObject, URLSessionDataDelegat
                     completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
         guard let response = response as? HTTPURLResponse else {
             completionHandler(.cancel)
-            finish(throwing: ModelProviderError(kind: .invalidResponse, message: "Invalid HTTP response."))
+            finish(throwing: ModelProviderError(kind: .invalidResponse, message: "Invalid HTTP response.", diagnostic: .init(stage: .transport, reason: .invalidHTTPResponse)))
             return
         }
         let headers = response.allHeaderFields.reduce(into: [String: String]()) { result, entry in
@@ -111,7 +111,7 @@ private final class ProviderHTTPSessionDelegate: NSObject, URLSessionDataDelegat
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                     completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
-        finish(throwing: ModelProviderError(kind: .invalidResponse, message: "HTTP redirects are not allowed."))
+        finish(throwing: ModelProviderError(kind: .invalidResponse, message: "HTTP redirects are not allowed.", diagnostic: .init(stage: .transport, reason: .redirect)))
         completionHandler(nil)
     }
 
@@ -120,7 +120,7 @@ private final class ProviderHTTPSessionDelegate: NSObject, URLSessionDataDelegat
             if (error as? URLError)?.code == .cancelled { finish(throwing: CancellationError()) }
             else { finish(throwing: ModelProviderError(kind: .transport, message: "HTTP transport failed.")) }
         } else if !lock.withLock({ receivedResponse }) {
-            finish(throwing: ModelProviderError(kind: .invalidResponse, message: "Missing HTTP response."))
+            finish(throwing: ModelProviderError(kind: .invalidResponse, message: "Missing HTTP response.", diagnostic: .init(stage: .transport, reason: .missingHTTPResponse)))
         } else {
             finish()
         }
