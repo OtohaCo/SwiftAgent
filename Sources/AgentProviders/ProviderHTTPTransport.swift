@@ -15,12 +15,23 @@ public protocol ProviderHTTPTransport: Sendable {
 
 public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport {
     private let configurationFactory: @Sendable () -> URLSessionConfiguration
+    private let releaseSession: @Sendable (URLSession) -> Void
 
-    public init() { configurationFactory = { .ephemeral } }
-
-    internal init(configurationFactory: @escaping @Sendable () -> URLSessionConfiguration) {
-        self.configurationFactory = configurationFactory
+    public init() {
+        configurationFactory = { .ephemeral }
+        releaseSession = Self.release
     }
+
+    internal init(
+        configurationFactory: @escaping @Sendable () -> URLSessionConfiguration,
+        releaseSession: @escaping @Sendable (URLSession) -> Void = URLSessionProviderHTTPTransport.release
+    ) {
+        self.configurationFactory = configurationFactory
+        self.releaseSession = releaseSession
+    }
+
+    /// Lets a request's session go once nothing more of it is wanted: its task has ended or been cancelled.
+    static func release(_ session: URLSession) { session.finishTasksAndInvalidate() }
 
     public func stream(_ request: URLRequest) -> AsyncThrowingStream<ProviderHTTPEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -37,7 +48,7 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport {
             var request = request
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.httpShouldHandleCookies = false
-            let delegate = ProviderHTTPSessionDelegate(continuation: continuation)
+            let delegate = ProviderHTTPSessionDelegate(continuation: continuation, releaseSession: releaseSession)
             continuation.onTermination = { @Sendable _ in delegate.cancel() }
             delegate.start(request, configuration: configuration)
         }
@@ -52,9 +63,11 @@ private final class ProviderHTTPSessionDelegate: NSObject, URLSessionDataDelegat
     private var session: URLSession?
     private var task: URLSessionDataTask?
     private var receivedResponse = false
+    private let releaseSession: @Sendable (URLSession) -> Void
 
-    init(continuation: AsyncThrowingStream<ProviderHTTPEvent, Error>.Continuation) {
+    init(continuation: AsyncThrowingStream<ProviderHTTPEvent, Error>.Continuation, releaseSession: @escaping @Sendable (URLSession) -> Void) {
         self.continuation = continuation
+        self.releaseSession = releaseSession
     }
 
     func start(_ request: URLRequest, configuration: URLSessionConfiguration) {
@@ -81,7 +94,14 @@ private final class ProviderHTTPSessionDelegate: NSObject, URLSessionDataDelegat
             return state
         }
         state.2?.cancel()
-        state.1?.invalidateAndCancel()
+        // Let go of the session after this callback has returned, never from inside it: swift-corelibs-foundation
+        // frees the session's curl multi handle while curl still holds it otherwise, and the process aborts
+        // ("_MultiHandle deallocated with non-zero retain count"; swift-corelibs-foundation PR #5491). The task is
+        // cancelled above where it had not ended, so finishing the session's tasks lets it go at once.
+        if let session = state.1 {
+            let release = releaseSession
+            DispatchQueue.global().async { release(session) }
+        }
         state.0?.finish(throwing: error)
     }
 

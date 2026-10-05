@@ -189,6 +189,52 @@ struct ProviderHTTPTransportTests {
     }
 }
 
+extension ProviderHTTPTransportTests {
+    /// swift-corelibs-foundation frees a session's curl multi handle while curl still uses it when the session is
+    /// invalidated from inside its own delegate callback, and the process aborts ("_MultiHandle deallocated with
+    /// non-zero retain count", swift-corelibs-foundation PR #5491). Each finished request lets its session go once,
+    /// and never from the delegate callback that finished it.
+    @Test func aFinishedRequestLetsItsSessionGoOnceAndOutsideItsCallbacks() async throws {
+        let fixture = ProviderHTTPFixture()
+        defer { fixture.remove() }
+        let released = ProviderHTTPReleases()
+        let transport = URLSessionProviderHTTPTransport(
+            configurationFactory: {
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.protocolClasses = [ProviderHTTPURLProtocol.self]
+                return configuration
+            },
+            releaseSession: { session in released.record(session) }
+        )
+        let consumer = Task { for try await _ in transport.stream(fixture.request) {} }
+        try await fixture.waitForStart()
+        fixture.respond()
+        fixture.send("done")
+        fixture.finish()
+        try await consumer.value
+        try await eventually { released.count == 1 }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(released.count == 1, "released once")
+        #expect(released.insideCallback == false, "not from the session's own delegate queue")
+    }
+}
+
+private final class ProviderHTTPReleases: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sessions: [URLSession] = []
+    private var fromCallback = false
+    func record(_ session: URLSession) {
+        let inside = OperationQueue.current === session.delegateQueue
+        lock.withLock {
+            sessions.append(session)
+            if inside { fromCallback = true }
+        }
+        session.finishTasksAndInvalidate()
+    }
+    var count: Int { lock.withLock { sessions.count } }
+    var insideCallback: Bool { lock.withLock { fromCallback } }
+}
+
 private func collect(_ fixture: ProviderHTTPFixture, into received: ProviderHTTPReceived) -> Task<Void, Never> {
     Task {
         do {
