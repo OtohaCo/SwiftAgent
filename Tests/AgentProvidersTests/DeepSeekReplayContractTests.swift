@@ -109,8 +109,8 @@ struct DeepSeekReplayContractTests {
         let changes: [AgentModelBinding] = [
             try binding(target, revision: "changed-effort"),
             try binding(sameEffortTarget, revision: "changed-version"),
-            try binding(target, revision: effort.rawValue, endpoint: "other-endpoint"),
-            try binding(target, revision: effort.rawValue, targetModel: .init(provider: "deepseek", name: "deepseek-v4-pro")),
+            try binding(sameEffortTarget, revision: effort.rawValue, endpoint: "other-endpoint"),
+            try binding(sameEffortTarget, revision: effort.rawValue, targetModel: .init(provider: "deepseek", name: "deepseek-v4-pro")),
         ]
         for changed in changes {
             await #expect(throws: AgentModelBindingError.incompatibleContinuation) {
