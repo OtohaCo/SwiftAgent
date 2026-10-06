@@ -88,7 +88,7 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
         ModelEventStream.make { emit in
             let body: Data
             do {
-                body = try JSONEncoder().encode(DeepSeekResponsesRequestEncoder.encode(
+                body = try ProviderJSON.encode(DeepSeekResponsesRequestEncoder.encode(
                     request, maximumOutputTokens: maximumOutputTokens, reasoningEffort: reasoningEffort
                 ))
             } catch let error as ModelProviderError {

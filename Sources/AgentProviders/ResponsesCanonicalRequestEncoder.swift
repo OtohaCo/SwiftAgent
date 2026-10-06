@@ -49,7 +49,7 @@ enum ResponsesCanonicalRequestEncoder {
                         "is_error": .bool(true),
                         "content": .string(output),
                     ])
-                    output = String(decoding: try JSONEncoder().encode(envelope), as: UTF8.self)
+                    output = try ProviderJSON.text(envelope)
                 }
                 let pictures = result.content.filter(\.isImage)
                 let value: JSONValue = pictures.isEmpty ? .string(output) : .array(
@@ -128,7 +128,7 @@ enum ResponsesCanonicalRequestEncoder {
             switch part {
             case .text(let value): return value
             case .json(let value):
-                return String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+                return try ProviderJSON.text(value)
             case .reasoning, .providerContinuation:
                 return nil
             case .image:
@@ -144,7 +144,7 @@ enum ResponsesCanonicalRequestEncoder {
             case .text(let value): return .object(["type": .string("input_text"), "text": .string(value)])
             case .json(let value):
                 return .object(["type": .string("input_text"),
-                                "text": .string(String(decoding: try JSONEncoder().encode(value), as: UTF8.self))])
+                                "text": .string(try ProviderJSON.text(value))])
             case .reasoning, .providerContinuation: return nil
             case .image(let image):
                 guard images else { throw ImageEncoding.unsupported() }

@@ -2,6 +2,19 @@ import AgentModels
 import Foundation
 
 enum ProviderJSON {
+    /// Request bodies, and JSON text sent inside them, with object keys in order. Services cache a prompt by its
+    /// prefix, so a conversation's earlier turns must be the same bytes in every request; a dictionary's own order
+    /// differs from one encoding to the next.
+    static func encode<Value: Encodable>(_ value: Value) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(value)
+    }
+
+    static func text<Value: Encodable>(_ value: Value) throws -> String {
+        String(decoding: try encode(value), as: UTF8.self)
+    }
+
     static func object(_ value: JSONValue?) throws -> [String: JSONValue] {
         guard case .object(let object) = value else { throw invalid() }
         return object

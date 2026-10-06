@@ -7,7 +7,7 @@ enum AnthropicContinuation {
     static func make(blocks: [JSONValue], model: ModelID) throws -> ModelProviderContinuation {
         _ = try visibleContent(blocks)
         return .init(model: model, format: format,
-                     payload: try JSONEncoder().encode(JSONValue.object(["content": .array(blocks)])))
+                     payload: try ProviderJSON.encode(JSONValue.object(["content": .array(blocks)])))
     }
 
     static func restore(content: [ModelContent], calls: [ToolCall], model: ModelID) throws -> [JSONValue]? {

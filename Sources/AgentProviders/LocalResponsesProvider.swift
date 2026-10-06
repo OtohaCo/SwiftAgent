@@ -133,7 +133,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
 
             let body: Data
             do {
-                body = try JSONEncoder().encode(LocalResponsesRequestEncoder.encode(
+                body = try ProviderJSON.encode(LocalResponsesRequestEncoder.encode(
                     request,
                     maximumOutputTokens: maximumOutputTokens,
                     images: descriptor.capabilities.contains(.imageInput)

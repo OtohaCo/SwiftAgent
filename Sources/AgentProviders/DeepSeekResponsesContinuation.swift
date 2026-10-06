@@ -25,7 +25,7 @@ enum DeepSeekResponsesContinuation {
         guard validated.hasReasoning || !calls.isEmpty else {
             return nil
         }
-        return .init(model: model, format: format, payload: try JSONEncoder().encode(JSONValue.object([
+        return .init(model: model, format: format, payload: try ProviderJSON.encode(JSONValue.object([
             "items": .array(items),
             "visible_content_order": encodeVisibleContent(try visibleContent(content)),
         ])))
@@ -170,7 +170,7 @@ enum DeepSeekResponsesContinuation {
             switch part {
             case .text(let value): append(value, as: .text)
             case .json(let value):
-                append(String(decoding: try JSONEncoder().encode(value), as: UTF8.self), as: .text)
+                append(try ProviderJSON.text(value), as: .text)
             case .reasoning(let value): append(value, as: .reasoning)
             case .providerContinuation: break
             case .image: throw ImageEncoding.assistantImage()

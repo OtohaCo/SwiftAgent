@@ -135,7 +135,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
         ModelEventStream.make { emit in
             let body: Data
             do {
-                body = try JSONEncoder().encode(AnthropicRequestEncoder.encode(
+                body = try ProviderJSON.encode(AnthropicRequestEncoder.encode(
                     request,
                     maximumOutputTokens: maximumOutputTokens,
                     thinking: thinking,

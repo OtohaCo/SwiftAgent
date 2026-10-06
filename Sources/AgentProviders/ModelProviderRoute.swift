@@ -427,7 +427,7 @@ private struct OwnedContinuation: Codable {
     static func wrap(_ state: ModelProviderContinuation, candidate: String) throws -> ModelProviderContinuation {
         let owned = OwnedContinuation(candidate: candidate, format: state.format, payload: state.payload)
         return ModelProviderContinuation(model: state.model, format: format,
-                                         payload: try JSONEncoder().encode(owned), origin: state.origin)
+                                         payload: try ProviderJSON.encode(owned), origin: state.origin)
     }
 
     static func unwrap(_ state: ModelProviderContinuation) throws -> (String, ModelProviderContinuation) {

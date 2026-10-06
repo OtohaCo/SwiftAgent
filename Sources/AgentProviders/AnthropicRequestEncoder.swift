@@ -47,7 +47,7 @@ enum AnthropicRequestEncoder {
                 let text = try result.content.compactMap { part -> String? in
                     switch part {
                     case .text(let value): return value
-                    case .json(let value): return String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+                    case .json(let value): return try ProviderJSON.text(value)
                     case .reasoning, .providerContinuation, .image: return nil
                     }
                 }.joined(separator: "\n")
@@ -97,7 +97,7 @@ enum AnthropicRequestEncoder {
             let text: String
             switch part {
             case .text(let value): text = value
-            case .json(let value): text = String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+            case .json(let value): text = try ProviderJSON.text(value)
             case .reasoning, .providerContinuation: return nil
             case .image(let image):
                 return .object(["type": .string("image"), "source": .object([
