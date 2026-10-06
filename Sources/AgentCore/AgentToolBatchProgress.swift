@@ -15,6 +15,7 @@ actor AgentToolBatchProgress {
     private var executedMutation = false
     private var declaredTools: Set<String> = []
     private var canonicalHistory: [ModelMessage]?
+    private var pendingRejections: [ToolCallID]
 
     /// `rejected` holds results, by response index, for calls refused before preparation completed
     /// (arguments the model must correct). They commit with the batch; `index` in `record` is a response index.
@@ -25,6 +26,7 @@ actor AgentToolBatchProgress {
         self.response = response
         self.calls = calls ?? response.toolCalls
         results = rejected
+        pendingRejections = rejected.keys.sorted().compactMap { rejected[$0]?.callID }
         self.budget = budget
         self.lifecycle = lifecycle
         self.emitter = emitter
@@ -32,6 +34,7 @@ actor AgentToolBatchProgress {
 
     func record(index: Int, call: PreparedToolCall, result: ToolResult<JSONValue>) async throws {
         var reserved = false
+        var reservedRejections: [ToolCallID] = []
         do {
             try budget.checkActive()
             var images = result.images.map(ModelContent.image)
@@ -49,6 +52,7 @@ actor AgentToolBatchProgress {
             )
             try await emitter?.reserveCompletion(call.call.id)
             reserved = true
+            reservedRejections = try await reserveRejections()
             var proposed = results
             proposed[index] = message
             let committedHistory = history(proposed)
@@ -91,8 +95,10 @@ actor AgentToolBatchProgress {
             let receipt = result.receipt.map { AgentToolReceipt(callID: call.call.id, effect: call.policy.effect, receipt: $0) }
             if let receipt { receipts.append(receipt) }
             // A committed checkpoint must be reflected in events even if cancellation arrived afterward.
+            await publishRejections(reservedRejections)
             try await emitter?.commitCompletion(message, receipt: receipt)
         } catch {
+            await emitter?.abortAdmissionRejections(reservedRejections)
             // The executor already returned. Quarantine persistence must not
             // pin the emitter's reserved completion, or finish() waits forever.
             // A no-effect result reached the executor but failed its atomic publication.
@@ -122,11 +128,29 @@ actor AgentToolBatchProgress {
 
     /// Commits a batch in which no call was prepared: only rejected results exist.
     func commitUnexecuted() async throws {
-        guard let lifecycle else { return }
         try budget.checkActive()
-        let committedHistory = history(results)
-        let canonical = try await lifecycle.checkpoint(committedHistory, [])
-        updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+        let reserved = try await reserveRejections()
+        do {
+            let committedHistory = history(results)
+            let canonical = try await lifecycle?.checkpoint(committedHistory, []) ?? committedHistory
+            updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+            await publishRejections(reserved)
+        } catch {
+            await emitter?.abortAdmissionRejections(reserved)
+            throw error
+        }
+    }
+
+    private func reserveRejections() async throws -> [ToolCallID] {
+        let ids = pendingRejections
+        if !ids.isEmpty { try await emitter?.reserveAdmissionRejections(ids) }
+        return ids
+    }
+
+    private func publishRejections(_ ids: [ToolCallID]) async {
+        // Later checkpoints include the same rejection results, but never publish them again.
+        pendingRejections.removeAll()
+        await emitter?.commitAdmissionRejections(ids)
     }
 
     func completed() -> (history: [ModelMessage], receipts: [AgentToolReceipt], count: Int, executedMutation: Bool,

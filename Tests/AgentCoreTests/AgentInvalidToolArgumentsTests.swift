@@ -8,6 +8,39 @@ import Testing
 /// A tool call whose arguments are not a JSON object, or do not match the tool's input schema,
 /// is a model mistake. The tool does not run; the model is told what was wrong and the Run goes on.
 struct AgentInvalidToolArgumentsTests {
+    @Test func committedRejectionSurvivesALaterSiblingExecutionFailureAndJournalReopen() async throws {
+        let directory = auditTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "rejected-sibling")
+        let bad = invalidAddition("bad", "{")
+        let good = addition("good")
+        let overflow = invalidAddition("overflow", "{\"lhs\":\(Int.max),\"rhs\":1}")
+        let log = EffectLog()
+        let provider = ScriptedProvider { request, _ in toolResponse(request, [bad, good, overflow]) }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [try AddTool(log: log, execution: .sequential)]).makeSession(journal: journal)
+        let run = try await session.run("Add")
+        let observation = Task { await collectInvalidArgumentEvents(run.events) }
+        await #expect(throws: FixtureError.invalidOperation) { try await run.wait() }
+        try await run.waitForDrain()
+        let events = await observation.value
+        #expect(events.filter { $0 == .toolAdmissionRejected(bad.id) }.count == 1)
+        #expect(events.last == .runFinished(.failed(.unclassified)))
+        #expect(!events.contains(.toolStarted(bad)))
+        #expect(events.contains(.toolCompleted(.init(callID: good.id, content: [.json(.object(["sum": .number(5)]))], isError: false))))
+        #expect(await log.contexts.map(\.callID) == [good.id, overflow.id])
+        #expect(await provider.log.requests.count == 1)
+        let committed = try #require(try await journal.latestCheckpoint(sessionID: session.id)).history
+        #expect(committed.suffix(3).first == .assistant(content: [], toolCalls: [invalidAddition("bad", "{}"), good]))
+        let feedback = try #require(toolResult(Array(committed.suffix(2))[0]))
+        #expect(feedback.callID == bad.id && feedback.isError && feedbackCode(feedback) == "invalid_arguments")
+        #expect(committed.last == .tool(.init(callID: good.id, content: [.json(.object(["sum": .number(5)]))], isError: false)))
+        #expect(await session.history == committed)
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        #expect(try await reopened.latestCheckpoint(sessionID: session.id)?.history == committed)
+        try await reopened.close()
+    }
+
     @Test(arguments: [#"{"lhs":2,"rhs":"#, #"[2,3]"#, #"{"lhs":2,"lhs":3,"rhs":1}"#, ""])
     func argumentsThatAreNotAJSONObjectGoBackToTheModel(_ arguments: String) async throws {
         let call = invalidAddition("bad", arguments)
@@ -107,6 +140,53 @@ struct AgentInvalidToolArgumentsTests {
         }
         #expect(await provider.log.requests.count == 3)
         #expect(await log.names.isEmpty)
+    }
+
+    @Test func correctedArgumentsExecuteOnceAndCompleteOnTheThirdModelTurn() async throws {
+        let bad = invalidAddition("bad", "{")
+        let good = addition("corrected")
+        let log = EffectLog()
+        let provider = ScriptedProvider { request, turn in
+            switch turn {
+            case 1: return toolResponse(request, [bad])
+            case 2:
+                let feedback = try #require(toolResult(request.messages.last))
+                #expect(feedback.callID == bad.id && feedbackCode(feedback) == "invalid_arguments")
+                return toolResponse(request, [good])
+            default:
+                #expect(request.messages.last == .tool(.init(callID: good.id, content: [.json(.object(["sum": .number(5)]))], isError: false)))
+                return textResponse(request, "5")
+            }
+        }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [try AddTool(log: log)]).makeSession()
+        let run = try await session.run("Add", budget: testBudget(turns: 3, calls: 2))
+        let observation = Task { await collectInvalidArgumentEvents(run.events) }
+        let result = try await run.wait()
+        try await run.waitForDrain()
+        #expect(result.outcome == .completed && result.modelTurns == 3 && result.toolCalls == 2)
+        #expect(await log.contexts.map(\.callID) == [good.id])
+        let history = await session.history
+        #expect(history[1] == .assistant(content: [], toolCalls: [invalidAddition("bad", "{}")]))
+        #expect(toolResult(history[2])?.callID == bad.id && toolResult(history[2])?.isError == true)
+        #expect(history[3] == .assistant(content: [], toolCalls: [good]))
+        #expect(history[4] == .tool(.init(callID: good.id, content: [.json(.object(["sum": .number(5)]))], isError: false)))
+        let events = await observation.value
+        #expect(events.filter { $0 == .toolAdmissionRejected(bad.id) }.count == 1)
+        #expect(!events.contains(.toolStarted(bad)))
+        #expect(events.filter { $0 == .toolStarted(good) }.count == 1)
+    }
+
+    @Test func correctedArgumentsCannotReuseTheRejectedCallID() async throws {
+        let bad = invalidAddition("bad", "{")
+        let corrected = addition("bad")
+        let log = EffectLog()
+        let provider = ScriptedProvider { request, turn in toolResponse(request, [turn == 1 ? bad : corrected]) }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [try AddTool(log: log)]).makeSession()
+        let run = try await session.run("Add")
+        await #expect(throws: AgentLoopError.reusedToolCallID(bad.id)) { try await run.wait() }
+        try await run.waitForDrain()
+        #expect(await log.names.isEmpty)
+        #expect(await provider.log.requests.count == 2)
     }
 
     @Test func unknownToolStillEndsTheRun() async throws {

@@ -19,8 +19,10 @@ Responses (and local Responses), DeepSeek and Anthropic stream decoders and
 (`ModelStreamError.invalidToolArguments` is no longer thrown and is kept for
 source compatibility); the Apple on-device provider, which generates arguments
 under a schema guide, still rejects such a plan as `invalidResponse`. Hosts
-see `toolAdmissionRejected` for the call once the batch is committed; audit
-records `invalid_arguments` as its disposition. A host tool that throws
+see `toolAdmissionRejected` exactly once after the first checkpoint that commits
+the rejection, before `runFinished`, even if a later sibling fails or the Run
+is cancelled or reaches its deadline. Failed or uncertain commits do not publish
+a confirmed rejection. Audit records `invalid_arguments` as its disposition. A host tool that throws
 `ToolInvocationError.invalidArguments` while the call is prepared gets the same
 treatment. Unknown or undeclared tools,
 reused call IDs, identity and stream protocol violations, and calls cut off

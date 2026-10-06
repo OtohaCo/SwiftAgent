@@ -6,6 +6,7 @@ actor AgentEventEmitter {
     private var finished = false
     private var activeTools: [ToolCallID] = []
     private var reservedCompletions = Set<ToolCallID>()
+    private var reservedAdmissionRejections = Set<ToolCallID>()
     private var pendingTermination: AgentRunTermination?
     private var finishStartedWaiters: [CheckedContinuation<Void, Never>] = []
     private var finishWaiters: [CheckedContinuation<Void, Never>] = []
@@ -59,6 +60,29 @@ actor AgentEventEmitter {
         finishIfReady()
     }
 
+    /// Rejected calls never become active tools. Reserve their own identities before the
+    /// checkpoint, so finish cannot overtake a confirmed commit's notification.
+    func reserveAdmissionRejections(_ ids: [ToolCallID]) throws {
+        try Task.checkCancellation()
+        guard !finished, pendingTermination == nil,
+              reservedAdmissionRejections.isDisjoint(with: ids) else { throw CancellationError() }
+        reservedAdmissionRejections.formUnion(ids)
+    }
+
+    func commitAdmissionRejections(_ ids: [ToolCallID]) {
+        for id in ids where reservedAdmissionRejections.remove(id) != nil {
+            // No cancellation check after a confirmed commit. Publication cannot turn an
+            // already committed sibling result into a settlement failure.
+            continuation.yield(.toolAdmissionRejected(id))
+        }
+        finishIfReady()
+    }
+
+    func abortAdmissionRejections(_ ids: [ToolCallID]) {
+        reservedAdmissionRejections.subtract(ids)
+        finishIfReady()
+    }
+
     func finish(_ termination: AgentRunTermination) async {
         guard !finished else { return }
         if pendingTermination == nil {
@@ -68,7 +92,7 @@ actor AgentEventEmitter {
             for waiter in waiters { waiter.resume() }
         }
         finishIfReady()
-        // Wait for reserved completions so a checkpoint that already landed can
+        // Wait for reserved publications so a checkpoint that already landed can
         // still publish. Settlement failure must abort the reservation itself;
         // finish must not be the only path that can unblock a leaked reserve.
         if !finished { await withCheckedContinuation { finishWaiters.append($0) } }
@@ -80,7 +104,8 @@ actor AgentEventEmitter {
     }
 
     private func finishIfReady() {
-        guard !finished, reservedCompletions.isEmpty, let termination = pendingTermination else { return }
+        guard !finished, reservedCompletions.isEmpty, reservedAdmissionRejections.isEmpty,
+              let termination = pendingTermination else { return }
         finished = true
         for activeTool in activeTools {
             switch termination {

@@ -423,10 +423,6 @@ package struct AgentLoop: Sendable {
                     throw exposed
                 })
             } catch { throw Self.toolError(error) }
-            // Reported once the rejections are committed with the batch, as an admission rejection is.
-            for index in rejectedArguments.keys.sorted() {
-                try await emitter?.send(.toolAdmissionRejected(response.toolCalls[index].id))
-            }
             let completed = await progress.completed()
             if completed.executedMutation {
                 // Only a newly executed side effect creates a provider fallback boundary.
