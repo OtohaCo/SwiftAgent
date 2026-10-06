@@ -302,21 +302,33 @@ package struct AgentLoop: Sendable {
                 throw AgentLoopError.toolCallLimitReached
             }
             var preparedCalls: [PreparedToolCall] = []
-            for call in response.toolCalls {
+            // Response index of each prepared call, and model-visible results for calls whose
+            // arguments the model must correct. Those calls are never authorized, admitted or run.
+            var preparedIndices: [Int] = []
+            var rejectedArguments: [Int: ToolResultMessage] = [:]
+            for (index, call) in response.toolCalls.enumerated() {
                 do {
                 guard usedCallIDs.insert(call.id).inserted else { throw AgentLoopError.reusedToolCallID(call.id) }
-                var prepared = try tools.prepare(call, context: ToolContext(sessionID: sessionID, runID: runID,
-                    callID: call.id, deadline: budget.deadline,
-                    idempotencyKey: Self.idempotencyKey(operationID: operationID, runID: runID, call: call),
-                    argumentsJSON: call.argumentsJSON, evidenceLedger: evidenceLedger,
-                    mutationAdmission: lifecycle?.mutationAdmission,
-                    executionAdmission: capabilityScope), declared: declaredTools,
-                    prepareAuthorizationBinding: audit != nil)
+                var prepared: PreparedToolCall
+                do {
+                    prepared = try tools.prepare(call, context: ToolContext(sessionID: sessionID, runID: runID,
+                        callID: call.id, deadline: budget.deadline,
+                        idempotencyKey: Self.idempotencyKey(operationID: operationID, runID: runID, call: call),
+                        argumentsJSON: call.argumentsJSON, evidenceLedger: evidenceLedger,
+                        mutationAdmission: lifecycle?.mutationAdmission,
+                        executionAdmission: capabilityScope), declared: declaredTools,
+                        prepareAuthorizationBinding: audit != nil)
+                } catch {
+                    guard let feedback = Self.invalidArgumentsFeedback(error, call: call) else { throw error }
+                    rejectedArguments[index] = feedback
+                    continue
+                }
                 if let allowedResources, !Set(prepared.resources).isSubset(of: allowedResources) {
                     throw AgentCapabilityError.resourceOutsideScope
                 }
                 if let audit { prepared = try await audit.prepare(prepared, deadline: budget.deadline) }
                 preparedCalls.append(prepared)
+                preparedIndices.append(index)
                 } catch {
                     try await audit?.rejected(call.id, reason: error is AgentCapabilityError ? "resource_outside_scope" : "preparation_rejected")
                     for sibling in response.toolCalls where sibling.id != call.id {
@@ -325,7 +337,7 @@ package struct AgentLoop: Sendable {
                     throw error
                 }
             }
-            if let call = preparedCalls.first, preparedCalls.count == 1,
+            if let call = preparedCalls.first, preparedCalls.count == 1, rejectedArguments.isEmpty,
                !admissionFeedbackUsed, !mutationObserved,
                call.policy.effect == .mutation,
                preAdmissionReplanning.includes(call.call.name),
@@ -372,15 +384,29 @@ package struct AgentLoop: Sendable {
                     continue
                 }
             }
-            let progress = AgentToolBatchProgress(prefix: history, response: response, budget: budget,
+            // Replay keeps every proposal. Arguments that are not one JSON object become `{}`: each
+            // provider requires a tool call's input to be an object, and the result explains the mistake.
+            var replayCalls = response.toolCalls
+            for index in rejectedArguments.keys.sorted() {
+                let call = response.toolCalls[index]
+                try await audit?.rejected(call.id, reason: "invalid_arguments")
+                if (try? JSONValue.decodeToolArguments(call.argumentsJSON)) == nil {
+                    replayCalls[index] = ToolCall(id: call.id, name: call.name,
+                        argumentsJSON: ToolCall.replacedInvalidArgumentsJSON, completeness: .complete)
+                }
+            }
+            let progress = AgentToolBatchProgress(prefix: history, response: response, calls: replayCalls,
+                                                  rejected: rejectedArguments, budget: budget,
                                                   lifecycle: lifecycle, emitter: emitter)
+            if preparedCalls.isEmpty { try await progress.commitUnexecuted() }
+            let responseIndices = preparedIndices
             do {
                 try await scheduler.execute(preparedCalls, deadline: budget.deadline, onStarted: { call in
                     try budget.checkActive()
                     try await capabilityScope?.check(runID: runID, resources: call.resources)
                     try await emitter?.send(.toolStarted(call.call))
                 }, onCompleted: { index, call, result in
-                    try await progress.record(index: index, call: call, result: result)
+                    try await progress.record(index: responseIndices[index], call: call, result: result)
                 }, onFailed: { call, error in
                     // Audit failure cannot discard the original error or skip existing recovery.
                     var exposed = await AgentAuditPersistenceError.capturing(original: Self.toolError(error)) {
@@ -397,6 +423,10 @@ package struct AgentLoop: Sendable {
                     throw exposed
                 })
             } catch { throw Self.toolError(error) }
+            // Reported once the rejections are committed with the batch, as an admission rejection is.
+            for index in rejectedArguments.keys.sorted() {
+                try await emitter?.send(.toolAdmissionRejected(response.toolCalls[index].id))
+            }
             let completed = await progress.completed()
             if completed.executedMutation {
                 // Only a newly executed side effect creates a provider fallback boundary.
@@ -716,6 +746,38 @@ package struct AgentLoop: Sendable {
         case .deadlineExceeded: return AgentLoopError.deadlineExceeded
         case .toolTimedOut(let id): return AgentLoopError.toolTimedOut(id)
         }
+    }
+
+    /// A model-visible result for a call the model can correct: arguments that are not one JSON
+    /// object, or that do not match the tool's input schema. `nil` for every other preparation failure.
+    private static func invalidArgumentsFeedback(_ error: any Error, call: ToolCall) -> ToolResultMessage? {
+        let name = call.name
+        let retry = "so the tool was not run. Call \(name) again with arguments that match its input schema."
+        let message: String
+        switch error {
+        case ToolRegistryError.invalidJSON:
+            message = "The arguments for \(name) were not a valid JSON object (\(call.argumentsJSON.count) characters received), "
+                + "so the tool was not run. Call \(name) again with one complete JSON object that matches its input schema."
+        case ToolRegistryError.invalidArguments(let issue):
+            let path = issue.path.count > 200 ? String(issue.path.prefix(200)) + "..." : issue.path
+            switch issue.keyword {
+            case "required":
+                message = "The arguments for \(name) are missing the required field \(path), " + retry
+            case "false" where !path.isEmpty:
+                message = "The arguments for \(name) include \(path), which the tool does not accept, " + retry
+            default:
+                let location = path.isEmpty ? "The arguments for \(name) do" : "The value at \(path) in the arguments for \(name) does"
+                message = "\(location) not satisfy the \"\(issue.keyword)\" rule of its input schema, " + retry
+            }
+        case ToolInvocationError.invalidArguments:
+            message = "The arguments for \(name) did not match its input schema, " + retry
+        default:
+            return nil
+        }
+        return ToolResultMessage(callID: call.id, content: [.json(.object([
+            "code": .string("invalid_arguments"),
+            "message": .string(message),
+        ]))], isError: true)
     }
 
     private static func modelSubmittedReference(_ reference: EvidenceReference,

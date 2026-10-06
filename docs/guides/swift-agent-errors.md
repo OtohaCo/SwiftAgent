@@ -31,8 +31,8 @@ switch on them rather than wrapping arbitrary errors themselves.
 | Model / provider failure | `ModelProviderError` | Adapter `kind` |
 | Request does not fit the model's context window | `ModelProviderError` with `kind == .contextWindowExceeded` | The provider rejected the request; see below. Never retried |
 | Stream protocol error | `ModelStreamError` | Accumulator / incomplete stream |
-| Tool schema or unknown tool | `ToolRegistryError` | Preparation |
-| Tool invocation / authorization | `ToolInvocationError` | `authorizationDenied`, invalid arguments |
+| Tool schema or unknown tool | `ToolRegistryError` | Preparation. Model arguments that are not one JSON object or do not match the input schema (`invalidJSON`, `invalidArguments`) do not end the Run: the call is not run and the model gets an `invalid_arguments` tool error |
+| Tool invocation / authorization | `ToolInvocationError` | `authorizationDenied`. `invalidArguments` during preparation goes back to the model as above |
 | Stale or missing Evidence | `EvidenceError` | `unavailable`, `staleEvidence` |
 | Receipt rejected | `ToolReceiptError` | Binding against the expectation |
 | Mutation blocked / needs host action | `AgentJournalError` | `mutationRequiresReconciliation`, `storeInUse`, `sessionLeaseUnavailable` |

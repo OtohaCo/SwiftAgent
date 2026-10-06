@@ -325,8 +325,8 @@ struct DeepSeekResponsesStreamDecoder {
             guard final.utf8.starts(with: call.arguments.utf8) else { throw DeepSeekResponseJSON.invalid() }
             call.arguments = final
             if !incomplete {
-                guard call.argumentsDone,
-                      (try? JSONValue.decodeToolArguments(final)) != nil else { throw DeepSeekResponseJSON.invalid() }
+                // Arguments that are not one JSON object are the model's mistake; the runtime reports them to the model.
+                guard call.argumentsDone else { throw DeepSeekResponseJSON.invalid() }
                 call.completed = true
             }
             state.call = call

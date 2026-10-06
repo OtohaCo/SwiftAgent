@@ -164,8 +164,10 @@ struct AnthropicStreamDecoder {
                 if call.arguments == nil { events.append(.toolCallArgumentsDelta(call.id, arguments)) }
                 let value = ToolCall(id: call.id, name: call.name, argumentsJSON: arguments, completeness: completed ? .complete : .incomplete)
                 if completed {
-                    guard let input = try? JSONValue.decodeToolArguments(arguments) else { throw ProviderJSON.invalid() }
-                    nativeBlocks[call.blockIndex]["input"] = input
+                    // Input that is not one JSON object is the model's mistake; the runtime reports it to the
+                    // model and replays the call with `{}`. The native block keeps its initial `{}` input
+                    // (deltas require it), so the continuation still matches that replay.
+                    if let input = try? JSONValue.decodeToolArguments(arguments) { nativeBlocks[call.blockIndex]["input"] = input }
                     events.append(.toolCallCompleted(value))
                 }
                 modelCalls.append(value)

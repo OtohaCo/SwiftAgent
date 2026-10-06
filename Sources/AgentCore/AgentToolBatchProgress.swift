@@ -5,6 +5,8 @@ import AgentTools
 actor AgentToolBatchProgress {
     private var prefix: [ModelMessage]
     private let response: ModelResponse
+    /// The response's calls as they are replayed; differs only where arguments were replaced.
+    private let calls: [ToolCall]
     private let budget: AgentBudget
     private let lifecycle: AgentLoopLifecycle?
     private let emitter: AgentEventEmitter?
@@ -14,10 +16,15 @@ actor AgentToolBatchProgress {
     private var declaredTools: Set<String> = []
     private var canonicalHistory: [ModelMessage]?
 
-    init(prefix: [ModelMessage], response: ModelResponse, budget: AgentBudget,
+    /// `rejected` holds results, by response index, for calls refused before preparation completed
+    /// (arguments the model must correct). They commit with the batch; `index` in `record` is a response index.
+    init(prefix: [ModelMessage], response: ModelResponse, calls: [ToolCall]? = nil,
+         rejected: [Int: ToolResultMessage] = [:], budget: AgentBudget,
          lifecycle: AgentLoopLifecycle?, emitter: AgentEventEmitter?) {
         self.prefix = prefix
         self.response = response
+        self.calls = calls ?? response.toolCalls
+        results = rejected
         self.budget = budget
         self.lifecycle = lifecycle
         self.emitter = emitter
@@ -113,6 +120,15 @@ actor AgentToolBatchProgress {
         }
     }
 
+    /// Commits a batch in which no call was prepared: only rejected results exist.
+    func commitUnexecuted() async throws {
+        guard let lifecycle else { return }
+        try budget.checkActive()
+        let committedHistory = history(results)
+        let canonical = try await lifecycle.checkpoint(committedHistory, [])
+        updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+    }
+
     func completed() -> (history: [ModelMessage], receipts: [AgentToolReceipt], count: Int, executedMutation: Bool,
                          declaredTools: Set<String>) {
         (canonicalHistory ?? history(results), receipts, results.count, executedMutation, declaredTools)
@@ -121,12 +137,14 @@ actor AgentToolBatchProgress {
     private func history(_ results: [Int: ToolResultMessage]) -> [ModelMessage] {
         let indices = results.keys.sorted()
         guard !indices.isEmpty else { return prefix }
-        let calls = indices.map { response.toolCalls[$0] }
-        let content = calls.count == response.toolCalls.count ? response.content : response.content.filter {
+        let replayed = indices.map { calls[$0] }
+        // Opaque provider state describes the whole response, so discarding proposals invalidates it.
+        // Replaced invalid arguments do not: providers replay the same replacement.
+        let content = replayed.count == calls.count ? response.content : response.content.filter {
             if case .providerContinuation = $0 { return false }
             return true
         }
-        return prefix + [.assistant(content: content, toolCalls: calls)] + indices.compactMap { results[$0].map(ModelMessage.tool) }
+        return prefix + [.assistant(content: content, toolCalls: replayed)] + indices.compactMap { results[$0].map(ModelMessage.tool) }
     }
 
     private func updateCanonicalPrefix(_ history: [ModelMessage], committedHistory: [ModelMessage]) {

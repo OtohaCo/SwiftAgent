@@ -58,6 +58,11 @@ public struct ToolCall: Hashable, Sendable, Codable {
     public let argumentsJSON: String
     public let completeness: Completeness
 
+    /// What conversation history holds in place of complete arguments that are not one JSON object.
+    /// The model is told in the call's result that its arguments were invalid; every provider needs a
+    /// call's input to be an object, and a provider continuation replays the same replacement.
+    package static let replacedInvalidArgumentsJSON = "{}"
+
     public init(
         id: ToolCallID,
         name: String,

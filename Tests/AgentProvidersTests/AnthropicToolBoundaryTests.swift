@@ -43,12 +43,11 @@ struct AnthropicToolBoundaryTests {
         #expect(await requestProbe.requests.count == 1)
     }
 
-    @Test func malformedArgumentsMissingTerminalAndTrailingEventsCannotDispatch() async throws {
+    @Test func missingTerminalAndTrailingEventsCannotDispatch() async throws {
         let normal = String(decoding: anthropicToolFixture, as: UTF8.self)
         let missing = Data(normal.replacingOccurrences(of: "data: {\"type\":\"message_stop\"}\n\n", with: "").utf8)
         let trailing = anthropicToolFixture + providerSSE([#"{"type":"content_block_stop","index":0}"#])
-        let invalid = try [toolStream(arguments: "{", stop: "tool_use"),
-                           toolStream(arguments: "{\"a\":2,\"a\":3,\"b\":4}", stop: "tool_use"), missing, trailing]
+        let invalid = [missing, trailing]
         for body in invalid {
             let execution = ProviderExecutionProbe()
             let provider = try AnthropicProvider(apiKey: "fixture-key", transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [body]))
@@ -59,6 +58,55 @@ struct AnthropicToolBoundaryTests {
             } catch { #expect((error as? ModelProviderError)?.kind == .invalidResponse) }
             #expect(await execution.count == 0)
         }
+    }
+
+    /// Malformed or ambiguous input is a model mistake: the tool does not run, the model is told,
+    /// and the next request replays the call with `{}` input, which the Messages API accepts.
+    @Test(arguments: ["{", "{\"a\":2,\"a\":3,\"b\":4}"])
+    func malformedArgumentsGoBackToTheModelAndTheNextRequestEncodes(_ arguments: String) async throws {
+        let execution = ProviderExecutionProbe()
+        let probe = ProviderRequestProbe()
+        let provider = try AnthropicProvider(apiKey: "fixture-key", transport: FixtureHTTPTransport(probe: probe,
+            bodies: [try toolStream(arguments: arguments, stop: "tool_use"), anthropicTextFixture]))
+        let result = try await Agent(model: .init(provider: "anthropic", name: "fixture"), provider: provider,
+                                     tools: [ProviderCalculator(probe: execution)]).makeSession().run("Compute").wait()
+        #expect(result.outcome == .completed)
+        #expect(await execution.count == 0)
+        let requests = await probe.requests
+        #expect(requests.count == 2)
+        guard case .object(let body) = try JSONDecoder().decode(JSONValue.self, from: #require(requests.last?.httpBody)),
+              case .array(let messages) = body["messages"], messages.count == 3,
+              case .object(let assistant) = messages[1], case .object(let user) = messages[2],
+              case .array(let blocks) = user["content"], case .object(let toolResult) = blocks.last else {
+            Issue.record("Missing replayed tool round"); return
+        }
+        #expect(assistant["content"] == .array([.object(["type": .string("tool_use"), "id": .string("toolu-1"),
+                                                         "name": .string("calculator"), "input": .object([:])])]))
+        #expect(toolResult["tool_use_id"] == .string("toolu-1"))
+        #expect(toolResult["is_error"] == .bool(true))
+        guard case .string(let text) = toolResult["content"] else { Issue.record("Missing tool result text"); return }
+        #expect(text.contains("invalid_arguments"))
+    }
+
+    /// With thinking, the Messages API needs the signed thinking block before a replayed tool call;
+    /// replacing invalid input must keep the continuation that carries it.
+    @Test func malformedArgumentsAfterThinkingKeepTheSignedThinkingBlock() async throws {
+        let thinking = String(decoding: anthropicThinkingToolFixture, as: UTF8.self)
+            .replacingOccurrences(of: #"{\"a\":2,\"b\":3}"#, with: #"{\"a\":2,"#)
+        let probe = ProviderRequestProbe()
+        let provider = try AnthropicProvider(apiKey: "fixture-key", transport: FixtureHTTPTransport(probe: probe,
+            bodies: [Data(thinking.utf8), anthropicTextFixture]))
+        let result = try await Agent(model: .init(provider: "anthropic", name: "fixture"), provider: provider,
+                                     tools: [ProviderCalculator()]).makeSession().run("Compute").wait()
+        #expect(result.outcome == .completed)
+        let requests = await probe.requests
+        guard case .object(let body) = try JSONDecoder().decode(JSONValue.self, from: #require(requests.last?.httpBody)),
+              case .array(let messages) = body["messages"], messages.count == 3,
+              case .object(let assistant) = messages[1] else { Issue.record("Missing replayed tool round"); return }
+        #expect(assistant["content"] == .array([
+            .object(["type": .string("thinking"), "thinking": .string("Consider inputs."), "signature": .string("signature-1")]),
+            .object(["type": .string("tool_use"), "id": .string("toolu-1"), "name": .string("calculator"), "input": .object([:])]),
+        ]))
     }
 
     private func toolStream(arguments: String, stop: String) throws -> Data {

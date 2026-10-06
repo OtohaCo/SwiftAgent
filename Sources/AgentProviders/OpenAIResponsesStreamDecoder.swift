@@ -531,8 +531,8 @@ struct ResponsesStreamDecoder {
                   try ProviderJSON.string(item["call_id"]) == call.id.rawValue,
                   try ProviderJSON.string(item["name"]) == call.name else { throw ProviderJSON.invalid() }
             let final = try ProviderJSON.string(item["arguments"])
-            guard final == call.arguments,
-                  (try? JSONValue.decodeToolArguments(final)) != nil else { throw ProviderJSON.invalid() }
+            // Arguments that are not one JSON object are the model's mistake; the runtime reports them to the model.
+            guard final == call.arguments else { throw ProviderJSON.invalid() }
             call.completed = true
             state.functionCall = call
             events.append(.toolCallCompleted(.init(id: call.id, name: call.name,

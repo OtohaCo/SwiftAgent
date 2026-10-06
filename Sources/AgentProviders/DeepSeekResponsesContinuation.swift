@@ -46,7 +46,7 @@ enum DeepSeekResponsesContinuation {
                   case .object(let object) = payload, case .array(let storedItems) = object["items"] else {
                 throw ProviderJSON.invalid()
             }
-            let items = try replayableItems(storedItems)
+            let items = try replayableItems(ProviderJSON.replacingInvalidArguments(in: storedItems, calls: calls))
             let binding: ContentBinding
             if let encodedContent = object["visible_content_order"] {
                 binding = .stored(try decodeVisibleContent(encodedContent))

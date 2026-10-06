@@ -66,10 +66,11 @@ enum OpenAIResponsesContinuation {
                   state.format == format || state.format == legacyFormat,
                   let payload = try? JSONDecoder().decode(JSONValue.self, from: state.payload),
                   case .object(let object) = payload,
-                  case .array(let items) = object["items"],
+                  case .array(let storedItems) = object["items"],
                   case .array(let encodedReasoning) = object["visible_reasoning"] else {
                 throw ProviderJSON.invalid()
             }
+            let items = ProviderJSON.replacingInvalidArguments(in: storedItems, calls: calls)
             let expectedReasoning = try encodedReasoning.map(ProviderJSON.string)
             let storedVisibleContent: [(ContentKind, String)]?
             if state.format == format, let encodedContent = object["visible_content_order"] {
