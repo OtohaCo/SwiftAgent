@@ -50,18 +50,24 @@ final class ModelToolEventTests: XCTestCase {
         }
     }
 
-    func testCompleteEventDoesNotBlessMalformedOrNonObjectArguments() throws {
+    /// Arguments are the model's words, not stream structure. A complete call keeps malformed or
+    /// non-object arguments exactly as streamed and never blesses them: they still fail argument
+    /// decoding, so the runtime tells the model instead of running the tool or ending the Run.
+    func testCompleteEventKeepsButDoesNotBlessMalformedOrNonObjectArguments() throws {
         for raw in [#"{"query":"oops"#, "", "[]", "null", "12", #""string""#,
                     #"{"a":1,}"#, #"{"a":[1,]}"#, #"{"a":{"b":2, }}"#,
                     #"{"a":01}"#, #"{"a":+1}"#, #"{/*comment*/"a":1}"#,
                     #"{"a":1,"a":2}"#, #"{"nested":{"\u00e9":1,"e\u0301":2}}"#] {
+            let call = ToolCall(id: first.id, name: first.name, argumentsJSON: raw, completeness: .complete)
+            let expected = ModelResponse(info: info, toolCalls: [call], stopReason: .toolCalls)
             var accumulator = ModelEventAccumulator()
             try accumulator.append(.responseStarted(info))
             try accumulator.append(.toolCallStarted(first.id, name: first.name))
             try accumulator.append(.toolCallArgumentsDelta(first.id, raw))
-            XCTAssertThrowsError(try accumulator.append(.toolCallCompleted(.init(
-                id: first.id, name: first.name, argumentsJSON: raw, completeness: .complete
-            ))), raw)
+            try accumulator.append(.toolCallCompleted(call))
+            try accumulator.append(.responseCompleted(expected))
+            XCTAssertEqual(try accumulator.finish().toolCalls.first?.argumentsJSON, raw)
+            XCTAssertThrowsError(try JSONValue.decodeToolArguments(raw), raw)
         }
     }
 

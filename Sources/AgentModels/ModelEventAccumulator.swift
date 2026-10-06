@@ -62,9 +62,8 @@ public struct ModelEventAccumulator: Sendable {
                   call.argumentsJSON.utf8.elementsEqual(pending.argumentsJSON.utf8) else {
                 throw ModelStreamError.toolCallMismatch(call.id)
             }
-            guard (try? JSONValue.decodeToolArguments(call.argumentsJSON)) != nil else {
-                throw ModelStreamError.invalidToolArguments(call.id)
-            }
+            // Arguments are the model's words, not stream structure: a call whose arguments are not
+            // one JSON object is kept so the runtime can tell the model instead of ending the Run.
             calls[call.id] = call
         case .usage(let newer):
             let merged = ModelUsage(
@@ -138,6 +137,9 @@ public enum ModelStreamError: Error, Equatable, Sendable {
     case duplicateToolCall(ToolCallID)
     case toolAlreadyCompleted(ToolCallID)
     case toolCallMismatch(ToolCallID)
+    /// No longer thrown by `ModelEventAccumulator`: a completed call keeps its arguments as streamed,
+    /// and the runtime answers arguments that are not one JSON object with a tool error the model sees.
+    /// Kept so existing exhaustive switches still compile.
     case invalidToolArguments(ToolCallID)
     case invalidToolIdentity
     case invalidToolStop

@@ -145,20 +145,26 @@ struct AgentRecoverableToolErrorTests {
         #expect(await provider.log.requests.count == 1)
     }
 
-    @Test func malformedArgumentsAndUnknownToolsStayFailClosed() async throws {
-        let calls = [
-            ToolCall(id: .init(rawValue: "malformed"), name: RecoverableSearchTool.name,
-                     argumentsJSON: #"{"query":1}"#, completeness: .complete),
-            ToolCall(id: .init(rawValue: "unknown"), name: "unknown_tool",
-                     argumentsJSON: "{}", completeness: .complete),
-        ]
-        for call in calls {
-            let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
-            let session = try Agent(model: fixtureModel, provider: provider,
-                                    tools: [try RecoverableSearchTool(probe: RecoverableProbe())]).makeSession()
-            await #expect(throws: (any Error).self) { _ = try await session.run("Search").wait() }
-            #expect(await provider.log.requests.count == 1)
+    @Test func malformedArgumentsGoBackToTheModelAndUnknownToolsStayFailClosed() async throws {
+        let malformed = ToolCall(id: .init(rawValue: "malformed"), name: RecoverableSearchTool.name,
+                                 argumentsJSON: #"{"query":1}"#, completeness: .complete)
+        let probe = RecoverableProbe()
+        let provider = ScriptedProvider { request, turn in
+            turn == 1 ? toolResponse(request, [malformed]) : textResponse(request, "I will search with text.")
         }
+        let result = try await Agent(model: fixtureModel, provider: provider,
+                                     tools: [try RecoverableSearchTool(probe: probe)]).makeSession().run("Search").wait()
+        #expect(result.outcome == .completed)
+        #expect(await probe.executions == 0)
+        #expect(await provider.log.requests.count == 2)
+
+        let unknown = ToolCall(id: .init(rawValue: "unknown"), name: "unknown_tool",
+                               argumentsJSON: "{}", completeness: .complete)
+        let failing = ScriptedProvider { request, _ in toolResponse(request, [unknown]) }
+        let session = try Agent(model: fixtureModel, provider: failing,
+                                tools: [try RecoverableSearchTool(probe: RecoverableProbe())]).makeSession()
+        await #expect(throws: (any Error).self) { _ = try await session.run("Search").wait() }
+        #expect(await failing.log.requests.count == 1)
     }
 
     @Test func parallelSuccessErrorSuccessPreservesProposalOrder() async throws {

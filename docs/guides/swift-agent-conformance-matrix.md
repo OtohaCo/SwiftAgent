@@ -214,7 +214,8 @@ Phases are covered across files, not one checklist suite.
 | Scenario | Existing test | Action |
 | --- | --- | --- |
 | Opaque IDs, reuse cannot replay | `ModelIdentityTests`, `AgentLoopBudgetTests.reusedCallIDs…` | Covered |
-| Invalid JSON / wrong type / unknown tool never execute | `AgentLoopContractTests.malformedUnknownAndInvalidBatchMembersNeverExecuteAnyTool` | Covered |
+| Invalid JSON / wrong type / unknown tool never execute | `AgentLoopContractTests.malformedUnknownAndInvalidBatchMembersNeverExecute` | Covered |
+| Invalid JSON / schema mismatch go back to the model; the Run continues within its budgets | `AgentInvalidToolArgumentsTests`, `InvalidToolArgumentsReplayTests`, `AnthropicToolBoundaryTests.malformedArguments…` | Covered |
 | Pi foreign toolcall-id normalization / OpenAI Responses IDs | OpenAI native function ID and call ID are retained and rebound to canonical calls | `openAIToolOnlyContinuationPreservesNativeIdentityAcrossEncoding` | Covered |
 | Empty / Unicode / very long IDs as identity bytes | opaque UTF-8 identity tests | Covered |
 

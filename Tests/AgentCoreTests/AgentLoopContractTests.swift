@@ -5,23 +5,38 @@ import Foundation
 import Testing
 
 struct AgentLoopContractTests {
-    @Test func malformedUnknownAndInvalidBatchMembersNeverExecuteAnyTool() async throws {
+    @Test func malformedUnknownAndInvalidBatchMembersNeverExecute() async throws {
         let valid = ToolCall(id: .init(rawValue: "a"), name: "add", argumentsJSON: #"{"lhs":2,"rhs":3}"#, completeness: .complete)
+        let unknown = ToolCall(id: .init(rawValue: "b"), name: "missing", argumentsJSON: "{}", completeness: .complete)
+        // An unknown tool still rejects the whole batch: nothing runs and the Run ends.
+        let log = EffectLog()
+        let provider = ScriptedProvider { request, turn in
+            turn == 1 ? toolResponse(request, [valid, unknown]) : textResponse(request, "Unexpected")
+        }
+        let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: [AnyAgentTool(AddTool(log: log))]))
+        await #expect(throws: (any Error).self) { try await loop.run(messages: [], sessionID: UUID(), budget: testBudget()) }
+        #expect(await log.names.isEmpty)
+        #expect(await provider.log.requests.count == 1)
+
+        // Arguments the model must correct never execute; the model is told and a valid sibling still runs.
         let invalid = [
             ToolCall(id: .init(rawValue: "b"), name: "add", argumentsJSON: "{", completeness: .complete),
-            ToolCall(id: .init(rawValue: "b"), name: "missing", argumentsJSON: "{}", completeness: .complete),
             ToolCall(id: .init(rawValue: "b"), name: "add", argumentsJSON: #"{"lhs":true,"rhs":3}"#, completeness: .complete),
             ToolCall(id: .init(rawValue: "b"), name: "add", argumentsJSON: #"{"lhs":9223372036854775808,"rhs":0}"#, completeness: .complete),
         ]
         for bad in invalid {
             let log = EffectLog()
             let provider = ScriptedProvider { request, turn in
-                turn == 1 ? toolResponse(request, [valid, bad]) : textResponse(request, "Unexpected")
+                turn == 1 ? toolResponse(request, [valid, bad]) : textResponse(request, "Corrected")
             }
             let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: [AnyAgentTool(AddTool(log: log))]))
-            await #expect(throws: (any Error).self) { try await loop.run(messages: [], sessionID: UUID(), budget: testBudget()) }
-            #expect(await log.names.isEmpty)
-            #expect(await provider.log.requests.count == 1)
+            let result = try await loop.run(messages: [], sessionID: UUID(), budget: testBudget())
+            #expect(result.outcome == .completed)
+            #expect(await log.names == ["add"])
+            #expect(await provider.log.requests.count == 2)
+            #expect(result.history.contains {
+                if case .tool(let message) = $0 { message.callID == bad.id && message.isError } else { false }
+            })
         }
     }
 

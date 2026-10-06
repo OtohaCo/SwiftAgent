@@ -38,15 +38,16 @@ struct RuntimeToolPublicAPITests {
             callID: .init(rawValue: "call-read A"),
             content: [.json(.object(["id": .string("A"), "text": .string("contents of A")]))], isError: false))))
 
+        // An argument outside the tool's own schema is not run; the model is told and the Run goes on.
         let badInputSession = try agent.makeSession()
         let badInput = try await badInputSession.run("read with a number", capabilities: try await bound(badInputSession))
-        await #expect(throws: ToolRegistryError.self) {
-            do { _ = try await badInput.wait() } catch let error as ToolRegistryError {
-                guard case .invalidArguments = error else { throw ConnectorFailure.unexpected("\(error)") }
-                throw error
-            }
-        }
+        #expect(try await badInput.wait().outcome == .completed)
         try await badInput.waitForDrain()
+        #expect(await badInputSession.history.contains {
+            guard case .tool(let result) = $0, result.callID == .init(rawValue: "call-read with a number"),
+                  result.isError, case .json(.object(let fields))? = result.content.first else { return false }
+            return fields["code"] == .string("invalid_arguments")
+        })
 
         let badOutputSession = try agent.makeSession()
         let badOutput = try await badOutputSession.run("lookup broken", capabilities: try await bound(badOutputSession))

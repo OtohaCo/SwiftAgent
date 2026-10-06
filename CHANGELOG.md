@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased: invalid tool arguments go back to the model
+
+A tool call whose arguments are not one JSON object (malformed, truncated,
+duplicate keys, not an object) or do not match the tool's input schema no
+longer ends the Run. The tool is not authorized, admitted or run; the model
+receives an error result for that call (`code: "invalid_arguments"`, with the
+missing or wrong field when the schema names one) and the Run continues to the
+next model turn. Such calls count toward `maxToolCalls`, and each correction
+attempt uses a model turn, so the existing budgets bound repeated mistakes.
+Valid calls in the same batch still run; results keep call order. History
+replays the call with `{}` in place of arguments that are not one JSON object,
+which every provider accepts; schema-invalid JSON is replayed as written.
+Provider continuations replay the same replacement, so OpenAI Responses and
+DeepSeek native items and Anthropic thinking blocks are kept. The OpenAI
+Responses (and local Responses), DeepSeek and Anthropic stream decoders and
+`ModelEventAccumulator` no longer reject a completed call for its arguments
+(`ModelStreamError.invalidToolArguments` is no longer thrown and is kept for
+source compatibility); the Apple on-device provider, which generates arguments
+under a schema guide, still rejects such a plan as `invalidResponse`. Hosts
+see `toolAdmissionRejected` exactly once after the first checkpoint that commits
+the rejection, before `runFinished`, even if a later sibling fails or the Run
+is cancelled or reaches its deadline. Failed or uncertain commits do not publish
+a confirmed rejection. Audit records `invalid_arguments` as its disposition. A host tool that throws
+`ToolInvocationError.invalidArguments` while the call is prepared gets the same
+treatment. Unknown or undeclared tools,
+reused call IDs, identity and stream protocol violations, and calls cut off
+by the output limit keep their behaviour.
+
 ## Unreleased: provider replay and diagnostics
 
 DeepSeek now retains native state for every accepted complete tool turn, including

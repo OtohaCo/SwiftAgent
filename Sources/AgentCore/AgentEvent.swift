@@ -34,7 +34,9 @@ public enum AgentEvent: Equatable, Sendable {
     case toolCompleted(ToolResultMessage)
     case toolReceiptValidated(AgentToolReceipt)
     case toolFailed(ToolCallID, AgentFailure)
-    /// The runtime denied a prepared tool call before admission; it did not execute the tool.
+    /// The runtime denied a tool call before admission; it did not execute the tool. Also sent for a
+    /// call whose arguments are not one JSON object or do not match the tool's input schema: the
+    /// model receives an `invalid_arguments` tool error for it and the Run continues.
     case toolAdmissionRejected(ToolCallID)
     case steeringApplied(id: UUID, text: String)
     case runFinished(AgentRunTermination)

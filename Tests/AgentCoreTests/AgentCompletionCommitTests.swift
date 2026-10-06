@@ -241,7 +241,7 @@ struct AgentCompletionCommitTests {
 
 /// Blocks the first CURRENT publication after it is armed: the checkpoint is committed, but its
 /// append has not returned to the Session yet.
-private final class PublishedCheckpointHold: @unchecked Sendable {
+final class PublishedCheckpointHold: @unchecked Sendable {
     private let lock = NSLock()
     private let resume = DispatchSemaphore(value: 0)
     private var armed = false
