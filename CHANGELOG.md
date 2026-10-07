@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased: execution-reporting CI uses the prebuilt Host CLI
+
+- After Host tests build `HeadlessExecutionHostCLI`, both CLI acceptance
+  scenarios use `swift run --skip-build`. This avoids a second build-planning
+  pass after a recorded Linux Swift 6.4 `swift-package` SIGSEGV; both scenarios,
+  receipt/authorization assertions, watchdogs and failing exits remain required.
+  The compiler/planner root cause remains unknown; see
+  [the retained CI evidence](https://github.com/OtohaCo/SwiftAgent/issues/46#issuecomment-6035891119).
+
 ## Unreleased: prompt cache key and cache usage
 
 - OpenAI and Local Responses accept an optional Host-configured `promptCacheKey`

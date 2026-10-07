@@ -72,10 +72,12 @@ run_case "ExecutionReportingSupportTests" "fixture" \
     swift test --package-path Examples/ExecutionReportingSupport --disable-sandbox --no-parallel
 run_case "HeadlessExecutionHostTests" "local-integration" \
     swift test --package-path Examples/HeadlessExecutionHost --disable-sandbox --no-parallel
+# The preceding tests build this executable. Run that product without another
+# SwiftPM planning pass; all CLI assertions, watchdogs and exit checks still run.
 run_case "HeadlessFailureAfterWrite" "local-integration" \
-    swift run --package-path Examples/HeadlessExecutionHost HeadlessExecutionHostCLI failure-after-write
+    swift run --skip-build --package-path Examples/HeadlessExecutionHost HeadlessExecutionHostCLI failure-after-write
 run_case "HeadlessReadOnlyAuthorization" "local-integration" \
-    swift run --package-path Examples/HeadlessExecutionHost HeadlessExecutionHostCLI read-only-rejects-write
+    swift run --skip-build --package-path Examples/HeadlessExecutionHost HeadlessExecutionHostCLI read-only-rejects-write
 run_case "AppleChatIntegrationTests" "fixture" \
     swift test --package-path Examples/AppleChatApp --disable-sandbox --no-parallel
 
