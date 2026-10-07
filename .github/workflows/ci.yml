@@ -75,7 +75,7 @@ jobs:
         run: python3 -m unittest discover Scripts -p 'test_ci_stage.py'
       - name: Core --target build, tests, external client
         run: bash Scripts/ci-linux.sh
-      - name: Finite original reporting reproduction (five attempts, stop on failure)
+      - name: Finite reporting acceptance reproduction (five attempts, stop on failure)
         if: ${{ !cancelled() }}
         run: bash Scripts/ci-linux-reporting-repro.sh
       - name: Upload acceptance logs
