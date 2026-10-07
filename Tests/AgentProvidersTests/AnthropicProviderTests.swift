@@ -162,7 +162,7 @@ struct AnthropicProviderTests {
         let response = try accumulator.finish()
         #expect(response.content.first == .text("Hello"))
         #expect(response.stopReason == .endTurn)
-        #expect(response.usage == .init(inputTokens: 5, outputTokens: 3))
+        #expect(response.usage == .init(outputTokens: 3)) // Fixture omits read/write categories: normalized input is unknown.
         let requests = await probe.requests
         let sent = try #require(requests.first)
         #expect(sent.url?.path == "/v1/messages")

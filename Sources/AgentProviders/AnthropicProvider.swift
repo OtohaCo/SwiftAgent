@@ -41,6 +41,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
     private let maximumOutputTokens: Int
     private let thinking: AnthropicThinking
     private let effort: AnthropicEffort?
+    private let promptCaching: AnthropicPromptCaching?
     private let resolvedModelIDsByAlias: [String: String]
     private let transport: any ProviderHTTPTransport
     public var description: String { "AnthropicProvider" }
@@ -81,6 +82,18 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
                 effort: AnthropicEffort?,
                 resolvedModelIDsByAlias: [String: String],
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+        try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
+                      thinking: thinking, effort: effort, resolvedModelIDsByAlias: resolvedModelIDsByAlias,
+                      promptCaching: nil, transport: transport)
+    }
+
+    /// Optional cache strategy qualified by the Host for this endpoint and resolved model.
+    /// The strategy is provider-wide and must be supplied again when rebuilding it.
+    public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
+                thinking: AnthropicThinking = .disabled, effort: AnthropicEffort? = nil,
+                resolvedModelIDsByAlias: [String: String] = [:],
+                promptCaching: AnthropicPromptCaching?,
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !apiKey.contains("\r"), !apiKey.contains("\n"), maximumOutputTokens > 0,
               let endpoint = endpoint ?? URL(string: "https://api.anthropic.com/v1/messages") else {
@@ -112,6 +125,8 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
         self.maximumOutputTokens = maximumOutputTokens
         self.thinking = thinking
         self.effort = effort
+        try promptCaching?.validate(endpoint: endpoint)
+        self.promptCaching = promptCaching
         self.resolvedModelIDsByAlias = resolvedModelIDsByAlias
         self.transport = transport
     }
@@ -139,7 +154,9 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
                     request,
                     maximumOutputTokens: maximumOutputTokens,
                     thinking: thinking,
-                    effort: effort
+                    effort: effort,
+                    promptCaching: promptCaching,
+                    resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name
                 ))
             } catch let error as ModelProviderError { throw error }
             catch { throw ModelProviderError(kind: .invalidRequest, message: "The provider request cannot be encoded.") }
@@ -191,7 +208,9 @@ extension AnthropicProvider: ModelProviderRequestValidator {
             request,
             maximumOutputTokens: maximumOutputTokens,
             thinking: thinking,
-            effort: effort
+            effort: effort,
+            promptCaching: promptCaching,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name
         )
     }
 }

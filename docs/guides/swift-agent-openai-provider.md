@@ -71,7 +71,113 @@ only when explicitly configured through `Configuration.promptCacheKey`;
 service support is unknown until qualified. Anthropic, DeepSeek and Apple do
 not send this OpenAI field.
 
-## Cache usage and remaining controls
+## Model and endpoint-qualified cache controls
+
+The optional `OpenAIResponsesPromptCaching` configuration binds cache controls to
+an exact Responses endpoint and a Host-verified set of resolved model names. The
+Host declares only capabilities confirmed for that deployed protocol. SwiftAgent
+validates endpoint/model binding, required capabilities and parameter combinations
+before HTTP; it does not establish a compatible gateway's support from its name.
+With model aliases, qualify the resolved identity from `resolvedModelIDsByAlias`;
+the request still carries the alias. New required `promptCaching:` overloads retain
+all existing public initializer function signatures. Without configuration, neither
+modern options nor legacy retention nor explicit markers are sent.
+
+```swift
+let endpoint = URL(string: "https://api.openai.com/v1/responses")!
+let caching = OpenAIResponsesPromptCaching(
+    endpoint: endpoint,
+    modelNames: ["gpt-6.1-sol"], // Host-verified endpoint/model capabilities
+    capabilities: [.modernControls, .prewarm],
+    policy: .modern(
+        mode: .explicit, ttl: .thirtyMinutes,
+        breakpoints: [.init(messageIndex: 0)]
+    )
+)
+let provider = try OpenAIResponsesProvider(
+    apiKey: apiKey, endpoint: endpoint,
+    promptCacheKey: hostCacheGroup, promptCaching: caching
+)
+let request = ModelRequest(
+    model: .init(provider: "openai", name: "gpt-6.1-sol"),
+    messages: [.developer("Stable instructions and reference material"),
+               .user([.text("Dynamic question")])]
+)
+```
+
+Official protocol distinctions, verified 2026-10-07:
+
+| Model / endpoint capability | Host policy | Wire control |
+| --- | --- | --- |
+| GPT-5.6 and later with modern controls | `.modern(mode:ttl:breakpoints:)` | `prompt_cache_options.mode` (`implicit` / `explicit`) and `ttl: "30m"` |
+| Earlier model qualified for in-memory retention | `.legacy(retention: .inMemory)` and `.legacyInMemoryRetention` capability | `prompt_cache_retention: "in_memory"` |
+| Earlier model qualified for extended retention | `.legacy(retention: .twentyFourHours)` and `.legacy24HourRetention` capability | `prompt_cache_retention: "24h"` |
+| Gateway / Local Responses | Host attestation for its exact endpoint, resolved model and controls | Only the declared, validated policy |
+
+GPT-5.5 / GPT-5.5 Pro support only `24h`. Extended retention is model- and
+organization-dependent; the official guide lists the eligible earlier models.
+Earlier models do not support modern explicit breakpoints or prewarming. A Host
+must not attest unsupported capabilities simply to pass validation. This SDK
+does not guess a gateway's model generation or translate retention into modern TTL.
+
+Breakpoints address the zero-based canonical `ModelRequest.messages` index. The
+optional `contentBlock` is a zero-based index among that message's eligible encoded
+input-text/image blocks. A plain-text instruction, user message or tool output is
+one block at zero; the existing encoder's joined text and error envelope stay intact.
+Markers are added only to supported input content, never to function calls, reasoning
+continuation, tool definitions or `additional_tools`. Top-level `instructions` cannot
+contain markers; this adapter already encodes instructions as canonical input messages.
+Missing/ineligible targets, negative or duplicate coordinates fail locally. Each
+request can create at most four cache writes; implicit mode reserves one write slot,
+leaving three explicit write slots. This is a write budget, not a cap on historical
+markers in the input. Keep earlier markers when appending conversation history;
+the service checks the first two and latest fifty explicit boundaries, plus eligible
+implicit boundaries in implicit mode, and selects the limited writes. The SDK neither
+truncates nor reorders valid historical markers. Explicit mode with no markers
+deliberately requests no cache writes.
+
+Keep static reference material before a changing suffix. Requests preserve canonical
+message history, continuation integrity and supplied tool-array order; sorted JSON
+object keys make equivalent serialization stable. Changing tools/schemas, earlier
+context/history, output schema, reasoning settings or model can change the prefix.
+The SDK does not expose unapproved tools, move context, rewrite old messages or
+generate per-request keys in pursuit of cache hits. The provider's configuration
+and Host key persist across Runs, tool rounds and shared Sessions; rebuilding it
+requires the Host to resupply both. Dynamic breakpoint coordinates must be recomputed
+by the Host when its canonical context layout changes.
+
+`LocalResponsesProvider.Configuration` has a required `promptCaching:` overload
+for explicit opt-in. Its qualification URL must equal the derived `/responses`
+endpoint, and its model name must match the configured local model. Nil configuration
+preserves previous bytes; declaring local support is the Host's responsibility.
+
+## Separate prewarm invocations
+
+For an endpoint/model explicitly qualified with `.modernControls` and `.prewarm`,
+`OpenAIResponsesProvider.prewarm(request:)` sends `prompt_cache_options.prewarm: true`.
+Local Responses offers the same method only with equivalent Host qualification.
+Normal `stream(request:)` omits prewarm, so Agent runs continue generating output.
+The same configured cache key and prefix markers are used in both methods.
+
+```swift
+for try await event in provider.prewarm(request: request) {
+    // Feed standard usage / responseCompleted events to the Host ledger under
+    // a distinct prewarm invocation ID, including cache-write-only usage.
+}
+for try await event in provider.stream(request: request) {
+    // Account for the generation invocation under another ID.
+}
+```
+
+Prewarming is a real request with potential cache-write cost. The Host bounds its
+requests/tokens/cost, consumes the complete stream before relying on preparation,
+and never feeds prewarm tool proposals into an executor or adds its response to
+canonical conversation history. A gateway accepting a parameter does not demonstrate
+that it warmed a usable cache. Record write usage and compare subsequent reads;
+the provider rejects a prewarm response that generates visible content/tools or
+reports positive output tokens, retaining any usage already emitted for accounting.
+
+## Cache usage
 
 Completed and incomplete Responses preserve `input_tokens`, `output_tokens`,
 `input_tokens_details.cached_tokens`, `input_tokens_details.cache_write_tokens`
@@ -87,8 +193,9 @@ Prices and fee categories must come from the Host's deployed tariff; official
 [OpenAI pricing](https://developers.openai.com/api/docs/pricing) is not a gateway
 subscription or quota schedule (reference verified 2026-10-07).
 
-Explicit breakpoints and model/endpoint-qualified cache controls remain
-[follow-up #88](https://github.com/OtohaCo/SwiftAgent/issues/88). Live OtohaAI
+Request-level cache controls are covered by `OpenAIPromptCacheControlsTests`,
+including reconstruction, canonical tool rounds and separate write-only prewarm
+accounting. Live OtohaAI
 reuse and gateway behavior remain [follow-up #89](https://github.com/OtohaCo/SwiftAgent/issues/89).
 
 Structured output uses Responses `text.format` with the supplied JSON Schema.

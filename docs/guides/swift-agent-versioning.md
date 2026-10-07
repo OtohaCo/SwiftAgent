@@ -1,5 +1,34 @@
 # SwiftAgent Semantic Versioning
 
+## Cache controls and TTL accounting (unreleased)
+
+Verified 2026-10-07. `CacheWriteTTLUsage` and optional
+`ModelUsage.cacheWriteTTL` add 5m/1h reported write detail. The original
+five-argument `ModelUsage.init` signature is preserved, including stored
+initializer function references; a separate overload requires the
+`cacheWriteTTL:` label. Existing Codable documents without that field decode
+with nil detail. Equality includes reported detail. No Journal schema changes
+or automatic persistence of usage are introduced.
+
+`UsageTokenSummary` and `UsageSummary` expose optional
+`CacheWriteTTLSummary` with per-category coverage. Older summary documents decode
+with nil detail; aggregate totals and `totalTokens` retain their meanings.
+Anthropic now leaves normalized input unknown if ordinary, read or aggregate
+write counts are unreported; it previously treated omitted read/write counts as
+zero. Reported explicit zeros remain known. Raw inconsistent TTL classifications
+remain visible for Host diagnostics rather than changing tools or settlement.
+Sparse finalized replays match their reported fields against stored finalized
+values; unknown-field enrichment remains a finalized conflict.
+
+The DynamicModelRouting example adds detail overloads while preserving its
+existing forecast and quote initializer signatures. Its new `.ttlBreakdown`
+case requires existing exhaustive switches over the example's pricing-scope
+enum to adapt. This enum is outside the SDK products. A public cost assessment
+explains missing/invalid accounting instead of silently producing a value.
+Provider configuration additions and their compatibility tests are documented
+in the provider guides; their older initializer function signatures remain
+available through compatibility overloads.
+
 ## Responses cache keys and usage (unreleased, PR #85)
 
 Verified 2026-10-07. Both `OpenAIResponsesProvider` initializers and

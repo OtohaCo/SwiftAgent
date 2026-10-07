@@ -205,9 +205,9 @@ Phases are covered across files, not one checklist suite.
 | Responses reads/writes: completed/incomplete, zero/absent/null/invalid | `ResponsesCacheUsageTests` on OpenAI and Local | Covered for reported fields; live cache support unknown |
 | Cumulative/sparse usage, finalization, duplicate finals, multi-invocation/export | `ModelUsageStreamTests`, `UsageLedgerTests`, `ResponsesCacheUsageTests`, `CacheUsageExportTests` | Covered; total is input + output |
 | Single write tariff forecast, unknown data, independent candidates | `HostModelRouterTests` | Covered as prediction, not actual billing |
-| Anthropic request cache strategy | [#86](https://github.com/OtohaCo/SwiftAgent/issues/86) | Not covered |
-| Anthropic 5m/1h write detail | [#87](https://github.com/OtohaCo/SwiftAgent/issues/87) | Not covered; aggregate read/write only |
-| OpenAI explicit breakpoint/qualified cache controls | [#88](https://github.com/OtohaCo/SwiftAgent/issues/88) | Not covered |
+| Anthropic automatic / explicit tool, system and message controls; 5m/1h TTL order, limits, eligibility, continuation and reconstruction | `AnthropicPromptCacheTests` | Covered request contract; endpoint/model support requires Host qualification |
+| Anthropic aggregate and partial 5m/1h write detail through snapshots/ledger/export | `AnthropicCacheUsageTests`, `ModelUsageStreamTests`, `UsageLedgerTests` | Covered reported fields; unknown TTL is not inferred as 5m; mismatches remain accounting diagnostics |
+| OpenAI modern explicit/implicit controls, legacy retention, Local opt-in, key/prefix stability and separate prewarm usage | `OpenAIPromptCacheControlsTests` | Covered request/usage contract; absent configuration preserves requests, no live-hit claim |
 | OtohaAI live reuse, gateway semantics and fees | [#89](https://github.com/OtohaCo/SwiftAgent/issues/89) | Not measured |
 
 Journal recovery does not restore a usage ledger. Public-event coverage does

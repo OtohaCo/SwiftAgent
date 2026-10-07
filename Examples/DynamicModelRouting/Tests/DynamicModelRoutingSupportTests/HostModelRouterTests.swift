@@ -233,6 +233,84 @@ struct HostModelRouterTests {
         }
     }
 
+    @Test func mixedTTLForecastUsesEachVerifiedRateAndReportsWhyCostIsUnknown() throws {
+        // Test-only quote: 5m 1.25, 1h 2; not a provider's current prices.
+        let mixed = try candidate("mixed", remote: false, inputRate: 1, cachedRate: Decimal(string: "0.1"),
+            outputRate: 2, writeScope: .ttlBreakdown,
+            ttlRates: .init(fiveMinutePerMillion: Decimal(string: "1.25"), oneHourPerMillion: 2),
+            forecast: .init(inputTokens: 15_000, cachedInputTokens: 12_000, cacheWriteInputTokens: 3_000,
+                outputTokens: 100, cacheWriteTTL: .init(fiveMinuteTokens: 2_000, oneHourTokens: 1_000)))
+        let router = HostModelRouter()
+        #expect(router.costEstimate(for: mixed).value == Decimal(string: "0.0059"))
+        #expect(router.costEstimate(for: mixed).unknownReason == nil)
+        for (detail, rates, reason) in [
+            (CacheWriteTTLUsage(fiveMinuteTokens: 2_000), CacheWriteTTLPrices(fiveMinutePerMillion: Decimal(string: "1.25"), oneHourPerMillion: 2), HostCostUnknownReason.missingTTLUsage),
+            (.init(fiveMinuteTokens: 2_000, oneHourTokens: 1_000), .init(fiveMinutePerMillion: Decimal(string: "1.25")), .missingWritePrice),
+            (.init(fiveMinuteTokens: 2_000, oneHourTokens: 2_000), .init(fiveMinutePerMillion: Decimal(string: "1.25"), oneHourPerMillion: 2), .invalidClassification),
+            (.init(fiveMinuteTokens: -1, oneHourTokens: 3_001), .init(), .invalidCount),
+            (.init(fiveMinuteTokens: Int.max, oneHourTokens: 1), .init(), .arithmeticOverflow),
+        ] {
+            let value = try candidate("unknown", remote: false, inputRate: 1, cachedRate: Decimal(string: "0.1"),
+                outputRate: 2, writeScope: .ttlBreakdown, ttlRates: rates,
+                forecast: .init(inputTokens: reason == .arithmeticOverflow ? Int.max : 15_000,
+                    cachedInputTokens: reason == .arithmeticOverflow ? 0 : 12_000,
+                    cacheWriteInputTokens: reason == .arithmeticOverflow ? Int.max : 3_000,
+                    outputTokens: 100, cacheWriteTTL: detail))
+            #expect(router.costEstimate(for: value).value == nil)
+            #expect(router.costEstimate(for: value).unknownReason == reason)
+        }
+        let zero = try candidate("zero-ttl", remote: false, inputRate: 1, cachedRate: nil,
+            outputRate: 2, writeScope: .ttlBreakdown, ttlRates: .init(),
+            forecast: .init(inputTokens: 15_000, cachedInputTokens: 0, cacheWriteInputTokens: 0,
+                outputTokens: 100, cacheWriteTTL: .init(fiveMinuteTokens: 0, oneHourTokens: 0)))
+        #expect(router.costEstimate(for: zero).value == Decimal(string: "0.0152"))
+        let fiveOnly = try candidate("five-only", remote: false, inputRate: 1, cachedRate: nil,
+            outputRate: 2, writeScope: .ttlBreakdown, ttlRates: .init(fiveMinutePerMillion: Decimal(string: "1.25")),
+            forecast: .init(inputTokens: 15_000, cachedInputTokens: 0, cacheWriteInputTokens: 15_000,
+                outputTokens: 100, cacheWriteTTL: .init(fiveMinuteTokens: 15_000, oneHourTokens: 0)))
+        #expect(router.costEstimate(for: fiveOnly).value == Decimal(string: "0.01895"))
+    }
+
+    @Test func routingResultCarriesMissingCostReasonAndDifferentCurrenciesNeverProveSavings() async throws {
+        let unknown = try candidate("unknown-result", remote: false,
+            forecast: .init(inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 100))
+        let result = try await HostModelRouter().select(.init(
+            conversation: .init(revision: 1, messages: []), catalogRevision: "1", taskSummary: "Price",
+            latestInput: "Continue", candidates: [unknown], manualCandidateID: unknown.id,
+            requirements: .init(), revisionReader: { .init(conversation: 1, catalog: "1") }))
+        #expect(result.estimatedSelectedCost == nil)
+        #expect(result.estimatedSelectedCostUnknownReason == .missingWriteUsage)
+        let current = try candidate("usd", remote: false, inputRate: 10, currency: "USD")
+        let other = try candidate("eur", remote: false, inputRate: 1, currency: "EUR")
+        let kept = try await HostModelRouter().select(.init(
+            conversation: .init(revision: 1, messages: []), catalogRevision: "1", taskSummary: "Route",
+            latestInput: "Continue", candidates: [current, other], currentCandidateID: current.id,
+            requirements: .init(), decisionProvider: DecisionProbe(selected: other.id),
+            revisionReader: { .init(conversation: 1, catalog: "1") }))
+        #expect(kept.candidate.id == current.id)
+    }
+
+    @Test func ttlRatesQuoteScopeAndLegacyInitializerReferencesAreValidated() throws {
+        let forecastInitializer: (Int, Int?, Int?, Int) -> RoutingUsageForecast = RoutingUsageForecast.init
+        let quoteInitializer: (Decimal, Decimal?, Decimal?, CacheWritePricingScope, Decimal, String, String, Date) -> HostPricingQuote = HostPricingQuote.init
+        #expect(forecastInitializer(1, 0, 0, 0).cacheWriteTTL == nil)
+        #expect(quoteInitializer(1, nil, nil, .singleCategory, 2, "USD", "test-only", Date(timeIntervalSince1970: 0)).cacheWriteTTLPrices == nil)
+        for rate in [Decimal(-1), Decimal.nan, Decimal.greatestFiniteMagnitude] {
+            let value = try candidate("bad-ttl-rate", remote: false, inputRate: 1, cachedRate: nil,
+                writeScope: .ttlBreakdown, ttlRates: .init(oneHourPerMillion: rate),
+                forecast: .init(inputTokens: Int.max, cachedInputTokens: 0, cacheWriteInputTokens: Int.max,
+                    outputTokens: 0, cacheWriteTTL: .init(fiveMinuteTokens: 0, oneHourTokens: Int.max)))
+            #expect(HostModelRouter().costEstimate(for: value).value == nil)
+        }
+        let invalidVerifiedTariff = try candidate("invalid-no-write-fee", remote: false, writeScope: .noSeparateCharge,
+            forecast: .init(inputTokens: 10, cachedInputTokens: 8, outputTokens: 0,
+                cacheWriteTTL: .init(fiveMinuteTokens: 2, oneHourTokens: 1)))
+        #expect(HostModelRouter().costEstimate(for: invalidVerifiedTariff).unknownReason == .invalidClassification)
+        let mismatch = try candidate("quoted-model", remote: false, ttlRates: .init(),
+            quoteModel: .init(provider: "fixture", name: "different-model"))
+        #expect(HostModelRouter().costEstimate(for: mismatch).unknownReason == .invalidQuote)
+    }
+
     private func cost(_ candidate: HostModelCandidate) async throws -> Decimal? {
         try await HostModelRouter().select(.init(
             conversation: .init(revision: 1, messages: []), catalogRevision: "1", taskSummary: "Price",
@@ -357,6 +435,9 @@ private func candidate(
     writeRate: Decimal? = nil,
     outputRate: Decimal = 12,
     writeScope: CacheWritePricingScope = .singleCategory,
+    ttlRates: CacheWriteTTLPrices? = nil,
+    currency: String = "USD",
+    quoteModel: ModelID? = nil,
     forecast: RoutingUsageForecast = .init(inputTokens: 1_000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 100)
 ) throws -> HostModelCandidate {
     let scope = try ModelServiceScope(
@@ -396,16 +477,15 @@ private func candidate(
         automaticSelectionAllowed: true,
         forecast: forecast,
         pricing: inputRate.map { input in
-            .init(
-                inputPerMillion: input,
-                cachedInputPerMillion: cachedRate,
-                cacheWriteInputPerMillion: writeRate,
-                cacheWriteScope: writeScope,
-                outputPerMillion: outputRate,
-                currency: "USD",
-                source: "fixture",
-                asOf: Date(timeIntervalSince1970: 0)
-            )
+            if let ttlRates {
+                return HostPricingQuote(inputPerMillion: input, cachedInputPerMillion: cachedRate,
+                    cacheWriteInputPerMillion: writeRate, cacheWriteScope: writeScope,
+                    outputPerMillion: outputRate, currency: currency, source: "fixture", asOf: Date(timeIntervalSince1970: 0),
+                    cacheWriteTTLPrices: ttlRates, model: quoteModel)
+            }
+            return HostPricingQuote(inputPerMillion: input, cachedInputPerMillion: cachedRate,
+                cacheWriteInputPerMillion: writeRate, cacheWriteScope: writeScope,
+                outputPerMillion: outputRate, currency: currency, source: "fixture", asOf: Date(timeIntervalSince1970: 0))
         }
     )
 }

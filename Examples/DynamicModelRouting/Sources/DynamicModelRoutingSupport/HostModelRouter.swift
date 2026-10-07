@@ -32,21 +32,51 @@ public struct RoutingUsageForecast: Hashable, Sendable {
     /// Host prediction, not a measured response. Nil means unknown.
     public let cacheWriteInputTokens: Int?
     public let outputTokens: Int
+    public let cacheWriteTTL: CacheWriteTTLUsage?
 
     public init(inputTokens: Int, cachedInputTokens: Int?, cacheWriteInputTokens: Int? = nil, outputTokens: Int) {
+        self.init(inputTokens: inputTokens, cachedInputTokens: cachedInputTokens,
+            cacheWriteInputTokens: cacheWriteInputTokens, outputTokens: outputTokens, cacheWriteTTL: nil)
+    }
+
+    public init(inputTokens: Int, cachedInputTokens: Int?, cacheWriteInputTokens: Int? = nil,
+                outputTokens: Int, cacheWriteTTL: CacheWriteTTLUsage?) {
         self.inputTokens = inputTokens
         self.cachedInputTokens = cachedInputTokens
         self.cacheWriteInputTokens = cacheWriteInputTokens
         self.outputTokens = outputTokens
+        self.cacheWriteTTL = cacheWriteTTL
     }
 }
 
 /// The Host must verify this scope for the candidate's model, endpoint and tariff.
 public enum CacheWritePricingScope: Hashable, Sendable {
-    /// One disjoint write category with one rate; mixed TTL tariffs are not covered.
+    /// One disjoint write category with one rate.
     case singleCategory
+    /// Complete mutually exclusive 5m and 1h categories with their own rates.
+    case ttlBreakdown
     /// Verified protocol/tariff bills writes as ordinary input, without a separate category.
     case noSeparateCharge
+}
+
+public struct CacheWriteTTLPrices: Hashable, Sendable {
+    public let fiveMinutePerMillion: Decimal?
+    public let oneHourPerMillion: Decimal?
+
+    public init(fiveMinutePerMillion: Decimal? = nil, oneHourPerMillion: Decimal? = nil) {
+        self.fiveMinutePerMillion = fiveMinutePerMillion
+        self.oneHourPerMillion = oneHourPerMillion
+    }
+}
+
+public enum HostCostUnknownReason: String, Hashable, Sendable {
+    case missingForecast, missingQuote, missingReadUsage, missingWriteUsage, missingTTLUsage
+    case missingReadPrice, missingWritePrice, invalidCount, invalidClassification, invalidPrice, invalidQuote, arithmeticOverflow
+}
+
+public struct HostCostEstimate: Hashable, Sendable {
+    public let value: Decimal?
+    public let unknownReason: HostCostUnknownReason?
 }
 
 public struct HostPricingQuote: Hashable, Sendable {
@@ -58,6 +88,8 @@ public struct HostPricingQuote: Hashable, Sendable {
     public let currency: String
     public let source: String
     public let asOf: Date
+    public let cacheWriteTTLPrices: CacheWriteTTLPrices?
+    public let model: ModelID?
 
     public init(
         inputPerMillion: Decimal,
@@ -69,6 +101,24 @@ public struct HostPricingQuote: Hashable, Sendable {
         source: String,
         asOf: Date
     ) {
+        self.init(inputPerMillion: inputPerMillion, cachedInputPerMillion: cachedInputPerMillion,
+            cacheWriteInputPerMillion: cacheWriteInputPerMillion, cacheWriteScope: cacheWriteScope,
+            outputPerMillion: outputPerMillion, currency: currency, source: source, asOf: asOf,
+            cacheWriteTTLPrices: nil)
+    }
+
+    public init(
+        inputPerMillion: Decimal,
+        cachedInputPerMillion: Decimal?,
+        cacheWriteInputPerMillion: Decimal? = nil,
+        cacheWriteScope: CacheWritePricingScope = .singleCategory,
+        outputPerMillion: Decimal,
+        currency: String,
+        source: String,
+        asOf: Date,
+        cacheWriteTTLPrices: CacheWriteTTLPrices?,
+        model: ModelID? = nil
+    ) {
         self.inputPerMillion = inputPerMillion
         self.cachedInputPerMillion = cachedInputPerMillion
         self.cacheWriteInputPerMillion = cacheWriteInputPerMillion
@@ -77,6 +127,8 @@ public struct HostPricingQuote: Hashable, Sendable {
         self.currency = currency
         self.source = source
         self.asOf = asOf
+        self.cacheWriteTTLPrices = cacheWriteTTLPrices
+        self.model = model
     }
 }
 
@@ -181,6 +233,8 @@ public struct HostModelRoutingResult: Sendable {
     public let source: HostRoutingSelectionSource
     public let estimatedCurrentCost: Decimal?
     public let estimatedSelectedCost: Decimal?
+    public let estimatedCurrentCostUnknownReason: HostCostUnknownReason?
+    public let estimatedSelectedCostUnknownReason: HostCostUnknownReason?
 
     public init(
         candidate: HostModelCandidate,
@@ -188,10 +242,25 @@ public struct HostModelRoutingResult: Sendable {
         estimatedCurrentCost: Decimal?,
         estimatedSelectedCost: Decimal?
     ) {
+        self.init(candidate: candidate, source: source, estimatedCurrentCost: estimatedCurrentCost,
+            estimatedSelectedCost: estimatedSelectedCost, estimatedCurrentCostUnknownReason: nil,
+            estimatedSelectedCostUnknownReason: nil)
+    }
+
+    public init(
+        candidate: HostModelCandidate,
+        source: HostRoutingSelectionSource,
+        estimatedCurrentCost: Decimal?,
+        estimatedSelectedCost: Decimal?,
+        estimatedCurrentCostUnknownReason: HostCostUnknownReason?,
+        estimatedSelectedCostUnknownReason: HostCostUnknownReason?
+    ) {
         self.candidate = candidate
         self.source = source
         self.estimatedCurrentCost = estimatedCurrentCost
         self.estimatedSelectedCost = estimatedSelectedCost
+        self.estimatedCurrentCostUnknownReason = estimatedCurrentCostUnknownReason
+        self.estimatedSelectedCostUnknownReason = estimatedSelectedCostUnknownReason
     }
 }
 
@@ -260,8 +329,10 @@ public struct HostModelRouter: Sendable {
         if let turns = input.turnsSinceLastSwitch, turns < minimumTurnsBetweenSwitches {
             return result(legalCurrent, source: .current, current: current)
         }
-        let currentCost = estimatedCost(legalCurrent)
-        let selectedCost = estimatedCost(selected)
+        let currentEstimate = costEstimate(for: legalCurrent)
+        let selectedEstimate = costEstimate(for: selected)
+        let currentCost = currentEstimate.value
+        let selectedCost = selectedEstimate.value
         guard let currentCost, let selectedCost,
               legalCurrent.pricing?.currency == selected.pricing?.currency,
               let switchCost = add(selectedCost, minimumSwitchSavings),
@@ -270,14 +341,18 @@ public struct HostModelRouter: Sendable {
                 candidate: legalCurrent,
                 source: .current,
                 estimatedCurrentCost: currentCost,
-                estimatedSelectedCost: selectedCost
+                estimatedSelectedCost: selectedCost,
+                estimatedCurrentCostUnknownReason: currentEstimate.unknownReason,
+                estimatedSelectedCostUnknownReason: selectedEstimate.unknownReason
             )
         }
         return .init(
             candidate: selected,
             source: .decision,
             estimatedCurrentCost: currentCost,
-            estimatedSelectedCost: selectedCost
+            estimatedSelectedCost: selectedCost,
+            estimatedCurrentCostUnknownReason: currentEstimate.unknownReason,
+            estimatedSelectedCostUnknownReason: selectedEstimate.unknownReason
         )
     }
 
@@ -374,50 +449,111 @@ public struct HostModelRouter: Sendable {
         source: HostRoutingSelectionSource,
         current: HostModelCandidate?
     ) -> HostModelRoutingResult {
-        .init(
+        let currentEstimate = current.map { costEstimate(for: $0) }
+        let selectedEstimate = costEstimate(for: selected)
+        return .init(
             candidate: selected,
             source: source,
-            estimatedCurrentCost: current.flatMap(estimatedCost),
-            estimatedSelectedCost: estimatedCost(selected)
+            estimatedCurrentCost: currentEstimate?.value,
+            estimatedSelectedCost: selectedEstimate.value,
+            estimatedCurrentCostUnknownReason: currentEstimate?.unknownReason,
+            estimatedSelectedCostUnknownReason: selectedEstimate.unknownReason
         )
     }
 
-    private func estimatedCost(_ candidate: HostModelCandidate) -> Decimal? {
-        guard let usage = candidate.forecast, let pricing = candidate.pricing,
-              usage.inputTokens >= 0, usage.outputTokens >= 0,
-              let cached = usage.cachedInputTokens, cached >= 0, cached <= usage.inputTokens,
-              pricing.inputPerMillion >= 0, pricing.outputPerMillion >= 0 else { return nil }
+    /// Forecast only: the Host supplies this candidate's own usage assumptions and tariff.
+    public func costEstimate(for candidate: HostModelCandidate) -> HostCostEstimate {
+        guard let usage = candidate.forecast else { return .init(value: nil, unknownReason: .missingForecast) }
+        guard let pricing = candidate.pricing else { return .init(value: nil, unknownReason: .missingQuote) }
+        func unknown(_ reason: HostCostUnknownReason) -> HostCostEstimate { .init(value: nil, unknownReason: reason) }
+        let counts = [usage.inputTokens, usage.outputTokens, usage.cachedInputTokens,
+            usage.cacheWriteInputTokens, usage.cacheWriteTTL?.fiveMinuteTokens, usage.cacheWriteTTL?.oneHourTokens]
+        guard counts.compactMap({ $0 }).allSatisfy({ $0 >= 0 }) else { return unknown(.invalidCount) }
+        guard let cached = usage.cachedInputTokens else { return unknown(.missingReadUsage) }
+        guard cached <= usage.inputTokens else { return unknown(.invalidClassification) }
+        guard pricing.model == nil || pricing.model == candidate.binding.model,
+              !pricing.currency.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !pricing.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              pricing.asOf.timeIntervalSince1970.isFinite else { return unknown(.invalidQuote) }
+        guard pricing.inputPerMillion >= 0, pricing.outputPerMillion >= 0 else { return unknown(.invalidPrice) }
         let remaining = usage.inputTokens - cached
-        if let written = usage.cacheWriteInputTokens, written < 0 || written > remaining { return nil }
+        if let aggregate = usage.cacheWriteInputTokens, aggregate > remaining { return unknown(.invalidClassification) }
+        if let five = usage.cacheWriteTTL?.fiveMinuteTokens, five > remaining { return unknown(.invalidClassification) }
+        if let hour = usage.cacheWriteTTL?.oneHourTokens, hour > remaining { return unknown(.invalidClassification) }
+        if let detail = usage.cacheWriteTTL, let aggregate = usage.cacheWriteInputTokens {
+            if let five = detail.fiveMinuteTokens, five > aggregate { return unknown(.invalidClassification) }
+            if let hour = detail.oneHourTokens, hour > aggregate { return unknown(.invalidClassification) }
+        }
+        if let five = usage.cacheWriteTTL?.fiveMinuteTokens, let hour = usage.cacheWriteTTL?.oneHourTokens {
+            let sum = five.addingReportingOverflow(hour)
+            guard !sum.overflow else { return unknown(.arithmeticOverflow) }
+            guard sum.partialValue <= remaining else { return unknown(.invalidClassification) }
+            if let aggregate = usage.cacheWriteInputTokens, sum.partialValue != aggregate { return unknown(.invalidClassification) }
+        }
         let written: Int
-        let writeRate: Decimal
+        let writeCost: Decimal
         switch pricing.cacheWriteScope {
         case .noSeparateCharge:
-            // This explicit Host assertion permits unknown write counts because all
-            // non-read input uses the ordinary rate under this verified tariff.
+            // Explicit verified tariff: non-read input uses the ordinary rate.
             written = 0
-            writeRate = 0
+            writeCost = 0
         case .singleCategory:
-            guard let count = usage.cacheWriteInputTokens else { return nil }
+            guard let count = usage.cacheWriteInputTokens else { return unknown(.missingWriteUsage) }
             written = count
-            if count == 0 { writeRate = 0 }
-            else if let rate = pricing.cacheWriteInputPerMillion, rate >= 0 { writeRate = rate }
-            else { return nil }
+            let rate: Decimal
+            if count == 0 { rate = 0 }
+            else if let quoted = pricing.cacheWriteInputPerMillion {
+                guard quoted >= 0 else { return unknown(.invalidPrice) }
+                rate = quoted
+            } else { return unknown(.missingWritePrice) }
+            guard let product = multiply(Decimal(count), rate) else { return unknown(.arithmeticOverflow) }
+            writeCost = product
+        case .ttlBreakdown:
+            if usage.cacheWriteInputTokens == 0 {
+                // An explicitly reported aggregate zero needs no write tariff.
+                written = 0
+                writeCost = 0
+            } else {
+                guard let five = usage.cacheWriteTTL?.fiveMinuteTokens,
+                      let hour = usage.cacheWriteTTL?.oneHourTokens else { return unknown(.missingTTLUsage) }
+                let sum = five.addingReportingOverflow(hour)
+                guard !sum.overflow else { return unknown(.arithmeticOverflow) }
+                written = sum.partialValue
+                guard written <= remaining else { return unknown(.invalidClassification) }
+                let fiveRate: Decimal
+                let hourRate: Decimal
+                if five == 0 { fiveRate = 0 }
+                else if let rate = pricing.cacheWriteTTLPrices?.fiveMinutePerMillion {
+                    guard rate >= 0 else { return unknown(.invalidPrice) }
+                    fiveRate = rate
+                } else { return unknown(.missingWritePrice) }
+                if hour == 0 { hourRate = 0 }
+                else if let rate = pricing.cacheWriteTTLPrices?.oneHourPerMillion {
+                    guard rate >= 0 else { return unknown(.invalidPrice) }
+                    hourRate = rate
+                } else { return unknown(.missingWritePrice) }
+                guard let fiveCost = multiply(Decimal(five), fiveRate),
+                      let hourCost = multiply(Decimal(hour), hourRate),
+                      let total = add(fiveCost, hourCost) else { return unknown(.arithmeticOverflow) }
+                writeCost = total
+            }
         }
         let cachedRate: Decimal
         if cached == 0 { cachedRate = 0 }
-        else if let rate = pricing.cachedInputPerMillion, rate >= 0 { cachedRate = rate }
-        else { return nil }
+        else if let rate = pricing.cachedInputPerMillion {
+            guard rate >= 0 else { return unknown(.invalidPrice) }
+            cachedRate = rate
+        } else { return unknown(.missingReadPrice) }
         guard let ordinaryCost = multiply(Decimal(remaining - written), pricing.inputPerMillion),
               let cachedCost = multiply(Decimal(cached), cachedRate),
-              let writeCost = multiply(Decimal(written), writeRate),
               let outputCost = multiply(Decimal(usage.outputTokens), pricing.outputPerMillion),
               let readAndOrdinaryCost = add(ordinaryCost, cachedCost),
               let inputCost = add(readAndOrdinaryCost, writeCost),
-              var tokenCost = add(inputCost, outputCost) else { return nil }
+              var tokenCost = add(inputCost, outputCost) else { return unknown(.arithmeticOverflow) }
         var million = Decimal(1_000_000)
         var result = Decimal()
-        return NSDecimalDivide(&result, &tokenCost, &million, .plain) == .noError ? result : nil
+        guard NSDecimalDivide(&result, &tokenCost, &million, .plain) == .noError else { return unknown(.arithmeticOverflow) }
+        return .init(value: result, unknownReason: nil)
     }
 
     private func multiply(_ lhs: Decimal, _ rhs: Decimal) -> Decimal? {

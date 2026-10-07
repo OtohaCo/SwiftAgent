@@ -15,6 +15,19 @@ public struct ModelCapabilities: OptionSet, Hashable, Sendable, Codable {
     public static let imageInput = Self(rawValue: 1 << 5)
 }
 
+/// Reported cache writes by retention category. Nil means unreported, including
+/// within a partial breakdown. These counts subdivide aggregate cache writes;
+/// they are never added to the aggregate or total input a second time.
+public struct CacheWriteTTLUsage: Hashable, Sendable, Codable {
+    public let fiveMinuteTokens: Int?
+    public let oneHourTokens: Int?
+
+    public init(fiveMinuteTokens: Int? = nil, oneHourTokens: Int? = nil) {
+        self.fiveMinuteTokens = fiveMinuteTokens
+        self.oneHourTokens = oneHourTokens
+    }
+}
+
 /// Reported counts for a model response. Nil means unreported, not zero.
 /// Cache counts are input subsets and reasoning is an output subset; do not sum them.
 /// Providers normalize their native accounting into these categories.
@@ -26,6 +39,7 @@ public struct ModelUsage: Hashable, Sendable, Codable {
     /// not identify a tariff or TTL; unreported writes remain nil, not zero.
     public let cacheWriteInputTokens: Int?
     public let reasoningTokens: Int?
+    public let cacheWriteTTL: CacheWriteTTLUsage?
 
     public init(
         inputTokens: Int? = nil,
@@ -34,11 +48,26 @@ public struct ModelUsage: Hashable, Sendable, Codable {
         cacheWriteInputTokens: Int? = nil,
         reasoningTokens: Int? = nil
     ) {
+        self.init(inputTokens: inputTokens, outputTokens: outputTokens,
+                  cachedInputTokens: cachedInputTokens, cacheWriteInputTokens: cacheWriteInputTokens,
+                  reasoningTokens: reasoningTokens, cacheWriteTTL: nil)
+    }
+
+    /// Detail overload preserves the original initializer's function signature.
+    public init(
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil,
+        cachedInputTokens: Int? = nil,
+        cacheWriteInputTokens: Int? = nil,
+        reasoningTokens: Int? = nil,
+        cacheWriteTTL: CacheWriteTTLUsage?
+    ) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.cachedInputTokens = cachedInputTokens
         self.cacheWriteInputTokens = cacheWriteInputTokens
         self.reasoningTokens = reasoningTokens
+        self.cacheWriteTTL = cacheWriteTTL
     }
 }
 

@@ -61,6 +61,7 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
     private let reasoningEffort: OpenAIReasoningEffort?
     private let reasoningSummary: OpenAIReasoningSummary?
     private let promptCacheKey: String?
+    private let promptCaching: OpenAIResponsesPromptCaching?
     private let resolvedModelIDsByAlias: [String: String]
     private let transport: any ProviderHTTPTransport
 
@@ -96,6 +97,21 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         resolvedModelIDsByAlias: [String: String],
         transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
     ) throws {
+        try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
+                      reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary,
+                      promptCacheKey: promptCacheKey, resolvedModelIDsByAlias: resolvedModelIDsByAlias,
+                      promptCaching: nil, transport: transport)
+    }
+
+    /// Cache controls require explicit Host qualification for the endpoint and resolved model.
+    /// Omit this configuration to preserve the endpoint's existing defaults.
+    public init(
+        apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
+        reasoningEffort: OpenAIReasoningEffort? = nil, reasoningSummary: OpenAIReasoningSummary? = nil,
+        promptCacheKey: String? = nil, resolvedModelIDsByAlias: [String: String] = [:],
+        promptCaching: OpenAIResponsesPromptCaching?,
+        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+    ) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !apiKey.contains("\r"), !apiKey.contains("\n"), maximumOutputTokens > 0,
               let endpoint = endpoint ?? URL(string: "https://api.openai.com/v1/responses") else {
@@ -128,18 +144,33 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         self.reasoningEffort = reasoningEffort
         self.reasoningSummary = reasoningSummary
         self.promptCacheKey = promptCacheKey
+        try promptCaching?.validate(endpoint: endpoint)
+        self.promptCaching = promptCaching
         self.resolvedModelIDsByAlias = resolvedModelIDsByAlias
         self.transport = transport
     }
 
     public func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        stream(request: request, prewarm: false)
+    }
+
+    /// A separate Host-owned invocation which prepares the cache without generation.
+    /// Consume and account for these normal model events under a distinct invocation ID;
+    /// do not feed the response into an Agent run or execute tools from it.
+    public func prewarm(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        stream(request: request, prewarm: true)
+    }
+
+    private func stream(request: ModelRequest, prewarm: Bool) -> AsyncThrowingStream<ModelEvent, Error> {
         ModelEventStream.make { emit in
             let body: Data
             do {
                 body = try ProviderJSON.encode(OpenAIResponsesRequestEncoder.encode(
                     request, maximumOutputTokens: maximumOutputTokens,
                     reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary,
-                    promptCacheKey: promptCacheKey
+                    promptCacheKey: promptCacheKey, promptCaching: promptCaching,
+                    resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name,
+                    prewarm: prewarm
                 ))
             } catch let error as ModelProviderError {
                 throw error
@@ -176,6 +207,7 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
                     for frame in try sse.consume(data) {
                         for normalized in try decoder.consume(frame) {
                             do { try validation.append(normalized) } catch { throw ProviderJSON.invalid() }
+                            if prewarm { try PromptCacheQualification.validatePrewarm(normalized) }
                             try emit(normalized)
                         }
                     }
@@ -196,7 +228,8 @@ extension OpenAIResponsesProvider: ModelProviderRequestValidator {
             maximumOutputTokens: maximumOutputTokens,
             reasoningEffort: reasoningEffort,
             reasoningSummary: reasoningSummary,
-            promptCacheKey: promptCacheKey
+            promptCacheKey: promptCacheKey, promptCaching: promptCaching,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name
         )
     }
 }

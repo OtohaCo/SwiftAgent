@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased: qualified cache controls and TTL accounting
+
+- Anthropic Messages supports opt-in automatic caching and explicit tool,
+  system and message breakpoints with 5-minute/1-hour TTLs. OpenAI and Local
+  Responses support qualified modern implicit/explicit controls, 30-minute
+  TTL, separate prewarming, and earlier retention policies. Hosts attest the
+  exact endpoint and resolved model capabilities; absent configuration sends
+  no controls. These parameters do not prove an upstream hit. Tool visibility,
+  canonical history and provider continuation checks remain authoritative.
+- `ModelUsage.cacheWriteTTL` retains optional Anthropic 5-minute/1-hour write
+  counts alongside their aggregate through events, sparse snapshots, ledger
+  summaries, Codable and example exports. Aggregate and breakdown are not
+  added together. Missing counts remain unknown, including Anthropic total
+  input when the components needed to normalize it are unreported.
+- Replaying an accepted original sparse finalized observation is idempotent;
+  changing a finalized count or enriching an unknown finalized count still
+  reports a conflict. This affects accounting only, not execution receipts,
+  tool retries or Journal settlement.
+- DynamicModelRouting supports Host-supplied single-category or TTL write
+  tariffs and explicit no-separate-charge billing. Disjoint input categories
+  retain Decimal arithmetic and unknown-cost diagnostics; candidate forecasts
+  remain independent. Old initializer function signatures remain available
+  through explicit overloads; see the versioning guide and release checklist.
+- Protocol references were checked on 2026-10-07. Real gateway qualification
+  and OtohaAI integration evidence are tracked in
+  [#89](https://github.com/OtohaCo/SwiftAgent/issues/89); fixture tests alone
+  establish neither billing completeness nor a cache-hit improvement.
+
 ## Unreleased: execution-reporting CI uses the prebuilt Host CLI
 
 - After Host tests build `HeadlessExecutionHostCLI`, both CLI acceptance

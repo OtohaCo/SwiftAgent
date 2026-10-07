@@ -74,10 +74,36 @@ checks coverage, finalization and missing fields. Journal recovery does not
 restore a historical usage ledger; hidden retries/internal calls are not
 necessarily covered by public response events.
 
-The single write rate cannot price aggregate Anthropic writes with mixed 5m/1h
-TTLs exactly. Request cache policy and TTL detail remain [#86](https://github.com/OtohaCo/SwiftAgent/issues/86)
-and [#87](https://github.com/OtohaCo/SwiftAgent/issues/87). OpenAI qualified cache
-controls remain [#88](https://github.com/OtohaCo/SwiftAgent/issues/88); OtohaAI
-live A/B remains [#89](https://github.com/OtohaCo/SwiftAgent/issues/89). See the
-[usage guide](../../docs/guides/swift-agent-usage.md) and
-[OpenAI provider guide](../../docs/guides/swift-agent-openai-provider.md).
+For complete, mutually exclusive 5m/1h writes, configure `.ttlBreakdown`, supply
+`RoutingUsageForecast.cacheWriteTTL` and `HostPricingQuote.cacheWriteTTLPrices`:
+
+```text
+ordinary = input - cacheRead - write5m - write1h
+cost = (ordinary × inputRate + cacheRead × readRate
+        + write5m × write5mRate + write1h × write1hRate
+        + output × outputRate) / 1,000,000
+```
+
+The test-only rates above plus an hourly write rate of 2 yield `0.0059` for
+15,000 input, 12,000 reads, 2,000 5m writes, 1,000 1h writes and 100 output.
+Aggregate writes, when reported, must equal the two TTL categories; neither
+aggregate nor reasoning is charged a second time. A known aggregate zero needs
+no write rates. For nonzero writes, both TTL counts are required and a positive
+category needs its own rate; an unknown category is never assigned to 5m.
+Partial, overlapping or inconsistent categories yield unknown cost.
+
+`HostModelRouter.costEstimate(for:)` returns both the optional value and a
+`HostCostUnknownReason`, distinguishing missing forecasts/quotes/counts/rates,
+invalid classifications, invalid quote metadata and checked arithmetic failure.
+Routing results also expose current/selected missing reasons so a UI can display
+them. Quotes carry currency, source, `asOf`, and an
+optional exact model scope; a mismatched model scope is rejected. The candidate
+binding supplies the endpoint/deployment scope. Quote dates are tariff evidence,
+not proof of a live bill or current account balance. No currency conversion is
+performed, and different currencies never justify a switch.
+
+Anthropic request policy and TTL preservation are implemented in the provider
+and usage modules; see the [usage guide](../../docs/guides/swift-agent-usage.md).
+Real gateway cache and billing effects require a separately bounded experiment,
+tracked in [#89](https://github.com/OtohaCo/SwiftAgent/issues/89). Official API
+prices cannot establish a subscription or gateway's effective tariff.

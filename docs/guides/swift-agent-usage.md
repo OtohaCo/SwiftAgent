@@ -13,6 +13,8 @@ Run outcome, tool settlement, Evidence, Receipt, or journal state.
 
 - `inputTokens` and `outputTokens` are response totals.
 - `cachedInputTokens` and `cacheWriteInputTokens` are input subsets.
+- `cacheWriteTTL` optionally subdivides aggregate writes into `fiveMinuteTokens`
+  and `oneHourTokens`. It is not another input category to add to the total.
 - `reasoningTokens` is an output subset.
 - `nil` means unreported. An explicit `0` means reported as zero.
 - `totalTokens` is exact only when every selected response reports both input
@@ -39,18 +41,23 @@ when a Run failed or was cancelled.
 | --- | --- | --- | --- |
 | OpenAI Responses | `input_tokens_details.cached_tokens` | `input_tokens_details.cache_write_tokens` | Completed/incomplete responses; missing/null optional fields remain `nil` |
 | Local Responses | Same reported fields | Same reported fields | Preserves server reports; actual caching and write fees require service qualification |
-| Anthropic | Aggregate `cache_read_input_tokens` | Aggregate `cache_creation_input_tokens` | Normalized input includes ordinary + read + write; 5m/1h detail is not retained |
+| Anthropic | `cache_read_input_tokens` | Aggregate `cache_creation_input_tokens` plus optional `cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens` | Normalized input requires reported ordinary + read + aggregate write; missing categories leave total input unknown; partial TTL detail stays partial |
 | DeepSeek | Its adapter's verified native read mapping | No OpenAI write-field mapping | Do not infer writes or fees from cache misses |
 | Apple | SDK 27 `input.cachedTokenCount` | Unreported | Native usage on macOS/iOS 27 with Swift 6.4; older runtimes leave usage unreported; no OpenAI cache-key field |
 
-These are adapter capabilities, not evidence of live cache reuse. Anthropic
-request-side automatic/explicit cache configuration and TTL policy remain
-[#86](https://github.com/OtohaCo/SwiftAgent/issues/86); preservation of write TTL
-categories through accumulation, export and pricing remains
-[#87](https://github.com/OtohaCo/SwiftAgent/issues/87). OpenAI explicit breakpoints
-and qualified controls remain [#88](https://github.com/OtohaCo/SwiftAgent/issues/88).
-OtohaAI endpoint/gateway A/B qualification remains
-[#89](https://github.com/OtohaCo/SwiftAgent/issues/89).
+These are adapter capabilities, not evidence of live cache reuse. Request-side
+Anthropic automatic/explicit policy and qualified OpenAI controls are described
+in the [Anthropic guide](swift-agent-anthropic-provider.md) and
+[Responses guide](swift-agent-openai-provider.md). OtohaAI endpoint/gateway A/B
+qualification is tracked separately in [#89](https://github.com/OtohaCo/SwiftAgent/issues/89).
+
+Anthropic's aggregate writes equal its 5m + 1h categories when both are reported.
+The SDK preserves reported values even when categories disagree; a consuming
+cost calculator diagnoses the classification instead of changing execution
+facts. It never assigns unreported TTLs to 5m or derives missing write/read
+counts as zero. `UsageSummary.cacheWriteTTL` exposes each category's
+`reportedSubtotal`, `reportedCount`, `missingCount`, and `complete`. Inspect that
+coverage before pricing. An older export with no detail decodes with nil detail.
 
 Protocol references verified 2026-10-07:
 [OpenAI caching](https://developers.openai.com/api/docs/guides/prompt-caching),
@@ -147,7 +154,12 @@ Agent journal.
 
 ## Diagnostics and limits
 
-Exact duplicate observations are idempotent. Conflicting finalized data,
+An original sparse finalized observation can be replayed unchanged: nil means
+no new report, and every reported value must match the stored finalized value.
+That replay returns `duplicate`, including explicit zero. Adding a previously
+unknown field or changing a finalized count returns `finalizedConflict`.
+Identity remains invocation-specific; the same values under another identity
+are an independent observation. Conflicting finalized data,
 counter regressions, negative values, invalid subset relationships, and checked
 integer overflow return a typed `UsageDiagnostic` and leave the last valid state
 unchanged.
@@ -166,11 +178,13 @@ implements and labels a separate pricing/accounting system.
 `reportedSubtotal` is only the sum of reported values. A non-nil subtotal does
 not bypass `complete`/`missingCount` or establish a complete bill. Export records
 and field coverage together; `ReplanningEvalTrial.ResponseUsage` retains both
-cache categories and preserves omitted values instead of writing zero.
+cache categories and optional TTL detail, preserving omitted values instead of writing zero.
 
 The [DynamicModelRouting example](../../Examples/DynamicModelRouting/README.md)
 uses candidate-specific Host forecasts and quotes, not actual billing. It
-supports a single known write category or an explicit verified tariff with no
-separate write charge; aggregate mixed Anthropic TTL writes cannot establish an
-exact fee. Unknown costs and accounting diagnostics never revoke a Receipt,
+supports a single known write category, complete 5m/1h categories with separate
+Host rates, or an explicit verified tariff with no separate write charge.
+Aggregate-only mixed TTL writes cannot establish an exact fee. Required unknown
+counts/rates and inconsistent classifications produce a missing reason instead
+of a numeric cost. Unknown costs and accounting diagnostics never revoke a Receipt,
 downgrade a completed tool, cause a retry, or alter journal settlement.
