@@ -1,6 +1,6 @@
 # OpenAI Responses Provider
 
-> last-verified: 2026-10-02
+> last-verified: 2026-10-07
 
 `AgentProviders` includes `OpenAIResponsesProvider`, a stateless adapter for
 OpenAI's Responses API.
@@ -37,6 +37,28 @@ OpenAI-hosted tools such as web search, file search, code interpreter, computer
 use, and MCP are not SwiftAgent `AgentTool` values. This first adapter rejects
 hosted-tool output rather than routing it into the host executor and bypassing
 the SwiftAgent safety chain.
+
+## Prompt cache key
+
+OpenAI keeps a prompt cache by request prefix and uses `prompt_cache_key` to
+send requests that share a prefix to the same cache; gateways in front of
+OpenAI also read it as the conversation's identity. Give the provider one key
+per conversation, the same on every request of it and different between
+conversations (a conversation identifier works):
+
+```swift
+let provider = try OpenAIResponsesProvider(
+    apiKey: apiKey,
+    endpoint: gatewayURL,
+    promptCacheKey: conversationID.uuidString
+)
+```
+
+The key is written as `prompt_cache_key` in every request body. It must not be
+empty, have surrounding whitespace or contain control characters. Without a
+key the body is unchanged. `LocalResponsesProvider.Configuration` takes the
+same optional `promptCacheKey` for servers that honour it. Anthropic,
+DeepSeek and Apple providers do not send one.
 
 Structured output uses Responses `text.format` with the supplied JSON Schema.
 Reasoning summaries are model-visible content and remain untrusted; reasoning

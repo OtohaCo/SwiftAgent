@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased: OpenAI prompt cache key
+
+`OpenAIResponsesProvider` takes an optional `promptCacheKey` and
+`LocalResponsesProvider.Configuration` an optional `promptCacheKey`; when given,
+every request body carries it as `prompt_cache_key`. OpenAI routes requests
+with the same key to the same prompt cache, and gateways use it as the
+conversation's identity; without it, a conversation's turns can land on caches
+that have not seen its prefix (an evaluation through a gateway saw 34% of input
+tokens served from cache, against 97–99% for clients that send a key). Give one
+stable key per conversation. Without a key the request body is byte-identical
+to before; Anthropic, DeepSeek and Apple providers are unchanged. Empty keys,
+keys with surrounding whitespace and keys with control characters are rejected
+as `invalidRequest` when the provider is created.
+
 ## Unreleased: invalid tool arguments go back to the model
 
 A tool call whose arguments are not one JSON object (malformed, truncated,

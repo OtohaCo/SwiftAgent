@@ -60,6 +60,7 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
     private let maximumOutputTokens: Int
     private let reasoningEffort: OpenAIReasoningEffort?
     private let reasoningSummary: OpenAIReasoningSummary?
+    private let promptCacheKey: String?
     private let resolvedModelIDsByAlias: [String: String]
     private let transport: any ProviderHTTPTransport
 
@@ -67,17 +68,21 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
     public var debugDescription: String { description }
     public var customMirror: Mirror { Mirror(self, children: ["descriptor": descriptor]) }
 
+    /// - Parameter promptCacheKey: Sent as `prompt_cache_key` on every request. OpenAI routes requests with the same
+    ///   key to the same prompt cache, and gateways use it as the conversation's identity. Give one stable key per
+    ///   conversation (for example its identifier) and a different key to each conversation; `nil` sends no key.
     public init(
         apiKey: String,
         endpoint: URL? = nil,
         maximumOutputTokens: Int = 4_096,
         reasoningEffort: OpenAIReasoningEffort? = nil,
         reasoningSummary: OpenAIReasoningSummary? = nil,
+        promptCacheKey: String? = nil,
         transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
     ) throws {
         try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
                       reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary,
-                      resolvedModelIDsByAlias: [:], transport: transport)
+                      promptCacheKey: promptCacheKey, resolvedModelIDsByAlias: [:], transport: transport)
     }
 
     public init(
@@ -86,6 +91,7 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         maximumOutputTokens: Int = 4_096,
         reasoningEffort: OpenAIReasoningEffort? = nil,
         reasoningSummary: OpenAIReasoningSummary? = nil,
+        promptCacheKey: String? = nil,
         resolvedModelIDsByAlias: [String: String],
         transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
     ) throws {
@@ -99,6 +105,9 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
               reasoningSummary.map({ $0.rawValue == $0.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
             && !$0.rawValue.isEmpty }) ?? true else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid OpenAI reasoning configuration.")
+        }
+        guard OpenAIResponsesRequestEncoder.validPromptCacheKey(promptCacheKey) else {
+            throw ModelProviderError(kind: .invalidRequest, message: "Invalid OpenAI prompt cache key.")
         }
         guard resolvedModelIDsByAlias.allSatisfy({ alias, resolved in
             !alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -117,6 +126,7 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         self.maximumOutputTokens = maximumOutputTokens
         self.reasoningEffort = reasoningEffort
         self.reasoningSummary = reasoningSummary
+        self.promptCacheKey = promptCacheKey
         self.resolvedModelIDsByAlias = resolvedModelIDsByAlias
         self.transport = transport
     }
@@ -127,7 +137,8 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
             do {
                 body = try ProviderJSON.encode(OpenAIResponsesRequestEncoder.encode(
                     request, maximumOutputTokens: maximumOutputTokens,
-                    reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary
+                    reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary,
+                    promptCacheKey: promptCacheKey
                 ))
             } catch let error as ModelProviderError {
                 throw error
@@ -183,7 +194,8 @@ extension OpenAIResponsesProvider: ModelProviderRequestValidator {
             request,
             maximumOutputTokens: maximumOutputTokens,
             reasoningEffort: reasoningEffort,
-            reasoningSummary: reasoningSummary
+            reasoningSummary: reasoningSummary,
+            promptCacheKey: promptCacheKey
         )
     }
 }

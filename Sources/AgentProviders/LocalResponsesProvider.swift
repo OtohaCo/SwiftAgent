@@ -41,19 +41,24 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
         public let authentication: LocalResponsesAuthentication
         public let maximumOutputTokens: Int
         public let capabilities: ModelCapabilities
+        /// Sent as `prompt_cache_key` on every request, for servers and gateways that keep a prompt cache per key.
+        /// Give one stable key per conversation; `nil` sends no key.
+        public let promptCacheKey: String?
 
         public init(
             baseURL: URL,
             model: String,
             authentication: LocalResponsesAuthentication = .none,
             maximumOutputTokens: Int = 4_096,
-            capabilities: ModelCapabilities = []
+            capabilities: ModelCapabilities = [],
+            promptCacheKey: String? = nil
         ) {
             self.baseURL = baseURL
             self.model = model
             self.authentication = authentication
             self.maximumOutputTokens = maximumOutputTokens
             self.capabilities = capabilities
+            self.promptCacheKey = promptCacheKey
         }
     }
 
@@ -63,6 +68,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
     private let endpoint: URL
     private let authentication: LocalResponsesAuthentication
     private let maximumOutputTokens: Int
+    private let promptCacheKey: String?
     private let transport: any ProviderHTTPTransport
 
     public var description: String { "LocalResponsesProvider" }
@@ -78,7 +84,8 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
         let modelName = configuration.model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !modelName.isEmpty,
               modelName == configuration.model,
-              configuration.maximumOutputTokens > 0 else {
+              configuration.maximumOutputTokens > 0,
+              OpenAIResponsesRequestEncoder.validPromptCacheKey(configuration.promptCacheKey) else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid local Responses configuration.")
         }
         switch configuration.authentication.storage {
@@ -102,6 +109,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
         self.endpoint = endpoint
         authentication = configuration.authentication
         maximumOutputTokens = configuration.maximumOutputTokens
+        promptCacheKey = configuration.promptCacheKey
         model = .init(provider: "local-responses", name: modelName)
         descriptor = .init(
             id: "local-responses",
@@ -136,7 +144,8 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
                 body = try ProviderJSON.encode(LocalResponsesRequestEncoder.encode(
                     request,
                     maximumOutputTokens: maximumOutputTokens,
-                    images: descriptor.capabilities.contains(.imageInput)
+                    images: descriptor.capabilities.contains(.imageInput),
+                    promptCacheKey: promptCacheKey
                 ))
             } catch let error as ModelProviderError {
                 throw error
@@ -235,12 +244,15 @@ extension LocalResponsesProvider: ModelProviderRequestValidator {
             throw ModelProviderError(kind: .unsupportedCapability, message: "The configured local model has not declared structured-output support.")
         }
         _ = try LocalResponsesRequestEncoder.encode(request, maximumOutputTokens: maximumOutputTokens,
-                                                    images: descriptor.capabilities.contains(.imageInput))
+                                                    images: descriptor.capabilities.contains(.imageInput),
+                                                    promptCacheKey: promptCacheKey)
     }
 }
 
 enum LocalResponsesRequestEncoder {
-    static func encode(_ request: ModelRequest, maximumOutputTokens: Int, images: Bool) throws -> JSONValue {
+    static func encode(
+        _ request: ModelRequest, maximumOutputTokens: Int, images: Bool, promptCacheKey: String? = nil
+    ) throws -> JSONValue {
         guard request.model.provider == "local-responses",
               !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid local Responses model identifier.")
@@ -257,6 +269,7 @@ enum LocalResponsesRequestEncoder {
         if let structured = ResponsesCanonicalRequestEncoder.encodeStructuredOutput(request.structuredOutput) {
             body["text"] = structured
         }
+        if let promptCacheKey { body["prompt_cache_key"] = .string(promptCacheKey) }
         return .object(body)
     }
 }
