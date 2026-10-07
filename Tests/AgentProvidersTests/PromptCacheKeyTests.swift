@@ -20,16 +20,20 @@ struct PromptCacheKeyTests {
 
     @Test func everyRequestOfAConversationCarriesTheSameKey() async throws {
         let probe = ProviderRequestProbe()
+        let secondToolRound = Data(String(decoding: openAIToolFixture, as: UTF8.self)
+            .replacingOccurrences(of: "resp-tool", with: "resp-tool-2")
+            .replacingOccurrences(of: "fc-1", with: "fc-2")
+            .replacingOccurrences(of: "call-1", with: "call-2").utf8)
         let provider = try OpenAIResponsesProvider(
             apiKey: "fixture-key", promptCacheKey: "conversation-1",
-            transport: FixtureHTTPTransport(probe: probe, bodies: [openAIToolFixture, openAITextFixture])
+            transport: FixtureHTTPTransport(probe: probe, bodies: [openAIToolFixture, secondToolRound, openAITextFixture])
         )
         let result = try await Agent(model: Self.model, provider: provider, tools: [ProviderCalculator()])
             .makeSession().run("Add 2 and 3").wait()
         #expect(result.outcome == .completed)
 
         let bodies = try await Self.bodies(probe)
-        #expect(bodies.count == 2)
+        #expect(bodies.count == 3)
         #expect(bodies.allSatisfy { $0["prompt_cache_key"] == .string("conversation-1") })
         // Verify request parameter propagation across changing tool-round transcripts.
         let raw = await probe.requests.compactMap(\.httpBody).map { String(decoding: $0, as: UTF8.self) }

@@ -81,9 +81,12 @@ let package = Package(
                 "ConfirmedNoEffectFixture",
                 "JournalReplayFixture",
                 "BoundedReplanningFixture",
-                "ReplanningEvalTrial",
             ]
         ),
+        .testTarget(name: "ReplanningEvalTrialTests", dependencies: [
+            "ReplanningEvalTrial",
+            .product(name: "AgentModels", package: "SwiftAgent"),
+        ]),
     ],
     swiftLanguageModes: [.v6]
 )
