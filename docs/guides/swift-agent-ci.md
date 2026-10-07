@@ -78,3 +78,18 @@ existing ten-second, owned-process collector can attempt a stack if it recurs;
 permission or sampling failures remain explicit diagnostics. No failing test or
 exit code is ignored, and a later pass is not a claimed fix for this unattributed
 hang.
+
+## Prebuilt Host CLI acceptance (2026-10-07)
+
+PR #85's [final-head Linux push](https://github.com/OtohaCo/SwiftAgent/actions/runs/37604331672/job/112736047296)
+passed core, consumer and routing tests, then `swift run` exited 139 while
+planning `HeadlessFailureAfterWrite`. The crashing program was `swift-package`
+in libdispatch, before the Host CLI started; this was not a timeout. The prior
+Host test log contains the `HeadlessExecutionHostCLI-product` build steps.
+Both CLI scenarios now use `swift run --skip-build` after those tests, executing
+the built product with the original arguments, assertions, watchdogs and exit
+checks. A missing executable still fails; no acceptance case or retry is added
+or removed. The original five bounded reporting-test commands remain unchanged.
+The [separate planner evidence and follow-up](https://github.com/OtohaCo/SwiftAgent/issues/46#issuecomment-6035891119)
+remain distinct from the original unassigned test crash and the historical
+core-stage hang. Avoiding this planning pass does not prove an upstream fix.
