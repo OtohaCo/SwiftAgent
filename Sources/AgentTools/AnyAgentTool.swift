@@ -260,7 +260,12 @@ package struct AnyAgentTool: Sendable {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    throw ToolInvocationError.invalidOutput
+                    // A read-only tool with model-visible errors changed nothing: the model hears of it.
+                    guard policy.effect == .readOnly, policy.recoverableErrors == .modelVisible else {
+                        throw ToolInvocationError.invalidOutput
+                    }
+                    try context.checkActive()
+                    return ToolResult<JSONValue>(modelVisibleError: invalidOutputPayload(name: definition.name, issue: nil))
                 }
                 guard result.images.count <= ModelImage.maximumImagesPerMessage else {
                     throw ModelImageError.tooManyImages(count: result.images.count, limit: ModelImage.maximumImagesPerMessage)

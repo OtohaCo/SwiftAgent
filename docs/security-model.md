@@ -108,10 +108,18 @@ canonical conversation, and consumes the normal tool-call and model-turn
 budgets. The author controls every model-visible field; Core never stringifies
 an arbitrary underlying error.
 
+The same tool's output that breaks its declared output schema, or cannot be
+encoded as JSON, also becomes a model-visible result with code
+`invalid_output`: Core writes its message (the tool name, the failing path and
+rule, never the output itself), and the output's Evidence and declared tools
+are dropped. Nothing was changed, so the model can go on another way. Every
+other tool's invalid output still ends the Run.
+
 This channel is not available to mutation tools. It also does not catch input
-or output schema errors, unknown tools, authorization, Evidence, receipts,
-journal persistence, reconciliation, cancellation, deadlines, or ordinary
-Swift errors. Those remain runtime failures. A recoverable error publishes no
+schema errors (handled before the call, see invalid arguments), unknown tools,
+authorization, Evidence, receipts, journal persistence, reconciliation,
+cancellation, deadlines, or ordinary Swift errors. Those remain runtime
+failures. A recoverable error publishes no
 Evidence and carries no Receipt, so text in its payload cannot establish a
 trusted observation or claim a side effect.
 

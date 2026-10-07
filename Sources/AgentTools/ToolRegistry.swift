@@ -101,8 +101,13 @@ package struct ToolRegistry: Sendable {
         try context.checkActive()
         let tools = tools
         let output = registration.output
+        let definition = registration.tool.definition
+        let policy = registration.tool.policy
         @Sendable func checked(_ invoke: @escaping AnyAgentTool.Invocation) -> AnyAgentTool.Invocation {
-            { executionContext in try await Self.checkedResult(of: invoke, context: executionContext, output: output, tools: tools) }
+            { executionContext in
+                try await Self.checkedResult(of: invoke, context: executionContext, output: output, tools: tools,
+                                             name: definition.name, policy: policy)
+            }
         }
         return PreparedToolCall(call: call, policy: registration.tool.policy, resources: invocation.resources,
                                 evidenceRequirements: invocation.evidenceRequirements,
@@ -114,13 +119,22 @@ package struct ToolRegistry: Sendable {
     }
 
     /// What every invocation returns only after: output schema, declared tools and Evidence recorded.
+    /// A read-only tool whose recoverable errors are model-visible changed nothing, so output outside its
+    /// schema goes back to the model as that tool's error, without its Evidence or declared tools; any
+    /// other tool's invalid output still ends the Run.
     private static func checkedResult(of invoke: AnyAgentTool.Invocation, context executionContext: ToolContext,
-                                      output: ToolSchemaValidator,
-                                      tools: [String: Registration]) async throws -> ToolResult<JSONValue> {
+                                      output: ToolSchemaValidator, tools: [String: Registration],
+                                      name: String, policy: ToolPolicy) async throws -> ToolResult<JSONValue> {
         let result = try await invoke(executionContext)
         if !result.isModelVisibleError {
             do { try output.validate(result.output) }
-            catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidOutput(error) }
+            catch let error as ToolSchemaValidationError {
+                guard policy.effect == .readOnly, policy.recoverableErrors == .modelVisible else {
+                    throw ToolRegistryError.invalidOutput(error)
+                }
+                try executionContext.checkActive()
+                return ToolResult(modelVisibleError: invalidOutputPayload(name: name, issue: error))
+            }
         }
         // A result can only declare tools this Run already has; it never adds one.
         try checkRegistered(result.declaredTools, in: tools)
@@ -133,6 +147,19 @@ package struct ToolRegistry: Sendable {
         }
         return result
     }
+}
+
+/// What the model is told when a read-only tool's output broke its schema: where and which rule, never the
+/// output itself, which is what could not be checked.
+package func invalidOutputPayload(name: String, issue: ToolSchemaValidationError?) -> JSONValue {
+    var detail = ""
+    if let issue {
+        let path = issue.path.count > 200 ? String(issue.path.prefix(200)) + "..." : issue.path
+        detail = path.isEmpty ? " (it breaks the \"\(issue.keyword)\" rule)" : " (the value at \(path) breaks the \"\(issue.keyword)\" rule)"
+    }
+    let message = "\(name) ran, but what it returned does not match its output schema\(detail), so its result "
+        + "cannot be used. Nothing was changed. Go on another way: another source, other arguments or another tool."
+    return .object(["code": .string("invalid_output"), "message": .string(message)])
 }
 
 package struct PreparedToolCall: Sendable {
