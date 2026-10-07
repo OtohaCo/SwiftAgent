@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased: tool authorization before the resource lease
+
+A tool's own required `authorize` (without audited authorization) now runs
+before the call waits for its `ToolScheduler` resource lease, as audited
+authorization already did. A call waiting for a person's answer holds no lease,
+so other Sessions' conflicting calls (any two mutations conflict) are no
+longer held until it is answered or times out. Under the lease the call checks
+Evidence and the capability scope again, then admits the mutation and runs the
+executor; it is not asked again. The executor must recheck any state the
+decision relied on (versioned reads, conditional writes): other calls may have
+changed it while the answer or the lease was awaited. The answer counts against
+the tool's timeout as before; a call cancelled, denied or timed out while
+being asked never waits for the lease and never enters its executor. Calls of
+one Run still run in order, so a call is asked only after the previous
+sequential call finished. `ToolScheduler(authorization: .whileHoldingResourceLease)`
+keeps the previous order, where decision and effect see the same state but
+every conflicting call waits for the answer.
+
 ## Unreleased: invalid tool arguments go back to the model
 
 A tool call whose arguments are not one JSON object (malformed, truncated,
