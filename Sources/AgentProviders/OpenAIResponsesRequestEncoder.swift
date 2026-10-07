@@ -7,12 +7,17 @@ enum OpenAIResponsesRequestEncoder {
         maximumOutputTokens: Int,
         reasoningEffort: OpenAIReasoningEffort?,
         reasoningSummary: OpenAIReasoningSummary?,
-        promptCacheKey: String? = nil
+        promptCacheKey: String? = nil,
+        promptCaching: OpenAIResponsesPromptCaching? = nil,
+        resolvedModelName: String? = nil,
+        prewarm: Bool = false
     ) throws -> JSONValue {
         guard request.model.provider == "openai",
               !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid OpenAI model identifier.")
         }
+        if prewarm, promptCaching == nil { throw PromptCacheQualification.unsupported("Prewarming requires a qualified modern cache configuration.") }
+        try promptCaching?.validate(modelName: resolvedModelName ?? request.model.name, prewarm: prewarm)
         let input = try ResponsesCanonicalRequestEncoder.encodeMessages(request.messages, images: true) { content, calls in
             try OpenAIResponsesContinuation.restore(
                 content: content,
@@ -36,6 +41,9 @@ enum OpenAIResponsesRequestEncoder {
             body["reasoning"] = .object(reasoning)
         }
         if let promptCacheKey { body["prompt_cache_key"] = .string(promptCacheKey) }
+        try promptCaching?.apply(to: &body, request: request, images: true, assistantNativeItems: { content, calls in
+            try OpenAIResponsesContinuation.restore(content: content, calls: calls, model: request.model)?.items
+        }, prewarm: prewarm)
         return .object(body)
     }
 

@@ -346,7 +346,11 @@ public struct ConversationProjection: Sendable {
             outputTokens: newer.outputTokens ?? existing.outputTokens,
             cachedInputTokens: newer.cachedInputTokens ?? existing.cachedInputTokens,
             cacheWriteInputTokens: newer.cacheWriteInputTokens ?? existing.cacheWriteInputTokens,
-            reasoningTokens: newer.reasoningTokens ?? existing.reasoningTokens
+            reasoningTokens: newer.reasoningTokens ?? existing.reasoningTokens,
+            cacheWriteTTL: newer.cacheWriteTTL == nil && existing.cacheWriteTTL == nil ? nil : .init(
+                fiveMinuteTokens: newer.cacheWriteTTL?.fiveMinuteTokens ?? existing.cacheWriteTTL?.fiveMinuteTokens,
+                oneHourTokens: newer.cacheWriteTTL?.oneHourTokens ?? existing.cacheWriteTTL?.oneHourTokens
+            )
         )
     }
 }

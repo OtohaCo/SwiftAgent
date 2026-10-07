@@ -141,6 +141,91 @@ struct UsageLedgerTests {
         #expect(summary.cacheWriteInputTokens.complete)
     }
 
+    @Test func originalSparseFinalReplayIsDuplicateWithoutEnrichmentOrCountChanges() async throws {
+        let identity = makeIdentity(invocationID: "sparse-final-original")
+        let ledger = UsageLedger()
+        _ = await ledger.record(.init(identity: identity,
+            usage: .init(inputTokens: 15_000, outputTokens: 10, cachedInputTokens: 0,
+                cacheWriteInputTokens: 3_000), status: .provisional))
+        _ = await ledger.record(.init(identity: identity,
+            usage: .init(cachedInputTokens: 12_000), status: .provisional))
+        let sparseFinal = UsageObservation(identity: identity,
+            usage: .init(outputTokens: 100, reasoningTokens: 0), status: .finalized)
+        #expect(await ledger.record(sparseFinal).disposition == .updated)
+        let before = await ledger.summary()
+        let replay = await ledger.record(sparseFinal)
+        #expect(replay.disposition == .duplicate)
+        #expect(replay.diagnostic == nil)
+        #expect(await ledger.summary() == before)
+        #expect(await ledger.record(.init(identity: identity, usage: .init(), status: .finalized)).disposition == .duplicate)
+        #expect(await ledger.record(.init(identity: identity, usage: .init(reasoningTokens: 1), status: .finalized)).diagnostic?.kind == .finalizedConflict)
+        let unknown = makeIdentity(invocationID: "unknown-final")
+        _ = await ledger.record(.init(identity: unknown, usage: .init(inputTokens: 1), status: .finalized))
+        #expect(await ledger.record(.init(identity: unknown, usage: .init(outputTokens: 0), status: .finalized)).diagnostic?.kind == .finalizedConflict)
+        let different = makeIdentity(invocationID: "different-final-identity")
+        #expect(await ledger.record(.init(identity: different, usage: sparseFinal.usage, status: .finalized)).disposition == .inserted)
+        #expect(await ledger.summary().observedResponseCount == 3)
+    }
+
+    @Test func ttlSparseFinalReplaySummariesAndRestoredObservationsKeepCoverage() async throws {
+        let identity = makeIdentity(invocationID: "ttl-first")
+        let ledger = UsageLedger()
+        _ = await ledger.record(.init(identity: identity,
+            usage: .init(inputTokens: 15_000, outputTokens: 10, cachedInputTokens: 12_000,
+                cacheWriteInputTokens: 3_000, cacheWriteTTL: .init(fiveMinuteTokens: 2_000)), status: .provisional))
+        _ = await ledger.record(.init(identity: identity,
+            usage: .init(cacheWriteTTL: .init(oneHourTokens: 1_000)), status: .provisional))
+        let original = UsageObservation(identity: identity,
+            usage: .init(outputTokens: 100, cacheWriteTTL: .init(oneHourTokens: 1_000)), status: .finalized)
+        #expect(await ledger.record(original).accepted)
+        #expect(await ledger.record(original).disposition == .duplicate)
+        #expect(await ledger.record(.init(identity: identity, usage: .init(cacheWriteTTL: .init(fiveMinuteTokens: 1_999)), status: .finalized)).diagnostic?.kind == .finalizedConflict)
+        _ = await ledger.record(.init(identity: makeIdentity(invocationID: "ttl-zero"),
+            usage: .init(inputTokens: 5, outputTokens: 0, cacheWriteInputTokens: 0,
+                cacheWriteTTL: .init(fiveMinuteTokens: 0, oneHourTokens: 0)), status: .finalized))
+        let unknownIdentity = makeIdentity(invocationID: "ttl-unknown")
+        _ = await ledger.record(.init(identity: unknownIdentity,
+            usage: .init(inputTokens: 5, outputTokens: 0), status: .finalized))
+        #expect(await ledger.record(.init(identity: unknownIdentity,
+            usage: .init(cacheWriteTTL: .init(fiveMinuteTokens: 0)), status: .finalized)).diagnostic?.kind == .finalizedConflict)
+        let summary = await ledger.summary()
+        #expect(summary.totalTokens == 15_110)
+        #expect(summary.cacheWriteInputTokens.reportedSubtotal == 3_000)
+        let detail = try #require(summary.cacheWriteTTL)
+        #expect(detail.fiveMinuteTokens.reportedSubtotal == 2_000)
+        #expect(detail.oneHourTokens.reportedSubtotal == 1_000)
+        #expect(detail.fiveMinuteTokens.reportedCount == 2)
+        #expect(detail.oneHourTokens.missingCount == 1)
+        #expect(!detail.oneHourTokens.complete)
+        #expect(summary.reportedUsage.cacheWriteTTL == .init(fiveMinuteTokens: 2_000, oneHourTokens: 1_000))
+        let exported = try JSONEncoder().encode(summary)
+        #expect(try JSONDecoder().decode(UsageSummary.self, from: exported) == summary)
+        var legacy = try #require(JSONSerialization.jsonObject(with: exported) as? [String: Any])
+        for key in ["observedUsage", "finalizedUsage", "provisionalUsage"] {
+            var view = try #require(legacy[key] as? [String: Any])
+            view.removeValue(forKey: "cacheWriteTTL")
+            legacy[key] = view
+        }
+        let decodedLegacy = try JSONDecoder().decode(UsageSummary.self, from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(decodedLegacy.cacheWriteTTL == nil)
+        #expect(decodedLegacy.totalTokens == 15_110)
+        // The Host persists accepted complete observations independently of the Journal.
+        let saved = try JSONEncoder().encode([
+            UsageObservation(identity: identity, usage: .init(inputTokens: 15_000, outputTokens: 100,
+                cachedInputTokens: 12_000, cacheWriteInputTokens: 3_000,
+                cacheWriteTTL: .init(fiveMinuteTokens: 2_000, oneHourTokens: 1_000)), status: .finalized),
+            .init(identity: makeIdentity(invocationID: "ttl-zero"), usage: .init(inputTokens: 5, outputTokens: 0,
+                cacheWriteInputTokens: 0, cacheWriteTTL: .init(fiveMinuteTokens: 0, oneHourTokens: 0)), status: .finalized),
+            .init(identity: makeIdentity(invocationID: "ttl-unknown"), usage: .init(inputTokens: 5, outputTokens: 0), status: .finalized),
+        ])
+        let restored = UsageLedger()
+        for observation in try JSONDecoder().decode([UsageObservation].self, from: saved) { _ = await restored.record(observation) }
+        #expect(await restored.summary() == summary)
+        #expect(await restored.record(original).disposition == .duplicate)
+        let legacyJSON = #"{"inputTokens":10,"outputTokens":1}"#
+        #expect(try JSONDecoder().decode(ModelUsage.self, from: Data(legacyJSON.utf8)).cacheWriteTTL == nil)
+    }
+
     @Test func combinedCacheClassificationIsNotANewGlobalUsageFailure() async throws {
         let ledger = UsageLedger()
         let usage = ModelUsage(inputTokens: 10, outputTokens: 0,

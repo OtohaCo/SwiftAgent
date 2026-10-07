@@ -71,12 +71,18 @@ public struct ModelEventAccumulator: Sendable {
                 outputTokens: newer.outputTokens ?? usage.outputTokens,
                 cachedInputTokens: newer.cachedInputTokens ?? usage.cachedInputTokens,
                 cacheWriteInputTokens: newer.cacheWriteInputTokens ?? usage.cacheWriteInputTokens,
-                reasoningTokens: newer.reasoningTokens ?? usage.reasoningTokens
+                reasoningTokens: newer.reasoningTokens ?? usage.reasoningTokens,
+                cacheWriteTTL: newer.cacheWriteTTL == nil && usage.cacheWriteTTL == nil ? nil : .init(
+                    fiveMinuteTokens: newer.cacheWriteTTL?.fiveMinuteTokens ?? usage.cacheWriteTTL?.fiveMinuteTokens,
+                    oneHourTokens: newer.cacheWriteTTL?.oneHourTokens ?? usage.cacheWriteTTL?.oneHourTokens
+                )
             )
             let counts = [(usage.inputTokens, merged.inputTokens), (usage.outputTokens, merged.outputTokens),
                           (usage.cachedInputTokens, merged.cachedInputTokens),
                           (usage.cacheWriteInputTokens, merged.cacheWriteInputTokens),
-                          (usage.reasoningTokens, merged.reasoningTokens)]
+                          (usage.reasoningTokens, merged.reasoningTokens),
+                          (usage.cacheWriteTTL?.fiveMinuteTokens, merged.cacheWriteTTL?.fiveMinuteTokens),
+                          (usage.cacheWriteTTL?.oneHourTokens, merged.cacheWriteTTL?.oneHourTokens)]
             guard counts.allSatisfy({ previous, current in
                 guard let current else { return true }
                 return current >= 0 && (previous.map { current >= $0 } ?? true)

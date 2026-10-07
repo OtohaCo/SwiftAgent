@@ -11,14 +11,17 @@ enum AnthropicRequestEncoder {
         _ request: ModelRequest,
         maximumOutputTokens: Int,
         thinking: AnthropicThinking,
-        effort: AnthropicEffort? = nil
+        effort: AnthropicEffort? = nil,
+        promptCaching: AnthropicPromptCaching? = nil,
+        resolvedModelName: String? = nil
     ) throws -> JSONValue {
         guard request.model.provider == "anthropic", !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid Anthropic model identifier.")
         }
+        try promptCaching?.validate(modelName: resolvedModelName ?? request.model.name)
         var system: [String] = []
         var messages: [Message] = []
-        for message in request.messages {
+        for (messageIndex, message) in request.messages.enumerated() {
             switch message {
             case .system(let text), .developer(let text):
                 guard messages.isEmpty else {
@@ -26,11 +29,11 @@ enum AnthropicRequestEncoder {
                 }
                 system.append(text)
             case .user(let content):
-                try append(role: "user", content: textBlocks(content), to: &messages)
+                try append(role: "user", content: marked(try textBlocks(content), at: messageIndex, configuration: promptCaching), to: &messages)
             case .assistant(let content, let calls):
                 guard !content.contains(where: \.isImage) else { throw ImageEncoding.assistantImage() }
                 if let restored = try AnthropicContinuation.restore(content: content, calls: calls, model: request.model) {
-                    try append(role: "assistant", content: restored, to: &messages)
+                    try append(role: "assistant", content: marked(restored, at: messageIndex, configuration: promptCaching), to: &messages)
                     continue
                 }
                 var blocks = try textBlocks(content)
@@ -42,7 +45,7 @@ enum AnthropicRequestEncoder {
                     blocks.append(.object(["type": .string("tool_use"), "id": .string(call.id.rawValue),
                                             "name": .string(call.name), "input": arguments]))
                 }
-                try append(role: "assistant", content: blocks, to: &messages)
+                try append(role: "assistant", content: marked(blocks, at: messageIndex, configuration: promptCaching), to: &messages)
             case .tool(let result):
                 let text = try result.content.compactMap { part -> String? in
                     switch part {
@@ -55,16 +58,31 @@ enum AnthropicRequestEncoder {
                 let value: JSONValue = pictures.isEmpty ? .string(text) : .array(
                     (text.isEmpty ? [] : [.object(["type": .string("text"), "text": .string(text)])])
                         + (try textBlocks(pictures)))
-                try append(role: "user", content: [.object([
+                try append(role: "user", content: marked([.object([
                     "type": .string("tool_result"), "tool_use_id": .string(result.callID.rawValue),
                     "content": value, "is_error": .bool(result.isError),
-                ])], to: &messages)
+                ])], at: messageIndex, configuration: promptCaching), to: &messages)
             }
         }
         guard !messages.isEmpty else { throw ModelProviderError(kind: .invalidRequest, message: "Conversation messages are required.") }
         var body: [String: JSONValue] = ["model": .string(request.model.name), "max_tokens": .number(Decimal(maximumOutputTokens)),
                                         "stream": .bool(true), "messages": .array(messages.map(\.json))]
-        if !system.isEmpty { body["system"] = .string(system.joined(separator: "\n")) }
+        if !system.isEmpty {
+            if let promptCaching, promptCaching.breakpoints.contains(where: { if case .system = $0.target { true } else { false } }) {
+                var blocks = system.enumerated().map { index, text in
+                    JSONValue.object(["type": .string("text"), "text": .string((index == 0 ? "" : "\n") + text)])
+                }
+                for breakpoint in promptCaching.breakpoints {
+                    guard case .system(let index) = breakpoint.target else { continue }
+                    guard blocks.indices.contains(index), !system[index].isEmpty, case .object(var block) = blocks[index] else {
+                        throw PromptCacheQualification.invalid("The Anthropic system cache breakpoint is absent or empty.")
+                    }
+                    block["cache_control"] = promptCaching.control(breakpoint.ttl)
+                    blocks[index] = .object(block)
+                }
+                body["system"] = .array(blocks)
+            } else { body["system"] = .string(system.joined(separator: "\n")) }
+        }
         switch thinking {
         case .disabled: body["thinking"] = .object(["type": .string("disabled")])
         case .adaptive: body["thinking"] = .object(["type": .string("adaptive")])
@@ -81,7 +99,34 @@ enum AnthropicRequestEncoder {
                 .object(["name": .string($0.name), "description": .string($0.description), "input_schema": $0.inputSchema])
             })
         }
+        if let promptCaching {
+            for breakpoint in promptCaching.breakpoints {
+                switch breakpoint.target {
+                case .lastTool:
+                    guard case .array(var tools) = body["tools"], case .object(var last) = tools.last else {
+                        throw PromptCacheQualification.invalid("The Anthropic tool cache breakpoint is absent.")
+                    }
+                    last["cache_control"] = promptCaching.control(breakpoint.ttl)
+                    tools[tools.count - 1] = .object(last)
+                    body["tools"] = .array(tools)
+                case .system(let index):
+                    guard system.indices.contains(index) else { throw PromptCacheQualification.invalid("The Anthropic instruction cache breakpoint is absent.") }
+                case .message(let index, _):
+                    guard request.messages.indices.contains(index) else { throw PromptCacheQualification.invalid("The Anthropic message cache breakpoint is absent.") }
+                    switch request.messages[index] {
+                    case .system, .developer: throw PromptCacheQualification.invalid("Use a system cache target for leading instructions.")
+                    default: break
+                    }
+                }
+            }
+            if let ttl = promptCaching.automaticTTL { body["cache_control"] = promptCaching.control(ttl) }
+            try promptCaching.validateTTLOrder(in: body)
+        }
         return .object(body)
+    }
+
+    private static func marked(_ blocks: [JSONValue], at index: Int, configuration: AnthropicPromptCaching?) throws -> [JSONValue] {
+        try configuration?.mark(blocks, atMessage: index) ?? blocks
     }
 
     private static func append(role: String, content: [JSONValue], to messages: inout [Message]) throws {

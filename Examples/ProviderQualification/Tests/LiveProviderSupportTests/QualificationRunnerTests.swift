@@ -73,6 +73,24 @@ struct QualificationRunnerTests {
         }
     }
 
+    @Test func renderedTTLUsageIncludesKnownValuesAndMissingCoverage() {
+        var usage = UsageAccumulator()
+        let model = ModelID(provider: "anthropic", name: "fixture")
+        _ = usage.record(.init(identity: .init(source: .modelResponse, invocationID: "first", model: model),
+            usage: .init(inputTokens: 15_000, outputTokens: 100, cachedInputTokens: 12_000,
+                cacheWriteInputTokens: 3_000, cacheWriteTTL: .init(fiveMinuteTokens: 2_000, oneHourTokens: 1_000)), status: .finalized))
+        _ = usage.record(.init(identity: .init(source: .modelResponse, invocationID: "second", model: model),
+            usage: .init(inputTokens: 5, outputTokens: 0), status: .finalized))
+        let result = QualificationCaseResult(scenario: .usage, status: .pass, requestAttempts: 0,
+            modelTurns: 2, toolCalls: 0, toolExecutions: 0, usageSummary: usage.summary(), note: "fixture")
+        #expect(result.rendered.contains("usage_cache_write_5m=2000"))
+        #expect(result.rendered.contains("usage_cache_write_1h=1000"))
+        #expect(result.rendered.contains("usage_cache_write_5m_missing=1"))
+        #expect(result.rendered.contains("usage_cache_write_1h_reported=1"))
+        #expect(result.rendered.contains("usage_total=15105"))
+        #expect(result.rendered.contains("cost=UNKNOWN"))
+    }
+
     @Test func renderedUsageNamesScopeCoverageAndFieldCompleteness() async throws {
         let options = QualificationOptions(
             provider: .openAI,

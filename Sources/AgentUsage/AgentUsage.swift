@@ -114,6 +114,13 @@ public struct UsageFieldSummary: Hashable, Sendable, Codable {
     }
 }
 
+/// Coverage-aware subtotals of reported TTL categories; aggregate cache writes
+/// remain a separate field and must not be added to this breakdown.
+public struct CacheWriteTTLSummary: Hashable, Sendable, Codable {
+    public let fiveMinuteTokens: UsageFieldSummary
+    public let oneHourTokens: UsageFieldSummary
+}
+
 /// Field-by-field token totals for a selected set of visible responses.
 public struct UsageTokenSummary: Hashable, Sendable, Codable {
     public let sampleCount: Int
@@ -123,6 +130,7 @@ public struct UsageTokenSummary: Hashable, Sendable, Codable {
     public let cacheWriteInputTokens: UsageFieldSummary
     public let reasoningTokens: UsageFieldSummary
     public let totalTokens: Int?
+    public let cacheWriteTTL: CacheWriteTTLSummary?
 
     init(
         sampleCount: Int,
@@ -131,7 +139,8 @@ public struct UsageTokenSummary: Hashable, Sendable, Codable {
         cachedInputTokens: UsageFieldSummary,
         cacheWriteInputTokens: UsageFieldSummary,
         reasoningTokens: UsageFieldSummary,
-        totalTokens: Int?
+        totalTokens: Int?,
+        cacheWriteTTL: CacheWriteTTLSummary? = nil
     ) {
         self.sampleCount = sampleCount
         self.inputTokens = inputTokens
@@ -140,6 +149,7 @@ public struct UsageTokenSummary: Hashable, Sendable, Codable {
         self.cacheWriteInputTokens = cacheWriteInputTokens
         self.reasoningTokens = reasoningTokens
         self.totalTokens = totalTokens
+        self.cacheWriteTTL = cacheWriteTTL
     }
 }
 
@@ -171,6 +181,7 @@ public struct UsageSummary: Hashable, Sendable, Codable {
     public var cachedInputTokens: UsageFieldSummary { observedUsage.cachedInputTokens }
     public var cacheWriteInputTokens: UsageFieldSummary { observedUsage.cacheWriteInputTokens }
     public var reasoningTokens: UsageFieldSummary { observedUsage.reasoningTokens }
+    public var cacheWriteTTL: CacheWriteTTLSummary? { observedUsage.cacheWriteTTL }
     public var totalTokens: Int? { observedUsage.totalTokens }
 
     public var allResponsesFinalized: Bool {
@@ -184,7 +195,11 @@ public struct UsageSummary: Hashable, Sendable, Codable {
             outputTokens: outputTokens.reportedSubtotal,
             cachedInputTokens: cachedInputTokens.reportedSubtotal,
             cacheWriteInputTokens: cacheWriteInputTokens.reportedSubtotal,
-            reasoningTokens: reasoningTokens.reportedSubtotal
+            reasoningTokens: reasoningTokens.reportedSubtotal,
+            cacheWriteTTL: cacheWriteTTL.map { .init(
+                fiveMinuteTokens: $0.fiveMinuteTokens.reportedSubtotal,
+                oneHourTokens: $0.oneHourTokens.reportedSubtotal
+            ) }
         )
     }
 
@@ -244,6 +259,8 @@ public struct UsageMetric: Hashable, Sendable, Codable {
     public static let cachedInputTokens = Self(rawValue: "cached_input_tokens")
     public static let cacheWriteInputTokens = Self(rawValue: "cache_write_input_tokens")
     public static let reasoningTokens = Self(rawValue: "reasoning_tokens")
+    public static let cacheWriteFiveMinuteTokens = Self(rawValue: "cache_write_five_minute_tokens")
+    public static let cacheWriteOneHourTokens = Self(rawValue: "cache_write_one_hour_tokens")
     public static let totalTokens = Self(rawValue: "total_tokens")
 }
 
@@ -315,7 +332,9 @@ public struct UsageAccumulator: Sendable {
         }
 
         if let existing = observations[observation.identity], existing.status == .finalized {
-            if existing.usage == observation.usage {
+            if Self.fields(of: observation.usage).allSatisfy({ metric, incoming in
+                incoming == nil || Self.value(for: metric, in: existing.usage) == incoming
+            }) {
                 return .init(disposition: .duplicate)
             }
             return .init(
@@ -428,7 +447,11 @@ public struct UsageAccumulator: Sendable {
             cachedInputTokens: cached,
             cacheWriteInputTokens: cacheWrite,
             reasoningTokens: reasoning,
-            totalTokens: totalTokens
+            totalTokens: totalTokens,
+            cacheWriteTTL: observations.contains { $0.usage.cacheWriteTTL != nil } ? .init(
+                fiveMinuteTokens: summarizeUsageField(observations.map { $0.usage.cacheWriteTTL?.fiveMinuteTokens }),
+                oneHourTokens: summarizeUsageField(observations.map { $0.usage.cacheWriteTTL?.oneHourTokens })
+            ) : nil
         )
     }
 
@@ -477,6 +500,8 @@ public struct UsageAccumulator: Sendable {
         let cached: Int?
         let cacheWrite: Int?
         let reasoning: Int?
+        let fiveMinute: Int?
+        let oneHour: Int?
         switch field(existing.inputTokens, incoming.inputTokens, metric: .inputTokens) {
         case .success(let value): input = value
         case .failure(let diagnostic): return .failure(diagnostic)
@@ -497,12 +522,23 @@ public struct UsageAccumulator: Sendable {
         case .success(let value): reasoning = value
         case .failure(let diagnostic): return .failure(diagnostic)
         }
+        switch field(existing.cacheWriteTTL?.fiveMinuteTokens, incoming.cacheWriteTTL?.fiveMinuteTokens, metric: .cacheWriteFiveMinuteTokens) {
+        case .success(let value): fiveMinute = value
+        case .failure(let diagnostic): return .failure(diagnostic)
+        }
+        switch field(existing.cacheWriteTTL?.oneHourTokens, incoming.cacheWriteTTL?.oneHourTokens, metric: .cacheWriteOneHourTokens) {
+        case .success(let value): oneHour = value
+        case .failure(let diagnostic): return .failure(diagnostic)
+        }
         return .success(.init(
             inputTokens: input,
             outputTokens: output,
             cachedInputTokens: cached,
             cacheWriteInputTokens: cacheWrite,
-            reasoningTokens: reasoning
+            reasoningTokens: reasoning,
+            cacheWriteTTL: existing.cacheWriteTTL == nil && incoming.cacheWriteTTL == nil ? nil : .init(
+                fiveMinuteTokens: fiveMinute, oneHourTokens: oneHour
+            )
         ))
     }
 
@@ -529,7 +565,7 @@ public struct UsageAccumulator: Sendable {
     private static func firstOverflow<S: Sequence>(in observations: S) -> UsageMetric? where S.Element == UsageObservation {
         let values = Array(observations)
         for metric in [UsageMetric.inputTokens, .outputTokens, .cachedInputTokens,
-                       .cacheWriteInputTokens, .reasoningTokens] {
+                       .cacheWriteInputTokens, .reasoningTokens, .cacheWriteFiveMinuteTokens, .cacheWriteOneHourTokens] {
             var subtotal = 0
             for observation in values {
                 guard let value = value(for: metric, in: observation.usage) else { continue }
@@ -565,6 +601,8 @@ public struct UsageAccumulator: Sendable {
             (.cachedInputTokens, usage.cachedInputTokens),
             (.cacheWriteInputTokens, usage.cacheWriteInputTokens),
             (.reasoningTokens, usage.reasoningTokens),
+            (.cacheWriteFiveMinuteTokens, usage.cacheWriteTTL?.fiveMinuteTokens),
+            (.cacheWriteOneHourTokens, usage.cacheWriteTTL?.oneHourTokens),
         ]
     }
 
@@ -575,6 +613,8 @@ public struct UsageAccumulator: Sendable {
         case .cachedInputTokens: usage.cachedInputTokens
         case .cacheWriteInputTokens: usage.cacheWriteInputTokens
         case .reasoningTokens: usage.reasoningTokens
+        case .cacheWriteFiveMinuteTokens: usage.cacheWriteTTL?.fiveMinuteTokens
+        case .cacheWriteOneHourTokens: usage.cacheWriteTTL?.oneHourTokens
         default: nil
         }
     }

@@ -51,6 +51,22 @@ struct ConversationProjectionTests {
         #expect(assistant.usage.outputTokens == 5)
     }
 
+    @Test func displayKeepsTTLCategoriesAcrossSparseSnapshots() throws {
+        let conversationID = UUID()
+        let model = ModelID(provider: "anthropic", name: "fixture")
+        var projection = ConversationProjection(conversationID: conversationID)
+        projection.beginUserTurn("Hi", generation: 1)
+        projection.apply(.runStarted(.init(sessionID: conversationID, runID: UUID(), model: model)))
+        projection.apply(.turnStarted(1))
+        projection.apply(.model(.usage(.init(inputTokens: 15_000, outputTokens: 0, cachedInputTokens: 12_000,
+            cacheWriteInputTokens: 3_000, cacheWriteTTL: .init(fiveMinuteTokens: 2_000)))))
+        projection.apply(.model(.usage(.init(cacheWriteTTL: .init(oneHourTokens: 1_000)))))
+        projection.apply(.model(.usage(.init(outputTokens: 100))))
+        let assistant = try #require(projection.snapshot.items.compactMap(\.assistant).first)
+        #expect(assistant.usage.cacheWriteTTL == .init(fiveMinuteTokens: 2_000, oneHourTokens: 1_000))
+        #expect(assistant.usage.cacheWriteInputTokens == 3_000)
+    }
+
     @Test func assistantDisplayIdentityIsUniqueAcrossRunsAndTracksOnlyTheCurrentResponse() throws {
         let conversationID = UUID()
         let model = ModelID(provider: "apple-chat-fixture", name: "streaming")

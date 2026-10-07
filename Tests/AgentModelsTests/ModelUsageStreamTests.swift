@@ -60,6 +60,28 @@ struct ModelUsageStreamTests {
         #expect(try replay([reported], terminal: reported) == reported)
     }
 
+    @Test func ttlBreakdownSurvivesSparseSnapshotsWithoutAddingToAggregate() throws {
+        let final = ModelUsage(inputTokens: 15_000, outputTokens: 100, cachedInputTokens: 12_000,
+            cacheWriteInputTokens: 3_000, reasoningTokens: 0,
+            cacheWriteTTL: .init(fiveMinuteTokens: 2_000, oneHourTokens: 1_000))
+        #expect(try replay([
+            .init(inputTokens: 15_000, outputTokens: 0, cachedInputTokens: 12_000,
+                cacheWriteInputTokens: 3_000, reasoningTokens: 0,
+                cacheWriteTTL: .init(fiveMinuteTokens: 2_000)),
+            .init(cacheWriteTTL: .init(oneHourTokens: 1_000)),
+            .init(outputTokens: 100),
+        ], terminal: final) == final)
+        for counter: (Int) -> ModelUsage in [
+            { .init(cacheWriteTTL: .init(fiveMinuteTokens: $0)) },
+            { .init(cacheWriteTTL: .init(oneHourTokens: $0)) },
+        ] {
+            var stream = ModelEventAccumulator()
+            try stream.append(.responseStarted(info))
+            try stream.append(.usage(counter(2)))
+            #expect(throws: ModelStreamError.invalidUsage) { try stream.append(.usage(counter(1))) }
+        }
+    }
+
     private func replay(_ snapshots: [ModelUsage], terminal: ModelUsage) throws -> ModelUsage {
         var stream = ModelEventAccumulator()
         try stream.append(.responseStarted(info))

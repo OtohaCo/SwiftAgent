@@ -45,6 +45,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
         /// All sessions sharing the provider share it; server support and semantics vary.
         /// The Host supplies it again on reconstruction; `nil` sends no key.
         public let promptCacheKey: String?
+        public let promptCaching: OpenAIResponsesPromptCaching?
 
         public init(
             baseURL: URL,
@@ -54,12 +55,25 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
             capabilities: ModelCapabilities = [],
             promptCacheKey: String? = nil
         ) {
+            self.init(baseURL: baseURL, model: model, authentication: authentication,
+                      maximumOutputTokens: maximumOutputTokens, capabilities: capabilities,
+                      promptCacheKey: promptCacheKey, promptCaching: nil)
+        }
+
+        /// The Host qualifies the derived `/responses` endpoint and the exact local model.
+        /// Setting this value alone does not establish that a local service supports caching.
+        public init(
+            baseURL: URL, model: String, authentication: LocalResponsesAuthentication = .none,
+            maximumOutputTokens: Int = 4_096, capabilities: ModelCapabilities = [],
+            promptCacheKey: String? = nil, promptCaching: OpenAIResponsesPromptCaching?
+        ) {
             self.baseURL = baseURL
             self.model = model
             self.authentication = authentication
             self.maximumOutputTokens = maximumOutputTokens
             self.capabilities = capabilities
             self.promptCacheKey = promptCacheKey
+            self.promptCaching = promptCaching
         }
     }
 
@@ -70,6 +84,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
     private let authentication: LocalResponsesAuthentication
     private let maximumOutputTokens: Int
     private let promptCacheKey: String?
+    private let promptCaching: OpenAIResponsesPromptCaching?
     private let transport: any ProviderHTTPTransport
 
     public var description: String { "LocalResponsesProvider" }
@@ -111,6 +126,8 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
         authentication = configuration.authentication
         maximumOutputTokens = configuration.maximumOutputTokens
         promptCacheKey = configuration.promptCacheKey
+        try configuration.promptCaching?.validate(endpoint: endpoint, modelName: modelName)
+        promptCaching = configuration.promptCaching
         model = .init(provider: "local-responses", name: modelName)
         descriptor = .init(
             id: "local-responses",
@@ -120,6 +137,16 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
     }
 
     public func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        stream(request: request, prewarm: false)
+    }
+
+    /// Opt-in prewarming for a local service qualified for modern Responses controls.
+    /// Account for it as a separate Host invocation; it is never an Agent tool run.
+    public func prewarm(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        stream(request: request, prewarm: true)
+    }
+
+    private func stream(request: ModelRequest, prewarm: Bool) -> AsyncThrowingStream<ModelEvent, Error> {
         ModelEventStream.make { emit in
             guard request.model == model else {
                 throw ModelProviderError(
@@ -146,7 +173,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
                     request,
                     maximumOutputTokens: maximumOutputTokens,
                     images: descriptor.capabilities.contains(.imageInput),
-                    promptCacheKey: promptCacheKey
+                    promptCacheKey: promptCacheKey, promptCaching: promptCaching, prewarm: prewarm
                 ))
             } catch let error as ModelProviderError {
                 throw error
@@ -195,6 +222,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
                         for normalized in try decoder.consume(frame) {
                             do { try validation.append(normalized) }
                             catch { throw ProviderJSON.invalid() }
+                            if prewarm { try PromptCacheQualification.validatePrewarm(normalized) }
                             try emit(normalized)
                         }
                     }
@@ -246,18 +274,21 @@ extension LocalResponsesProvider: ModelProviderRequestValidator {
         }
         _ = try LocalResponsesRequestEncoder.encode(request, maximumOutputTokens: maximumOutputTokens,
                                                     images: descriptor.capabilities.contains(.imageInput),
-                                                    promptCacheKey: promptCacheKey)
+                                                    promptCacheKey: promptCacheKey, promptCaching: promptCaching)
     }
 }
 
 enum LocalResponsesRequestEncoder {
     static func encode(
-        _ request: ModelRequest, maximumOutputTokens: Int, images: Bool, promptCacheKey: String? = nil
+        _ request: ModelRequest, maximumOutputTokens: Int, images: Bool, promptCacheKey: String? = nil,
+        promptCaching: OpenAIResponsesPromptCaching? = nil, prewarm: Bool = false
     ) throws -> JSONValue {
         guard request.model.provider == "local-responses",
               !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid local Responses model identifier.")
         }
+        if prewarm, promptCaching == nil { throw PromptCacheQualification.unsupported("Prewarming requires a qualified modern cache configuration.") }
+        try promptCaching?.validate(modelName: request.model.name, prewarm: prewarm)
         var body: [String: JSONValue] = [
             "model": .string(request.model.name),
             "input": .array(try ResponsesCanonicalRequestEncoder.encodeMessages(request.messages, images: images)),
@@ -271,6 +302,7 @@ enum LocalResponsesRequestEncoder {
             body["text"] = structured
         }
         if let promptCacheKey { body["prompt_cache_key"] = .string(promptCacheKey) }
+        try promptCaching?.apply(to: &body, request: request, images: images, prewarm: prewarm)
         return .object(body)
     }
 }

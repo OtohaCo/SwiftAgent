@@ -19,6 +19,7 @@ struct AnthropicStreamDecoder {
     private var cachedInputTokens: Int?
     private var cacheWriteInputTokens: Int?
     private var reasoningTokens: Int?
+    private var cacheWriteTTL: CacheWriteTTLUsage?
     private var usage = ModelUsage()
     private var stopReason: StopReason?
     private var ended = false
@@ -205,18 +206,27 @@ struct AnthropicStreamDecoder {
         outputTokens = try ProviderJSON.count(usage["output_tokens"]) ?? outputTokens
         cachedInputTokens = try ProviderJSON.count(usage["cache_read_input_tokens"]) ?? cachedInputTokens
         cacheWriteInputTokens = try ProviderJSON.count(usage["cache_creation_input_tokens"]) ?? cacheWriteInputTokens
+        if let details = usage["cache_creation"], details != .null {
+            let detail = try ProviderJSON.object(details)
+            cacheWriteTTL = .init(
+                fiveMinuteTokens: try ProviderJSON.count(detail["ephemeral_5m_input_tokens"]) ?? cacheWriteTTL?.fiveMinuteTokens,
+                oneHourTokens: try ProviderJSON.count(detail["ephemeral_1h_input_tokens"]) ?? cacheWriteTTL?.oneHourTokens
+            )
+        }
         if let details = usage["output_tokens_details"], details != .null {
             reasoningTokens = try ProviderJSON.count(ProviderJSON.object(details)["thinking_tokens"]) ?? reasoningTokens
         }
         var total: Int?
-        if let inputTokens {
-            let (withRead, readOverflow) = inputTokens.addingReportingOverflow(cachedInputTokens ?? 0)
-            let (withWrite, writeOverflow) = withRead.addingReportingOverflow(cacheWriteInputTokens ?? 0)
+        // Native input excludes reads/writes. A missing category cannot be treated
+        // as zero to manufacture a complete normalized total.
+        if let inputTokens, let cachedInputTokens, let cacheWriteInputTokens {
+            let (withRead, readOverflow) = inputTokens.addingReportingOverflow(cachedInputTokens)
+            let (withWrite, writeOverflow) = withRead.addingReportingOverflow(cacheWriteInputTokens)
             guard !readOverflow, !writeOverflow else { throw ProviderJSON.invalid() }
             total = withWrite
         }
         self.usage = .init(inputTokens: total, outputTokens: outputTokens, cachedInputTokens: cachedInputTokens,
-                           cacheWriteInputTokens: cacheWriteInputTokens, reasoningTokens: reasoningTokens)
+                           cacheWriteInputTokens: cacheWriteInputTokens, reasoningTokens: reasoningTokens, cacheWriteTTL: cacheWriteTTL)
         return [.usage(self.usage)]
     }
 }

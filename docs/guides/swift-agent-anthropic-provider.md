@@ -1,6 +1,6 @@
 # Anthropic Messages Provider
 
-last-verified: 2026-10-02
+last-verified: 2026-10-07
 
 `AnthropicProvider` implements one streaming Messages API request per ModelRequest.
 It does not execute tools, keep a second conversation history, retry requests or
@@ -41,6 +41,75 @@ let provider = try AnthropicProvider(
 
 Canonical model IDs, including 4.6-generation dateless IDs, need no mapping.
 
+## Host-configured prompt caching
+
+Caching is opt-in through `AnthropicPromptCaching`; existing initializers keep
+their original function signatures and send no cache controls. The new required
+`promptCaching:` overload qualifies an exact Messages endpoint, resolved model
+set, and supported controls. The Host attests those capabilities from the deployed
+API/gateway version; SwiftAgent checks the binding and combinations before HTTP.
+It does not infer gateway support from an Anthropic-compatible URL or model alias.
+When aliases are configured, `modelNames` contains the resolved response identities,
+while the request continues to send the configured alias.
+
+```swift
+let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
+let caching = AnthropicPromptCaching(
+    endpoint: endpoint,
+    modelNames: ["claude-opus-5-5"], // Host-verified model at this endpoint
+    capabilities: [.automatic, .explicitBreakpoints, .oneHourTTL],
+    automaticTTL: .fiveMinutes,
+    breakpoints: [.init(target: .system(index: 0), ttl: .oneHour)]
+)
+let provider = try AnthropicProvider(
+    apiKey: apiKey, endpoint: endpoint, promptCaching: caching
+)
+```
+
+The official [prompt caching protocol](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
+verified 2026-10-07, supports top-level automatic `cache_control` and explicit
+block controls with `type: "ephemeral"` and `ttl: "5m"` or `"1h"`. Current active
+models support these controls, but platform differences remain: legacy Bedrock
+integrations do not support automatic caching. Declare only capabilities verified
+for the actual endpoint. Unsupported capabilities fail locally; no automatic
+fallback silently removes a requested control.
+
+Automatic caching moves the breakpoint to the last eligible block as a conversation
+grows. Explicit targets are `.lastTool`, `.system(index:)`, and
+`.message(index:contentBlock:)`. System indices count leading system/developer
+instructions from zero. Message indices address the original `ModelRequest.messages`,
+including instructions; content-block indices address that message's native encoded
+blocks before adjacent same-role messages are grouped. A tool result is one outer
+`tool_result` block; native assistant continuation may contain thinking followed by
+tool-use blocks. Thinking/redacted thinking and empty text cannot be marked.
+Missing targets, negative indices, duplicate targets and unsupported block types
+fail before the request is sent.
+
+Selecting a system breakpoint converts leading instructions into text blocks in
+the same order. Each instruction after the first carries the newline that the
+existing combined system string supplied; their concatenated visible text stays
+the same. Without a system breakpoint, the existing joined string remains. Tools
+retain their supplied order and definitions; cache controls never add hidden or
+unauthorized tools. The wire encoder sorts JSON object keys and leaves array order
+intact. A change in tool definitions, instruction/context content, model, images,
+thinking configuration or earlier history can change the cached prefix. Place the
+stable instruction/reference material first and dynamic material later in the Host;
+the adapter does not rewrite history or reorder content to improve cache hits.
+
+At most four distinct explicit/automatic slots are allowed. In actual
+`tools → system → messages` order, one-hour breakpoints must precede five-minute
+breakpoints. Automatic caching consumes one slot even when the final explicit
+marker has the same TTL; a different TTL on the final eligible block is rejected.
+The provider-wide strategy applies to every Run, tool round and shared Session.
+The Host supplies it again on provider reconstruction or journal recovery; recovery
+restores canonical history, not an independent vendor cache or a usage ledger.
+Continuation ownership and integrity checks remain in force before markers are added.
+
+Parameter fixtures establish request contracts rather than real cache hits.
+Inspect reported reads/writes, minimum-prefix requirements and expiry at the actual
+service. The OtohaAI experiment and its production routing evidence are tracked in
+[#89](https://github.com/OtohaCo/SwiftAgent/issues/89).
+
 ## Model Contract
 
 Text, returned thinking summaries, complete tool proposals, usage and terminal
@@ -72,6 +141,19 @@ as defined in the [cache accounting contract](https://platform.claude.com/docs/e
 Individual unreported counts remain nil, previously reported values survive sparse
 updates, and reported thinking tokens remain an output subset. Invalid or decreasing
 normalized usage cannot seal a successful response.
+
+`cache_creation_input_tokens` remains the aggregate cache write count. The optional
+`cache_creation.ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens` populate
+`ModelUsage.cacheWriteTTL.fiveMinuteTokens` and `oneHourTokens`. Aggregate and TTL
+detail describe the same input subset and are never added twice. Missing/null stays
+unknown, explicit zero stays zero, and partial TTL detail is retained without
+assigning unknown writes to five minutes. Normalized input is known only when the
+ordinary input, aggregate write and read categories are all reported. An aggregate
+versus TTL mismatch is retained for metering diagnostics rather than causing tool
+execution or settlement to repeat. Complete, mutually exclusive TTL categories can
+be priced by the Host's two qualified rates; incomplete classifications produce an
+unknown cost. Prices and model-specific exceptions belong to the actual Host tariff,
+not a universal SDK multiplier. See [usage accounting](swift-agent-usage.md).
 
 ## Continuation State
 
