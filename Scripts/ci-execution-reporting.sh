@@ -68,8 +68,14 @@ run_case() {
     entries+=("{\"suite\":\"$suite\",\"mode\":\"$mode\",\"platform\":\"$platform\",\"toolchain\":\"$toolchain\",\"result\":\"$result\",\"exitCode\":$exit_code,\"durationSeconds\":$((ended - started)),\"modelRequests\":0}")
 }
 
-run_case "ExecutionReportingSupportTests" "fixture" \
-    swift test --package-path Examples/ExecutionReportingSupport --disable-sandbox --no-parallel
+# Swift 6.4's default Swift Build planner crashed in Linux linker discovery
+# before this package's tests started (main run 37619838596). Use the available
+# native backend for this package only; it still builds and runs every test.
+reporting_test_command=(swift test --package-path Examples/ExecutionReportingSupport --disable-sandbox --no-parallel)
+if [[ "$(uname -s)" == "Linux" ]]; then
+    reporting_test_command+=(--build-system native)
+fi
+run_case "ExecutionReportingSupportTests" "fixture" "${reporting_test_command[@]}"
 run_case "HeadlessExecutionHostTests" "local-integration" \
     swift test --package-path Examples/HeadlessExecutionHost --disable-sandbox --no-parallel
 # The preceding tests build this executable. Run that product without another
