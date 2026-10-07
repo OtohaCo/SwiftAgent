@@ -1,6 +1,6 @@
 # SwiftAgent Named Regressions
 
-last-verified: 2026-10-05
+last-verified: 2026-10-07
 
 Keep production bugs as named tests in their domain files. This index is the
 long-term map so a later bug does not require moving files.
@@ -28,6 +28,7 @@ long-term map so a later bug does not require moving files.
 | Provider fallback must not replay a previously settled mutation | `fallbackProviderReplaysSettledMutationWithoutExecutingAgain` | `Tests/AgentProvidersTests/ProviderFallbackTests.swift` |
 | Declared read-only recoverable failure must continue the model loop with a canonical error result | `declaredRecoverableReadOnlyErrorBecomesModelVisibleAndContinues`, `crossRunAndRestartPreserveRecoverableTranscript` | `Tests/AgentCoreTests/AgentRecoverableToolErrorTests.swift` |
 | Mutation, authorization, Evidence, malformed calls, and undeclared errors must never enter the recoverable channel | `mutationCannotOptIntoModelVisibleErrors`, `authorizationFailureStaysFailClosed`, `recoverablePayloadCannotMintEvidence`, `malformedArgumentsAndUnknownToolsStayFailClosed`, `recoverableErrorWithoutPolicyOptInStillFailsTheRun` | `Tests/AgentCoreTests/AgentRecoverableToolErrorTests.swift` |
+| A mutation waiting for its tool authorization must not hold the scheduler lease from another Session's mutation | `aMutationWaitingForItsAnswerDoesNotHoldTheLeaseFromAnother`, `anAnsweredMutationWaitsForTheLeaseWithoutBeingAskedAgain`, `anAnswerArrivingAfterTheToolTimeoutNeverExecutes`, `cancellingWhileWaitingForTheAnswerNeverTakesTheLease` | `Tests/AgentCoreTests/AuthorizationBeforeLeaseTests.swift` |
 | Old framed files are rejected without overwrite | `oldFileIsNotOpenedOrOverwritten` | `Tests/AgentJournalFileStoreTests/SegmentedJournalStoreTests.swift` |
 | An unpublished tail is truncated, while damaged published data fails explicitly | `unpublishedTailIsTruncatedButCommittedFrameDamageFails` | `Tests/AgentJournalFileStoreTests/SegmentedJournalStoreTests.swift` |
 | Cancellation after a real file effect must quarantine and keep physical drain | `testCancellationAfterRealFileEffectKeepsReconciliationAndPhysicalDrain` | `Tests/AgentCoreTests/AgentMutationRecoveryTests.swift` |

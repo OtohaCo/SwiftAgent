@@ -72,6 +72,16 @@ approve the underlying account/workspace/backend version and avoid mutable
 backend swaps inside a captured tool value. Neither model text, Context Skill
 data nor a serializable scope diagnostic can mint a new execution binding.
 
+Authorization that may wait for a person or a network service holds no
+scheduler resource lease: audited authorization and, by default
+(`ToolAuthorizationTiming.beforeResourceLease`), a tool's own required
+`authorize` run before the call waits for its lease. Evidence and scope are
+checked again under the lease, before mutation admission and the executor. The
+decision may therefore be older than the state the executor sees; a Host tool
+whose decision depends on mutable state must recheck it in the executor
+(versioned reads or conditional writes), or its scheduler can use
+`.whileHoldingResourceLease`.
+
 Every complete tool call still passes:
 
 1. Schema validation for input

@@ -13,7 +13,11 @@ package struct AnyAgentTool: Sendable {
         let receiptExpectation: ToolReceiptExpectation?
         let binding: ToolAuthorizationBinding
         let preauthorize: @Sendable (ToolContext) async throws -> Void
+        /// Without audit: the tool's own required authorization, run before the scheduler lease.
+        let authorizeBeforeLease: @Sendable (ToolContext) async throws -> Void
         let invoke: Invocation
+        /// `invoke` for a call whose `authorizeBeforeLease` returned: it does not ask again.
+        let invokeAuthorized: Invocation
     }
     private let decode: @Sendable (JSONValue, Bool) throws -> PreparedInvocation
 
@@ -46,8 +50,33 @@ package struct AnyAgentTool: Sendable {
             if policy.effect == .readOnly && requiresReceipt && receiptExpectation == nil {
                 throw ToolInvocationError.receiptValidationUnavailable
             }
-            return PreparedInvocation(resources: resources, evidenceRequirements: requirements,
-                                      receiptExpectation: receiptExpectation, binding: binding, preauthorize: { context in
+            @Sendable func checkInvocationIdentity(_ context: ToolContext) throws {
+                if policy.effect == .mutation {
+                    guard context.mutationAdmission != nil, context.argumentsJSON != nil else {
+                        throw ToolInvocationError.mutationIntegrityUnavailable
+                    }
+                }
+                if policy.idempotency == .keyed || requiresReceipt {
+                    guard let key = context.idempotencyKey,
+                          !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw ToolInvocationError.missingIdempotencyKey
+                    }
+                }
+            }
+            @Sendable func authorizeWithoutAudit(_ context: ToolContext) async throws {
+                let authorization = try await tool.authorize(input, context: context)
+                try context.checkActive()
+                guard authorization == .allowed else { throw ToolInvocationError.authorizationDenied }
+            }
+            let authorizeBeforeLease: @Sendable (ToolContext) async throws -> Void = { context in
+                guard policy.authorization == .required, context.auditAuthorization == nil else { return }
+                try context.checkActive()
+                try checkInvocationIdentity(context)
+                try await Self.validateEvidence(requirements, context: context)
+                try await context.executionAdmission?.check(runID: context.runID, resources: resources)
+                try await authorizeWithoutAudit(context)
+            }
+            let preauthorize: @Sendable (ToolContext) async throws -> Void = { context in
                 guard let audit = context.auditAuthorization else { return }
                 audit.beginEvaluation()
                 try context.checkActive()
@@ -67,25 +96,14 @@ package struct AnyAgentTool: Sendable {
                     try context.checkActive()
                     guard authorization == .allowed else { throw ToolInvocationError.authorizationDenied }
                 } else { try await audit.recordToolAuthorization(nil, failed: false) }
-            }) { context in
+            }
+            let run: @Sendable (ToolContext, Bool) async throws -> ToolResult<JSONValue> = { context, authorized in
                 try context.checkActive()
-                if policy.effect == .mutation {
-                    guard context.mutationAdmission != nil, context.argumentsJSON != nil else {
-                        throw ToolInvocationError.mutationIntegrityUnavailable
-                    }
-                }
-                if policy.idempotency == .keyed || requiresReceipt {
-                    guard let key = context.idempotencyKey,
-                          !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                        throw ToolInvocationError.missingIdempotencyKey
-                    }
-                }
+                try checkInvocationIdentity(context)
                 try await Self.validateEvidence(requirements, context: context)
                 try await context.executionAdmission?.check(runID: context.runID, resources: resources)
-                if policy.authorization == .required, context.auditAuthorization == nil {
-                    let authorization = try await tool.authorize(input, context: context)
-                    try context.checkActive()
-                    guard authorization == .allowed else { throw ToolInvocationError.authorizationDenied }
+                if policy.authorization == .required, context.auditAuthorization == nil, !authorized {
+                    try await authorizeWithoutAudit(context)
                     try await Self.validateEvidence(requirements, context: context)
                 }
                 try await context.executionAdmission?.check(runID: context.runID, resources: resources)
@@ -251,6 +269,10 @@ package struct AnyAgentTool: Sendable {
                 return ToolResult(output: output, evidence: result.evidence, receipt: result.receipt,
                                   declaredTools: result.declaredTools, images: result.images)
             }
+            return PreparedInvocation(resources: resources, evidenceRequirements: requirements,
+                                      receiptExpectation: receiptExpectation, binding: binding,
+                                      preauthorize: preauthorize, authorizeBeforeLease: authorizeBeforeLease,
+                                      invoke: { try await run($0, false) }, invokeAuthorized: { try await run($0, true) })
         }
     }
 
