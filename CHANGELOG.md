@@ -7,7 +7,9 @@
   resupplies it on reconstruction. Model/gateway grouping and routing semantics
   vary, and a key does not guarantee a hit. No key preserves request bytes;
   empty, padded and control-character keys remain invalid. Other adapters do
-  not send this OpenAI field.
+  not send this OpenAI field. Defaulted initializer parameters preserve ordinary
+  calls but change stored initializer function signatures; see the
+  [versioning guide](docs/guides/swift-agent-versioning.md) and release checklist.
 - The shared Responses decoder preserves optional `cache_write_tokens` in
   completed/incomplete responses, including explicit zero. Cache reads/writes
   remain input subsets through events, ledger summaries and exports;

@@ -1,5 +1,27 @@
 # SwiftAgent Semantic Versioning
 
+## Responses cache keys and usage (unreleased, PR #85)
+
+Verified 2026-10-07. Both `OpenAIResponsesProvider` initializers and
+`LocalResponsesProvider.Configuration.init` add the defaulted
+`promptCacheKey: String? = nil` parameter. Ordinary calls that omit the key
+still compile and send the original request fields. Stored initializer
+function references have a different parameter signature and must be adapted;
+this is a source compatibility break under the public-parameter rule below,
+even though the new parameter has a default. The Local configuration also
+exposes the configured optional key as a public property.
+
+The key belongs to the provider configuration, including all Sessions that
+share it; the Host supplies its chosen value again when reconstructing the
+provider. See the [OpenAI provider guide](swift-agent-openai-provider.md).
+Responses now preserves a reported `cache_write_tokens` count using the
+existing optional `ModelUsage.cacheWriteInputTokens` property. Missing/null
+stays unknown, explicit zero stays zero, and totals remain input + output.
+There is no new usage API or Journal format. Routing forecasts and evaluation
+export additions belong to the example packages, not the Core SDK contract.
+The [release checklist](../releases/1.0-rc-checklist.md#responses-cache-contracts-after-pr-85)
+records the acceptance scope.
+
 ## Provider replay diagnostics (unreleased)
 
 Adds `ModelProviderError.Diagnostic`, its fixed `Stage`/`Reason` enums, and the
