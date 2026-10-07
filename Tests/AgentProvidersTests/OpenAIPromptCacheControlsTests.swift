@@ -121,12 +121,10 @@ struct OpenAIPromptCacheControlsTests {
         #expect(await probe.requests.isEmpty)
     }
 
-    @Test func modernSlotLimitsDuplicateCoordinatesAndIneligibleTargetsAreRejected() throws {
+    @Test func modernDuplicateCoordinatesAndIneligibleTargetsAreRejected() throws {
         let request = ModelRequest(model: model, messages: [.developer("stable"), .user([.text("dynamic")]),
             .assistant(content: [.text("history")], toolCalls: [])])
         let invalid = [
-            configuration(mode: .implicit, breakpoints: (0..<4).map { .init(messageIndex: $0) }),
-            configuration(breakpoints: (0..<5).map { .init(messageIndex: $0) }),
             configuration(breakpoints: [.init(messageIndex: 0), .init(messageIndex: 0)]),
             configuration(breakpoints: [.init(messageIndex: -1)]),
             configuration(breakpoints: [.init(messageIndex: 20)]),
@@ -146,6 +144,34 @@ struct OpenAIPromptCacheControlsTests {
         _ = try OpenAIResponsesRequestEncoder.encode(request, maximumOutputTokens: 100,
             reasoningEffort: nil, reasoningSummary: nil,
             promptCaching: configuration(mode: .explicit, breakpoints: []))
+    }
+
+    @Test(arguments: [OpenAIResponsesPromptCaching.Mode.implicit, .explicit])
+    func historicalMarkersAreRetainedBeyondTheCurrentWriteSlotCount(mode: OpenAIResponsesPromptCaching.Mode) async throws {
+        let probe = ProviderRequestProbe()
+        let markers = (0..<6).map { OpenAIResponsesPromptCaching.Breakpoint(messageIndex: $0) }
+        let provider = try OpenAIResponsesProvider(apiKey: "fixture", promptCaching: configuration(mode: mode, breakpoints: markers),
+            transport: FixtureHTTPTransport(probe: probe, bodies: [openAITextFixture, openAITextFixture]))
+        let history: [ModelMessage] = (0..<6).map { .user([.text("stable historical message \($0)")]) }
+        var first = ModelEventAccumulator()
+        for try await event in provider.stream(request: .init(model: model, messages: history)) { try first.append(event) }
+        let response = try first.finish()
+        for try await _ in provider.stream(request: .init(model: model, messages: history + [
+            .assistant(content: response.content, toolCalls: response.toolCalls), .user([.text("new dynamic suffix")]),
+        ])) {}
+        let bodies = try await probe.requests.map(requestBody)
+        #expect(bodies.count == 2)
+        guard case .array(let original) = bodies[0]["input"], case .array(let continued) = bodies[1]["input"] else {
+            Issue.record("Missing historical input"); return
+        }
+        #expect(original.count == 6)
+        #expect(Array(continued.prefix(original.count)) == original)
+        for (index, message) in original.enumerated() {
+            guard case .object(let item) = message, case .array(let content) = item["content"],
+                  case .object(let block) = content.first else { Issue.record("Missing historical marker"); return }
+            #expect(block["text"] == .string("stable historical message \(index)"))
+            #expect(block["prompt_cache_breakpoint"] == .object(["mode": .string("explicit")]))
+        }
     }
 
     @Test func localControlsRequireOptInForTheDerivedEndpointAndKeepTheKey() async throws {

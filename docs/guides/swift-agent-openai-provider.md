@@ -127,9 +127,14 @@ one block at zero; the existing encoder's joined text and error envelope stay in
 Markers are added only to supported input content, never to function calls, reasoning
 continuation, tool definitions or `additional_tools`. Top-level `instructions` cannot
 contain markers; this adapter already encodes instructions as canonical input messages.
-Missing/ineligible targets, negative or duplicate coordinates fail locally. Explicit
-mode permits four marker slots; implicit mode reserves one slot, leaving three explicit
-slots. Explicit mode with no markers deliberately requests no cache writes.
+Missing/ineligible targets, negative or duplicate coordinates fail locally. Each
+request can create at most four cache writes; implicit mode reserves one write slot,
+leaving three explicit write slots. This is a write budget, not a cap on historical
+markers in the input. Keep earlier markers when appending conversation history;
+the service checks the first two and latest fifty explicit boundaries, plus eligible
+implicit boundaries in implicit mode, and selects the limited writes. The SDK neither
+truncates nor reorders valid historical markers. Explicit mode with no markers
+deliberately requests no cache writes.
 
 Keep static reference material before a changing suffix. Requests preserve canonical
 message history, continuation integrity and supplied tool-array order; sorted JSON

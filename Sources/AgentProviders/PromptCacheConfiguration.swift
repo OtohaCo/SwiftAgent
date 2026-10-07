@@ -141,6 +141,8 @@ public struct OpenAIResponsesPromptCaching: Hashable, Sendable, Codable {
         }
     }
     public enum Policy: Hashable, Sendable, Codable {
+        /// Historical markers can exceed the per-request cache-write budget.
+        /// Keep them in canonical history; the service selects eligible writes/lookups.
         case modern(mode: Mode, ttl: TTL, breakpoints: [Breakpoint])
         case legacy(retention: Retention)
     }
@@ -156,13 +158,13 @@ public struct OpenAIResponsesPromptCaching: Hashable, Sendable, Codable {
         try PromptCacheQualification.validate(endpoint: endpoint, actualEndpoint: actualEndpoint,
                                               modelNames: modelNames, modelName: modelName)
         switch policy {
-        case .modern(let mode, _, let breakpoints):
+        case .modern(_, _, let breakpoints):
             guard capabilities.contains(.modernControls), !prewarm || capabilities.contains(.prewarm) else {
                 throw PromptCacheQualification.unsupported("The endpoint/model has not been qualified for modern Responses cache controls or prewarming.")
             }
-            guard breakpoints.count <= (mode == .implicit ? 3 : 4), Set(breakpoints).count == breakpoints.count,
+            guard Set(breakpoints).count == breakpoints.count,
                   breakpoints.allSatisfy({ $0.messageIndex >= 0 && $0.contentBlock >= 0 }) else {
-                throw PromptCacheQualification.invalid("Invalid Responses breakpoint positions or cache-write slot count.")
+                throw PromptCacheQualification.invalid("Invalid or duplicate Responses breakpoint positions.")
             }
         case .legacy(let retention):
             guard !prewarm,
