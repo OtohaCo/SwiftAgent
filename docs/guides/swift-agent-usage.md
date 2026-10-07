@@ -41,7 +41,7 @@ when a Run failed or was cancelled.
 | Local Responses | Same reported fields | Same reported fields | Preserves server reports; actual caching and write fees require service qualification |
 | Anthropic | Aggregate `cache_read_input_tokens` | Aggregate `cache_creation_input_tokens` | Normalized input includes ordinary + read + write; 5m/1h detail is not retained |
 | DeepSeek | Its adapter's verified native read mapping | No OpenAI write-field mapping | Do not infer writes or fees from cache misses |
-| Apple | Unreported | Unreported | No cache accounting promise |
+| Apple | SDK 27 `input.cachedTokenCount` | Unreported | Native usage on macOS/iOS 27 with Swift 6.4; older runtimes leave usage unreported; no OpenAI cache-key field |
 
 These are adapter capabilities, not evidence of live cache reuse. Anthropic
 request-side automatic/explicit cache configuration and TTL policy remain
@@ -159,8 +159,9 @@ must not be presented as HTTP send attempts; ProviderQualification keeps its
 budget ledger separate.
 
 No tokenizer, context-size estimator, price catalog, currency conversion, or
-billing reconciliation is included. SDK core supplies usage, not a complete monetary billing system. Cost remains unknown unless a consuming
-product implements and labels a separate pricing/accounting system.
+billing reconciliation is included. SDK core supplies usage, not a complete
+monetary billing system. Cost remains unknown unless a consuming product
+implements and labels a separate pricing/accounting system.
 
 `reportedSubtotal` is only the sum of reported values. A non-nil subtotal does
 not bypass `complete`/`missingCount` or establish a complete bill. Export records
