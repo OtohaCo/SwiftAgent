@@ -68,9 +68,10 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
     public var debugDescription: String { description }
     public var customMirror: Mirror { Mirror(self, children: ["descriptor": descriptor]) }
 
-    /// - Parameter promptCacheKey: Sent as `prompt_cache_key` on every request. OpenAI routes requests with the same
-    ///   key to the same prompt cache, and gateways use it as the conversation's identity. Give one stable key per
-    ///   conversation (for example its identifier) and a different key to each conversation; `nil` sends no key.
+    /// - Parameter promptCacheKey: Optional Host-configured grouping/routing value sent as
+    ///   `prompt_cache_key` on every request. All sessions sharing this provider share its key.
+    ///   It does not guarantee a cache hit; model and gateway semantics vary. When rebuilding
+    ///   the provider, the Host supplies the key again according to its grouping strategy.
     public init(
         apiKey: String,
         endpoint: URL? = nil,

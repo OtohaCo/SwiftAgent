@@ -53,6 +53,13 @@ struct ModelUsageStreamTests {
         #expect(try replay([.init(inputTokens: 1, outputTokens: 1), subsets, .init(inputTokens: 10, outputTokens: 4)], terminal: final) == final)
     }
 
+    @Test func combinedCacheCategoriesDoNotChangeRuntimeStreamValidation() throws {
+        let reported = ModelUsage(inputTokens: 10, outputTokens: 0,
+            cachedInputTokens: 8, cacheWriteInputTokens: 3)
+        // A consuming tariff can reject this classification without failing execution.
+        #expect(try replay([reported], terminal: reported) == reported)
+    }
+
     private func replay(_ snapshots: [ModelUsage], terminal: ModelUsage) throws -> ModelUsage {
         var stream = ModelEventAccumulator()
         try stream.append(.responseStarted(info))

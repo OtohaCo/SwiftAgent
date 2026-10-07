@@ -40,25 +40,56 @@ the SwiftAgent safety chain.
 
 ## Prompt cache key
 
-OpenAI keeps a prompt cache by request prefix and uses `prompt_cache_key` to
-send requests that share a prefix to the same cache; gateways in front of
-OpenAI also read it as the conversation's identity. Give the provider one key
-per conversation, the same on every request of it and different between
-conversations (a conversation identifier works):
+`promptCacheKey` is an optional Host-configured grouping/routing parameter,
+not a cache-hit guarantee. Official [prompt caching documentation](https://developers.openai.com/api/docs/guides/prompt-caching),
+verified 2026-10-07, distinguishes models before GPT-5.6 (a stable key helps
+prefix-based routing) from GPT-5.6 and later (separate cache accounting groups;
+the key is optional for cache optimization). Shared groups can be legitimate.
+Some deployed gateways may additionally use it for session stickiness; verify
+the actual gateway version and configuration rather than assuming this for all
+services. No hit-rate improvement, including 97–99%, is established by this SDK's fixtures.
 
 ```swift
 let provider = try OpenAIResponsesProvider(
     apiKey: apiKey,
     endpoint: gatewayURL,
-    promptCacheKey: conversationID.uuidString
+    promptCacheKey: hostCacheGroup // Host-selected policy, possibly shared
 )
 ```
 
-The key is written as `prompt_cache_key` in every request body. It must not be
-empty, have surrounding whitespace or contain control characters. Without a
-key the body is unchanged. `LocalResponsesProvider.Configuration` takes the
-same optional `promptCacheKey` for servers that honour it. Anthropic,
-DeepSeek and Apple providers do not send one.
+Every request from this provider carries the configured value, including tool
+rounds and later Runs. All Sessions sharing the provider share that value; the
+SDK does not allocate a key per Session. On provider reconstruction or journal
+recovery, the Host supplies its policy's key again. A gateway requiring separate
+per-session keys needs a provider/binding assembled per Session by the Host.
+`sessionID.uuidString` is one possible policy, not a required one. The key stays
+outside model-visible messages, tool content and continuation payloads.
+
+Empty keys, surrounding whitespace and control characters are rejected.
+Without a key, the request body is unchanged. Local Responses sends this field
+only when explicitly configured through `Configuration.promptCacheKey`;
+service support is unknown until qualified. Anthropic, DeepSeek and Apple do
+not send this OpenAI field.
+
+## Cache usage and remaining controls
+
+Completed and incomplete Responses preserve `input_tokens`, `output_tokens`,
+`input_tokens_details.cached_tokens`, `input_tokens_details.cache_write_tokens`
+and `output_tokens_details.reasoning_tokens` in `ModelUsage`. Missing or null
+optional counts remain `nil`; explicit zero remains zero. Old models and
+compatible services need not report writes. Cache read/write counts are already
+included in input totals; reasoning is included in output totals.
+
+Local Responses uses the same decoder to preserve service-reported fields.
+This is not a promise that a local service caches prompts or charges for writes.
+See the [usage guide](swift-agent-usage.md) for accounting and export limits.
+Prices and fee categories must come from the Host's deployed tariff; official
+[OpenAI pricing](https://developers.openai.com/api/docs/pricing) is not a gateway
+subscription or quota schedule (reference verified 2026-10-07).
+
+Explicit breakpoints and model/endpoint-qualified cache controls remain
+[follow-up #88](https://github.com/OtohaCo/SwiftAgent/issues/88). Live OtohaAI
+reuse and gateway behavior remain [follow-up #89](https://github.com/OtohaCo/SwiftAgent/issues/89).
 
 Structured output uses Responses `text.format` with the supplied JSON Schema.
 Reasoning summaries are model-visible content and remain untrusted; reasoning

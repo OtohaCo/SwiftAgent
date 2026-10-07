@@ -31,3 +31,53 @@ To opt into a real TypeSafe Jev classification, set
 process environment. The example still supplies Jev only with the task summary,
 latest input, and legal candidate descriptions. Jev cannot create Evidence,
 authorize or execute a tool, or settle a Journal.
+
+## Forecast cost contract
+
+Last verified: 2026-10-07. `RoutingUsageForecast` contains the Host's prediction
+for each candidate, not measured `ModelUsage` or an actual bill. The Host must
+label its forecast assumptions in the consuming product and supply that
+candidate's own input, cache read, cache write and output predictions and tariff.
+Do not inherit the current model's cache hits when switching models. The test fixtures
+explicitly predict zero writes; this is an assumption, not a conservative
+estimate for a service with write charges.
+
+`HostPricingQuote.cacheWriteScope` defaults to `.singleCategory`: one disjoint
+write category with one Host-provided `cacheWriteInputPerMillion` rate, qualified
+by the quote's source/date and candidate deployment. The calculation is:
+
+```text
+ordinary = input - cacheRead - cacheWrite
+cost = (ordinary × inputRate + cacheRead × readRate
+        + cacheWrite × writeRate + output × outputRate) / 1,000,000
+```
+
+Writes replace ordinary input charges for those tokens; they are not an extra
+full charge on all input. Test-only rates of 1, 0.1, 1.25 and 2 give `0.00515`
+for 15,000 input, 12,000 reads, 3,000 writes and 100 output. These are not any
+provider's current prices. The SDK core does not hardcode multipliers or supply
+a complete billing system.
+
+A known zero read/write count needs no corresponding rate. An unknown read
+count, unknown single-category write count, positive count with unknown rate,
+negative count/rate, overlapping categories or Decimal arithmetic failure yields
+unknown cost (`nil`). Counts are validated here without changing runtime usage
+validation or execution facts. `.noSeparateCharge` is an explicit Host assertion
+that a verified protocol/tariff bills all non-read input at the ordinary rate;
+only under that scope can unknown writes be irrelevant to the estimate. It must
+not be selected merely because a service omitted the count or quote.
+
+The router compares each candidate's own forecast and quote in the same
+currency. Unknown cost cannot establish savings or justify a cost-based switch.
+Summary `reportedSubtotal` values are not complete inputs unless the Host also
+checks coverage, finalization and missing fields. Journal recovery does not
+restore a historical usage ledger; hidden retries/internal calls are not
+necessarily covered by public response events.
+
+The single write rate cannot price aggregate Anthropic writes with mixed 5m/1h
+TTLs exactly. Request cache policy and TTL detail remain [#86](https://github.com/OtohaCo/SwiftAgent/issues/86)
+and [#87](https://github.com/OtohaCo/SwiftAgent/issues/87). OpenAI qualified cache
+controls remain [#88](https://github.com/OtohaCo/SwiftAgent/issues/88); OtohaAI
+live A/B remains [#89](https://github.com/OtohaCo/SwiftAgent/issues/89). See the
+[usage guide](../../docs/guides/swift-agent-usage.md) and
+[OpenAI provider guide](../../docs/guides/swift-agent-openai-provider.md).

@@ -41,8 +41,9 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
         public let authentication: LocalResponsesAuthentication
         public let maximumOutputTokens: Int
         public let capabilities: ModelCapabilities
-        /// Sent as `prompt_cache_key` on every request, for servers and gateways that keep a prompt cache per key.
-        /// Give one stable key per conversation; `nil` sends no key.
+        /// Optional Host-configured grouping/routing value sent on every request.
+        /// All sessions sharing the provider share it; server support and semantics vary.
+        /// The Host supplies it again on reconstruction; `nil` sends no key.
         public let promptCacheKey: String?
 
         public init(

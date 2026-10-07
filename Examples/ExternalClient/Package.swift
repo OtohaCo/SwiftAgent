@@ -81,6 +81,7 @@ let package = Package(
                 "ConfirmedNoEffectFixture",
                 "JournalReplayFixture",
                 "BoundedReplanningFixture",
+                "ReplanningEvalTrial",
             ]
         ),
     ],

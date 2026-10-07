@@ -4,9 +4,8 @@ import Foundation
 import Testing
 @testable import AgentProviders
 
-/// OpenAI routes requests that carry the same `prompt_cache_key` to the same prompt cache, and gateways use it as the
-/// conversation's identity. A Host gives one key per conversation; every request of it must carry that same key, and
-/// a provider given no key must write the body it always wrote.
+/// The Host configures a provider-wide grouping/routing key. These request tests
+/// verify propagation and lifecycle, not upstream cache hits or gateway stickiness.
 struct PromptCacheKeyTests {
     private static let model = ModelID(provider: "openai", name: "fixture")
 
@@ -59,15 +58,59 @@ struct PromptCacheKeyTests {
         #expect(try ProviderJSON.encode(defaulted) == plainBody)
     }
 
-    @Test func differentConversationsCarryDifferentKeys() throws {
-        let request = ModelRequest(model: Self.model, messages: [.user([.text("Hi")])])
-        let first = try OpenAIResponsesRequestEncoder.encode(
-            request, maximumOutputTokens: 64, reasoningEffort: nil, reasoningSummary: nil, promptCacheKey: "a")
-        let second = try OpenAIResponsesRequestEncoder.encode(
-            request, maximumOutputTokens: 64, reasoningEffort: nil, reasoningSummary: nil, promptCacheKey: "b")
-        guard case .object(let a) = first, case .object(let b) = second else { Issue.record("Not objects"); return }
-        #expect(a["prompt_cache_key"] == .string("a"))
-        #expect(b["prompt_cache_key"] == .string("b"))
+    @Test func separatelyConfiguredProvidersAndSessionsCarryTheirOwnKeys() async throws {
+        for key in ["a", "b"] {
+            let probe = ProviderRequestProbe()
+            let provider = try OpenAIResponsesProvider(apiKey: "fixture-key", promptCacheKey: key,
+                transport: FixtureHTTPTransport(probe: probe, bodies: [openAITextFixture]))
+            let session = try Agent(model: Self.model, provider: provider).makeSession()
+            #expect(try await session.run("Hi").wait().outcome == .completed)
+            #expect(try await Self.bodies(probe).first?["prompt_cache_key"] == .string(key))
+        }
+    }
+
+    @Test func repeatedRunsAndSharedProviderSessionsKeepTheConfiguredGroup() async throws {
+        let probe = ProviderRequestProbe()
+        let provider = try OpenAIResponsesProvider(apiKey: "fixture-key", promptCacheKey: "shared-group",
+            transport: FixtureHTTPTransport(probe: probe, bodies: Array(repeating: openAITextFixture, count: 3)))
+        let agent = try Agent(model: Self.model, provider: provider)
+        let first = try agent.makeSession()
+        let second = try agent.makeSession()
+        #expect(first.id != second.id)
+        for session in [first, first, second] {
+            let run = try await session.run("Hi")
+            #expect(try await run.wait().outcome == .completed)
+            try await run.waitForDrain()
+        }
+        let bodies = try await Self.bodies(probe)
+        #expect(bodies.count == 3)
+        #expect(bodies.allSatisfy { $0["prompt_cache_key"] == .string("shared-group") })
+        // The key must never enter the model-visible transcript or opaque continuation.
+        #expect(bodies.allSatisfy { !String(describing: $0["input"]).contains("shared-group") })
+    }
+
+    @Test func restoredPersistentSessionUsesTheHostsReconstructedProviderKey() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("cache-key-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sessionID = UUID()
+        let key = "host-persisted-group"
+        let probe = ProviderRequestProbe()
+        for restored in [false, true] {
+            let journal = try restored ? openTestJournal(at: directory) : makeTestJournal(at: directory)
+            let provider = try OpenAIResponsesProvider(apiKey: "fixture-key", promptCacheKey: key,
+                transport: FixtureHTTPTransport(probe: probe, bodies: [openAITextFixture, openAITextFixture]))
+            let session = try Agent(model: Self.model, provider: provider).makeSession(id: sessionID, journal: journal)
+            if restored {
+                #expect(try await session.conversationSnapshot().messages.contains(.user([.text("remember")])))
+            }
+            let run = try await session.run(restored ? "continue" : "remember")
+            #expect(try await run.wait().outcome == .completed)
+            try await run.waitForDrain()
+            try await journal.close()
+        }
+        let bodies = try await Self.bodies(probe)
+        #expect(bodies.count == 2)
+        #expect(bodies.allSatisfy { $0["prompt_cache_key"] == .string(key) })
     }
 
     @Test(arguments: ["", "  ", " key", "key ", "a\nb", "a\u{0}b"])

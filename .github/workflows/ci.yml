@@ -51,7 +51,9 @@ jobs:
   linux:
     name: Linux Swift 6.4
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # PR #85: check annotations confirm the 30m budget expired during reader builds.
+    # Keep all acceptance coverage; cap the expanded cold-build budget at 60m.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         with:

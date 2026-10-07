@@ -1,18 +1,31 @@
 # Changelog
 
-## Unreleased: OpenAI prompt cache key
+## Unreleased: prompt cache key and cache usage
 
-`OpenAIResponsesProvider` takes an optional `promptCacheKey` and
-`LocalResponsesProvider.Configuration` an optional `promptCacheKey`; when given,
-every request body carries it as `prompt_cache_key`. OpenAI routes requests
-with the same key to the same prompt cache, and gateways use it as the
-conversation's identity; without it, a conversation's turns can land on caches
-that have not seen its prefix (an evaluation through a gateway saw 34% of input
-tokens served from cache, against 97–99% for clients that send a key). Give one
-stable key per conversation. Without a key the request body is byte-identical
-to before; Anthropic, DeepSeek and Apple providers are unchanged. Empty keys,
-keys with surrounding whitespace and keys with control characters are rejected
-as `invalidRequest` when the provider is created.
+- OpenAI and Local Responses accept an optional Host-configured `promptCacheKey`
+  on every request. It is provider-wide, including shared Sessions; the Host
+  resupplies it on reconstruction. Model/gateway grouping and routing semantics
+  vary, and a key does not guarantee a hit. No key preserves request bytes;
+  empty, padded and control-character keys remain invalid. Other adapters do
+  not send this OpenAI field.
+- The shared Responses decoder preserves optional `cache_write_tokens` in
+  completed/incomplete responses, including explicit zero. Cache reads/writes
+  remain input subsets through events, ledger summaries and exports;
+  `ReplanningEvalTrial` now exports writes. No Journal schema change.
+- DynamicModelRouting forecasts support a single explicit write tariff and
+  disjoint input/read/write pricing, or a Host-verified no-separate-charge scope.
+  Unknown counts/quotes remain unknown; predictions are not bills. Rates remain
+  Host-owned and mixed Anthropic TTL pricing is not supported.
+- Cache-key lifecycle, sparse snapshots, idempotent final accounting and export
+  regressions are covered. Linux CI's cold-build budget increases from 30 to
+  60 minutes after GitHub confirmed the prior timeout during reader builds;
+  acceptance coverage is retained.
+- Still open: [Anthropic cache policy #86](https://github.com/OtohaCo/SwiftAgent/issues/86),
+  [Anthropic TTL detail #87](https://github.com/OtohaCo/SwiftAgent/issues/87),
+  [OpenAI cache controls #88](https://github.com/OtohaCo/SwiftAgent/issues/88),
+  [OtohaAI live A/B #89](https://github.com/OtohaCo/SwiftAgent/issues/89).
+  Protocol references were verified 2026-10-07; fixtures do not establish a
+  real cache-hit improvement or a 97–99% hit rate.
 
 ## Unreleased: invalid tool arguments go back to the model
 
