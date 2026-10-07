@@ -31,7 +31,7 @@ struct PromptCacheKeyTests {
         let bodies = try await Self.bodies(probe)
         #expect(bodies.count == 2)
         #expect(bodies.allSatisfy { $0["prompt_cache_key"] == .string("conversation-1") })
-        // The key sits at the same place of the sorted body every time, so the bytes before the input still match.
+        // Verify request parameter propagation across changing tool-round transcripts.
         let raw = await probe.requests.compactMap(\.httpBody).map { String(decoding: $0, as: UTF8.self) }
         #expect(raw.allSatisfy { $0.contains(#""prompt_cache_key":"conversation-1""#) })
     }
