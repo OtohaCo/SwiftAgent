@@ -30,6 +30,12 @@
 
 ## Unreleased: execution-reporting CI uses the prebuilt Host CLI
 
+- Linux reporting acceptance and its five finite repetitions select Swift
+  6.4's available, deprecated native build backend for
+  `Examples/ExecutionReportingSupport` only. The complete debug suite still
+  builds and runs. This avoids the newly observed Swift Build linker-planning
+  crash; it does not fix the upstream cause or close #46. Other packages and
+  macOS retain their backend, coverage, watchdogs and failure propagation.
 - After Host tests build `HeadlessExecutionHostCLI`, both CLI acceptance
   scenarios use `swift run --skip-build`. This avoids a second build-planning
   pass after a recorded Linux Swift 6.4 `swift-package` SIGSEGV; both scenarios,
@@ -38,6 +44,11 @@
   [the retained CI evidence](https://github.com/OtohaCo/SwiftAgent/issues/46#issuecomment-6035891119).
 
 ## Unreleased: prompt cache key and cache usage
+
+This records PR #85's scope. The qualified cache-controls and TTL-accounting
+section above supersedes its single-write pricing limit and follow-up status:
+#86, #87 and #88 are implemented and merged in PR #92. Deployment evidence is
+tracked in #89; it must be assessed separately from SDK fixture results.
 
 - OpenAI and Local Responses accept an optional Host-configured `promptCacheKey`
   on every request. It is provider-wide, including shared Sessions; the Host
@@ -65,7 +76,7 @@
   the reproduced arithmetic-fixture deadline race without changing authorization
   rules or assertions. Linux installs a bounded failure-stack debugger; the
   independently observed core-stage hang remains unattributed.
-- Still open: [Anthropic cache policy #86](https://github.com/OtohaCo/SwiftAgent/issues/86),
+- Follow-ups recorded at PR #85: [Anthropic cache policy #86](https://github.com/OtohaCo/SwiftAgent/issues/86),
   [Anthropic TTL detail #87](https://github.com/OtohaCo/SwiftAgent/issues/87),
   [OpenAI cache controls #88](https://github.com/OtohaCo/SwiftAgent/issues/88),
   [OtohaAI live A/B #89](https://github.com/OtohaCo/SwiftAgent/issues/89).
