@@ -97,6 +97,22 @@ provider reads them can apply the same rules with
 OpenAI Responses and Local Responses, `.anthropic` for Anthropic Messages) and
 report `.contextWindowExceeded` itself.
 
+## Retry budgets and waiting
+
+`ModelProviderRoute` waits for a provider's `retryAfter` only before an eligible
+retry of that provider. Both `maxRetriesPerProvider` and the route-wide
+`maxAttempts` must still allow another attempt. When the total attempt budget
+is exhausted, no retry delay or further candidate request is performed; the
+existing error and mutation-boundary policies determine the reported failure.
+Cancelling an eligible backoff stops the route.
+
+The hint does not authorize retrying a nonretryable error or a request whose
+events or mutation boundary already prevent a retry. It is not a delay added
+to warm a prompt cache. This follows the role of
+[HTTP Retry-After](https://www.rfc-editor.org/rfc/rfc9110.html#name-retry-after)
+as an indication of when a follow-up request may be made; reference verified
+2026-10-07.
+
 ## Optional provider diagnostics
 
 `ModelProviderError.diagnostic` adds fixed `stage` and `reason` enums. The

@@ -580,21 +580,31 @@ import Glibc
     @Test func unpublishedMaintenanceCandidateCannotReplaceTheOldRoot() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-candidate-fault-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let gate = JournalFaultGate()
         let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: 4096,
                                                   maxUnreclaimedBytes: 16384, maxSegmentBatches: 1)
-        var journal: AgentJournal? = try AgentIncrementalJournal.createForTesting(at: directory,
-            operationDomain: "candidate", policy: policy, fault: { try gate.check($0) })
-        gate.arm(.beforeMaintenancePublish)
+        let failure = AgentJournalError.persistenceUnavailable("injected beforeMaintenancePublish")
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory,
+            operationDomain: "candidate", policy: policy, fault: { stage in
+                // Automatic maintenance may finish before the explicit request joins it.
+                // Every pass must leave its candidate unpublished until this owner closes.
+                if stage == .beforeMaintenancePublish { throw failure }
+            })
         let session = UUID()
         let original = ModelMessage.user([.text("must survive an unpublished candidate")])
-        _ = try await journal?.appendCheckpoint([.checkpoint(history: [original], steeringIDs: [])],
-                                                sessionID: session, runID: UUID(), durability: .durable)
-        _ = try? await journal?.requestMaintenance()
-        journal = nil
+        _ = try await journal.appendCheckpoint([.checkpoint(history: [original], steeringIDs: [])],
+                                               sessionID: session, runID: UUID(), durability: .durable)
+        let current = directory.appendingPathComponent("CURRENT")
+        let publishedRoot = try Data(contentsOf: current)
+        await #expect(throws: failure) { _ = try await journal.requestMaintenance() }
+        #expect(try Data(contentsOf: current) == publishedRoot)
+        // Closing drains the owned maintenance and relinquishes its writer lock;
+        // it neither publishes the failed candidate nor depends on ARC timing.
+        try await journal.close()
+        #expect(try Data(contentsOf: current) == publishedRoot)
         let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
         #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == [original])
         for _ in 0..<8 { if try await reopened.requestMaintenance()?.sealedSegments == 0 { break } }
+        #expect(try await reopened.maintenanceStatus()?.sealedSegments == 0)
         #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == [original])
         try await reopened.close()
     }
@@ -1258,7 +1268,8 @@ import Glibc
             if FileManager.default.isExecutableFile(atPath: candidate.path) { binary = candidate; break }
             search.deleteLastPathComponent()
         }
-        process.executableURL = try #require(binary)
+        let executable: URL = try #require(binary)
+        process.executableURL = executable
         process.arguments = [mode, directory.path]
         process.standardOutput = Pipe()
         process.standardError = Pipe()

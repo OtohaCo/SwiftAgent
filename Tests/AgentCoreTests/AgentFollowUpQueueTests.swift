@@ -1040,7 +1040,7 @@ struct AgentFollowUpQueueTests {
         let run = try await session.run("write B", operationID: "stable-index-write")
         #expect(try await run.wait().receipts.count == 1)
         try await run.waitForDrain()
-        #expect(await entered.value == 1)
+        #expect(entered.value == 1)
         #expect(try String(contentsOf: file, encoding: .utf8) == "effect\n")
         var history = await session.history
         for number in 0..<4 {
@@ -1104,7 +1104,7 @@ struct AgentFollowUpQueueTests {
             }
         default: Issue.record("unexpected index kind")
         }
-        #expect(await entered.value == 1)
+        #expect(entered.value == 1)
         #expect(try String(contentsOf: file, encoding: .utf8) == "effect\n")
         try await reopened.close()
         try saved.write(to: index)

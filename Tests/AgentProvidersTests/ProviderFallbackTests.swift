@@ -127,6 +127,41 @@ struct ProviderFallbackTests {
         #expect(await probe.requests.count == 2)
     }
 
+    @Test(arguments: [1, 2])
+    func exhaustedAttemptBudgetReturnsTheFailureWithoutWaitingForRetryAfter(_ maximumAttempts: Int) async throws {
+        let probe = RouteProviderProbe()
+        let fallbackProbe = RouteProviderProbe()
+        let failure = ModelProviderError(kind: .rateLimited, message: "no attempt left", retryAfter: .seconds(30))
+        let candidate = RouteFixtureProvider(probe: probe) { _, turn, _ in
+            if turn < maximumAttempts { throw ModelProviderError(kind: .unavailable, message: "try again") }
+            throw failure
+        }
+        let fallback = RouteFixtureProvider(probe: fallbackProbe) { _, _, _ in
+            throw ModelProviderError(kind: .unavailable, message: "must not be attempted")
+        }
+        let route = try ModelProviderRoute(
+            id: "fixture",
+            candidates: [candidate, fallback],
+            policy: .init(maxAttempts: maximumAttempts, maxRetriesPerProvider: maximumAttempts)
+        )
+        let request = ModelRequest(model: .init(provider: "fixture", name: "test"), messages: [])
+
+        do {
+            // A watchdog bounds a regression's 30-second Retry-After. The assertion is
+            // the original failure, not an elapsed-time threshold or a readiness sleep.
+            _ = try await withOperationDeadline(
+                .now.advanced(by: .seconds(1)), timeoutError: RouteBudgetDeadline.expired
+            ) {
+                try await collectRouteEvents(route.stream(request: request))
+            }
+            Issue.record("An exhausted route must return its final provider failure")
+        } catch {
+            #expect(error as? ModelProviderError == failure)
+        }
+        #expect(await probe.requests.count == maximumAttempts)
+        #expect(await fallbackProbe.requests.isEmpty)
+    }
+
     @Test func cancellingDuringRetryAfterStopsBeforeAnotherAttempt() async throws {
         let probe = RouteProviderProbe()
         let candidate = RouteFixtureProvider(probe: probe) { _, _, _ in
@@ -612,6 +647,10 @@ struct ProviderFallbackTests {
 private enum RouteFailure {
     case cancellation
     case provider(ModelProviderError)
+}
+
+private enum RouteBudgetDeadline: Error {
+    case expired
 }
 
 private actor RouteProviderProbe {

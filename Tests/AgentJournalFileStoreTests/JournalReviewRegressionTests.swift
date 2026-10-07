@@ -394,7 +394,8 @@ import Testing
         let options = [root.appendingPathComponent(".build/out/Products/Debug/JournalTestProcess"),
                        root.appendingPathComponent(".build/debug/JournalTestProcess")]
         let process = Process()
-        process.executableURL = try #require(options.first { FileManager.default.isExecutableFile(atPath: $0.path) })
+        let executable: URL = try #require(options.first { FileManager.default.isExecutableFile(atPath: $0.path) })
+        process.executableURL = executable
         process.arguments = ["probe", directory.path]
         process.standardError = Pipe()
         try process.run()
