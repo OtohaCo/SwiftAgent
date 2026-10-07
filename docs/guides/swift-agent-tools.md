@@ -84,6 +84,29 @@ Schema declarations must agree with Codable behavior, including CodingKeys and
 custom encoding. No reflection or sample-value inference generates a schema for
 arbitrary Codable types. Schema validation is a separate runtime boundary.
 
+## Recovering from invalid read-only output (unreleased)
+
+Verified 2026-10-08. A Host can configure a read-only tool with
+`recoverableErrors: .modelVisible`. In addition to explicit
+`RecoverableToolError`, this policy converts output schema or JSON-encoding
+failure into an `invalid_output` tool result with `isError == true`. The model
+can choose another approach within the existing Run budgets. This changes
+the prior terminal behavior of invalid output for tools using that policy;
+see the [versioning guide](swift-agent-versioning.md).
+
+The rejected output and its images, Evidence, receipts and declared tools are
+discarded. Diagnostics use fixed wording, schema-declared property names and
+array indices; an unrecognized output property and its remaining path become
+`/<unrecognized>`. Neither output values nor dynamic keys are echoed. The
+tool's declared read-only policy is a Host assertion; the SDK cannot undo
+side effects of a misclassified executor.
+
+The default `.failClosed` policy retains terminal failure, as do mutation
+tools. Ordinary executor errors, authorization, Evidence, receipts,
+persistence, cancellation and deadlines are not converted by this output
+channel. Input validation remains the separate preparation-time
+`invalid_arguments` result; it does not invoke the executor.
+
 ## Tools Defined at Runtime
 
 A tool whose name, description and schemas are known only at runtime (declared by

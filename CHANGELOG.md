@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased: read-only invalid-output recovery
+
+- A read-only tool already configured with `.modelVisible` now returns a
+  structured `invalid_output` tool error when its output fails schema validation
+  or JSON encoding. The Run may continue within its existing budgets. Invalid
+  output, images, Evidence, declared tools and receipts are not published.
+  Default `.failClosed` tools and mutation tools retain terminal failure.
+- Model-visible validation paths retain only schema-declared property names
+  and array indices; unrecognized property names and their suffixes become
+  `/<unrecognized>`. Output data and dynamically supplied keys cannot enter
+  the error message. Host-facing fail-closed diagnostics are unchanged.
+- This changes runtime behavior for an existing opt-in policy: the call emits
+  `toolCompleted` with `isError`, instead of `toolFailed` ending the Run.
+  Public initializer signatures and Journal schemas are unchanged. The
+  versioning guide and release checklist record this compatibility boundary;
+  Hosts requiring the previous terminal behavior must use `.failClosed`.
+
 ## Unreleased: retry budgets and compiler diagnostics
 
 - Provider routes honor `Retry-After` only when another same-provider attempt

@@ -110,18 +110,27 @@ an arbitrary underlying error.
 
 The same tool's output that breaks its declared output schema, or cannot be
 encoded as JSON, also becomes a model-visible result with code
-`invalid_output`: Core writes its message (the tool name, the failing path and
-rule, never the output itself), and the output's Evidence and declared tools
-are dropped. Nothing was changed, so the model can go on another way. Every
-other tool's invalid output still ends the Run.
+`invalid_output`: Core writes fixed diagnostics with the registered tool name,
+schema-declared path components and array indices. An unrecognized output key
+and its remaining path become `/<unrecognized>`; rejected values and dynamic
+keys are never echoed. The invalid output, images, Evidence, declared tools and
+receipts are discarded. The model may choose another approach within the
+existing budgets. Every other tool's invalid output still ends the Run. A
+declared read-only effect remains the Host's responsibility, not proof that an
+arbitrary executor had no side effects.
 
-This channel is not available to mutation tools. It also does not catch input
-schema errors (handled before the call, see invalid arguments), unknown tools,
-authorization, Evidence, receipts, journal persistence, reconciliation,
-cancellation, deadlines, or ordinary Swift errors. Those remain runtime
-failures. A recoverable error publishes no
-Evidence and carries no Receipt, so text in its payload cannot establish a
-trusted observation or claim a side effect.
+Input schema errors use the existing preparation-time `invalid_arguments`
+tool result before executor invocation; they do not end the Run. They are
+separate from this output channel. Unknown tools, authorization, Evidence,
+receipts, journal persistence, reconciliation, cancellation, deadlines and
+ordinary Swift errors retain their existing runtime failure behavior. A
+recoverable error publishes no Evidence and carries no Receipt, so text in its
+payload cannot establish a trusted observation or claim a side effect.
+
+The invalid-output behavior is an unreleased runtime compatibility change for
+tools already using `.modelVisible`, verified 2026-10-08. See the
+[versioning guide](guides/swift-agent-versioning.md); public signatures and
+Journal schemas are unchanged, and `.failClosed` preserves terminal failure.
 
 ## Mutation is not success until receipt
 

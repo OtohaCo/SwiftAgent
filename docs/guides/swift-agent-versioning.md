@@ -1,5 +1,26 @@
 # SwiftAgent Semantic Versioning
 
+## Read-only invalid-output recovery (unreleased, PR #95)
+
+Verified 2026-10-08. Public signatures, enum cases and Journal schemas are
+unchanged. This is nevertheless a runtime compatibility change for read-only
+tools already configured with `recoverableErrors: .modelVisible`: output
+schema and JSON-encoding failures now publish `toolCompleted` with an
+`isError == true` result (`invalid_output`), then allow another model turn
+within the existing budgets. Previously these failures published `toolFailed`
+and ended the Run. Do not classify it as unchanged runtime behavior merely
+because callers still compile.
+
+The default `.failClosed` policy and mutation tools retain their prior failure
+behavior. Hosts needing terminal failure for invalid read-only output can
+explicitly select `.failClosed`. The rejected output, images, Evidence,
+declared tools and receipts are discarded. Only schema-derived paths and
+fixed diagnostics enter the model-facing error; unknown output keys are
+redacted. Input preparation retains its existing `invalid_arguments` channel.
+This does not replay tools or change durable mutation settlement. Include
+this behavior change in the next authorized RC's release notes and validation;
+this entry does not create a release or tag.
+
 ## Cache controls and TTL accounting (unreleased)
 
 Verified 2026-10-07. `CacheWriteTTLUsage` and optional

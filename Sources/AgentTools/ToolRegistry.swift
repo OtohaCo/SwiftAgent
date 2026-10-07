@@ -6,6 +6,7 @@ package struct ToolRegistry: Sendable {
         let tool: AnyAgentTool
         let input: ToolSchemaValidator
         let output: ToolSchemaValidator
+        let outputSchema: JSONValue
     }
     private let tools: [String: Registration]
     /// Tools a Run declares to the model from its first request. Every other registered tool is
@@ -24,7 +25,7 @@ package struct ToolRegistry: Sendable {
                     throw ToolSchemaValidationError(kind: .invalidSchema, path: "", keyword: "outputSchema")
                 }
                 let output = try ToolSchemaValidator(schema: .init(json: outputSchema))
-                registered[tool.definition.name] = Registration(tool: tool, input: input, output: output)
+                registered[tool.definition.name] = Registration(tool: tool, input: input, output: output, outputSchema: outputSchema)
             } catch let error as ToolSchemaValidationError {
                 throw ToolRegistryError.invalidSchema(tool: tool.definition.name, issue: error)
             }
@@ -101,11 +102,12 @@ package struct ToolRegistry: Sendable {
         try context.checkActive()
         let tools = tools
         let output = registration.output
+        let outputSchema = registration.outputSchema
         let definition = registration.tool.definition
         let policy = registration.tool.policy
         @Sendable func checked(_ invoke: @escaping AnyAgentTool.Invocation) -> AnyAgentTool.Invocation {
             { executionContext in
-                try await Self.checkedResult(of: invoke, context: executionContext, output: output, tools: tools,
+                try await Self.checkedResult(of: invoke, context: executionContext, output: output, outputSchema: outputSchema, tools: tools,
                                              name: definition.name, policy: policy)
             }
         }
@@ -123,7 +125,7 @@ package struct ToolRegistry: Sendable {
     /// schema goes back to the model as that tool's error, without its Evidence or declared tools; any
     /// other tool's invalid output still ends the Run.
     private static func checkedResult(of invoke: AnyAgentTool.Invocation, context executionContext: ToolContext,
-                                      output: ToolSchemaValidator, tools: [String: Registration],
+                                      output: ToolSchemaValidator, outputSchema: JSONValue, tools: [String: Registration],
                                       name: String, policy: ToolPolicy) async throws -> ToolResult<JSONValue> {
         let result = try await invoke(executionContext)
         if !result.isModelVisibleError {
@@ -133,7 +135,9 @@ package struct ToolRegistry: Sendable {
                     throw ToolRegistryError.invalidOutput(error)
                 }
                 try executionContext.checkActive()
-                return ToolResult(modelVisibleError: invalidOutputPayload(name: name, issue: error))
+                let safeIssue = ToolSchemaValidationError(kind: error.kind,
+                    path: modelVisibleOutputPath(error.path, schema: outputSchema, value: result.output), keyword: error.keyword)
+                return ToolResult(modelVisibleError: invalidOutputPayload(name: name, issue: safeIssue))
             }
         }
         // A result can only declare tools this Run already has; it never adds one.
@@ -147,6 +151,52 @@ package struct ToolRegistry: Sendable {
         }
         return result
     }
+}
+
+/// Validator paths can contain property names from the unvalidated output. Keep
+/// only schema-declared names and verified array positions in model feedback.
+/// At the first dynamic key, stop: even a later declared child lies under that
+/// untrusted name. Host fail-closed diagnostics retain the original validator path.
+private func modelVisibleOutputPath(_ path: String, schema: JSONValue, value: JSONValue) -> String {
+    guard !path.isEmpty else { return "" }
+    var schema = schema
+    var value = value
+    var safePath = ""
+    let segments = path.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
+    for (position, segment) in segments.enumerated() {
+        guard case .object(let rules) = schema else { return safePath + "/<unrecognized>" }
+        let key = String(segment).replacingOccurrences(of: "~1", with: "/").replacingOccurrences(of: "~0", with: "~")
+        switch value {
+        case .object(let object):
+            let properties: [String: JSONValue]
+            if case .object(let declared) = rules["properties"] { properties = declared } else { properties = [:] }
+            if let property = properties.first(where: { $0.key.utf8.elementsEqual(key.utf8) }) {
+                safePath += "/" + outputPathSegment(property.key)
+                schema = property.value
+                guard let nested = ToolSchemaValidator.exactValue(object, property.key) else { return safePath }
+                value = nested
+            } else if position == segments.count - 1, case .array(let required) = rules["required"],
+                      let name = required.compactMap({ item -> String? in
+                          if case .string(let name) = item { name } else { nil }
+                      }).first(where: { $0.utf8.elementsEqual(key.utf8) }) {
+                // A missing required field can be named by the schema even when
+                // it has no property-specific schema; it is not an output key.
+                return safePath + "/" + outputPathSegment(name)
+            } else { return safePath + "/<unrecognized>" }
+        case .array(let array):
+            guard let items = rules["items"], let index = Int(key), index >= 0,
+                  String(index) == key, array.indices.contains(index) else { return safePath + "/<unrecognized>" }
+            safePath += "/" + String(index)
+            schema = items
+            value = array[index]
+        default: return safePath + "/<unrecognized>"
+        }
+    }
+    return safePath
+}
+
+private func outputPathSegment(_ name: String) -> String {
+    name.replacingOccurrences(of: "~", with: "~0").replacingOccurrences(of: "/", with: "~1")
 }
 
 /// What the model is told when a read-only tool's output broke its schema: where and which rule, never the
