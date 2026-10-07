@@ -197,6 +197,24 @@ Phases are covered across files, not one checklist suite.
 
 ---
 
+## Cache contract coverage (verified 2026-10-07)
+
+| Scenario | Evidence | Status |
+| --- | --- | --- |
+| Host key lifecycle across Runs/tool rounds/shared Sessions/reconstruction | `PromptCacheKeyTests` | Covered; provider-wide configuration, no automatic isolation |
+| Responses reads/writes: completed/incomplete, zero/absent/null/invalid | `ResponsesCacheUsageTests` on OpenAI and Local | Covered for reported fields; live cache support unknown |
+| Cumulative/sparse usage, finalization, duplicate finals, multi-invocation/export | `ModelUsageStreamTests`, `UsageLedgerTests`, `ResponsesCacheUsageTests`, `CacheUsageExportTests` | Covered; total is input + output |
+| Single write tariff forecast, unknown data, independent candidates | `HostModelRouterTests` | Covered as prediction, not actual billing |
+| Anthropic request cache strategy | [#86](https://github.com/OtohaCo/SwiftAgent/issues/86) | Not covered |
+| Anthropic 5m/1h write detail | [#87](https://github.com/OtohaCo/SwiftAgent/issues/87) | Not covered; aggregate read/write only |
+| OpenAI explicit breakpoint/qualified cache controls | [#88](https://github.com/OtohaCo/SwiftAgent/issues/88) | Not covered |
+| OtohaAI live reuse, gateway semantics and fees | [#89](https://github.com/OtohaCo/SwiftAgent/issues/89) | Not measured |
+
+Journal recovery does not restore a usage ledger. Public-event coverage does
+not imply coverage of hidden retries, internal calls or every billable request.
+See [usage accounting](swift-agent-usage.md) for completeness and execution
+boundaries.
+
 ## M–N. Continuation / cross-provider
 
 | Scenario | Existing test | Action |

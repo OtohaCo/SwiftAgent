@@ -51,7 +51,9 @@ jobs:
   linux:
     name: Linux Swift 6.4
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # PR #85: check annotations confirm the 30m budget expired during reader builds.
+    # Keep all acceptance coverage; cap the expanded cold-build budget at 60m.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         with:
@@ -64,6 +66,11 @@ jobs:
         run: bash Scripts/install-linux-swift.sh
       - name: Verify compiler
         run: bash Scripts/require-toolchain.sh
+      - name: Install failure-stack debugger
+        timeout-minutes: 5
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gdb
       - name: Watchdog regression
         run: python3 -m unittest discover Scripts -p 'test_ci_stage.py'
       - name: Core --target build, tests, external client

@@ -22,6 +22,8 @@ public struct ModelUsage: Hashable, Sendable, Codable {
     public let inputTokens: Int?
     public let outputTokens: Int?
     public let cachedInputTokens: Int?
+    /// Aggregate reported cache writes, already included in inputTokens. This does
+    /// not identify a tariff or TTL; unreported writes remain nil, not zero.
     public let cacheWriteInputTokens: Int?
     public let reasoningTokens: Int?
 

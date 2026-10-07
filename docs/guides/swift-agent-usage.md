@@ -1,6 +1,6 @@
 # Usage accounting
 
-last-verified: 2026-09-20
+last-verified: 2026-10-07
 
 `AgentUsage` is an optional, Linux-portable product for aggregating usage that a
 Host can observe through public events. It depends only on `AgentModels`.
@@ -32,6 +32,31 @@ the ledger adds each response's final known value and preserves per-field
 The convenience fields such as `summary.inputTokens` and `summary.totalTokens`
 refer to `observedUsage`. Check the finalized and provisional views separately
 when a Run failed or was cancelled.
+
+## Provider cache coverage
+
+| Adapter | Cache read | Cache write | Limits |
+| --- | --- | --- | --- |
+| OpenAI Responses | `input_tokens_details.cached_tokens` | `input_tokens_details.cache_write_tokens` | Completed/incomplete responses; missing/null optional fields remain `nil` |
+| Local Responses | Same reported fields | Same reported fields | Preserves server reports; actual caching and write fees require service qualification |
+| Anthropic | Aggregate `cache_read_input_tokens` | Aggregate `cache_creation_input_tokens` | Normalized input includes ordinary + read + write; 5m/1h detail is not retained |
+| DeepSeek | Its adapter's verified native read mapping | No OpenAI write-field mapping | Do not infer writes or fees from cache misses |
+| Apple | SDK 27 `input.cachedTokenCount` | Unreported | Native usage on macOS/iOS 27 with Swift 6.4; older runtimes leave usage unreported; no OpenAI cache-key field |
+
+These are adapter capabilities, not evidence of live cache reuse. Anthropic
+request-side automatic/explicit cache configuration and TTL policy remain
+[#86](https://github.com/OtohaCo/SwiftAgent/issues/86); preservation of write TTL
+categories through accumulation, export and pricing remains
+[#87](https://github.com/OtohaCo/SwiftAgent/issues/87). OpenAI explicit breakpoints
+and qualified controls remain [#88](https://github.com/OtohaCo/SwiftAgent/issues/88).
+OtohaAI endpoint/gateway A/B qualification remains
+[#89](https://github.com/OtohaCo/SwiftAgent/issues/89).
+
+Protocol references verified 2026-10-07:
+[OpenAI caching](https://developers.openai.com/api/docs/guides/prompt-caching),
+[Anthropic caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
+[DeepSeek context caching](https://api-docs.deepseek.com/guides/kv_cache/).
+These protocols and official API prices do not establish a gateway tariff.
 
 ## Identity and recording
 
@@ -134,5 +159,18 @@ must not be presented as HTTP send attempts; ProviderQualification keeps its
 budget ledger separate.
 
 No tokenizer, context-size estimator, price catalog, currency conversion, or
-billing reconciliation is included. Cost remains unknown unless a consuming
-product implements and labels a separate pricing/accounting system.
+billing reconciliation is included. SDK core supplies usage, not a complete
+monetary billing system. Cost remains unknown unless a consuming product
+implements and labels a separate pricing/accounting system.
+
+`reportedSubtotal` is only the sum of reported values. A non-nil subtotal does
+not bypass `complete`/`missingCount` or establish a complete bill. Export records
+and field coverage together; `ReplanningEvalTrial.ResponseUsage` retains both
+cache categories and preserves omitted values instead of writing zero.
+
+The [DynamicModelRouting example](../../Examples/DynamicModelRouting/README.md)
+uses candidate-specific Host forecasts and quotes, not actual billing. It
+supports a single known write category or an explicit verified tariff with no
+separate write charge; aggregate mixed Anthropic TTL writes cannot establish an
+exact fee. Unknown costs and accounting diagnostics never revoke a Receipt,
+downgrade a completed tool, cause a retry, or alter journal settlement.

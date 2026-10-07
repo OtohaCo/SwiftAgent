@@ -870,15 +870,18 @@ struct ResponsesStreamDecoder {
         let input = try ProviderJSON.count(object["input_tokens"])
         let output = try ProviderJSON.count(object["output_tokens"])
         var cached: Int?
+        var written: Int?
         if let details = object["input_tokens_details"], details != .null {
-            cached = try ProviderJSON.count(ProviderJSON.object(details)["cached_tokens"])
+            let inputDetails = try ProviderJSON.object(details)
+            cached = try ProviderJSON.count(inputDetails["cached_tokens"])
+            written = try ProviderJSON.count(inputDetails["cache_write_tokens"])
         }
         var reasoning: Int?
         if let details = object["output_tokens_details"], details != .null {
             reasoning = try ProviderJSON.count(ProviderJSON.object(details)["reasoning_tokens"])
         }
         usage = .init(inputTokens: input, outputTokens: output, cachedInputTokens: cached,
-                      reasoningTokens: reasoning)
+                      cacheWriteInputTokens: written, reasoningTokens: reasoning)
         return [.usage(usage)]
     }
 

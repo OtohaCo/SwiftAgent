@@ -129,6 +129,7 @@ struct AuditExportTests {
 
 func seedExportFacts(_ journal: AgentJournal, count: Int) async throws {
     let identity = try #require(await journal.storeIdentity())
+    var drafts: [JournalAuditDraft] = []
     for _ in 0..<count {
         let links = AuditRecordLinks(storeID: identity.storeID, operationDomain: identity.operationDomain,
             sessionID: UUID(), runID: UUID(), invocationID: UUID(), modelCallID: "call", proposalID: UUID())
@@ -136,8 +137,11 @@ func seedExportFacts(_ journal: AgentJournal, count: Int) async throws {
             normalizedArguments: nil, originalUTF8Bytes: 32, payloadTruncated: false, reconstructable: true,
             definition: nil, policy: nil, binding: nil, resources: nil, receiptExpectation: nil, actionDigest: nil,
             identity: nil, scope: nil)
-        try await journal.appendAudit([.init(links: links, fact: .proposal(proposal))])
+        drafts.append(.init(links: links, fact: .proposal(proposal)))
     }
+    // These fixtures need a populated backlog, not one disk transaction per fact.
+    // Keep every record while avoiding timeout races at a paused application hook.
+    if !drafts.isEmpty { try await journal.appendAudit(drafts) }
 }
 
 actor ExportTestSink: AuditExportSink {

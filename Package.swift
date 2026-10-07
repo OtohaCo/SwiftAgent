@@ -55,7 +55,7 @@ let package = Package(
         .testTarget(name: "AgentCoreTests", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentTools", "AgentModels"]),
         .testTarget(name: "AgentJournalFileStoreTests", dependencies: ["AgentJournalFileStore", "AgentCore", "AgentTools", "AgentModels", "JournalTestProcess"]),
         .testTarget(name: "AgentAppleProviderTests", dependencies: ["AgentAppleProvider", "AgentModels", "AgentTools", "AgentCore"]),
-        .testTarget(name: "AgentProvidersTests", dependencies: ["AgentProviders", "AgentCatalog", "AgentModels", "AgentTools", "AgentCore", "AgentJournalFileStore"]),
+        .testTarget(name: "AgentProvidersTests", dependencies: ["AgentProviders", "AgentCatalog", "AgentModels", "AgentTools", "AgentCore", "AgentJournalFileStore", "AgentUsage"]),
         .testTarget(
             name: "AgentDecisionsTests",
             dependencies: ["AgentDecisions", "AgentModels", "AgentTools", "AgentCore", "AgentJournalFileStore"]

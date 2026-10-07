@@ -6,7 +6,8 @@ enum OpenAIResponsesRequestEncoder {
         _ request: ModelRequest,
         maximumOutputTokens: Int,
         reasoningEffort: OpenAIReasoningEffort?,
-        reasoningSummary: OpenAIReasoningSummary?
+        reasoningSummary: OpenAIReasoningSummary?,
+        promptCacheKey: String? = nil
     ) throws -> JSONValue {
         guard request.model.provider == "openai",
               !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -34,7 +35,14 @@ enum OpenAIResponsesRequestEncoder {
             if let reasoningSummary { reasoning["summary"] = .string(reasoningSummary.rawValue) }
             body["reasoning"] = .object(reasoning)
         }
+        if let promptCacheKey { body["prompt_cache_key"] = .string(promptCacheKey) }
         return .object(body)
     }
 
+    /// A key the service can route by: not empty, no surrounding spaces, no control characters.
+    static func validPromptCacheKey(_ key: String?) -> Bool {
+        guard let key else { return true }
+        return !key.isEmpty && key == key.trimmingCharacters(in: .whitespacesAndNewlines)
+            && !key.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
 }

@@ -356,7 +356,12 @@ struct AuditBoundaryTests {
     func backlogIsRecheckedInTheApplicationTransaction(_ mutation: Bool) async throws {
         let directory = auditTestDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "atomic-backlog", supportsAuthorizationAudit: true)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "atomic-backlog",
+            supportsAuthorizationAudit: true, fault: { stage in
+                // Model a slow durable append so fixture preparation cannot silently
+                // depend on the short arithmetic-tool deadline.
+                if case .beforeAppend = stage { Thread.sleep(forTimeInterval: 0.15) }
+            })
         let entered = AuditGate(), release = AuditGate(), probe = AuditExecutionProbe(), log = EffectLog(), authorizer = AuditTestAuthorizer()
         var authorization = AgentAuthorizationConfiguration(mode: .requiredAudit, authorizer: authorizer,
             identity: auditTestConfiguration().identity, backlog: .init(exportConfigurationID: "offline", maximumUnacknowledgedRecords: 16))
@@ -369,7 +374,9 @@ struct AuditBoundaryTests {
         let run = try await Agent(model: fixtureModel, provider: provider, tools: tools,
             configuration: .init(authorization: authorization)).makeSession(journal: journal).run("execute")
         await entered.wait()
+        let priorCount = try await journal.auditRecords().records.count
         try await seedExportFacts(journal, count: 16)
+        #expect(try await journal.auditRecords().records.count == priorCount + 16)
         await release.open()
         await #expect(throws: AgentAuthorizationError.backlogExceeded) { try await run.wait() }
         try await run.waitForDrain()

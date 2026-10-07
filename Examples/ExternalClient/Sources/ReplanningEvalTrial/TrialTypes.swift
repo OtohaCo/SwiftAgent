@@ -65,12 +65,14 @@ struct ResponseUsage: Codable, Sendable {
     let inputTokens: Int?
     let outputTokens: Int?
     let cachedInputTokens: Int?
+    let cacheWriteInputTokens: Int?
     let reasoningTokens: Int?
 
     init(_ value: ModelUsage) {
         inputTokens = value.inputTokens
         outputTokens = value.outputTokens
         cachedInputTokens = value.cachedInputTokens
+        cacheWriteInputTokens = value.cacheWriteInputTokens
         reasoningTokens = value.reasoningTokens
     }
 }

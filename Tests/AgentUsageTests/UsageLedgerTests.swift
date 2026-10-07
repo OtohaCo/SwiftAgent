@@ -119,6 +119,38 @@ struct UsageLedgerTests {
         #expect(response.totalTokens == 55)
     }
 
+    @Test func growingCacheSnapshotsAndSparseFinalizationKeepOneInvocation() async throws {
+        let identity = makeIdentity(invocationID: "cache-snapshots")
+        let ledger = UsageLedger()
+        _ = await ledger.record(.init(identity: identity,
+            usage: .init(inputTokens: 15_000, outputTokens: 10, cachedInputTokens: 6_000,
+                cacheWriteInputTokens: 1_000, reasoningTokens: 0), status: .provisional))
+        _ = await ledger.record(.init(identity: identity,
+            usage: .init(cachedInputTokens: 12_000, cacheWriteInputTokens: 3_000), status: .provisional))
+        _ = await ledger.record(.init(identity: identity,
+            usage: .init(outputTokens: 100), status: .finalized))
+        let final = UsageObservation(identity: identity,
+            usage: .init(inputTokens: 15_000, outputTokens: 100, cachedInputTokens: 12_000,
+                cacheWriteInputTokens: 3_000, reasoningTokens: 0), status: .finalized)
+        #expect(await ledger.record(final).disposition == .duplicate)
+        let summary = await ledger.summary()
+        #expect(summary.observedResponseCount == 1)
+        #expect(summary.finalizedUsage.totalTokens == 15_100)
+        #expect(summary.cachedInputTokens.reportedSubtotal == 12_000)
+        #expect(summary.cacheWriteInputTokens.reportedSubtotal == 3_000)
+        #expect(summary.cacheWriteInputTokens.complete)
+    }
+
+    @Test func combinedCacheClassificationIsNotANewGlobalUsageFailure() async throws {
+        let ledger = UsageLedger()
+        let usage = ModelUsage(inputTokens: 10, outputTokens: 0,
+            cachedInputTokens: 8, cacheWriteInputTokens: 3)
+        // Each field is an input subset. Disjoint tariff validation belongs in cost calculation.
+        #expect(await ledger.record(.init(identity: makeIdentity(invocationID: "reported"),
+            usage: usage, status: .finalized)).accepted)
+        #expect(await ledger.summary().totalTokens == 10)
+    }
+
     @Test func cacheAndReasoningSubsetsAreNotAddedToTotalTokens() async throws {
         let ledger = UsageLedger()
         _ = await ledger.record(.init(

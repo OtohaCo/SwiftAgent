@@ -122,11 +122,11 @@ struct HostModelRouterTests {
         let decision = DecisionProbe(selected: "uncached-cheap-rate")
         let cached = try candidate(
             "cached-current", remote: true, inputRate: 10, cachedRate: 0.5,
-            forecast: .init(inputTokens: 100_000, cachedInputTokens: 90_000, outputTokens: 1_000)
+            forecast: .init(inputTokens: 100_000, cachedInputTokens: 90_000, cacheWriteInputTokens: 0, outputTokens: 1_000)
         )
         let uncached = try candidate(
             "uncached-cheap-rate", remote: true, inputRate: 3, cachedRate: 3,
-            forecast: .init(inputTokens: 100_000, cachedInputTokens: 0, outputTokens: 1_000)
+            forecast: .init(inputTokens: 100_000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 1_000)
         )
 
         let result = try await HostModelRouter(minimumSwitchSavings: 0.01).select(.init(
@@ -166,6 +166,79 @@ struct HostModelRouterTests {
 
         #expect(result.candidate.id == "current")
         #expect(result.estimatedSelectedCost == nil)
+    }
+
+    // Test-only tariff; these numbers are not a provider price list.
+    @Test func disjointCacheWritePricingAndColdRequests() async throws {
+        for (read, write, expected) in [(12_000, 3_000, "0.00515"), (0, 15_000, "0.01895"),
+                                       (0, 3_000, "0.01595"), (0, 0, "0.0152"), (12_000, 0, "0.0044")] {
+            let value = try candidate("priced", remote: false, inputRate: 1, cachedRate: Decimal(string: "0.1"),
+                writeRate: Decimal(string: "1.25"), outputRate: 2,
+                forecast: .init(inputTokens: 15_000, cachedInputTokens: read,
+                    cacheWriteInputTokens: write, outputTokens: 100))
+            #expect(try await cost(value) == Decimal(string: expected))
+        }
+    }
+
+    @Test func explicitZeroNeedsNoWriteQuoteButUnknownDoes() async throws {
+        let zero = try candidate("zero", remote: false, inputRate: 1, cachedRate: nil, outputRate: 2,
+            forecast: .init(inputTokens: 15_000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 100))
+        #expect(try await cost(zero) == Decimal(string: "0.0152"))
+        for (read, write) in [(Optional(0), Optional<Int>.none), (0, 3_000), (nil, 0)] {
+            let unknown = try candidate("unknown", remote: false, inputRate: 1, outputRate: 2,
+                forecast: .init(inputTokens: 15_000, cachedInputTokens: read,
+                    cacheWriteInputTokens: write, outputTokens: 100))
+            #expect(try await cost(unknown) == nil)
+        }
+        let notApplicable = try candidate("verified-tariff", remote: false, inputRate: 1, outputRate: 2,
+            writeScope: .noSeparateCharge,
+            forecast: .init(inputTokens: 15_000, cachedInputTokens: 0, outputTokens: 100))
+        #expect(try await cost(notApplicable) == Decimal(string: "0.0152"))
+    }
+
+    @Test func invalidCountsClassificationAndDecimalOverflowRemainUnknown() async throws {
+        for forecast in [
+            RoutingUsageForecast(inputTokens: -1, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0),
+            .init(inputTokens: 10, cachedInputTokens: -1, cacheWriteInputTokens: 0, outputTokens: 0),
+            .init(inputTokens: 10, cachedInputTokens: 0, cacheWriteInputTokens: -1, outputTokens: 0),
+            .init(inputTokens: 10, cachedInputTokens: 8, cacheWriteInputTokens: 3, outputTokens: 0),
+            .init(inputTokens: Int.max, cachedInputTokens: Int.max, cacheWriteInputTokens: Int.max, outputTokens: 0),
+            .init(inputTokens: 10, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: -1),
+        ] {
+            #expect(try await cost(candidate("invalid", remote: false, writeRate: 1, forecast: forecast)) == nil)
+        }
+        for rate in [Decimal(-1), Decimal.nan, Decimal.greatestFiniteMagnitude] {
+            let value = try candidate("invalid-rate", remote: false, inputRate: rate,
+                forecast: .init(inputTokens: Int.max, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0))
+            #expect(try await cost(value) == nil)
+        }
+    }
+
+    @Test func candidateWriteForecastsStayIndependentAndUnknownCannotJustifyASwitch() async throws {
+        let current = try candidate("current", remote: false, inputRate: 1, cachedRate: Decimal(string: "0.1"),
+            writeRate: Decimal(string: "1.25"), outputRate: 2,
+            forecast: .init(inputTokens: 15_000, cachedInputTokens: 12_000, cacheWriteInputTokens: 3_000, outputTokens: 100))
+        for (write, rate) in [(Optional(15_000), Decimal(string: "1.25")), (nil, Decimal(string: "1.25")), (15_000, nil)] {
+            let other = try candidate("other", remote: false, inputRate: 1, cachedRate: Decimal(string: "0.1"),
+                writeRate: rate, outputRate: 2,
+                forecast: .init(inputTokens: 15_000, cachedInputTokens: 0, cacheWriteInputTokens: write, outputTokens: 100))
+            let result = try await HostModelRouter().select(.init(
+                conversation: .init(revision: 1, messages: []), catalogRevision: "1", taskSummary: "Route",
+                latestInput: "Continue", candidates: [current, other], currentCandidateID: "current",
+                requirements: .init(), decisionProvider: DecisionProbe(selected: "other"),
+                revisionReader: { .init(conversation: 1, catalog: "1") }))
+            #expect(result.candidate.id == "current")
+            #expect(result.estimatedCurrentCost == Decimal(string: "0.00515"))
+            #expect(result.estimatedSelectedCost == (write == nil || rate == nil ? nil : Decimal(string: "0.01895")))
+        }
+    }
+
+    private func cost(_ candidate: HostModelCandidate) async throws -> Decimal? {
+        try await HostModelRouter().select(.init(
+            conversation: .init(revision: 1, messages: []), catalogRevision: "1", taskSummary: "Price",
+            latestInput: "Continue", candidates: [candidate], manualCandidateID: candidate.id,
+            requirements: .init(), revisionReader: { .init(conversation: 1, catalog: "1") }
+        )).estimatedSelectedCost
     }
 
     @Test func cooldownKeepsTheCurrentLegalCandidate() async throws {
@@ -281,7 +354,10 @@ private func candidate(
     tools: Bool = true,
     inputRate: Decimal? = 4,
     cachedRate: Decimal? = 1,
-    forecast: RoutingUsageForecast = .init(inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 100)
+    writeRate: Decimal? = nil,
+    outputRate: Decimal = 12,
+    writeScope: CacheWritePricingScope = .singleCategory,
+    forecast: RoutingUsageForecast = .init(inputTokens: 1_000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 100)
 ) throws -> HostModelCandidate {
     let scope = try ModelServiceScope(
         provider: "fixture",
@@ -323,7 +399,9 @@ private func candidate(
             .init(
                 inputPerMillion: input,
                 cachedInputPerMillion: cachedRate,
-                outputPerMillion: 12,
+                cacheWriteInputPerMillion: writeRate,
+                cacheWriteScope: writeScope,
+                outputPerMillion: outputRate,
                 currency: "USD",
                 source: "fixture",
                 asOf: Date(timeIntervalSince1970: 0)

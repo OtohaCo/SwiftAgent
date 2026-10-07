@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased: prompt cache key and cache usage
+
+- OpenAI and Local Responses accept an optional Host-configured `promptCacheKey`
+  on every request. It is provider-wide, including shared Sessions; the Host
+  resupplies it on reconstruction. Model/gateway grouping and routing semantics
+  vary, and a key does not guarantee a hit. No key preserves request bytes;
+  empty, padded and control-character keys remain invalid. Other adapters do
+  not send this OpenAI field. Defaulted initializer parameters preserve ordinary
+  calls but change stored initializer function signatures; see the
+  [versioning guide](docs/guides/swift-agent-versioning.md) and release checklist.
+- The shared Responses decoder preserves optional `cache_write_tokens` in
+  completed/incomplete responses, including explicit zero. Cache reads/writes
+  remain input subsets through events, ledger summaries and exports;
+  `ReplanningEvalTrial` now exports writes. No Journal schema change.
+- DynamicModelRouting forecasts support a single explicit write tariff and
+  disjoint input/read/write pricing, or a Host-verified no-separate-charge scope.
+  Unknown counts/quotes remain unknown; predictions are not bills. Rates remain
+  Host-owned and mixed Anthropic TTL pricing is not supported.
+- Cache-key lifecycle, sparse snapshots, idempotent final accounting and export
+  regressions are covered. Linux CI's cold-build budget increases from 30 to
+  60 minutes after GitHub confirmed the prior timeout during reader builds;
+  acceptance coverage is retained. After a SwiftPM planning SIGSEGV, the already-built
+  Linux Context fixture uses `--skip-build` to remove redundant planning;
+  its assertions and failing exit status remain required.
+- Audit test backlog seeding retains every fact in one transaction, avoiding
+  the reproduced arithmetic-fixture deadline race without changing authorization
+  rules or assertions. Linux installs a bounded failure-stack debugger; the
+  independently observed core-stage hang remains unattributed.
+- Still open: [Anthropic cache policy #86](https://github.com/OtohaCo/SwiftAgent/issues/86),
+  [Anthropic TTL detail #87](https://github.com/OtohaCo/SwiftAgent/issues/87),
+  [OpenAI cache controls #88](https://github.com/OtohaCo/SwiftAgent/issues/88),
+  [OtohaAI live A/B #89](https://github.com/OtohaCo/SwiftAgent/issues/89).
+  Protocol references were verified 2026-10-07; fixtures do not establish a
+  real cache-hit improvement or a 97–99% hit rate.
+
 ## Unreleased: tool authorization before the resource lease
 
 A tool's own required `authorize` (without audited authorization) now runs

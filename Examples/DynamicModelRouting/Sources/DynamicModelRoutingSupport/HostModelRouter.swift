@@ -29,18 +29,31 @@ public struct HostRoutingRequirements: Hashable, Sendable {
 public struct RoutingUsageForecast: Hashable, Sendable {
     public let inputTokens: Int
     public let cachedInputTokens: Int?
+    /// Host prediction, not a measured response. Nil means unknown.
+    public let cacheWriteInputTokens: Int?
     public let outputTokens: Int
 
-    public init(inputTokens: Int, cachedInputTokens: Int?, outputTokens: Int) {
+    public init(inputTokens: Int, cachedInputTokens: Int?, cacheWriteInputTokens: Int? = nil, outputTokens: Int) {
         self.inputTokens = inputTokens
         self.cachedInputTokens = cachedInputTokens
+        self.cacheWriteInputTokens = cacheWriteInputTokens
         self.outputTokens = outputTokens
     }
+}
+
+/// The Host must verify this scope for the candidate's model, endpoint and tariff.
+public enum CacheWritePricingScope: Hashable, Sendable {
+    /// One disjoint write category with one rate; mixed TTL tariffs are not covered.
+    case singleCategory
+    /// Verified protocol/tariff bills writes as ordinary input, without a separate category.
+    case noSeparateCharge
 }
 
 public struct HostPricingQuote: Hashable, Sendable {
     public let inputPerMillion: Decimal
     public let cachedInputPerMillion: Decimal?
+    public let cacheWriteInputPerMillion: Decimal?
+    public let cacheWriteScope: CacheWritePricingScope
     public let outputPerMillion: Decimal
     public let currency: String
     public let source: String
@@ -49,6 +62,8 @@ public struct HostPricingQuote: Hashable, Sendable {
     public init(
         inputPerMillion: Decimal,
         cachedInputPerMillion: Decimal?,
+        cacheWriteInputPerMillion: Decimal? = nil,
+        cacheWriteScope: CacheWritePricingScope = .singleCategory,
         outputPerMillion: Decimal,
         currency: String,
         source: String,
@@ -56,6 +71,8 @@ public struct HostPricingQuote: Hashable, Sendable {
     ) {
         self.inputPerMillion = inputPerMillion
         self.cachedInputPerMillion = cachedInputPerMillion
+        self.cacheWriteInputPerMillion = cacheWriteInputPerMillion
+        self.cacheWriteScope = cacheWriteScope
         self.outputPerMillion = outputPerMillion
         self.currency = currency
         self.source = source
@@ -246,7 +263,9 @@ public struct HostModelRouter: Sendable {
         let currentCost = estimatedCost(legalCurrent)
         let selectedCost = estimatedCost(selected)
         guard let currentCost, let selectedCost,
-              selectedCost + minimumSwitchSavings < currentCost else {
+              legalCurrent.pricing?.currency == selected.pricing?.currency,
+              let switchCost = add(selectedCost, minimumSwitchSavings),
+              switchCost < currentCost else {
             return .init(
                 candidate: legalCurrent,
                 source: .current,
@@ -364,29 +383,41 @@ public struct HostModelRouter: Sendable {
     }
 
     private func estimatedCost(_ candidate: HostModelCandidate) -> Decimal? {
-        guard let usage = candidate.forecast,
-              let pricing = candidate.pricing,
-              usage.inputTokens >= 0,
-              usage.outputTokens >= 0,
-              usage.cachedInputTokens.map({ $0 >= 0 && $0 <= usage.inputTokens }) ?? true,
-              pricing.inputPerMillion >= 0,
-              pricing.outputPerMillion >= 0 else { return nil }
-        let cached = usage.cachedInputTokens ?? 0
-        let uncached = usage.inputTokens - cached
-        let cachedRate: Decimal
-        if cached == 0 {
-            cachedRate = 0
-        } else if let value = pricing.cachedInputPerMillion, value >= 0 {
-            cachedRate = value
-        } else {
-            return nil
+        guard let usage = candidate.forecast, let pricing = candidate.pricing,
+              usage.inputTokens >= 0, usage.outputTokens >= 0,
+              let cached = usage.cachedInputTokens, cached >= 0, cached <= usage.inputTokens,
+              pricing.inputPerMillion >= 0, pricing.outputPerMillion >= 0 else { return nil }
+        let remaining = usage.inputTokens - cached
+        if let written = usage.cacheWriteInputTokens, written < 0 || written > remaining { return nil }
+        let written: Int
+        let writeRate: Decimal
+        switch pricing.cacheWriteScope {
+        case .noSeparateCharge:
+            // This explicit Host assertion permits unknown write counts because all
+            // non-read input uses the ordinary rate under this verified tariff.
+            written = 0
+            writeRate = 0
+        case .singleCategory:
+            guard let count = usage.cacheWriteInputTokens else { return nil }
+            written = count
+            if count == 0 { writeRate = 0 }
+            else if let rate = pricing.cacheWriteInputPerMillion, rate >= 0 { writeRate = rate }
+            else { return nil }
         }
-        guard let uncachedCost = multiply(Decimal(uncached), pricing.inputPerMillion),
+        let cachedRate: Decimal
+        if cached == 0 { cachedRate = 0 }
+        else if let rate = pricing.cachedInputPerMillion, rate >= 0 { cachedRate = rate }
+        else { return nil }
+        guard let ordinaryCost = multiply(Decimal(remaining - written), pricing.inputPerMillion),
               let cachedCost = multiply(Decimal(cached), cachedRate),
+              let writeCost = multiply(Decimal(written), writeRate),
               let outputCost = multiply(Decimal(usage.outputTokens), pricing.outputPerMillion),
-              let inputCost = add(uncachedCost, cachedCost),
-              let tokenCost = add(inputCost, outputCost) else { return nil }
-        return tokenCost / 1_000_000
+              let readAndOrdinaryCost = add(ordinaryCost, cachedCost),
+              let inputCost = add(readAndOrdinaryCost, writeCost),
+              var tokenCost = add(inputCost, outputCost) else { return nil }
+        var million = Decimal(1_000_000)
+        var result = Decimal()
+        return NSDecimalDivide(&result, &tokenCost, &million, .plain) == .noError ? result : nil
     }
 
     private func multiply(_ lhs: Decimal, _ rhs: Decimal) -> Decimal? {

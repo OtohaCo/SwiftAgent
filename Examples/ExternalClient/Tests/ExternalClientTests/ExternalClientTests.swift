@@ -355,6 +355,19 @@ struct ExternalClientTests {
         #expect(!String(reflecting: authentication).contains("fixture-only"))
     }
 
+    @Test func promptCacheKeyIsSettableThroughPublicAPI() throws {
+        let conversation = "conversation-fixture"
+        let openAI: any ModelProvider = try OpenAIResponsesProvider(apiKey: "fixture-only", promptCacheKey: conversation)
+        let local: any ModelProvider = try LocalResponsesProvider(configuration: .init(
+            baseURL: URL(string: "http://localhost:1234/v1")!, model: "local-fixture", promptCacheKey: conversation
+        ))
+        #expect(openAI.descriptor.id == "openai")
+        #expect(local.descriptor.id == "local-responses")
+        #expect(throws: ModelProviderError.self) {
+            _ = try OpenAIResponsesProvider(apiKey: "fixture-only", promptCacheKey: "")
+        }
+    }
+
     @Test func catalogAndDynamicRunBindingAreConsumableThroughPublicAPI() async throws {
         let scope = try ModelServiceScope(
             provider: "external-client",
