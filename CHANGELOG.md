@@ -22,6 +22,10 @@
   acceptance coverage is retained. After a SwiftPM planning SIGSEGV, the already-built
   Linux Context fixture uses `--skip-build` to remove redundant planning;
   its assertions and failing exit status remain required.
+- Audit test backlog seeding retains every fact in one transaction, avoiding
+  the reproduced arithmetic-fixture deadline race without changing authorization
+  rules or assertions. Linux installs a bounded failure-stack debugger; the
+  independently observed core-stage hang remains unattributed.
 - Still open: [Anthropic cache policy #86](https://github.com/OtohaCo/SwiftAgent/issues/86),
   [Anthropic TTL detail #87](https://github.com/OtohaCo/SwiftAgent/issues/87),
   [OpenAI cache controls #88](https://github.com/OtohaCo/SwiftAgent/issues/88),

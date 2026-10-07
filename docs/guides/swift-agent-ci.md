@@ -61,3 +61,20 @@ the built fixture with all assertions and exit-status checks. A missing product
 or failed fixture still fails acceptance; there is no fallback or retry.
 This avoids redundant planning, not a proven fix for the underlying toolchain
 crash. It must not be conflated with the older, differently located #46 crash.
+
+A parallel [push run](https://github.com/OtohaCo/SwiftAgent/actions/runs/37594531153/job/112703815497)
+on `872273e` failed the backlog application-boundary assertion: the arithmetic
+tool fixture's two-second deadline expired while 16 audit facts were individually
+persisted behind a test barrier. A controlled 150 ms delay per append reproduces
+the exact `backlogExceeded` versus `toolTimedOut` failure. Fixture seeding now
+appends the same facts in one transaction; deadlines, backlog assertions and
+production authorization remain unchanged.
+
+That attempt also hit the separate 1200-second core-stage watchdog. Its last
+test output was buffered, and no debugger was installed, so the hanging test and
+stack are unknown. The passing parallel PR run does not erase this failure or
+identify its cause. Linux installs `gdb` within a five-minute setup bound so the
+existing ten-second, owned-process collector can attempt a stack if it recurs;
+permission or sampling failures remain explicit diagnostics. No failing test or
+exit code is ignored, and a later pass is not a claimed fix for this unattributed
+hang.
