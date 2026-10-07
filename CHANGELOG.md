@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased: retry budgets and compiler diagnostics
+
+- Provider routes honor `Retry-After` only when another same-provider attempt
+  is allowed by both the per-provider retry limit and the route-wide attempt
+  budget. An exhausted budget returns the last provider failure immediately;
+  eligible backoff and cancellation behavior remain covered.
+- Test assertions remove redundant synchronous `await` and nonthrowing `try`.
+  Process fixtures explicitly unwrap executable URLs before assigning the
+  optional `Process.executableURL`, preserving failure when a binary is absent.
+  ExternalClient explicitly excludes its fixture README from the Swift target.
+- The unpublished-maintenance regression explicitly closes its journal before
+  reopening it and verifies that a continuously rejected candidate cannot
+  change `CURRENT`. It does not assume dropping a reference drains background
+  ownership or replace the ownership barrier with a readiness delay.
+
 ## Unreleased: qualified cache controls and TTL accounting
 
 - Anthropic Messages supports opt-in automatic caching and explicit tool,

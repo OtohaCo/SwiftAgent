@@ -190,7 +190,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
                         }
                         throw error
                     }
-                    if retries < policy.maxRetriesPerProvider {
+                    if retries < policy.maxRetriesPerProvider, attempts < policy.maxAttempts {
                         retries += 1
                         if let retryAfter = error.retryAfter {
                             try await Task.sleep(for: retryAfter)

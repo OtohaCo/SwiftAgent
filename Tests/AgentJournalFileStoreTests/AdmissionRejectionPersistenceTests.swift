@@ -21,8 +21,8 @@ struct AdmissionRejectionPersistenceTests {
         let sessionID = UUID()
         let provider = RejectionProcessProvider()
         let agent = try Agent(model: .init(provider: "rejection-process", name: "script"),
-            provider: provider, tools: [try RejectionReadTool(), try RejectionMutationTool(),
-                                       try OrdinaryReadFailureTool()],
+            provider: provider, tools: [RejectionReadTool(), RejectionMutationTool(),
+                                       OrdinaryReadFailureTool()],
             configuration: .init(preAdmissionReplanning: .evidenceRejection(toolNames: [RejectionMutationTool.name])))
         let session = try agent.makeSession(id: sessionID, journal: journal)
         let run = try await session.run("Choose a discovered resource", operationID: "operation")
@@ -68,7 +68,7 @@ struct AdmissionRejectionPersistenceTests {
             let sessionID = UUID()
             let provider = RejectionProcessProvider(armRejection: { fault.arm() })
             let agent = try Agent(model: .init(provider: "rejection-process", name: "script"),
-                provider: provider, tools: [try RejectionReadTool(), try RejectionMutationTool()],
+                provider: provider, tools: [RejectionReadTool(), RejectionMutationTool()],
                 configuration: .init(preAdmissionReplanning: .evidenceRejection(toolNames: [RejectionMutationTool.name])))
             let run = try await agent.makeSession(id: sessionID, journal: journal)
                 .run("Choose a discovered resource", operationID: "operation")
