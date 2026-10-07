@@ -99,26 +99,39 @@ package struct ToolRegistry: Sendable {
                 expectation: invocation.receiptExpectation)
         }
         try context.checkActive()
+        let tools = tools
+        let output = registration.output
+        @Sendable func checked(_ invoke: @escaping AnyAgentTool.Invocation) -> AnyAgentTool.Invocation {
+            { executionContext in try await Self.checkedResult(of: invoke, context: executionContext, output: output, tools: tools) }
+        }
         return PreparedToolCall(call: call, policy: registration.tool.policy, resources: invocation.resources,
                                 evidenceRequirements: invocation.evidenceRequirements,
                                 receiptExpectation: invocation.receiptExpectation, definition: registration.tool.definition,
-                                binding: invocation.binding, context: context, preauthorize: invocation.preauthorize) { executionContext in
-            let result = try await invocation.invoke(executionContext)
-            if !result.isModelVisibleError {
-                do { try registration.output.validate(result.output) }
-                catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidOutput(error) }
-            }
-            // A result can only declare tools this Run already has; it never adds one.
-            try Self.checkRegistered(result.declaredTools, in: tools)
-            try executionContext.checkActive()
-            if !result.evidence.isEmpty {
-                guard let ledger = executionContext.evidenceLedger else { throw ToolInvocationError.evidenceUnavailable }
-                try await ledger.record(result.evidence, sessionID: executionContext.sessionID, runID: executionContext.runID,
-                                        deadline: executionContext.deadline)
-                try executionContext.checkActive()
-            }
-            return result
+                                binding: invocation.binding, context: context, preauthorize: invocation.preauthorize,
+                                authorizeBeforeLease: invocation.authorizeBeforeLease,
+                                authorizedOperation: checked(invocation.invokeAuthorized),
+                                operation: checked(invocation.invoke))
+    }
+
+    /// What every invocation returns only after: output schema, declared tools and Evidence recorded.
+    private static func checkedResult(of invoke: AnyAgentTool.Invocation, context executionContext: ToolContext,
+                                      output: ToolSchemaValidator,
+                                      tools: [String: Registration]) async throws -> ToolResult<JSONValue> {
+        let result = try await invoke(executionContext)
+        if !result.isModelVisibleError {
+            do { try output.validate(result.output) }
+            catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidOutput(error) }
         }
+        // A result can only declare tools this Run already has; it never adds one.
+        try checkRegistered(result.declaredTools, in: tools)
+        try executionContext.checkActive()
+        if !result.evidence.isEmpty {
+            guard let ledger = executionContext.evidenceLedger else { throw ToolInvocationError.evidenceUnavailable }
+            try await ledger.record(result.evidence, sessionID: executionContext.sessionID, runID: executionContext.runID,
+                                    deadline: executionContext.deadline)
+            try executionContext.checkActive()
+        }
+        return result
     }
 }
 
@@ -135,12 +148,16 @@ package struct PreparedToolCall: Sendable {
     package var auditAuthorization: (any ToolAuditAuthorization)? { context.auditAuthorization }
     private let context: ToolContext
     private let operation: AnyAgentTool.Invocation
+    private let authorizedOperation: AnyAgentTool.Invocation
     private let preauthorize: @Sendable (ToolContext) async throws -> Void
+    private let authorizeBeforeLease: @Sendable (ToolContext) async throws -> Void
 
     fileprivate init(call: ToolCall, policy: ToolPolicy, resources: [ToolResource],
                      evidenceRequirements: [EvidenceRequirement], receiptExpectation: ToolReceiptExpectation?,
                      definition: ModelToolDefinition, binding: ToolAuthorizationBinding,
                      context: ToolContext, preauthorize: @escaping @Sendable (ToolContext) async throws -> Void,
+                     authorizeBeforeLease: @escaping @Sendable (ToolContext) async throws -> Void,
+                     authorizedOperation: @escaping AnyAgentTool.Invocation,
                      operation: @escaping AnyAgentTool.Invocation) {
         self.call = call
         self.policy = policy
@@ -149,11 +166,25 @@ package struct PreparedToolCall: Sendable {
         self.receiptExpectation = receiptExpectation
         self.context = context
         self.operation = operation
+        self.authorizedOperation = authorizedOperation
         self.definition = definition; self.binding = binding; self.preauthorize = preauthorize
+        self.authorizeBeforeLease = authorizeBeforeLease
     }
 
     package func preauthorizeAudit(deadline: ContinuousClock.Instant) async throws {
         try await preauthorize(executionContext(deadline: deadline))
+    }
+
+    /// Runs the tool's own required authorization (no audit) before the scheduler lease and returns
+    /// the call to invoke under the lease: it rechecks Evidence and scope there but does not ask again.
+    /// A call without required authorization, or under audit, is returned unchanged.
+    package func authorizedBeforeLease(deadline: ContinuousClock.Instant) async throws -> Self {
+        guard policy.authorization == .required, auditAuthorization == nil else { return self }
+        try await authorizeBeforeLease(executionContext(deadline: deadline))
+        return Self(call: call, policy: policy, resources: resources, evidenceRequirements: evidenceRequirements,
+            receiptExpectation: receiptExpectation, definition: definition, binding: binding, context: context,
+            preauthorize: preauthorize, authorizeBeforeLease: authorizeBeforeLease,
+            authorizedOperation: authorizedOperation, operation: authorizedOperation)
     }
 
     package func boundToAudit(_ audit: any ToolAuditAuthorization) -> Self {
@@ -163,7 +194,8 @@ package struct PreparedToolCall: Sendable {
             executionAdmission: context.executionAdmission, auditAuthorization: audit)
         return Self(call: call, policy: policy, resources: resources, evidenceRequirements: evidenceRequirements,
             receiptExpectation: receiptExpectation, definition: definition, binding: binding,
-            context: updated, preauthorize: preauthorize, operation: operation)
+            context: updated, preauthorize: preauthorize, authorizeBeforeLease: authorizeBeforeLease,
+            authorizedOperation: authorizedOperation, operation: operation)
     }
 
     /// Only this runtime-owned ledger resolution can return a trusted, pre-admission rejection.

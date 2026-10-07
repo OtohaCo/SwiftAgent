@@ -9,15 +9,19 @@ public struct ToolScheduler: Sendable {
     private let coordinator = ToolResourceCoordinator()
     private let drain = ToolExecutionDrain()
     private let operationCancellationDidResolve: (@Sendable (UUID, UUID, ToolCallID) async -> Void)?
+    private let authorization: ToolAuthorizationTiming
 
-    public init() {
+    public init(authorization: ToolAuthorizationTiming = .beforeResourceLease) {
         operationCancellationDidResolve = nil
+        self.authorization = authorization
     }
 
     package init(
+        authorization: ToolAuthorizationTiming = .beforeResourceLease,
         operationCancellationDidResolve: @escaping @Sendable (UUID, UUID, ToolCallID) async -> Void
     ) {
         self.operationCancellationDidResolve = operationCancellationDidResolve
+        self.authorization = authorization
     }
 
     /// Wait until all work belonging to one run has returned from its host
@@ -119,12 +123,17 @@ public struct ToolScheduler: Sendable {
                         let timeoutError: ToolSchedulerError = toolDeadline == deadline ? .deadlineExceeded : .toolTimedOut(call.call.id)
                         let result = try await withOperationDeadline(toolDeadline, timeoutError: timeoutError) {
                             // Human/network authorization holds no scheduler resource lease.
+                            var admitted = call
                             if call.auditAuthorization != nil { try await call.preauthorizeAudit(deadline: toolDeadline) }
+                            else if authorization == .beforeResourceLease {
+                                admitted = try await call.authorizedBeforeLease(deadline: toolDeadline)
+                            }
+                            try Task.checkCancellation()
                             let lease = try await coordinator.acquire(resources: call.resources, effect: call.policy.effect,
                                                                       execution: call.policy.execution)
                             do {
                                 try Task.checkCancellation()
-                                let result = try await call.invoke(deadline: toolDeadline)
+                                let result = try await admitted.invoke(deadline: toolDeadline)
                                 await coordinator.release(lease)
                                 return result
                             } catch {
@@ -214,6 +223,19 @@ private actor ToolExecutionDrain {
             }
         }
     }
+}
+
+/// When a tool's own `authorize` runs relative to the scheduler's resource lease. Audited
+/// authorization (`AgentConfiguration.authorization`) always runs before the lease.
+public enum ToolAuthorizationTiming: Sendable, Equatable {
+    /// `authorize`, which may wait for a person, runs before the call waits for its lease, so an
+    /// unanswered call holds nothing another call needs. The executor runs later under the lease,
+    /// after Evidence and scope are checked again; it must recheck any state the decision relied on
+    /// (versioned reads or conditional writes), because other calls may have changed it meanwhile.
+    case beforeResourceLease
+    /// `authorize` runs after the lease is acquired, immediately before the executor: decision and
+    /// effect see the same state, but every conflicting call waits for the answer.
+    case whileHoldingResourceLease
 }
 
 public enum ToolSchedulerError: Error, Equatable, Sendable {
