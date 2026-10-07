@@ -29,6 +29,25 @@ struct ToolEvidenceTests {
         }
     }
 
+    /// A read-only tool with model-visible errors hands the model an error instead, and still publishes nothing.
+    @Test func invalidOutputToldToTheModelDoesNotPublishItsEvidence() async throws {
+        let ledger = EvidenceLedger()
+        let context = ToolContext(sessionID: UUID(), runID: UUID(), callID: .init(rawValue: "c"), evidenceLedger: ledger)
+        let tool = try EvidenceSourceTool(output: .object(["id": .number(1)]), recoverableErrors: .modelVisible)
+        let registry = try ToolRegistry(tools: [AnyAgentTool(tool)])
+        let call = ToolCall(id: context.callID, name: "discover", argumentsJSON: #"{"id":"d1"}"#, completeness: .complete)
+        let result = try await registry.prepare(call, context: context).invoke()
+        #expect(result.isModelVisibleError)
+        guard case .object(let payload) = result.output, case .string(let message)? = payload["message"] else {
+            Issue.record("No error payload"); return
+        }
+        #expect(payload["code"] == .string("invalid_output"))
+        #expect(message.contains("/id") && message.contains(#""type""#))
+        await #expect(throws: EvidenceError.self) {
+            try await ledger.validate([.init(reference: .init(namespace: "cad.document", id: "d1"))], sessionID: context.sessionID, runID: context.runID)
+        }
+    }
+
     @Test func evidenceIsRevalidatedAfterAuthorizationWait() async throws {
         let clock = EvidenceTestClock(Date(timeIntervalSince1970: 100))
         let ledger = EvidenceLedger(now: { clock.now() })
@@ -70,9 +89,10 @@ struct EvidenceSourceTool: AgentTool {
     static let outputSchema = inputSchema
     let policy: ToolPolicy
     let output: JSONValue?
-    init(output: JSONValue? = nil) throws {
+    init(output: JSONValue? = nil, recoverableErrors: ToolPolicy.RecoverableErrors = .failClosed) throws {
         self.output = output
-        policy = try ToolPolicy(effect: .readOnly, execution: .parallel, idempotency: .safe, timeout: .seconds(1), authorization: .notRequired)
+        policy = try ToolPolicy(effect: .readOnly, execution: .parallel, idempotency: .safe, timeout: .seconds(1),
+                                authorization: .notRequired, recoverableErrors: recoverableErrors)
     }
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
         ToolResult(output: output ?? .object(["id": .string(input.id)]), evidence: [
