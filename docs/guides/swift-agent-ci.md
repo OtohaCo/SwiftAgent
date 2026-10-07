@@ -45,3 +45,19 @@ normal acceptance. A pass means that attempt did not reproduce the old crash.
 These changes improve evidence for #45/#46. They do not establish or fix the
 historical macOS hang or Linux segfault root cause; the issues remain open. No
 paid live Provider requests or user-store operations are part of these scripts.
+
+## PR #85 Linux acceptance adjustments (2026-10-07)
+
+GitHub's prior job annotations explicitly reported the 30-minute total job cap
+expiring during reader compatibility builds. Linux now has a bounded 60-minute
+job budget; every stage and its existing 1200-second bound remains intact.
+
+A subsequent [Linux attempt](https://github.com/OtohaCo/SwiftAgent/actions/runs/37591989184/job/112695430919)
+passed core and ExternalClient tests, then exited 139 inside `swift-run` during
+build pre-planning (`SWBTaskConstruction`/`libdispatch`), before the Context
+fixture started. The earlier ExternalClient test log shows the Context product
+was compiled already. That stage now uses `swift run --skip-build` to execute
+the built fixture with all assertions and exit-status checks. A missing product
+or failed fixture still fails acceptance; there is no fallback or retry.
+This avoids redundant planning, not a proven fix for the underlying toolchain
+crash. It must not be conflated with the older, differently located #46 crash.

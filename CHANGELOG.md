@@ -19,7 +19,9 @@
 - Cache-key lifecycle, sparse snapshots, idempotent final accounting and export
   regressions are covered. Linux CI's cold-build budget increases from 30 to
   60 minutes after GitHub confirmed the prior timeout during reader builds;
-  acceptance coverage is retained.
+  acceptance coverage is retained. After a SwiftPM planning SIGSEGV, the already-built
+  Linux Context fixture uses `--skip-build` to remove redundant planning;
+  its assertions and failing exit status remain required.
 - Still open: [Anthropic cache policy #86](https://github.com/OtohaCo/SwiftAgent/issues/86),
   [Anthropic TTL detail #87](https://github.com/OtohaCo/SwiftAgent/issues/87),
   [OpenAI cache controls #88](https://github.com/OtohaCo/SwiftAgent/issues/88),
