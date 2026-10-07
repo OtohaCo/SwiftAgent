@@ -33,6 +33,7 @@ switch on them rather than wrapping arbitrary errors themselves.
 | Stream protocol error | `ModelStreamError` | Accumulator / incomplete stream |
 | Tool schema or unknown tool | `ToolRegistryError` | Preparation. Model arguments that are not one JSON object or do not match the input schema (`invalidJSON`, `invalidArguments`) do not end the Run: the call is not run and the model gets an `invalid_arguments` tool error |
 | Tool invocation / authorization | `ToolInvocationError` | `authorizationDenied`. `invalidArguments` during preparation goes back to the model as above |
+| Invalid tool output / JSON encoding | `ToolRegistryError.invalidOutput`, `ToolInvocationError.invalidOutput` | Only opted-in `.readOnly` + `.modelVisible` tools return an `invalid_output` error result and continue; other policies retain terminal failure |
 | Stale or missing Evidence | `EvidenceError` | `unavailable`, `staleEvidence` |
 | Receipt rejected | `ToolReceiptError` | Binding against the expectation |
 | Mutation blocked / needs host action | `AgentJournalError` | `mutationRequiresReconciliation`, `storeInUse`, `sessionLeaseUnavailable` |
@@ -59,6 +60,24 @@ stream. It does not carry the original payload.
 
 Journal `errorDescription` exists for logs. Recovery and UI branches must switch
 on the enum.
+
+## Model-facing validation errors (unreleased output behavior)
+
+Verified 2026-10-08. Preparation-time invalid input is the existing
+`invalid_arguments` channel: no executor is called. Output schema or
+JSON-encoding failure is handled separately after executor return. For a
+read-only tool using `.modelVisible`, it now emits `toolCompleted` with an
+`isError` result (`invalid_output`) and may continue the Run. Previously that
+output failure emitted `toolFailed` and terminated the Run. Default
+`.failClosed` and mutation policies retain that terminal behavior.
+
+The output error contains fixed wording and sanitized schema paths, never
+rejected output values or dynamic property names. The invalid result publishes
+no images, Evidence, receipt or tool declarations. This channel does not catch
+arbitrary executor errors, unknown tools, authorization, persistence,
+cancellation or deadlines, and cannot change a confirmed mutation settlement.
+See the [tools guide](swift-agent-tools.md#recovering-from-invalid-read-only-output-unreleased)
+and [versioning guide](swift-agent-versioning.md).
 
 Hosts reconcile quarantined mutations with `recoverPendingMutations`, then
 `reconcileMutation` or `abortMutation(_:confirmedNoEffect:)` with trusted
