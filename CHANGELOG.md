@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased: safety refusals classified as refused requests
+
+- OpenAI Responses stream failures with code `cyber_policy` (a safety refusal,
+  which can arrive in the middle of a tool call) are now classified as
+  `.invalidRequest`, like `bio_policy` and `misalignment_policy_violation`,
+  instead of `.invalidResponse`. Hosts that retry unreadable answers no longer
+  resend a request the service will refuse again. The partial tool call never runs.
+
 ## Unreleased: read-only invalid-output recovery
 
 - A read-only tool already configured with `.modelVisible` now returns a

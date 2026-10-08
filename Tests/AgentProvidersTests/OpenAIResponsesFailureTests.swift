@@ -103,6 +103,31 @@ struct OpenAIResponsesFailureTests {
         }
     }
 
+    /// A safety refusal that arrives in the middle of a tool call (OpenAI's `cyber_policy`, seen 2026-10-07 with
+    /// gpt-6.1-sol through a gateway) is the service turning the request down, not an answer that could not be read:
+    /// a host retrying an unreadable answer would only be refused again. The call never runs.
+    @Test func aSafetyRefusalMidCallIsARefusedRequest() async throws {
+        let body = providerNamedSSE([
+            ("response.created", #"{"type":"response.created","response":{"id":"resp-1","model":"fixture","status":"in_progress"}}"#),
+            ("response.output_item.added", #"{"type":"response.output_item.added","output_index":0,"item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"calculator","arguments":"","status":"in_progress"}}"#),
+            ("response.function_call_arguments.delta", #"{"type":"response.function_call_arguments.delta","item_id":"fc-1","output_index":0,"delta":"{\"a\":"}"#),
+            ("response.failed", #"{"type":"response.failed","response":{"id":"resp-1","model":"fixture","status":"failed","error":{"code":"cyber_policy","message":"private vendor diagnostic"}}}"#),
+        ])
+        let execution = ProviderExecutionProbe()
+        let provider = try OpenAIResponsesProvider(apiKey: "key",
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [body]))
+        do {
+            _ = try await Agent(model: request.model, provider: provider,
+                                tools: [ProviderCalculator(probe: execution)]).makeSession().run("Compute").wait()
+            Issue.record("A refused request must fail")
+        } catch {
+            let failure = try #require(error as? ModelProviderError)
+            #expect(failure.kind == .invalidRequest)
+            #expect(failure.message.contains("cyber_policy") && !failure.message.contains("private"))
+        }
+        #expect(await execution.count == 0)
+    }
+
     @Test func truncatedFunctionCallIsIncompleteAndNeverExecutes() async throws {
         let body = providerNamedSSE([
             ("response.created", #"{"type":"response.created","response":{"id":"resp-1","model":"fixture","status":"in_progress"}}"#),
@@ -165,6 +190,7 @@ struct OpenAIResponsesFailureTests {
             ("vector_store_timeout", .unavailable), ("invalid_prompt", .invalidRequest),
             ("invalid_request_error", .invalidRequest), ("data_residency_mismatch", .invalidRequest),
             ("bio_policy", .invalidRequest), ("misalignment_policy_violation", .invalidRequest),
+            ("cyber_policy", .invalidRequest),
             ("insufficient_quota", .permissionDenied), ("future_code", .invalidResponse),
         ]
         for (code, expected) in cases {
