@@ -915,7 +915,8 @@ struct ResponsesStreamDecoder {
         switch code {
         case "rate_limit_exceeded": kind = .rateLimited
         case "server_error", "vector_store_timeout": kind = .unavailable
-        case "invalid_prompt", "invalid_request_error", "data_residency_mismatch", "bio_policy",
+        // The service turned the request down, its safety policies included: sending it again gets the same answer.
+        case "invalid_prompt", "invalid_request_error", "data_residency_mismatch", "bio_policy", "cyber_policy",
              "misalignment_policy_violation": kind = .invalidRequest
         case "insufficient_quota": kind = .permissionDenied
         default: kind = .invalidResponse
