@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased: a final answer received in time is not turned into a timeout
+
+- A Run whose model source handed over the whole final answer (a response that
+  does not ask for tools and is not cancelled) before the Run deadline now ends
+  as that answer's outcome, with the answer in the model history and the
+  completion checkpoint written, instead of `deadlineExceeded`. Two paths
+  produced the timeout: `withOperationDeadline` re-checked the clock when
+  returning an already finished result, and the per-event deadline check threw
+  while the last events were still being handed from the model source to the
+  Run. Events are now read from the model source as they arrive, and the deadline
+  timer leaves a settled answer alone; cancellation still ends the Run.
+- A model source that keeps its stream open after the final answer is closed
+  at the deadline; the answer is already complete. Steering that starts another
+  model turn after a settled answer puts the deadline back in force. A Run
+  that has no whole final answer at the deadline ends with `deadlineExceeded`
+  as before.
+
 ## Unreleased: safety refusals classified as refused requests
 
 - OpenAI Responses stream failures with code `cyber_policy` (a safety refusal,

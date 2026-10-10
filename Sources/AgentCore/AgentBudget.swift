@@ -1,7 +1,12 @@
+import AgentModels
+
 public struct AgentBudget: Sendable {
     public let maxModelTurns: Int
     public let maxToolCalls: Int
     public let deadline: ContinuousClock.Instant
+    /// Whether this Run's final answer was settled in time, so that the deadline no longer applies to it.
+    /// Every Run gets its own (`renewed()`), so one budget value can start several Runs.
+    let gate: OperationDeadlineGate
 
     /// Finite per-run limits. Model turns must be positive; tool calls may be zero.
 
@@ -10,10 +15,20 @@ public struct AgentBudget: Sendable {
         self.maxModelTurns = maxModelTurns
         self.maxToolCalls = maxToolCalls
         self.deadline = deadline
+        self.gate = OperationDeadlineGate(deadline: deadline)
     }
 
+    private init(copying budget: AgentBudget) {
+        maxModelTurns = budget.maxModelTurns
+        maxToolCalls = budget.maxToolCalls
+        deadline = budget.deadline
+        gate = budget.gate.renewed()
+    }
+
+    /// The same limits for a new Run.
+    func renewed() -> AgentBudget { AgentBudget(copying: self) }
+
     func checkActive() throws {
-        try Task.checkCancellation()
-        guard ContinuousClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
+        try gate.checkActive(timeoutError: AgentLoopError.deadlineExceeded)
     }
 }
