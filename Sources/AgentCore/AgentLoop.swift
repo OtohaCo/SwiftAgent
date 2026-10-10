@@ -22,6 +22,8 @@ package struct AgentLoop: Sendable {
     private let preAdmissionReplanning: AgentPreAdmissionReplanning
     private let projectionDrain = AgentProjectionDrain()
     private let audit: AgentAuditRuntime?
+    /// Test seam: runs before the loop handles each model event, to make the consumer lag behind the model source.
+    private let beforeHandlingModelEvent: (@Sendable (ModelEvent) async -> Void)?
 
     private var model: ModelID { binding.model }
     private var provider: any ModelProvider { binding.provider }
@@ -33,7 +35,9 @@ package struct AgentLoop: Sendable {
                  capabilityScope: AgentCapabilityScope? = nil,
                  allowedResources: Set<ToolResource>? = nil,
                  preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled,
-                 audit: AgentAuditRuntime? = nil) {
+                 audit: AgentAuditRuntime? = nil,
+                 beforeHandlingModelEvent: (@Sendable (ModelEvent) async -> Void)? = nil) {
+        self.beforeHandlingModelEvent = beforeHandlingModelEvent
         self.binding = binding
         self.tools = tools
         self.scheduler = scheduler
@@ -46,8 +50,10 @@ package struct AgentLoop: Sendable {
         self.audit = audit
     }
 
-    package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init()) {
-        self.init(binding: .legacy(model: model, provider: provider), tools: tools, scheduler: scheduler)
+    package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init(),
+                 beforeHandlingModelEvent: (@Sendable (ModelEvent) async -> Void)? = nil) {
+        self.init(binding: .legacy(model: model, provider: provider), tools: tools, scheduler: scheduler,
+                  beforeHandlingModelEvent: beforeHandlingModelEvent)
     }
 
     package func preflight(
@@ -73,7 +79,7 @@ package struct AgentLoop: Sendable {
         messages: [ModelMessage], sessionID: UUID, runID: UUID = UUID(), budget: AgentBudget,
         structuredOutput: StructuredOutputSchema? = nil, operationID: String? = nil
     ) async throws -> AgentLoopResult {
-        try await execute(messages: messages, sessionID: sessionID, runID: runID, budget: budget,
+        try await execute(messages: messages, sessionID: sessionID, runID: runID, budget: budget.renewed(),
                           structuredOutput: structuredOutput, operationID: operationID, emitter: nil)
     }
 
@@ -82,6 +88,7 @@ package struct AgentLoop: Sendable {
         structuredOutput: StructuredOutputSchema? = nil, operationID: String? = nil
     ) -> AsyncStream<AgentEvent> {
         let cancelledAtCreation = Task.isCancelled
+        let budget = budget.renewed()
         return AsyncStream { continuation in
             let emitter = AgentEventEmitter(continuation)
             let worker = Task {
@@ -123,7 +130,7 @@ package struct AgentLoop: Sendable {
         do {
             if cancelledAtCreation { throw CancellationError() }
             await audit?.beginBody()
-            outcome = .success(try await withAgentDeadline(budget.deadline, operation: {
+            outcome = .success(try await withAgentDeadline(budget.deadline, gate: budget.gate, operation: {
                 do {
                     return try await runBody(messages: messages, sessionID: sessionID, runID: runID,
                         budget: budget, structuredOutput: structuredOutput, operationID: operationID,
@@ -230,7 +237,8 @@ package struct AgentLoop: Sendable {
             var accumulator = ModelEventAccumulator()
             var receivedThisTurn: [ToolCallID] = []
                 var startedThisTurn: Set<ToolCallID> = []
-            for try await rawEvent in provider.stream(request: request) {
+            for try await rawEvent in settlingModelEvents(provider.stream(request: request), gate: budget.gate) {
+                await beforeHandlingModelEvent?(rawEvent)
                 try budget.checkActive()
                 let event = try scopeContinuation(rawEvent)
                 if let audit, case .toolCallStarted(let id, let name) = event {
@@ -267,6 +275,8 @@ package struct AgentLoop: Sendable {
             if let lifecycle {
                 let inputs = try await lifecycle.control.takeSteering(atTermination: response.stopReason != .toolCalls)
                 if !inputs.isEmpty {
+                    // Another model turn follows: the answer just settled is not the last, and the deadline limits it.
+                    budget.gate.reopen()
                     for call in response.toolCalls { try await audit?.rejected(call.id, reason: "steering_superseded") }
                     guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
                     try await applySteering(inputs, to: &history, lifecycle: lifecycle, emitter: emitter)

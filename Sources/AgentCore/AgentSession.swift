@@ -191,7 +191,7 @@ public actor AgentSession {
         guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentSessionError.emptyInput }
         try contextPolicy.checkInput(text)
-        let runBudget = try budget ?? AgentBudget(
+        let runBudget = try budget?.renewed() ?? AgentBudget(
             maxModelTurns: maxModelTurns,
             maxToolCalls: maxToolCalls,
             deadline: .now.advanced(by: runTimeout)
