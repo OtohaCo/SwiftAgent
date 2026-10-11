@@ -4,10 +4,13 @@ import Foundation
 enum AnthropicContinuation {
     static let format = "anthropic.content.v1"
 
-    static func make(blocks: [JSONValue], model: ModelID) throws -> ModelProviderContinuation {
+    static func make(blocks: [JSONValue], model: ModelID, requestPrefix: JSONValue? = nil) throws -> ModelProviderContinuation {
         _ = try visibleContent(blocks)
-        return .init(model: model, format: format,
-                     payload: try ProviderJSON.encode(JSONValue.object(["content": .array(blocks)])))
+        var payload: [String: JSONValue] = ["content": .array(blocks)]
+        if containsThinking(blocks), let requestPrefix {
+            payload["prefixDigest"] = .string(try prefixDigest(requestPrefix))
+        }
+        return .init(model: model, format: format, payload: try ProviderJSON.encode(JSONValue.object(payload)))
     }
 
     static func restore(content: [ModelContent], calls: [ToolCall], model: ModelID) throws -> [JSONValue]? {
@@ -41,6 +44,51 @@ enum AnthropicContinuation {
         } catch {
             throw ModelProviderError(kind: .invalidRequest, message: "Provider continuation does not match the canonical message.")
         }
+    }
+
+    static func containsThinking(_ blocks: [JSONValue]) -> Bool {
+        blocks.contains { value in
+            guard case .object(let block) = value else { return false }
+            return block["type"] == .string("thinking") || block["type"] == .string("redacted_thinking")
+        }
+    }
+
+    /// A local witness of the encoded prefix, never verification of the vendor signature.
+    static func validatePrefix(content: [ModelContent], blocks: [JSONValue], prefix: JSONValue) throws {
+        guard containsThinking(blocks) else { return }
+        let state = content.compactMap { part -> ModelProviderContinuation? in
+            if case .providerContinuation(let value) = part { value } else { nil }
+        }.first
+        guard let state, let payload = try? JSONDecoder().decode(JSONValue.self, from: state.payload),
+              case .object(let object) = payload, case .string(let digest) = object["prefixDigest"],
+              digest == (try prefixDigest(prefix)) else {
+            throw ModelProviderError(kind: .invalidRequest,
+                message: "Anthropic signed thinking requires its unchanged system, tools and preceding messages, with an RC6 prefix witness. Use fixed declarations and an append-only request view; do not retry the Run.")
+        }
+    }
+
+    static func prefix(system: JSONValue?, tools: JSONValue?, messages: [JSONValue]) -> JSONValue {
+        func blocksWithoutCache(_ value: JSONValue) -> JSONValue {
+            guard case .array(let blocks) = value else { return value }
+            return .array(blocks.map { value in
+                guard case .object(var block) = value else { return value }
+                block.removeValue(forKey: "cache_control")
+                if let content = block["content"] { block["content"] = blocksWithoutCache(content) }
+                return .object(block)
+            })
+        }
+        let strippedMessages = messages.map { value -> JSONValue in
+            guard case .object(var message) = value else { return value }
+            if let content = message["content"] { message["content"] = blocksWithoutCache(content) }
+            return .object(message)
+        }
+        return .object(["system": system.map(blocksWithoutCache) ?? .null,
+                        "tools": tools.map(blocksWithoutCache) ?? .null,
+                        "messages": .array(strippedMessages)])
+    }
+
+    private static func prefixDigest(_ prefix: JSONValue) throws -> String {
+        ModelImageDigest.sha256Hex(try ProviderJSON.encode(prefix))
     }
 
     private static func visibleContent(_ blocks: [JSONValue]) throws -> [ModelContent] {

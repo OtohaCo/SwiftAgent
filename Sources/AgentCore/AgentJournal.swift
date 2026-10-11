@@ -3,6 +3,17 @@ import AgentTools
 import Foundation
 import Dispatch
 
+/// The per-session checkpoint publication identity, independent of metadata
+/// writes, other conversations, and physical store maintenance.
+package struct AgentJournalHistoryWitness: Equatable, Sendable {
+    let head: UInt64?
+}
+
+package struct AgentJournalHistorySnapshot: Sendable {
+    let checkpoint: (history: [ModelMessage], steeringIDs: [UUID])?
+    let witness: AgentJournalHistoryWitness
+}
+
 public enum AgentJournalRunOutcome: Codable, Equatable, Sendable {
     case completed
     case failed(code: String)
@@ -366,6 +377,28 @@ public actor AgentJournal {
         return nil
     }
 
+    package func historyWitness(sessionID: UUID) throws -> AgentJournalHistoryWitness {
+        if let store {
+            return try store.read { .init(head: try $0.header(sessionID)?.historyHead) }
+        }
+        return .init(head: memorySessions[sessionID]?.checkpoint?.sequence)
+    }
+
+    package func historySnapshot(sessionID: UUID) throws -> AgentJournalHistorySnapshot {
+        if let store {
+            return try store.read { view in
+                let current = try view.session(sessionID)
+                guard let current, let head = current.header.historyHead else {
+                    return .init(checkpoint: nil, witness: .init(head: nil))
+                }
+                return .init(checkpoint: (current.history, current.header.steeringIDs),
+                             witness: .init(head: head))
+            }
+        }
+        return .init(checkpoint: try latestCheckpoint(sessionID: sessionID),
+                     witness: try historyWitness(sessionID: sessionID))
+    }
+
     @discardableResult
     package func append(
         _ event: AgentJournalEvent,
@@ -407,7 +440,8 @@ public actor AgentJournal {
         timestamp: Date = Date(),
         durability: AgentJournalDurability,
         followUpInputID: String? = nil,
-        runAdmission: JournalRunAdmission? = nil
+        runAdmission: JournalRunAdmission? = nil,
+        expectedHistory: AgentJournalHistoryWitness? = nil
     ) throws -> [AgentJournalRecord] {
         try appendCheckpoint(
             events,
@@ -418,7 +452,8 @@ public actor AgentJournal {
             allowMutationSettlement: false,
             admissionDeadline: deadline,
             checkAdmissionCancellation: true,
-            followUpInputID: followUpInputID, runAdmission: runAdmission
+            followUpInputID: followUpInputID, runAdmission: runAdmission,
+            expectedHistory: expectedHistory
         )
     }
 
@@ -458,7 +493,8 @@ public actor AgentJournal {
         checkAdmissionCancellation: Bool = false,
         followUpInputID: String? = nil,
         auditDrafts: [JournalAuditDraft] = [],
-        runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil
+        runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil,
+        expectedHistory: AgentJournalHistoryWitness? = nil
     ) throws -> [AgentJournalRecord] {
         try checkStartupAdmission(deadline: admissionDeadline, checkCancellation: checkAdmissionCancellation)
         if let store {
@@ -469,7 +505,8 @@ public actor AgentJournal {
                                   allowMutationSettlement: allowMutationSettlement,
                                   followUpInputID: followUpInputID,
                                   admitsNewWork: checkAdmissionCancellation,
-                                  auditDrafts: auditDrafts, runAdmission: runAdmission, runTerminal: runTerminal)
+                                  auditDrafts: auditDrafts, runAdmission: runAdmission, runTerminal: runTerminal,
+                                  expectedHistory: expectedHistory)
             }
             scheduleMaintenanceIfNeeded()
             return result
@@ -478,6 +515,9 @@ public actor AgentJournal {
             throw AgentJournalError.persistenceUnavailable("a durable store is required")
         }
         guard followUpInputID == nil else { throw AgentFollowUpError.durableJournalRequired }
+        if let expectedHistory, try historyWitness(sessionID: sessionID) != expectedHistory {
+            throw AgentJournalError.concurrentWriter
+        }
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
             throw AgentJournalError.mutationSettlementRequiresReconciliation
@@ -634,6 +674,11 @@ public actor AgentJournal {
 
     /// Reconciles an uncertain external effect with a trusted receipt and an
     /// explicit replay result. The conversation and ledger settle together.
+    /// Wait for the corresponding Run's physical drain before reconciling in
+    /// a running application. Then create a new Session with the same ID and
+    /// this Journal handle to restore the updated conversation; do not reuse
+    /// the old Session's cached history. Closing a shared Journal is not required.
+    /// Reconciliation never reruns the executor or changes the old Run terminal.
     public func reconcileMutation(_ pending: PendingMutationRecovery,
                                   receipt: ToolReceipt, output: JSONValue) throws {
         let key = MutationKey(sessionID: pending.sessionID, runID: pending.runID, callID: pending.intent.call.id)
@@ -1212,13 +1257,17 @@ extension AgentJournal {
         view: any JournalStoreView, allowMutationSettlement: Bool,
         followUpInputID: String? = nil, admitsNewWork: Bool = false,
         auditDrafts: [JournalAuditDraft] = [],
-        runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil
+        runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil,
+        expectedHistory: AgentJournalHistoryWitness? = nil
     ) throws -> [AgentJournalRecord] {
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
             throw AgentJournalError.mutationSettlementRequiresReconciliation
         }
         let initialHeader = try view.header(sessionID) ?? JournalSessionHeader()
+        if let expectedHistory, expectedHistory.head != initialHeader.historyHead {
+            throw AgentJournalError.concurrentWriter
+        }
         let sequence = try view.nextRecordSequence()
         let committed = events.enumerated().map { offset, event in
             AgentJournalRecord(sequence: sequence + UInt64(offset), timestamp: timestamp,

@@ -1,0 +1,129 @@
+Another instance of SwiftPM (PID: 38214) is already running using '<CHECKOUT>/.build', waiting until that process has finished execution...Building for debugging...
+[Computing dependencies]
+[3 / 188]
+[6 / 186] AgentModels
+[21 / 214] Crypto
+[27 / 214] Crypto
+[40 / 208] AgentTools
+[45 / 213] Crypto
+[54 / 219] AgentModels
+[64 / 232] AgentCatalog
+[74 / 224] AgentTools
+[82 / 220] AgentTools
+[96 / 208] AgentProviders
+[97 / 208] AgentJevProvider
+[109 / 241] AgentProviders
+[116 / 237] AgentTools
+[120 / 236] AgentProviders
+[128 / 236] AgentProviders
+[135 / 232] AgentCore
+[136 / 232] AgentCore
+[148 / 225] AgentCatalogTests-product
+[148 / 225] AgentCore
+[155 / 237] WorkspaceAgent
+[161 / 237] MemoryJournalBenchmark-product
+[169 / 233] WorkspaceAgent
+[170 / 233] AgentJournalFileStore
+[183 / 234] AgentJournalFileStore
+[183 / 234] FollowUpQueueBenchmark-product
+[196 / 244] AuditAuthorizationBenchmark-product
+[198 / 244] JournalBenchmark-product
+[201 / 244] JournalTestProcess-product
+[202 / 244] AgentJournalFileStore
+[209 / 222] AgentDecisionsTests-product
+[215 / 225] AgentCoreTests-product
+[220 / 231] AgentProvidersTests-product
+[226 / 230] AgentProvidersTests-product
+Build complete! (6.92秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite AnthropicThinkingPrefixTests started.
+◇ Suite AnthropicRequestBoundaryTests started.
+◇ Suite AnthropicPromptCacheTests started.
+◇ Suite AnthropicContinuationTests started.
+◇ Suite DynamicBindingProviderCompatibilityTests started.
+◇ Suite AnthropicSyntheticSummaryTests started.
+◇ Suite AnthropicProviderTests started.
+◇ Suite ImageContentProviderTests started.
+◇ Test anotherProvidersOpaqueStateIsNotSentToThisEndpoint() started.
+◇ Test restoredSessionUsesTheHostsResuppliedConfigurationAndOriginalPrefix() started.
+◇ Test toolDeclarationExpansionRefusesNextRequestWithoutRepeatingExecution() started.
+◇ Test explicitPrefixChangesOnlyWhenTheHostChangesItsContext() started.
+◇ Test legacyThinkingWithoutWitnessIsRefusedButUnsignedToolChangesAreAccepted() started.
+◇ Test nilConfigurationRetainsPreviousRequestBytes() started.
+◇ Test subsequentRunRestoringInitialDeclarationsRefusesBeforeAdmission() started.
+◇ Test strategySurvivesToolRoundsRunsSharedSessionsAndProviderReconstruction() started.
+◇ Test completeEncodedBodyIsRejectedBeforeTransport() started.
+◇ Test signedThinkingRejectsChangedToolsAndEarlierMessages() started.
+◇ Test encoderKeepsSyntheticSummaryAndTheFollowingUserTurn() started.
+◇ Test ineligibleEndpointOrModelFailsBeforeHTTP() started.
+◇ Test thinkingCannotBeMarkedAndContinuationValidationStillRuns() started.
+◇ Test legalImageTotalsAndMixedExactBodyBoundary() started.
+◇ Test deepSeekThinkingWithToolsRejectsHistoryWithoutNativeReasoningBeforeNetworkOrAppend() started.
+◇ Test explicitToolAndMessageCoordinatesPreserveOrderWhenRolesAreGrouped() started.
+◇ Test thinkingAndStructuredAnswerConfigurationPreserveTheRequestedSchema() started.
+◇ Test alteredSnapshotsCannotOverrideTheCanonicalToolAndVisibleContent() started.
+◇ Test strategyCodableRoundTripPreservesQualificationAndTTL() started.
+◇ Test unchangedNativePrefixContinuesAndRejectsToolResetOrEditedPast() started.
+◇ Test illegalControlsFailBeforeSending() started.
+◇ Test automaticAndExplicitCacheControlsReachTheActualRequest() started.
+◇ Test effortAndStructuredOutputShareOneOutputConfiguration() started.
+◇ Test sameCoreLoopExecutesToolAndReturnsItsResultThroughTheMessagesAPI() started.
+◇ Test textStreamAndRequestUseTheMessagesContract() started.
+◇ Test completedBatchKeepsSnapshotAndGroupsOrderedToolResults() started.
+◇ Test signedThinkingAndUsageSurviveTheToolRoundWithoutProviderSessionState() started.
+◇ Test recoverableToolResultEncodesIsErrorTrue() started.
+◇ Test deepSeekRefusesImagesBeforeSending() started.
+◇ Test openAIResponsesSendsImagesAsInputImageDataURLs() started.
+◇ Test requestsWithoutImagesKeepTheirTextShapes() started.
+◇ Test aLocalResponsesServerSendsImagesOnlyWhenConfiguredTo() started.
+◇ Test anAssistantMessageCarryingAnImageIsRefused() started.
+◇ Test anthropicSendsImagesAsBase64BlocksInUserTurnsAndToolResults() started.
+✔ Test encoderKeepsSyntheticSummaryAndTheFollowingUserTurn() passed after 0.003 seconds.
+✔ Test nilConfigurationRetainsPreviousRequestBytes() passed after 0.003 seconds.
+✔ Test explicitPrefixChangesOnlyWhenTheHostChangesItsContext() passed after 0.003 seconds.
+✔ Test explicitToolAndMessageCoordinatesPreserveOrderWhenRolesAreGrouped() passed after 0.003 seconds.
+✔ Test recoverableToolResultEncodesIsErrorTrue() passed after 0.003 seconds.
+✔ Test requestsWithoutImagesKeepTheirTextShapes() passed after 0.003 seconds.
+✔ Test illegalControlsFailBeforeSending() passed after 0.003 seconds.
+✔ Test anAssistantMessageCarryingAnImageIsRefused() passed after 0.003 seconds.
+✔ Suite AnthropicSyntheticSummaryTests passed after 0.005 seconds.
+✔ Test anotherProvidersOpaqueStateIsNotSentToThisEndpoint() passed after 0.006 seconds.
+✔ Test automaticAndExplicitCacheControlsReachTheActualRequest() passed after 0.006 seconds.
+✔ Test effortAndStructuredOutputShareOneOutputConfiguration() passed after 0.006 seconds.
+✔ Test thinkingCannotBeMarkedAndContinuationValidationStillRuns() passed after 0.007 seconds.
+✔ Test legacyThinkingWithoutWitnessIsRefusedButUnsignedToolChangesAreAccepted() passed after 0.007 seconds.
+✔ Test textStreamAndRequestUseTheMessagesContract() passed after 0.007 seconds.
+✔ Test openAIResponsesSendsImagesAsInputImageDataURLs() passed after 0.006 seconds.
+✔ Test signedThinkingRejectsChangedToolsAndEarlierMessages() passed after 0.007 seconds.
+✔ Test anthropicSendsImagesAsBase64BlocksInUserTurnsAndToolResults() passed after 0.006 seconds.
+✔ Test ineligibleEndpointOrModelFailsBeforeHTTP() passed after 0.007 seconds.
+✔ Test deepSeekRefusesImagesBeforeSending() passed after 0.007 seconds.
+✔ Test aLocalResponsesServerSendsImagesOnlyWhenConfiguredTo() passed after 0.007 seconds.
+✔ Suite ImageContentProviderTests passed after 0.008 seconds.
+✔ Test strategyCodableRoundTripPreservesQualificationAndTTL() passed after 0.007 seconds.
+✔ Test thinkingAndStructuredAnswerConfigurationPreserveTheRequestedSchema() passed after 0.007 seconds.
+✔ Test alteredSnapshotsCannotOverrideTheCanonicalToolAndVisibleContent() passed after 0.008 seconds.
+✔ Suite AnthropicContinuationTests passed after 0.008 seconds.
+✔ Test deepSeekThinkingWithToolsRejectsHistoryWithoutNativeReasoningBeforeNetworkOrAppend() passed after 0.010 seconds.
+✔ Suite DynamicBindingProviderCompatibilityTests passed after 0.010 seconds.
+✔ Test sameCoreLoopExecutesToolAndReturnsItsResultThroughTheMessagesAPI() passed after 0.012 seconds.
+✔ Test unchangedNativePrefixContinuesAndRejectsToolResetOrEditedPast() passed after 0.012 seconds.
+✔ Test completedBatchKeepsSnapshotAndGroupsOrderedToolResults() passed after 0.013 seconds.
+✔ Test signedThinkingAndUsageSurviveTheToolRoundWithoutProviderSessionState() passed after 0.013 seconds.
+✔ Suite AnthropicProviderTests passed after 0.014 seconds.
+✔ Test subsequentRunRestoringInitialDeclarationsRefusesBeforeAdmission() passed after 0.014 seconds.
+✔ Test strategySurvivesToolRoundsRunsSharedSessionsAndProviderReconstruction() passed after 0.017 seconds.
+✔ Test toolDeclarationExpansionRefusesNextRequestWithoutRepeatingExecution() passed after 0.046 seconds.
+✔ Suite AnthropicThinkingPrefixTests passed after 0.046 seconds.
+✔ Test restoredSessionUsesTheHostsResuppliedConfigurationAndOriginalPrefix() passed after 0.074 seconds.
+✔ Suite AnthropicPromptCacheTests passed after 0.075 seconds.
+RC6 body oversize bytes=32000148
+✔ Test completeEncodedBodyIsRejectedBeforeTransport() passed after 0.481 seconds.
+RC6 legal image count=8 raw=25165824 body=33555209
+RC6 legal image count=7 raw=20971520 body=33962859
+RC6 mixed exact body=32000000 accepted transports=1; body=32000001 rejected transports=1
+✔ Test legalImageTotalsAndMixedExactBodyBoundary() passed after 2.430 seconds.
+✔ Suite AnthropicRequestBoundaryTests passed after 2.430 seconds.
+✔ Test run with 34 tests in 8 suites passed after 2.430 seconds.

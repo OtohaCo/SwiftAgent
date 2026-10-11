@@ -1,0 +1,20 @@
+Another instance of SwiftPM (PID: 38220) is already running using '<CHECKOUT>/.build', waiting until that process has finished execution...Building for debugging...
+[Computing dependencies]
+[1 / 1]
+Build complete! (0.91秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite StaleJournalBaselineTests started.
+◇ Test startupPublicationRechecksWitnessAfterPreflight() started.
+◇ Test oldSessionRejectsSeriallyChangedHistory(nextInput:records:) started.
+◇ Test ownCheckpointsMetadataOtherSessionsAndMaintenanceKeepWitnessValid() started.
+◇ Test case passing 2 arguments nextInput → "three", records → true to oldSessionRejectsSeriallyChangedHistory(nextInput:records:) started.
+◇ Test case passing 2 arguments nextInput → "three", records → false to oldSessionRejectsSeriallyChangedHistory(nextInput:records:) started.
+◇ Test case passing 2 arguments nextInput → "two", records → false to oldSessionRejectsSeriallyChangedHistory(nextInput:records:) started.
+◇ Test case passing 2 arguments nextInput → "two", records → true to oldSessionRejectsSeriallyChangedHistory(nextInput:records:) started.
+✔ Test startupPublicationRechecksWitnessAfterPreflight() passed after 0.033 seconds.
+✔ Test ownCheckpointsMetadataOtherSessionsAndMaintenanceKeepWitnessValid() passed after 0.107 seconds.
+✔ Test oldSessionRejectsSeriallyChangedHistory(nextInput:records:) with 4 test cases passed after 0.162 seconds.
+✔ Suite StaleJournalBaselineTests passed after 0.162 seconds.
+✔ Test run with 3 tests in 1 suite passed after 0.162 seconds.

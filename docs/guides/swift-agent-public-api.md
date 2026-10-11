@@ -63,3 +63,30 @@ must retain this graph without source changes.
 No public symbol was removed between the rc.1 anchor and this RC.2 candidate.
 Any later production change requires regenerating this inventory and repeating
 the API review before RC.2 release preparation.
+
+## RC6 prepared candidate inventory
+
+Regenerated with `swift package dump-symbol-graph --minimum-access-level public`
+on Apple Swift 6.4 / Xcode 27.0. Counts below deduplicate precise public symbol
+identifiers across each module’s primary and extension graphs. The tested source
+identity is recorded in the whole-candidate acceptance page; no tag is implied.
+Package-only history witnesses and Provider encoder/decoder helpers are excluded.
+
+| SDK product/module | Public identifiers |
+| --- | ---: |
+| AgentModels | 373 |
+| AgentTools | 434 |
+| AgentCore | 1256 |
+| AgentJournalFileStore | 16 |
+| AgentProviders | 272 |
+| AgentAppleProvider | 8 |
+| AgentCatalog | 240 |
+| AgentDecisions | 131 |
+| AgentJevProvider | 7 |
+| AgentUsage | 154 |
+| WorkspaceAgent | 56 |
+
+The RC5 → RC6 changes require the full [versioning review](swift-agent-versioning.md),
+including enum cases, initializer function references and behavior changes. A
+symbol count does not certify binary stability, Codable/schema compatibility or
+Provider qualification. The closeout itself adds no public SDK signature.

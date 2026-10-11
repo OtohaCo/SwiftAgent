@@ -155,6 +155,19 @@ be priced by the Host's two qualified rates; incomplete classifications produce 
 unknown cost. Prices and model-specific exceptions belong to the actual Host tariff,
 not a universal SDK multiplier. See [usage accounting](swift-agent-usage.md).
 
+## Request size and preserved-thinking boundaries
+
+RC6 checks the exact serialized HTTP body against an inclusive conservative
+32,000,000-byte ceiling in preflight and again before transport. Raw-image
+selection budgets do not guarantee base64 plus JSON, text and schemas fit.
+Signed/redacted thinking requires a locally witnessed unchanged system, tools
+and preceding-message prefix. Ordinary SDK deferred-tool expansion, initial
+declaration reset, old-history summaries/excerpts and legacy signed payloads
+without a witness fail locally when incompatible; append-only fixed-tool
+continuations and unsigned paths remain supported. This is not vendor signature
+verification, account-age inference or new live qualification. See the
+[complete boundary and support matrix](../anthropic-request-boundaries.md).
+
 ## Continuation State
 
 Complete native assistant content, including signatures and redacted thinking,

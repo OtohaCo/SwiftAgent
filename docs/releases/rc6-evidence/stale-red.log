@@ -1,0 +1,36 @@
+Another instance of SwiftPM (PID: 23845) is already running using '<CHECKOUT>/.build', waiting until that process has finished execution...Building for debugging...
+[Computing dependencies]
+[1 / 5]
+Build complete! (0.89秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite StaleJournalBaselineTests started.
+◇ Test oldSessionRejectsSeriallyChangedHistory(nextInput:) started.
+◇ Test case passing 1 argument nextInput → "three" to oldSessionRejectsSeriallyChangedHistory(nextInput:) started.
+◇ Test case passing 1 argument nextInput → "two" to oldSessionRejectsSeriallyChangedHistory(nextInput:) started.
+✘ Test oldSessionRejectsSeriallyChangedHistory(nextInput:) recorded an issue with 1 argument nextInput → "two" at StaleJournalBaselineTests.swift:32:25: Issue recorded
+↳ stale Run unexpectedly admitted; Provider messages: [AgentModels.ModelMessage.user([AgentModels.ModelContent.text("one")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 1")], toolCalls: []), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("two")])]; Journal: [AgentModels.ModelMessage.user([AgentModels.ModelContent.text("one")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 1")], toolCalls: []), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("two")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 3")], toolCalls: [])]
+✘ Test oldSessionRejectsSeriallyChangedHistory(nextInput:) recorded an issue with 1 argument nextInput → "three" at StaleJournalBaselineTests.swift:32:25: Issue recorded
+↳ stale Run unexpectedly admitted; Provider messages: [AgentModels.ModelMessage.user([AgentModels.ModelContent.text("one")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 1")], toolCalls: []), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("three")])]; Journal: [AgentModels.ModelMessage.user([AgentModels.ModelContent.text("one")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 1")], toolCalls: []), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("two")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 3")], toolCalls: [])]
+✘ Test oldSessionRejectsSeriallyChangedHistory(nextInput:) recorded an issue with 1 argument nextInput → "two" at StaleJournalBaselineTests.swift:37:9: Expectation failed: await provider.log.requests.count == 2
+↳ await provider.log.requests.count == 2 → <not evaluated>
+✘ Test oldSessionRejectsSeriallyChangedHistory(nextInput:) recorded an issue with 1 argument nextInput → "three" at StaleJournalBaselineTests.swift:37:9: Expectation failed: await provider.log.requests.count == 2
+↳ await provider.log.requests.count == 2 → <not evaluated>
+✘ Test oldSessionRejectsSeriallyChangedHistory(nextInput:) recorded an issue with 1 argument nextInput → "three" at StaleJournalBaselineTests.swift:38:9: Expectation failed: try await journal.latestCheckpoint(sessionID: id)?.history == before
+↳ try await journal.latestCheckpoint(sessionID: id)?.history == before → <not evaluated>
+✘ Test oldSessionRejectsSeriallyChangedHistory(nextInput:) recorded an issue with 1 argument nextInput → "two" at StaleJournalBaselineTests.swift:38:9: Expectation failed: try await journal.latestCheckpoint(sessionID: id)?.history == before
+↳ try await journal.latestCheckpoint(sessionID: id)?.history == before → <not evaluated>
+✘ Test oldSessionRejectsSeriallyChangedHistory(nextInput:) recorded an issue with 1 argument nextInput → "two" at StaleJournalBaselineTests.swift:43:9: Expectation failed: completed.history == before! + [.user([.text(nextInput)]), .assistant(content: [.text("answer 3")], toolCalls: [])]
+↳ completed.history == before! + [.user([.text(nextInput)]), .assistant(content: [.text("answer 3")], toolCalls: [])] → false
+↳   completed.history → [AgentModels.ModelMessage.user([AgentModels.ModelContent.text("one")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 1")], toolCalls: []), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("two")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 3")], toolCalls: []), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("two")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 4")], toolCalls: [])]
+↳   before! + [.user([.text(nextInput)]), .assistant(content: [.text("answer 3")], toolCalls: [])] → [AgentModels.ModelMessage.user([AgentModels.ModelContent.text("one")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 1")], toolCalls: []), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("two")]), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("two")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 3")], toolCalls: [])]
+✘ Test oldSessionRejectsSeriallyChangedHistory(nextInput:) recorded an issue with 1 argument nextInput → "three" at StaleJournalBaselineTests.swift:43:9: Expectation failed: completed.history == before! + [.user([.text(nextInput)]), .assistant(content: [.text("answer 3")], toolCalls: [])]
+↳ completed.history == before! + [.user([.text(nextInput)]), .assistant(content: [.text("answer 3")], toolCalls: [])] → false
+↳   completed.history → [AgentModels.ModelMessage.user([AgentModels.ModelContent.text("one")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 1")], toolCalls: []), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("two")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 3")], toolCalls: []), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("three")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 4")], toolCalls: [])]
+↳   before! + [.user([.text(nextInput)]), .assistant(content: [.text("answer 3")], toolCalls: [])] → [AgentModels.ModelMessage.user([AgentModels.ModelContent.text("one")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 1")], toolCalls: []), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("two")]), AgentModels.ModelMessage.user([AgentModels.ModelContent.text("three")]), AgentModels.ModelMessage.assistant(content: [AgentModels.ModelContent.text("answer 3")], toolCalls: [])]
+✘ Test oldSessionRejectsSeriallyChangedHistory(nextInput:) with 2 test cases failed after 0.142 seconds with 8 issues.
+✘ Suite StaleJournalBaselineTests failed after 0.142 seconds with 8 issues.
+✘ Test run with 1 test in 1 suite failed after 0.142 seconds with 8 issues.
+Note: Some test targets reported failures:
+  - AgentCoreTests (Swift Testing)

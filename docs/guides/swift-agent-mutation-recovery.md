@@ -46,6 +46,30 @@ operation. Confirmed no-effect abort keeps the identity and its basis. A
 matching retry can create a new intent; a semantically different request with
 that same final identity remains a conflict.
 
+In an application that remains running, keep the shared Journal open. First
+wait for the original Run's physical drain, even if its logical result was a
+failure. Reconcile only using independently verified Host evidence, then
+construct a fresh Session with the same ID on the same handle:
+
+```swift
+try await originalRun.waitForDrain()
+let pending = try await journal.recoverPendingMutations(sessionID: sessionID)
+for item in pending {
+    let receipt = try await host.verifiedReceipt(for: item)
+    let output = try await host.verifiedOutput(for: item)
+    try await journal.reconcileMutation(item, receipt: receipt, output: output)
+}
+let recoveredSession = try agent.makeSession(id: sessionID, journal: journal)
+let nextRun = try await recoveredSession.run("Continue from the verified result")
+```
+
+The `host` calls are pseudocode. Do not continue using the old Session actor:
+its canonical history cache predates reconciliation. A stale persisted
+baseline is rejected with `AgentJournalError.concurrentWriter` before new
+input admission or Provider dispatch. Rebuilding the Session restores the
+reconciled history; it does not replay the original mutation, revive its Run,
+or rewrite that Run's logical terminal.
+
 An `intent` is an uncertain candidate after process death. `needsReconciliation`
 blocks another mutation in that Session and blocks replay of the same identity
 across the operation domain. The ledger retains terminal identity, receipt

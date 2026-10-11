@@ -21,6 +21,7 @@ enum AnthropicRequestEncoder {
         try promptCaching?.validate(modelName: resolvedModelName ?? request.model.name)
         var system: [String] = []
         var messages: [Message] = []
+        var thinkingPrefixes: [(content: [ModelContent], blocks: [JSONValue], messages: [JSONValue])] = []
         for (messageIndex, message) in request.messages.enumerated() {
             switch message {
             case .system(let text), .developer(let text):
@@ -33,6 +34,7 @@ enum AnthropicRequestEncoder {
             case .assistant(let content, let calls):
                 guard !content.contains(where: \.isImage) else { throw ImageEncoding.assistantImage() }
                 if let restored = try AnthropicContinuation.restore(content: content, calls: calls, model: request.model) {
+                    thinkingPrefixes.append((content, restored, messages.map(\.json)))
                     try append(role: "assistant", content: marked(restored, at: messageIndex, configuration: promptCaching), to: &messages)
                     continue
                 }
@@ -121,6 +123,10 @@ enum AnthropicRequestEncoder {
             }
             if let ttl = promptCaching.automaticTTL { body["cache_control"] = promptCaching.control(ttl) }
             try promptCaching.validateTTLOrder(in: body)
+        }
+        for prior in thinkingPrefixes {
+            try AnthropicContinuation.validatePrefix(content: prior.content, blocks: prior.blocks,
+                prefix: AnthropicContinuation.prefix(system: body["system"], tools: body["tools"], messages: prior.messages))
         }
         return .object(body)
     }

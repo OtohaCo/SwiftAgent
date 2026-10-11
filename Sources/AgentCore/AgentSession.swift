@@ -42,6 +42,7 @@ public actor AgentSession {
     private let mutationQuarantineDidBegin: (@Sendable (UUID, ToolCallID) async -> Void)?
     private var appliedSteeringIDs: Set<UUID> = []
     private var restoredJournalState = false
+    private var persistentHistoryWitness: AgentJournalHistoryWitness?
     private var pendingDrainTask: Task<Void, Never>?
     private var drainingRunID: UUID?
     private var drainHandles: [UUID: AgentRunDrain] = [:]
@@ -468,17 +469,21 @@ public actor AgentSession {
         runAdmission: JournalRunAdmission? = nil
     ) async throws -> AgentRun {
         try budget.checkActive()
-        let restoredCheckpoint: (history: [ModelMessage], steeringIDs: [UUID])?
-        if restoredJournalState {
-            restoredCheckpoint = nil
-        } else {
+        if !restoredJournalState {
             let journal = self.journal
             let sessionID = id
-            restoredCheckpoint = try await withStartupDeadline(budget.deadline, startupID: startupID) {
-                try await journal?.latestCheckpoint(sessionID: sessionID)
+            let snapshot = try await withStartupDeadline(budget.deadline, startupID: startupID) {
+                try await journal?.historySnapshot(sessionID: sessionID)
             }
             try budget.checkActive()
-            applyRestoredJournalState(restoredCheckpoint)
+            persistentHistoryWitness = snapshot?.witness
+            applyRestoredJournalState(snapshot?.checkpoint)
+        }
+        if let journal, let persistentHistoryWitness {
+            let current = try await withStartupDeadline(budget.deadline, startupID: startupID) {
+                try await journal.historyWitness(sessionID: self.id)
+            }
+            guard current == persistentHistoryWitness else { throw AgentJournalError.concurrentWriter }
         }
         if let expectedConversationRevision, expectedConversationRevision != conversationRevision {
             throw AgentModelBindingError.staleConversationRevision
@@ -590,7 +595,8 @@ public actor AgentSession {
                     runID: runID,
                     deadline: budget.deadline,
                     durability: journal.storage == .durable ? .durable : .memory,
-                    followUpInputID: followUpInputID, runAdmission: runAdmission
+                    followUpInputID: followUpInputID, runAdmission: runAdmission,
+                    expectedHistory: persistentHistoryWitness
                 )
             } catch AgentJournalStartupAdmissionError.deadlineExceeded {
                 throw AgentLoopError.deadlineExceeded
@@ -911,6 +917,12 @@ public actor AgentSession {
 
     private func finishDraining(runID: UUID) async {
         guard drainingRunID == runID else { return }
+        // All own checkpoint/settlement writers have drained; retain their
+        // published head before releasing the same-session lease. A failed
+        // read leaves the old witness, so the next Run fails closed.
+        if let journal, let witness = try? await journal.historyWitness(sessionID: id) {
+            persistentHistoryWitness = witness
+        }
         await drainReleaseDidBegin?(runID)
         await journal?.releaseSessionLease(sessionID: id)
         await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal?.storeIdentity()?.storeID)
@@ -931,8 +943,9 @@ public actor AgentSession {
 
     private func restoreJournalStateIfNeeded() async throws {
         guard !restoredJournalState else { return }
-        let checkpoint = try await journal?.latestCheckpoint(sessionID: id)
-        applyRestoredJournalState(checkpoint)
+        let snapshot = try await journal?.historySnapshot(sessionID: id)
+        persistentHistoryWitness = snapshot?.witness
+        applyRestoredJournalState(snapshot?.checkpoint)
     }
 
     private func applyRestoredJournalState(

@@ -148,18 +148,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
 
     public func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         ModelEventStream.make { emit in
-            let body: Data
-            do {
-                body = try ProviderJSON.encode(AnthropicRequestEncoder.encode(
-                    request,
-                    maximumOutputTokens: maximumOutputTokens,
-                    thinking: thinking,
-                    effort: effort,
-                    promptCaching: promptCaching,
-                    resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name
-                ))
-            } catch let error as ModelProviderError { throw error }
-            catch { throw ModelProviderError(kind: .invalidRequest, message: "The provider request cannot be encoded.") }
+            let (body, encoded) = try encodedRequest(request)
             var http = URLRequest(url: endpoint)
             http.httpMethod = "POST"
             http.setValue(apiKey, forHTTPHeaderField: "x-api-key")
@@ -169,7 +158,10 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
             http.httpBody = body
             var sse = try ProviderSSEDecoder()
             let responseModelName = resolvedModelIDsByAlias[request.model.name] ?? request.model.name
-            var decoder = AnthropicStreamDecoder(model: request.model, responseModelName: responseModelName)
+            let fields = try ProviderJSON.object(encoded)
+            guard case .array(let messages) = fields["messages"] else { throw ProviderJSON.invalid() }
+            var decoder = AnthropicStreamDecoder(model: request.model, responseModelName: responseModelName,
+                requestPrefix: AnthropicContinuation.prefix(system: fields["system"], tools: fields["tools"], messages: messages))
             var validation = ModelEventAccumulator()
             var receivedHeader = false
             var events = transport.stream(http).makeAsyncIterator()
@@ -204,13 +196,24 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
 
 extension AnthropicProvider: ModelProviderRequestValidator {
     public func validate(request: ModelRequest) throws {
-        _ = try AnthropicRequestEncoder.encode(
-            request,
-            maximumOutputTokens: maximumOutputTokens,
-            thinking: thinking,
-            effort: effort,
-            promptCaching: promptCaching,
-            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name
-        )
+        _ = try encodedRequest(request)
+    }
+
+    /// The checked bytes are the same bytes assigned to the actual HTTP body.
+    private func encodedRequest(_ request: ModelRequest) throws -> (Data, JSONValue) {
+        do {
+            let encoded = try AnthropicRequestEncoder.encode(request,
+                maximumOutputTokens: maximumOutputTokens, thinking: thinking, effort: effort,
+                promptCaching: promptCaching,
+                resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name)
+            let body = try ProviderJSON.encode(encoded)
+            // The official limit is 32 MB. Use decimal MB conservatively, not 32 MiB.
+            guard body.count <= 32_000_000 else {
+                throw ModelProviderError(kind: .invalidRequest,
+                    message: "Anthropic encoded request body is \(body.count) bytes; the local limit is 32000000 bytes (32 MB), including base64 images and all JSON fields.")
+            }
+            return (body, encoded)
+        } catch let error as ModelProviderError { throw error }
+        catch { throw ModelProviderError(kind: .invalidRequest, message: "The provider request cannot be encoded.") }
     }
 }

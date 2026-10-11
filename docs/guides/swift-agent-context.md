@@ -274,3 +274,11 @@ historical calls. Direct constructed projector inputs are a trusted Host seam,
 not an authentication API. Canonical history, Receipts and audit records remain
 unchanged: this corrects request-view eligibility, not an execution permission
 bypass. Existing tool excerpts still require a successful read-only result.
+
+## RC6 Host preparation
+
+See [Host context integration](swift-agent-host-context.md) for call order,
+cache identity, fixed-projector dynamic output, cancellation and recovery.
+A fixed binding captures the projector object and configuration, not one
+permanent projected message array. The first model request reuses validated
+preflight; subsequent requests build and validate a fresh view.

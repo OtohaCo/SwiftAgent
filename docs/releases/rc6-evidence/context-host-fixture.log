@@ -1,0 +1,17 @@
+Building for debugging...
+[1 / 1]
+[2 / 10] AgentCore
+[7 / 15] AgentCore
+[13 / 21] AgentJournalFileStore
+[19 / 27] AgentJournalFileStore
+[22 / 29] ContextPipelineFixture-product
+[26 / 33] ContextPipelineFixture-product
+[39 / 45] AgentCore
+[39 / 45] ContextPipelineFixture-product
+[42 / 45] AgentCore
+[42 / 45] AgentJournalFileStore
+[44 / 45] ContextPipelineFixture-product
+Build complete! (3.30秒)
+Dynamic Host fixture passed: fixed projector, two source-correct views, single tool result, cancellation blocks late dispatch
+Context fixture passed: two Sessions, budgeted request, source-bound summary, read-only excerpt, complete reopened Journal
+Assembly: 336666 ns; indexed storage bytes read during Run: 79248; projected request: 929 bytes

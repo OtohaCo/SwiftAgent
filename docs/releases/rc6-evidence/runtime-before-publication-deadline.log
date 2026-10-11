@@ -1,0 +1,33 @@
+Building for debugging...
+[Computing dependencies]
+[1 / 1]
+[2 / 8] AgentCoreTests-product
+[6 / 12] AgentCoreTests-product
+[7 / 13] AgentCoreTests-product
+[12 / 16] AgentCoreTests-product
+[14 / 16] AgentCoreTests-product
+Build complete! (3.58秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite AgentSettledAnswerDeadlineTests started.
+◇ Test answerReceivedBeforeTheDeadlineCompletesWhenTheStreamClosesAfterIt() started.
+◇ Test finalAnswerDoesNotHideCheckpointFailure(unknown:) started.
+◇ Test answerTheModelSourceHandedOverBeforeTheDeadlineCompletesWhenTheRunReadsItLate() started.
+◇ Test steeringAfterAnAnswerReopensTheDeadlineBeforeAnotherModelRequest() started.
+◇ Test aRunWithoutAnAnswerByTheDeadlineStillTimesOut() started.
+◇ Test finalCheckpointPublicationCrossesDeadlineAndReopensExactlyOnce(records:cancelDuringPublication:) started.
+◇ Test case passing 1 argument unknown → true to finalAnswerDoesNotHideCheckpointFailure(unknown:) started.
+◇ Test case passing 1 argument unknown → false to finalAnswerDoesNotHideCheckpointFailure(unknown:) started.
+◇ Test case passing 2 arguments records → false, cancelDuringPublication → false to finalCheckpointPublicationCrossesDeadlineAndReopensExactlyOnce(records:cancelDuringPublication:) started.
+◇ Test case passing 2 arguments records → false, cancelDuringPublication → true to finalCheckpointPublicationCrossesDeadlineAndReopensExactlyOnce(records:cancelDuringPublication:) started.
+◇ Test case passing 2 arguments records → true, cancelDuringPublication → true to finalCheckpointPublicationCrossesDeadlineAndReopensExactlyOnce(records:cancelDuringPublication:) started.
+◇ Test case passing 2 arguments records → true, cancelDuringPublication → false to finalCheckpointPublicationCrossesDeadlineAndReopensExactlyOnce(records:cancelDuringPublication:) started.
+✔ Test finalAnswerDoesNotHideCheckpointFailure(unknown:) with 2 test cases passed after 0.045 seconds.
+✔ Test answerReceivedBeforeTheDeadlineCompletesWhenTheStreamClosesAfterIt() passed after 0.306 seconds.
+✔ Test steeringAfterAnAnswerReopensTheDeadlineBeforeAnotherModelRequest() passed after 0.306 seconds.
+✔ Test aRunWithoutAnAnswerByTheDeadlineStillTimesOut() passed after 0.306 seconds.
+✔ Test answerTheModelSourceHandedOverBeforeTheDeadlineCompletesWhenTheRunReadsItLate() passed after 0.624 seconds.
+✔ Test finalCheckpointPublicationCrossesDeadlineAndReopensExactlyOnce(records:cancelDuringPublication:) with 4 test cases passed after 1.126 seconds.
+✔ Suite AgentSettledAnswerDeadlineTests passed after 1.127 seconds.
+✔ Test run with 6 tests in 1 suite passed after 1.127 seconds.
