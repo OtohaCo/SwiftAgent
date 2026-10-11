@@ -20,7 +20,8 @@ public struct AgentImageInputPolicy: Hashable, Sendable {
 
     /// At most 20 images a request: Anthropic lowers its pixel limit for requests with more.
     public static let maximumImagesPerRequestLimit = 20
-    /// At most 24 MiB of image bytes a request, whose base64 form stays within Anthropic's 32 MB request.
+    /// At most 24 MiB of raw image bytes per request. This selection budget does not
+    /// guarantee the encoded HTTP body fits a provider limit; the adapter checks the whole body.
     public static let maximumImageBytesPerRequestLimit = 24 * 1024 * 1024
 
     public let mode: Mode

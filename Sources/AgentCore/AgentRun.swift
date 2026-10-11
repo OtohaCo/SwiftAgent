@@ -10,6 +10,15 @@ import Foundation
 /// Both methods share the Session's drain owner; they do not start a second
 /// drain.
 ///
+/// A complete final answer received before the deadline settles its deadline gate:
+/// its final checkpoint may finish after the deadline. Steering that requires
+/// another model request reopens the gate. Tools do not gain extra execution time.
+/// Cancellation remains cooperative until the final response seals steering and
+/// enters logical finishing. Cancellation after that seal does not interrupt final
+/// checkpoint publication. An already published checkpoint is adopted even if
+/// cancellation races its return. Persistence failure
+/// or an unknown commit is still a failure, never an invented completed result.
+///
 /// `events` is a single-consumer stream. Cancelling the observer does not
 /// cancel the Run; call `cancel()` to stop execution. `wait()` may be used
 /// by several callers and returns the same terminal result.

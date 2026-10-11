@@ -1,5 +1,28 @@
 # SwiftAgent Semantic Versioning
 
+## RC6 closeout (prepared, unreleased)
+
+The closeout adds no public initializer parameter, protocol requirement, enum
+case or Journal format. Existing `AgentJournalError.concurrentWriter` and
+`ModelProviderError.Kind.invalidRequest` report stale persistent history and
+Anthropic request-boundary rejection. These are intentional runtime changes:
+a stale actor cannot admit another input; an oversized encoded body or changed
+signed-thinking prefix cannot enter transport. Host recovery creates a fresh
+Session after physical drain, without replacing the shared Journal handle.
+
+Anthropic continuation uses its existing opaque format with optional local
+prefix evidence on newly produced payloads. Old unsigned payloads remain
+usable. Old signed/redacted thinking lacking evidence is rejected locally;
+matching model/origin alone cannot certify the bound prefix. No migration
+alters stored history. See [provider boundary policy](../anthropic-request-boundaries.md).
+The local witness proves correspondence, never vendor signature validity.
+
+This does not erase earlier RC5 → RC6 source breaks. Review the sections below
+for public enum additions, changed stored initializer signatures, optional
+queue operation IDs and additive Codable fields. Release notes collect the
+entire prerelease delta and reader matrix.
+
+
 ## Read-only invalid-output recovery (unreleased, PR #95)
 
 Verified 2026-10-08. Public signatures, enum cases and Journal schemas are

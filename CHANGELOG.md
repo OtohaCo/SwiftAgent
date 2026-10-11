@@ -1,5 +1,30 @@
 # Changelog
 
+## RC6 prepared candidate: history and request boundaries
+
+Status: unreleased; no tag or release date. The complete RC5 → RC6 scope is
+collected in [release notes](docs/releases/1.0.0-rc.6.md) and
+[whole-candidate acceptance](docs/releases/rc6-candidate-acceptance.md);
+historical unreleased sections below are included, not replaced.
+
+- Stale persistent Session histories fail with `concurrentWriter` before
+  input admission and Provider dispatch. Restoration and startup publication
+  bind the existing per-session history head; other Sessions and physical
+  maintenance do not invalidate that conversation witness. After physical
+  drain/reconciliation, reconstruct the Session on the same Journal handle.
+- Anthropic checks the final serialized HTTP body against a conservative
+  inclusive 32,000,000-byte ceiling before transport. Native image raw-byte
+  limits cannot guarantee the encoded body fits.
+- Signed/redacted thinking replay requires an unchanged locally witnessed
+  request prefix. Changed system/tools/earlier messages and legacy signed
+  payloads without this witness fail locally; fixed append-only continuation
+  and unsigned requests retain their supported paths. This does not verify
+  vendor signatures or qualify a live model/account.
+- Real final checkpoint publication crossing deadline, failure/unknown commit,
+  and public fixed-projector dynamic request views have focused regressions.
+  No new context public interface or Journal schema is introduced by closeout.
+
+
 ## Unreleased: a final answer received in time is not turned into a timeout
 
 - A Run whose model source handed over the whole final answer (a response that

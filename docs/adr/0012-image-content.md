@@ -46,7 +46,7 @@ estimation and dispatch; the canonical conversation keeps every image:
   Host's explicit choice for a model that does not see images.
 - `.native(maximumImagesPerRequest:maximumImageBytesPerRequest:)` (1...20
   images, default 20, since Anthropic lowers its pixel limit above 20; 1 byte to
-  24 MiB, default 20 MiB, so the base64 form stays within Anthropic's 32 MB
+  24 MiB, default 20 MiB. This raw-byte selection budget does not guarantee the encoded body fits Anthropic's 32 MB
   request): images are sent. The adapter must declare
   `ModelCapabilities.imageInput`, or the request fails before dispatch. The
   newest images are sent while they fit both limits; older ones in that request

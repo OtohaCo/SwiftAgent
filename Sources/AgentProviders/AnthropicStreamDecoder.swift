@@ -11,6 +11,7 @@ struct AnthropicStreamDecoder {
     }
     let model: ModelID
     let responseModelName: String
+    let requestPrefix: JSONValue?
     private var info: ResponseInfo?
     private var content: [ModelContent] = []
     private var nativeBlocks: [[String: JSONValue]] = []
@@ -34,8 +35,9 @@ struct AnthropicStreamDecoder {
         "content_block_stop", "message_delta", "message_stop",
     ]
 
-    init(model: ModelID, responseModelName: String? = nil) {
+    init(model: ModelID, responseModelName: String? = nil, requestPrefix: JSONValue? = nil) {
         self.model = model
+        self.requestPrefix = requestPrefix
         self.responseModelName = responseModelName ?? model.name
     }
 
@@ -174,7 +176,7 @@ struct AnthropicStreamDecoder {
                 modelCalls.append(value)
             }
             if stopReason == .endTurn || stopReason == .stopSequence || completed {
-                let state = try AnthropicContinuation.make(blocks: nativeBlocks.map(JSONValue.object), model: model)
+                let state = try AnthropicContinuation.make(blocks: nativeBlocks.map(JSONValue.object), model: model, requestPrefix: requestPrefix)
                 content.append(.providerContinuation(state))
                 events.append(.providerContinuation(state))
             }
