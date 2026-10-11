@@ -239,21 +239,27 @@ struct AgentCompletionCommitTests {
     }
 }
 
-/// Blocks the first CURRENT publication after it is armed: the checkpoint is committed, but its
-/// append has not returned to the Session yet.
+/// Blocks one selected publication stage after arming. The default holds after CURRENT
+/// publication; tests of durable landing can instead hold before CURRENT replacement.
 final class PublishedCheckpointHold: @unchecked Sendable {
     private let lock = NSLock()
     private let resume = DispatchSemaphore(value: 0)
     private var armed = false
+    private let stage: JournalFileFaultStage
+    private var baselineCurrent: Data?
     private let held: AsyncStream<Void>
     private let heldContinuation: AsyncStream<Void>.Continuation
 
-    init() { (held, heldContinuation) = AsyncStream<Void>.makeStream() }
+    init(stage: JournalFileFaultStage = .afterCurrentReplace) {
+        self.stage = stage
+        (held, heldContinuation) = AsyncStream<Void>.makeStream()
+    }
 
-    func arm() { lock.withLock { armed = true } }
+    func arm(current: Data? = nil) { lock.withLock { baselineCurrent = current; armed = true } }
+    var currentBeforePublication: Data? { lock.withLock { baselineCurrent } }
 
     func check(_ stage: JournalFileFaultStage) {
-        guard stage == .afterCurrentReplace, lock.withLock({ () -> Bool in
+        guard stage == self.stage, lock.withLock({ () -> Bool in
             defer { armed = false }
             return armed
         }) else { return }

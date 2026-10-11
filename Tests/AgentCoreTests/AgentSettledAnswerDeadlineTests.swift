@@ -17,29 +17,38 @@ struct AgentSettledAnswerDeadlineTests {
         }.delayingStreamEnd(by: delay)
     }
 
-    /// The real CURRENT publication has completed, but its checkpoint append remains blocked.
-    /// Crossing the deadline here must not rewrite the already received final answer as timeout.
+    /// Hold before actual CURRENT replacement, so the answer is not durably published
+    /// until after the deadline. The published root remains the user-only startup checkpoint.
     @Test(arguments: [false, true], [false, true])
     func finalCheckpointPublicationCrossesDeadlineAndReopensExactlyOnce(records: Bool, cancelDuringPublication: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("final-deadline-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let hold = PublishedCheckpointHold()
+        let hold = PublishedCheckpointHold(stage: .beforeCurrentReplace)
+        let sessionID = UUID()
+        let currentURL = directory.appendingPathComponent("CURRENT")
         let journal = try AgentIncrementalJournal.createForTesting(
             at: directory, operationDomain: "final-deadline", supportsRunRecords: records,
             fault: { hold.check($0) })
         let provider = ScriptedProvider { request, _ in
-            hold.arm()
+            #expect(try await journal.latestCheckpoint(sessionID: sessionID)?.history == [.user([.text("Answer")])])
+            hold.arm(current: try Data(contentsOf: currentURL))
             return textResponse(request, "persisted final answer")
         }
-        let session = try Agent(model: fixtureModel, provider: provider).makeSession(journal: journal)
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(id: sessionID, journal: journal)
         let deadline = ContinuousClock.now.advanced(by: .seconds(1))
         let run = try await session.run("Answer", budget: AgentBudget(
             maxModelTurns: 2, maxToolCalls: 0, deadline: deadline))
         let held = await hold.waitUntilHeld()
         #expect(held)
         if !held { hold.release(); return }
+        #expect(ContinuousClock.now < deadline, "final response reached publication before deadline")
+        // Journal reads share the held writer's lock, so inspect the actual published root:
+        // it still points to the independently checked user-only checkpoint, not the final candidate.
+        #expect(try Data(contentsOf: currentURL) == hold.currentBeforePublication)
         if cancelDuringPublication { await run.cancel() }
         try await Task.sleep(until: deadline.advanced(by: .milliseconds(50)), clock: .continuous)
+        #expect(try Data(contentsOf: currentURL) == hold.currentBeforePublication,
+                "final checkpoint must still be unpublished after deadline")
         hold.release()
         let result = try await run.wait()
         try await run.waitForDrain()

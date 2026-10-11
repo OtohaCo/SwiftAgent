@@ -106,8 +106,14 @@ commitUnknown must remain failures. No-answer timeout, steering reentry and
 tool deadline behavior retain their existing gates.
 `swift test --disable-sandbox --filter AgentSettledAnswerDeadlineTests` passes
 6 tests, including 4 barrier/deadline/cancellation/Run-record combinations and
-2 definite/unknown fault cases. No new #97 runtime defect was found; this is
-additional evidence and contract documentation, not an expanded timeout gate.
+2 definite/unknown fault cases. Independent review found the first test held `afterCurrentReplace`, which only
+proved delayed return. That P2 acceptance gap was corrected to
+`beforeCurrentReplace`: Provider first checks the user-only checkpoint and
+captures CURRENT; the test confirms entry before deadline and CURRENT remains
+unchanged after deadline, then releases actual publication. The amended 6-test
+suite passes with all 4 combinations and 2 failure cases. Prior wrong-barrier
+logs are retained but are not final landing evidence. No new #97 runtime defect
+was found; this is contract evidence, not an expanded timeout gate.
 
 ## Complete gates and independent review
 
