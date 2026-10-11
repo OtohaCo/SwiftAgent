@@ -1,6 +1,6 @@
 # RC6 whole-candidate acceptance
 
-Status: **prepared candidate; acceptance in progress**. This page covers the
+Status: **prepared candidate; local/source acceptance complete, final-head and main CI pending**. This page covers the
 whole RC5 → RC6 delta; the existing audited-authorization acceptance page
 qualifies only its own historical scope. No tag or GitHub Release is created.
 
@@ -13,10 +13,12 @@ qualifies only its own historical scope. No tag or GitHub Release is created.
 | Starting main tree | `c26e6c3c8daed7e809e50b76ecfdf132bdea3005` |
 | Historical baseline CI | [38057389035](https://github.com/OtohaCo/SwiftAgent/actions/runs/38057389035), success; does not certify RC6 |
 | Development branch | `fix/rc6-candidate`; initially clean worktree |
-| Tested source / tree | Pending final source commit |
-| Acceptance documentation / PR head | Pending final head |
-| PR CI | Pending |
-| Actual merged main / tree / CI | Pending; not yet merged |
+| Tested source | `5ebbcb94be868a3d43578a1d0f97a11fb382b7b1` |
+| Tested source tree | `81196a8e232d6c6c993f8404055e736ed01be7bb` |
+| Acceptance documentation / PR head | This later documentation-only commit; exact head is recorded by [PR #98](https://github.com/OtohaCo/SwiftAgent/pull/98) checks |
+| Source PR CI | [38148095076](https://github.com/OtohaCo/SwiftAgent/actions/runs/38148095076), launched for tested source; complete result must be checked |
+| Source push CI | [38148091538](https://github.com/OtohaCo/SwiftAgent/actions/runs/38148091538), same source; complete result must be checked |
+| Actual merged main / tree / CI | Pending; will be recorded in the post-merge acceptance comment on PR #98 after merge and its independent CI; not inferred from PR success |
 
 Local environment: macOS 27.2 arm64, Xcode 27.0 (27A266a), SDK 27.0,
 Apple Swift 6.4 (`swiftlang-6.4.0.34.1`, clang `2100.3.34.1`). Linux and
@@ -132,22 +134,26 @@ Session/Journal/admission/recovery; Provider/body/thinking; and runtime/context/
 public API/docs. Core history was reviewed independently by the runtime/context implementer;
 Provider changes by the history implementer; runtime/public fixture/docs by the
 Provider implementer. Final source/tests and the actual targeted results are
-reviewed, not only the proposed design. Findings and disposition will be
-attached to the final head before merge.
+reviewed, not only the proposed design. Final source seal:
+`5ebbcb94be868a3d43578a1d0f97a11fb382b7b1` /
+`81196a8e232d6c6c993f8404055e736ed01be7bb`. No unresolved P0/P1 or
+release-blocking P2 remains in reviewed scope. The #97 P2 correction above is
+recorded explicitly. [Focused logs and three review records](rc6-evidence/README.md)
+retain failures, corrections and results.
 
 Retained initial failures: a bounded interrupted SwiftPM planning attempt
 (without --disable-sandbox; no RED claim), real stale/body/thinking RED, and a
 new fixture missing-try compiler failure. The compiler failure was corrected
 before the final focused GREEN; no runtime gate was weakened. Local raw logs
-are retained in `.ci-logs/rc6/`; hosted full gate artifacts preserve their own
+are retained in `.ci-logs/rc6/`, with sanitized focused copies in `rc6-evidence/`; hosted full gate artifacts preserve their own
 SHA/tree/toolchain/command/exit metadata.
 
 ## Issues, limits and release separation
 
 | Issue | Candidate disposition |
 | --- | --- |
-| #65 | Large ordinary no-effect fixed by #67; verify merged tests before closure |
-| #66 | In-process reconciliation docs and fresh-Session contract; close after merge/evidence |
+| #65 | Large ordinary no-effect fixed by #67; current complete tests pass, close with merge/evidence |
+| #66 | In-process recovery docs/public comment and stale admission contract complete; close with merge/evidence |
 | #47 | Default fail-fast + opt-in bounded async lock wait; OS window persists, keep open |
 | #44 | Selected retry/diagnostic/pagination fixes merged; accumulation work deferred, keep open |
 | #45 | Historical macOS timeout attribution unknown; keep open, preserve failures |
@@ -167,6 +173,16 @@ Host-owned summaries/thresholds/model/cost/cache versioning, handle local
 rejections and fresh actors after reconciliation, then qualify product UI and
 end-to-end recovery. This delivery changes SwiftAgent only.
 
-Release conclusion: **not yet ready; final implementation, independent review,
-exact-head complete CI and actual-main CI remain required**. Merging main,
+Local complete gates all passed with exit 0 on the exact tested source, clean
+tracked workspace: `ci-macos.sh` (19 stage records, plus original report and
+reader gates), `ci-concurrency-seal.sh` and `ci-apple-provider.sh` (20 fixture
+tests). [Local stage identities/results](rc6-evidence/local-stage-results.json)
+record commands, compiler and source SHA/tree. Existing large no-effect and
+capacity/disk suites passed; no new service qualification was run.
+
+Release conclusion at this documentation commit: **implementation, focused
+regressions, local complete acceptance and independent review complete**.
+Final PR head complete CI and actual-main CI are mandatory before the
+ready-to-release attestation on PR #98. That attestation records full head,
+merge SHA/tree, CI URLs and issue outcomes; it does not create a tag/Release. Merging main,
 completing candidate acceptance and creating tag/Release are distinct steps.

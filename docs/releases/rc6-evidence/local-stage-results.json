@@ -1,0 +1,348 @@
+[
+  {
+    "stage": "durable-run-records",
+    "command": [
+      "swift",
+      "run",
+      "--package-path",
+      "Examples/ExternalClient",
+      "RunRecordFixture"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 2.079305208993901
+  },
+  {
+    "stage": "provider-qualification",
+    "command": [
+      "swift",
+      "test",
+      "--package-path",
+      "Examples/ProviderQualification",
+      "--disable-sandbox",
+      "--no-parallel"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 15.08230295800604
+  },
+  {
+    "stage": "apple-chat-build",
+    "command": [
+      "swift",
+      "build",
+      "--package-path",
+      "Examples/AppleChatApp"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 13.663067707995651
+  },
+  {
+    "stage": "dynamic-routing-tests",
+    "command": [
+      "swift",
+      "test",
+      "--package-path",
+      "Examples/DynamicModelRouting",
+      "--disable-sandbox",
+      "--no-parallel"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 12.018707082999754
+  },
+  {
+    "stage": "context-pipeline",
+    "command": [
+      "swift",
+      "run",
+      "--package-path",
+      "Examples/ExternalClient",
+      "ContextPipelineFixture"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 1.930378290999215
+  },
+  {
+    "stage": "replanning-eval-build",
+    "command": [
+      "swift",
+      "build",
+      "--package-path",
+      "Examples/ExternalClient",
+      "--product",
+      "ReplanningEvalTrial"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 1.8472756659975857
+  },
+  {
+    "stage": "core-tests",
+    "command": [
+      "swift",
+      "test",
+      "--disable-sandbox",
+      "--no-parallel"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 153.92815933300153
+  },
+  {
+    "stage": "apple-chat-ios-build",
+    "command": [
+      "swift",
+      "build",
+      "--package-path",
+      "Examples/AppleChatApp",
+      "--target",
+      "AppleChatApp",
+      "--triple",
+      "arm64-apple-ios16.0"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 10.164295166003285
+  },
+  {
+    "stage": "external-client-tests",
+    "command": [
+      "swift",
+      "test",
+      "--package-path",
+      "Examples/ExternalClient",
+      "--disable-sandbox",
+      "--no-parallel"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 17.435115332998976
+  },
+  {
+    "stage": "replanning-python",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "Examples/ExternalClient/ReplanningEvaluation",
+      "-p",
+      "test_*.py"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 1.6709082079978543
+  },
+  {
+    "stage": "scoped-capability",
+    "command": [
+      "swift",
+      "run",
+      "--package-path",
+      "Examples/ExternalClient",
+      "ScopedCapabilityFixture"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 2.1738057500042487
+  },
+  {
+    "stage": "strict-replanning-probe",
+    "command": [
+      "swift",
+      "run",
+      "--package-path",
+      "Examples/ExternalClient",
+      "BoundedReplanningProbe"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 3.4365490000054706
+  },
+  {
+    "stage": "decision-eval-regressions",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "Examples/DecisionEvaluation",
+      "-p",
+      "test_*.py"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 12.439794249999977
+  },
+  {
+    "stage": "decision-eval-build",
+    "command": [
+      "swift",
+      "build",
+      "--package-path",
+      "Examples/DecisionEvaluation"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 4.630081291994429
+  },
+  {
+    "stage": "core-build",
+    "command": [
+      "swift",
+      "build"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 4.742877916003636
+  },
+  {
+    "stage": "audited-authorization",
+    "command": [
+      "env",
+      "SWIFTAGENT_AUDIT_TESTS_ALREADY_RUN=1",
+      "bash",
+      "Scripts/ci-audited-authorization.sh"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 197.0721307499989
+  },
+  {
+    "stage": "core-ios-build",
+    "command": [
+      "swift",
+      "build",
+      "--triple",
+      "arm64-apple-ios16.0"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 10.157986332997098
+  },
+  {
+    "stage": "follow-up-queue",
+    "command": [
+      "swift",
+      "run",
+      "--package-path",
+      "Examples/ExternalClient",
+      "FollowUpQueueFixture"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 2.61562275000324
+  },
+  {
+    "stage": "apple-chat-tests",
+    "command": [
+      "swift",
+      "test",
+      "--package-path",
+      "Examples/AppleChatApp",
+      "--disable-sandbox",
+      "--no-parallel"
+    ],
+    "sourceCommitSHA": "5ebbcb94be868a3d43578a1d0f97a11fb382b7b1",
+    "sourceTreeSHA": "81196a8e232d6c6c993f8404055e736ed01be7bb",
+    "unverifiedWorkspaceChanges": false,
+    "toolchain": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "platform": "darwin",
+    "exitCode": 0,
+    "result": "pass",
+    "durationSeconds": 4.3229413330045645
+  }
+]

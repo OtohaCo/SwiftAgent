@@ -1,0 +1,91 @@
+Another instance of SwiftPM (PID: 23265) is already running using '<CHECKOUT>/.build', waiting until that process has finished execution...Building for debugging...
+[Computing dependencies]
+[1 / 5]
+[2 / 6] AgentModels
+[3 / 7] AgentModels
+[6 / 10] AgentAppleProvider
+[8 / 12] Crypto
+[10 / 14] AgentTools
+[12 / 16] AgentCore
+[13 / 17] AgentCore
+[24 / 29] AgentCore
+[28 / 30] AgentAppleProviderTests-product
+[31 / 32] AgentAppleProviderTests-product
+[34 / 38] AgentCatalog
+[38 / 40] AgentCatalogTests-product
+[45 / 63] AgentJournalFileStore
+[49 / 58] AgentCoreTests-product
+[52 / 61] AgentCoreTests-product
+[66 / 75] AgentCoreTests-product
+[71 / 75] AgentCoreTests-product
+[73 / 75] AgentCoreTests-product
+[76 / 80] AgentDecisions
+[80 / 82] AgentDecisionsTests-product
+[83 / 84] AgentDecisionsTests-product
+[86 / 90] AgentJevProvider
+[90 / 92] AgentJevProviderTests-product
+[94 / 97] JournalTestProcess-product
+[96 / 100] JournalTestProcess
+[99 / 104] JournalTestProcess-product
+[104 / 106] AgentJournalFileStoreTests-product
+[107 / 108] AgentJournalFileStoreTests-product
+[111 / 114] AgentModelsTests-product
+[113 / 116] AgentModelsTests-product
+[123 / 141] AgentProviders
+[125 / 142] AgentProviders
+[129 / 138] AgentProvidersTests-product
+[131 / 140] AgentProvidersTests-product
+[137 / 139] AgentProvidersTests-product
+[141 / 143] AgentToolsTests-product
+[146 / 148] AgentUsageTests-product
+[151 / 153] ArchitectureTests-product
+[155 / 159] WorkspaceAgent
+[159 / 161] WorkspaceAgentTests-product
+[162 / 163] WorkspaceAgentTests-product
+[171 / 181] MemoryJournalBenchmark-product
+[183 / 184] MemoryJournalBenchmark-product
+[190 / 190] AuditAuthorizationBenchmark-product
+Build complete! (18.16秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite AnthropicRequestBoundaryTests started.
+◇ Test signedThinkingRejectsChangedToolsAndEarlierMessages() started.
+◇ Test completeEncodedBodyIsRejectedBeforeTransport() started.
+◇ Test legalImageTotalsAndMixedExactBodyBoundary() started.
+✘ Test signedThinkingRejectsChangedToolsAndEarlierMessages() recorded an issue at AnthropicRequestBoundaryTests.swift:32:25: Issue recorded
+↳ Changed signed-thinking prefix reached transport
+✘ Test signedThinkingRejectsChangedToolsAndEarlierMessages() recorded an issue at AnthropicRequestBoundaryTests.swift:34:9: Expectation failed: await probe.requests.count == 1
+↳ await probe.requests.count == 1 → <not evaluated>
+✘ Test signedThinkingRejectsChangedToolsAndEarlierMessages() failed after 0.005 seconds with 2 issues.
+RC6 body oversize bytes=32000148
+✘ Test completeEncodedBodyIsRejectedBeforeTransport() recorded an issue at AnthropicRequestBoundaryTests.swift:15:25: Issue recorded
+↳ Oversize body reached transport
+✘ Test completeEncodedBodyIsRejectedBeforeTransport() recorded an issue at AnthropicRequestBoundaryTests.swift:17:9: Expectation failed: await probe.requests.isEmpty
+↳ await probe.requests.isEmpty → <not evaluated>
+✘ Test completeEncodedBodyIsRejectedBeforeTransport() recorded an issue at AnthropicRequestBoundaryTests.swift:18:9: Expectation failed: an error was expected but none was thrown
+↳ ModelProviderError.self → <not evaluated>
+↳   ModelProviderError → <not evaluated>
+↳   self → <not evaluated>
+✘ Test completeEncodedBodyIsRejectedBeforeTransport() failed after 0.424 seconds with 3 issues.
+RC6 legal image count=8 raw=25165824 body=33555209
+✘ Test legalImageTotalsAndMixedExactBodyBoundary() recorded an issue at AnthropicRequestBoundaryTests.swift:78:87: Issue recorded
+↳ Legal raw images exceeded whole body limit
+✘ Test legalImageTotalsAndMixedExactBodyBoundary() recorded an issue at AnthropicRequestBoundaryTests.swift:80:13: Expectation failed: await probe.requests.isEmpty
+↳ await probe.requests.isEmpty → <not evaluated>
+RC6 legal image count=7 raw=20971520 body=33962859
+✘ Test legalImageTotalsAndMixedExactBodyBoundary() recorded an issue at AnthropicRequestBoundaryTests.swift:78:87: Issue recorded
+↳ Legal raw images exceeded whole body limit
+✘ Test legalImageTotalsAndMixedExactBodyBoundary() recorded an issue at AnthropicRequestBoundaryTests.swift:80:13: Expectation failed: await probe.requests.isEmpty
+↳ await probe.requests.isEmpty → <not evaluated>
+✘ Test legalImageTotalsAndMixedExactBodyBoundary() recorded an issue at AnthropicRequestBoundaryTests.swift:95:49: Expectation failed: error.kind == .invalidRequest
+↳ error.kind == .invalidRequest → false
+↳   error.kind → .transport
+✘ Test legalImageTotalsAndMixedExactBodyBoundary() recorded an issue at AnthropicRequestBoundaryTests.swift:96:9: Expectation failed: await probe.requests.count == 1
+↳ await probe.requests.count == 1 → <not evaluated>
+RC6 mixed exact body=32000000 accepted transports=1; body=32000001 rejected transports=1
+✘ Test legalImageTotalsAndMixedExactBodyBoundary() failed after 2.358 seconds with 6 issues.
+✘ Suite AnthropicRequestBoundaryTests failed after 2.358 seconds with 11 issues.
+✘ Test run with 3 tests in 1 suite failed after 2.358 seconds with 11 issues.
+Note: Some test targets reported failures:
+  - AgentProvidersTests (Swift Testing)
