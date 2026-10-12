@@ -134,6 +134,11 @@ package actor AgentConversationControlState {
         return !canonical.dropFirst(leading + last.canonicalMessageCount).contains { $0.role == .user || $0.role == .tool }
     }
 
+    func activeReminderBoundary(in canonical: [ModelMessage]) -> Int? {
+        guard hasActiveReminder(in: canonical) else { return nil }
+        return state?.entries.last(where: { if case .reminder = $0.control { true } else { false } })?.canonicalMessageCount
+    }
+
     static func requireClosed(_ messages: [ModelMessage]) throws {
         var pending: Set<ToolCallID> = []
         for message in messages {

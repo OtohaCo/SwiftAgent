@@ -361,14 +361,19 @@ struct AnthropicConversationControlTests {
         #expect(try await journal.readMessages(sessionID: session.id).map(\.message) == canonical)
         try await journal.close()
     }
-    @Test(arguments: [false, true]) func idleCompactRefusesActiveReminderOrPermanentInstruction(_ permanent: Bool) async throws {
-        let probe = ProviderRequestProbe(), provider = try provider(probe, bodies: [anthropicTextFixture])
+    @Test(arguments: [false, true]) func idleCompactRefusesFailedReminderTurnOrPermanentInstruction(_ permanent: Bool) async throws {
+        let probe = ProviderRequestProbe(), provider = try provider(probe, bodies: permanent ? [anthropicTextFixture] : [])
         let agent = try Agent(binding: .init(profileID: "protected-control", profileRevision: "1", model: model, provider: provider,
             deployment: .init(serviceInstanceID: "fixture-account", endpointScope: endpoint.absoluteString, apiDialect: "anthropic")))
         let session = try agent.makeSession()
         let controls = try AgentRunContextControls(instructions: permanent ? ["permanent trusted notice"] : [], reminder: permanent ? nil : "turn reminder")
         let run = try await session.run("one", contextControls: controls)
-        _ = try await run.wait(); try await run.waitForDrain()
+        if permanent { _ = try await run.wait() }
+        else {
+            do { _ = try await run.wait(); Issue.record("expected provider failure") }
+            catch let error as ModelProviderError { #expect(error.kind == .transport) }
+        }
+        try await run.waitForDrain()
         let before = await session.history
         let operation = try await session.compact(mode: .anthropicOnDemand)
         do { _ = try await operation.wait(); Issue.record("protected control authority erased") }

@@ -33,7 +33,7 @@ struct DiskRunAdmissionV1: Codable {
             correlation = nil
         }
         return .init(record: .init(storeID: storeID, sessionID: sessionID, runID: runID, formalMessageID: formalMessageID,
-                                  correlation: correlation, followUpInputID: followUpInputID), payloadFingerprint: payloadFingerprint)
+                                  correlation: correlation, followUpInputID: followUpInputID), formalMessageOrdinal: formalMessageOrdinal, payloadFingerprint: payloadFingerprint)
     }
 }
 

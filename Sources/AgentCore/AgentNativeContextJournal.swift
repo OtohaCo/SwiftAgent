@@ -1,7 +1,37 @@
 import AgentModels
 import Foundation
 
+package struct CompletedReminderTurnProof: Sendable {
+    let runID: UUID
+    let boundary: Int
+}
+
 extension AgentJournal {
+    /// One store snapshot proves the active reminder belongs to the last completed
+    /// Run at the same persistent history head. The Session owns its drained lease.
+    package func completedReminderTurn(sessionID: UUID, boundary: Int,
+                                       expectedHistory: AgentJournalHistoryWitness) throws -> CompletedReminderTurnProof? {
+        guard let store, supportsRunRecords, boundary > 0 else { return nil }
+        return try store.read { view in
+            guard let header = try view.header(sessionID),
+                  AgentJournalHistoryWitness(head: header.historyHead) == expectedHistory,
+                  let runID = header.lastRunID else { return nil }
+            let proof = CompletedReminderTurnProof(runID: runID, boundary: boundary)
+            return try Self.isCompletedReminderTurn(sessionID: sessionID, proof: proof, header: header, view: view) ? proof : nil
+        }
+    }
+
+    /// Reused inside the publication transaction; metadata writes may not advance historyHead.
+    static func isCompletedReminderTurn(sessionID: UUID, proof: CompletedReminderTurnProof, header: JournalSessionHeader,
+                                        view: any JournalStoreView) throws -> Bool {
+        let boundary = proof.boundary, runID = proof.runID
+        guard boundary > 0, header.lastRunID == runID,
+              let admission = try view.runRecord(sessionID: sessionID, runID: runID),
+              try view.runTerminal(sessionID: sessionID, runID: runID) == .completed,
+              header.pendingIdentity == nil, try view.pending(sessionID: sessionID).isEmpty else { return false }
+        // Controls count formal messages; the persisted admission ordinal is zero-based.
+        return admission.formalMessageOrdinal < UInt64(boundary) && UInt64(boundary) <= header.messageCount
+    }
     /// Read-only effective context; canonical latestCheckpoint remains complete.
     public func nativeContextCheckpoint(sessionID: UUID) throws -> ModelNativeContextCheckpoint? {
         if let store { return try store.read { try $0.header(sessionID)?.nativeContext } }
@@ -11,14 +41,14 @@ extension AgentJournal {
     package func publishNativeContext(_ checkpoint: ModelNativeContextCheckpoint,
                                      history: [ModelMessage], sessionID: UUID, runID: UUID?,
                                      expectedHistory: AgentJournalHistoryWitness, steeringIDs: [UUID] = [],
-                                     deadline: ContinuousClock.Instant? = nil) throws {
+                                     deadline: ContinuousClock.Instant? = nil, completedReminderProof: CompletedReminderTurnProof? = nil) throws {
         guard supportsNativeContext else { throw AgentJournalError.unsupportedFormat }
         // No synthetic assistant response. Both view and history witness publish atomically.
         _ = try appendCheckpoint([.nativeContextCheckpoint(checkpoint), .checkpoint(history: history, steeringIDs: steeringIDs)],
                                  sessionID: sessionID, runID: runID, timestamp: Date(),
                                  durability: storage == .durable ? .durable : .memory,
                                  allowMutationSettlement: false, admissionDeadline: deadline, checkAdmissionCancellation: deadline != nil,
-                                 expectedHistory: expectedHistory, admitsNewWork: false)
+                                 expectedHistory: expectedHistory, admitsNewWork: false, completedReminderProof: completedReminderProof)
     }
 
     static func validateNativeContext(_ value: ModelNativeContextCheckpoint,

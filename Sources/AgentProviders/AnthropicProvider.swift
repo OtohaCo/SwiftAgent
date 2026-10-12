@@ -5,9 +5,20 @@ import FoundationNetworking
 #endif
 
 public enum AnthropicThinking: Equatable, Sendable {
+    /// Omit thinking and use this model deployment's service default.
+    case serviceDefault
+    /// Sonnet 5.5 progress thinking between tools, without up-front thinking.
+    case betweenTools
     case disabled
     case adaptive
     case enabled(budgetTokens: Int)
+
+    var supportsBindingControls: Bool {
+        switch self {
+        case .adaptive, .enabled: true
+        case .disabled, .serviceDefault, .betweenTools: false
+        }
+    }
 }
 
 /// Anthropic output-config effort wire value. Static values are conveniences,
@@ -111,6 +122,13 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid provider configuration.")
         }
         let host = endpoint.host?.lowercased() ?? ""
+        if thinking == .betweenTools, ["xhigh", "max"].contains(effort?.rawValue ?? "") {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Between-tools thinking requires effort high or below.")
+        }
+        if thinking == .serviceDefault || thinking == .betweenTools,
+           nativeContext?.thinkingPrefixMismatch != nil || nativeContext?.preservedThinking == true {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "This thinking mode cannot carry binding controls or managed thinking-tail qualification.")
+        }
         if case .enabled(let budget) = thinking, budget < 1_024 || budget >= maximumOutputTokens {
             throw ModelProviderError(kind: .invalidRequest, message: "The thinking budget must be at least 1024 and below the output limit.")
         }
@@ -246,7 +264,8 @@ extension AnthropicProvider: ModelProviderRequestValidator {
             // The official limit is 32 MB. Use decimal MB conservatively, not 32 MiB.
             guard body.count <= 32_000_000 else {
                 throw ModelProviderError(kind: .invalidRequest,
-                    message: "Anthropic encoded request body is \(body.count) bytes; the local limit is 32000000 bytes (32 MB), including base64 images and all JSON fields.")
+                    message: "Anthropic encoded request body is \(body.count) bytes; the local limit is 32000000 bytes (32 MB), including base64 images and all JSON fields.",
+                    diagnostic: .init(stage: .requestValidation, reason: .requestBodyTooLarge))
             }
             return (body, encoded, ordinary.sources)
         } catch let error as ModelProviderError { throw error }
@@ -255,7 +274,7 @@ extension AnthropicProvider: ModelProviderRequestValidator {
 }
 
 extension AnthropicProvider: ModelProviderPreservedThinkingCompaction {
-    public var supportsPreservedThinkingCompaction: Bool { nativeContext?.preservedThinking == true }
+    public var supportsPreservedThinkingCompaction: Bool { nativeContext?.preservedThinking == true && thinking.supportsBindingControls }
     public func preservedThinkingRequestWitness(request: ModelRequest) throws -> ModelPreservedThinkingRequestWitness {
         let (_, body, _) = try encodedRequest(request)
         let scope = try AnthropicPreservedThinking.scope(configuration: nativeContext, endpoint: endpoint,

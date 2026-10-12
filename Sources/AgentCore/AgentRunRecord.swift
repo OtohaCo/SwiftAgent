@@ -105,9 +105,10 @@ package struct JournalRunAdmission: Sendable {
 
 package struct JournalStoredRun: Sendable {
     package let record: AgentRunRecord
+    package let formalMessageOrdinal: UInt64
     package let payloadFingerprint: String
-    package init(record: AgentRunRecord, payloadFingerprint: String) {
-        self.record = record; self.payloadFingerprint = payloadFingerprint
+    package init(record: AgentRunRecord, formalMessageOrdinal: UInt64, payloadFingerprint: String) {
+        self.record = record; self.formalMessageOrdinal = formalMessageOrdinal; self.payloadFingerprint = payloadFingerprint
     }
 }
 extension AgentJournal {
