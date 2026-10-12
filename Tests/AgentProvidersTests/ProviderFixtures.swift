@@ -14,6 +14,7 @@ actor ProviderRequestProbe {
 struct FixtureHTTPTransport: ProviderHTTPTransport {
     let probe: ProviderRequestProbe
     let bodies: [Data]
+    var chunkBytes: Int? = nil
     var status = 200
     var headers: [String: String] = ["Content-Type": "text/event-stream"]
 
@@ -26,7 +27,11 @@ struct FixtureHTTPTransport: ProviderHTTPTransport {
                     return
                 }
                 continuation.yield(.response(status: status, headers: headers))
-                continuation.yield(.data(bodies[index]))
+                if let chunkBytes, chunkBytes > 0 {
+                    for offset in stride(from: 0, to: bodies[index].count, by: chunkBytes) {
+                        continuation.yield(.data(bodies[index].subdata(in: offset..<min(offset + chunkBytes, bodies[index].count))))
+                    }
+                } else { continuation.yield(.data(bodies[index])) }
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }

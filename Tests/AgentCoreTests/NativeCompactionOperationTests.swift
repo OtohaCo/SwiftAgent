@@ -13,7 +13,7 @@ import Testing
         let provider = NativeOperationFixture(generationBarrier: barrier, automaticToolResponse: true)
         let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "native-tool",
                                                                    supportsNativeContext: true, fault: { _ in })
-        let agent = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider,
+        let agent = try nativeFixtureAgent(model: .init(provider: "native-fixture", name: "model"), provider: provider,
                               tools: [AddTool(log: EffectLog())], configuration: .init(instructions: "root"))
         let session = try agent.makeSession(journal: journal)
         let run = try await session.run("source")
@@ -46,7 +46,7 @@ import Testing
         let calls = [ToolCall(id: .init(rawValue: "native-add"), name: "add", argumentsJSON: #"{"lhs":2,"rhs":3}"#, completeness: .complete),
             ToolCall(id: .init(rawValue: "native-mutation"), name: "no_effect_file", argumentsJSON: "{}", completeness: .complete)]
         let provider = NativeOperationFixture(automaticToolCalls: calls)
-        let agent = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider,
+        let agent = try nativeFixtureAgent(model: .init(provider: "native-fixture", name: "model"), provider: provider,
             tools: [AddTool(log: EffectLog()), try NoEffectFileTool(file: file, counts: counts, mode: mode)],
             configuration: audited ? .init(authorization: auditTestConfiguration()) : .init())
         let session = try agent.makeSession(journal: journal)
@@ -76,7 +76,7 @@ import Testing
             supportsAuthorizationAudit: true, supportsConfirmedNoEffect: true, supportsNativeContext: true, fault: { try fault.check($0) })
         let call = ToolCall(id: .init(rawValue: "native-mutation"), name: "no_effect_file", argumentsJSON: "{}", completeness: .complete)
         let counts = NoEffectCounts(), provider = NativeOperationFixture(automaticToolCalls: [call])
-        let session = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider,
+        let session = try nativeFixtureAgent(model: .init(provider: "native-fixture", name: "model"), provider: provider,
             tools: [try NoEffectFileTool(file: directory.appendingPathComponent("effect"), counts: counts, beforeReturn: { fault.arm() })],
             configuration: .init(authorization: auditTestConfiguration())).makeSession(journal: journal)
         let run = try await session.run("source", operationID: "native-fault")
@@ -96,7 +96,7 @@ import Testing
     @Test func idleCompactPreservesCanonicalAndNextRunUsesNativeWindow() async throws {
         let provider = NativeOperationFixture()
         let model = ModelID(provider: "native-fixture", name: "model")
-        let agent = try Agent(model: model, provider: provider, instructions: "root constraint")
+        let agent = try nativeFixtureAgent(model: model, provider: provider, configuration: .init(instructions: "root constraint"))
         let journal = AgentJournal(), id = UUID()
         let session = try agent.makeSession(id: id, journal: journal)
         let first = try await session.run("original full source")
@@ -120,7 +120,7 @@ import Testing
     }
     @Test func completeNoSummaryIsNotFinalAnswerOrCheckpoint() async throws {
         let provider = NativeOperationFixture(noSummary: true)
-        let agent = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
+        let agent = try nativeFixtureAgent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
         let journal = AgentJournal(), session = try agent.makeSession(journal: journal)
         let run = try await session.run("input"); _ = try await run.wait(); try await run.waitForDrain()
         let prior = try await session.conversationSnapshot()
@@ -133,7 +133,7 @@ import Testing
     @Test func cancelledLogicalOperationRetainsWriterUntilPhysicalDrain() async throws {
         let barrier = NativeCompactionBarrier()
         let provider = NativeOperationFixture(barrier: barrier)
-        let agent = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
+        let agent = try nativeFixtureAgent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
         let journal = AgentJournal(), id = UUID()
         let session = try agent.makeSession(id: id, journal: journal)
         let run = try await session.run("original"); _ = try await run.wait(); try await run.waitForDrain()
@@ -158,7 +158,7 @@ import Testing
         let binding = try AgentModelBinding(profileID: "native", profileRevision: "1", model: model, provider: provider,
             deployment: .init(serviceInstanceID: "fixture", endpointScope: "fixture", apiDialect: "fixture"),
             nativeContextPolicy: .init(compactBeforeGeneration: .openAIStandalone))
-        let agent = try Agent(model: model, provider: provider)
+        let agent = try nativeFixtureAgent(model: model, provider: provider)
         let journal = AgentJournal(), session = try agent.makeSession(journal: journal)
         let run = try await session.run("input retained canonically", using: binding)
         var compactUsage = 0
@@ -175,7 +175,7 @@ import Testing
     }
     @Test func automaticMaintenancePublishesAndContinuesWithoutFinalAnswer() async throws {
         let provider = NativeOperationFixture(maintenanceResponses: 1)
-        let agent = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
+        let agent = try nativeFixtureAgent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
         let journal = AgentJournal(), session = try agent.makeSession(journal: journal)
         let run = try await session.run("long source")
         let result = try await run.wait(); try await run.waitForDrain()
@@ -186,7 +186,7 @@ import Testing
     }
     @Test func repeatedMaintenanceIsBoundedAndNeverCompletesRun() async throws {
         let provider = NativeOperationFixture(maintenanceResponses: 20)
-        let agent = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
+        let agent = try nativeFixtureAgent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
         let session = try agent.makeSession()
         let run = try await session.run("source")
         await #expect(throws: ModelProviderError.self) { try await run.wait() }
@@ -198,7 +198,7 @@ import Testing
     @Test func maintenanceSummaryDoesNotDisableDeadlineForFollowingAnswer() async throws {
         let barrier = NativeCompactionBarrier()
         let provider = NativeOperationFixture(maintenanceResponses: 1, generationBarrier: barrier)
-        let agent = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
+        let agent = try nativeFixtureAgent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
         let journal = AgentJournal(), session = try agent.makeSession(journal: journal)
         let run = try await session.run("source", budget: .init(maxModelTurns: 8, maxToolCalls: 0,
                                                                 deadline: .now.advanced(by: .milliseconds(300))))
@@ -213,7 +213,7 @@ import Testing
 
     @Test func maintenanceCannotPublishUnacceptedClientToolProposal() async throws {
         let provider = NativeOperationFixture(maintenanceResponses: 1, maintenanceToolProposal: true)
-        let agent = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
+        let agent = try nativeFixtureAgent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
         let journal = AgentJournal(), session = try agent.makeSession(journal: journal)
         let run = try await session.run("source")
         await #expect(throws: ModelProviderError.self) { try await run.wait() }
@@ -333,4 +333,11 @@ private final class NativeSettlementFault: @unchecked Sendable {
             throw AgentJournalError.persistenceUnavailable("native settlement publication fixture")
         }
     }
+}
+
+private func nativeFixtureAgent(model: ModelID, provider: any ModelProvider, tools: [any AgentTool] = [],
+                                configuration: AgentConfiguration = .init()) throws -> Agent {
+    let binding = try AgentModelBinding(profileID: "native-fixture", profileRevision: "1", model: model, provider: provider,
+        deployment: .init(serviceInstanceID: "native-test-deployment", endpointScope: "fixture-local", apiDialect: model.provider))
+    return try Agent(binding: binding, tools: tools, configuration: configuration)
 }

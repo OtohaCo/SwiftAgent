@@ -153,6 +153,19 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
 
         let (owner, request) = try continuationOwner(of: request)
         let admission = await boundaryState.admission(sessionID: request.sessionID, runID: request.runID)
+        if request.nativeContextSource != nil || request.nativeContext != nil {
+            // Exact wire provenance is qualified for one actual owner. A retry would
+            // need a new managed invocation; never silently reuse its identity.
+            let index = try nativeOwnerIndex(owner: owner, request: request)
+            if admission.boundaryReached, let pinned = admission.pinnedCandidateIndex, pinned != index {
+                throw OwnedContinuation.unknownOrigin
+            }
+            let events = try await validatedEvents(from: candidates[index].provider, request: request)
+            try emitOwned(events, by: candidates[index], emit: emit)
+            await boundaryState.recordValidatedCandidate(sessionID: request.sessionID, runID: request.runID,
+                generation: admission.generation, candidateIndex: index)
+            return
+        }
         if admission.boundaryReached || owner != nil {
             return try await streamPinnedCandidate(admission, owner: owner, request: request, emit: emit)
         }
@@ -294,7 +307,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
                     },
                     toolCalls: response.toolCalls,
                     usage: response.usage,
-                    stopReason: response.stopReason
+                    stopReason: response.stopReason, inputTransformations: response.inputTransformations
                 )))
             default:
                 try emit(event)
@@ -325,10 +338,21 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
                 return .providerContinuation(native)
             }, toolCalls: calls)
         }
+        let checkpoint: ModelNativeContextCheckpoint?
+        if let value = request.nativeContext {
+            let (candidateID, native) = try OwnedContinuation.unwrap(value.continuation)
+            guard let index = candidates.firstIndex(where: { $0.id.utf8.elementsEqual(candidateID.utf8) }),
+                  owner == nil || owner == index else { throw OwnedContinuation.unknownOrigin }
+            owner = index; changed = true
+            checkpoint = .init(id: value.id, generation: value.generation, continuation: native, transition: value.transition,
+                rootConfigurationDigest: value.rootConfigurationDigest, toolBaseline: value.toolBaseline,
+                usage: value.usage, canonicalTailStart: value.canonicalTailStart)
+        } else { checkpoint = nil }
         guard changed else { return (nil, request) }
         return (owner, ModelRequest(model: request.model, messages: messages, tools: request.tools,
                                     structuredOutput: request.structuredOutput,
-                                    sessionID: request.sessionID, runID: request.runID))
+                                    sessionID: request.sessionID, runID: request.runID, nativeContext: checkpoint,
+                                    nativeContextSource: request.nativeContextSource, invocationID: request.invocationID))
     }
 
     private func validatedEvents(from candidate: any ModelProvider, request: ModelRequest) async throws -> [ModelEvent] {
@@ -346,7 +370,104 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
     }
 }
 
+extension ModelProviderRoute: ModelProviderNativeContextWitness, ModelProviderRequestValidator {
+    /// A Route only advertises modes implemented and qualified by every candidate.
+    public var compactionModes: Set<ModelCompactionMode> {
+        candidates.reduce(Set([.anthropicThreshold, .anthropicOnDemand, .openAIAutomatic, .openAIStandalone])) {
+            $0.intersection(($1.provider as? any ModelProviderCompaction)?.compactionModes ?? [])
+        }
+    }
+    public var automaticCompaction: ModelAutomaticCompaction? {
+        let values = candidates.map { ($0.provider as? any ModelProviderCompaction)?.automaticCompaction }
+        guard let first = values.first ?? nil, values.allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+    private func nativeOwner(_ request: ModelRequest) throws -> (Candidate, ModelRequest) {
+        let (owner, unwrapped) = try continuationOwner(of: request)
+        return (candidates[try nativeOwnerIndex(owner: owner, request: request)], unwrapped)
+    }
+    private func nativeOwnerIndex(owner: Int?, request: ModelRequest) throws -> Int {
+        let selected = boundaryState.nativeOwners.selected(sessionID: request.sessionID, runID: request.runID)
+        if let owner, let selected, owner != selected { throw OwnedContinuation.unknownOrigin }
+        return owner ?? selected ?? 0
+    }
+    public func validate(request: ModelRequest) throws {
+        guard request.nativeContext != nil || request.nativeContextSource != nil || candidates.contains(where: { ($0.provider as? any ModelProviderCompaction)?.automaticCompaction != nil }) else { return }
+        let (candidate, unwrapped) = try nativeOwner(request)
+        if candidates.contains(where: { ($0.provider as? any ModelProviderCompaction)?.automaticCompaction != nil }), automaticCompaction == nil {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Route candidates must agree on their automatic compaction policy.")
+        }
+        try (candidate.provider as? any ModelProviderRequestValidator)?.validate(request: unwrapped)
+    }
+    public func nativeContextRequestDigest(request: ModelRequest, compactionMode: ModelCompactionMode?) throws -> String {
+        let (candidate, unwrapped) = try nativeOwner(request)
+        guard let provider = candidate.provider as? any ModelProviderNativeContextWitness else {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "The native owner cannot bind an exact request.")
+        }
+        return try provider.nativeContextRequestDigest(request: unwrapped, compactionMode: compactionMode)
+    }
+    public func validateCompaction(request: ModelCompactionRequest) throws {
+        let (candidate, unwrapped) = try nativeOwner(request.request)
+        guard compactionModes.contains(request.mode), let provider = candidate.provider as? any ModelProviderCompaction else {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Route native compaction is not qualified.")
+        }
+        try provider.validateCompaction(request: .init(request: unwrapped, mode: request.mode,
+            operationID: request.operationID, invocationID: request.invocationID))
+    }
+    public func compact(request: ModelCompactionRequest) -> AsyncThrowingStream<ModelCompactionEvent, Error> {
+        AsyncThrowingStream { continuation in
+            guard !Task.isCancelled else { continuation.finish(throwing: CancellationError()); return }
+            let worker = Task {
+                do {
+                    try Task.checkCancellation()
+                    try validateCompaction(request: request)
+                    let (candidate, unwrapped) = try nativeOwner(request.request)
+                    let provider = candidate.provider as! any ModelProviderCompaction // validated above
+                    for try await event in provider.compact(request: .init(request: unwrapped, mode: request.mode,
+                        operationID: request.operationID, invocationID: request.invocationID)) {
+                        try Task.checkCancellation()
+                        if case .completed(let response) = event {
+                            let state = try response.continuation.map { try OwnedContinuation.wrap($0, candidate: candidate.id) }
+                            continuation.yield(.completed(.init(info: response.info, continuation: state, usage: response.usage,
+                                nativeStopReason: response.nativeStopReason, inputTransformations: response.inputTransformations)))
+                        } else { continuation.yield(event) }
+                    }
+                    try Task.checkCancellation(); continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in worker.cancel() }
+        }
+    }
+    public func waitForCompactionToDrain(sessionID: UUID, operationID: UUID) async {
+        for candidate in candidates {
+            await (candidate.provider as? any ModelProviderCompaction)?.waitForCompactionToDrain(sessionID: sessionID, operationID: operationID)
+        }
+    }
+}
+
+// Synchronous validators and wire witnesses must observe the same validated owner
+// as the actor-managed dispatch path. This cache contains no conversation state.
+private final class NativeOwnerCache: @unchecked Sendable {
+    private struct Key: Hashable { let sessionID: UUID; let runID: UUID }
+    private let lock = NSLock()
+    private var owners: [Key: Int] = [:]
+    func selected(sessionID: UUID?, runID: UUID?) -> Int? {
+        guard let sessionID, let runID else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        return owners[Key(sessionID: sessionID, runID: runID)]
+    }
+    func record(sessionID: UUID, runID: UUID, candidateIndex: Int) {
+        lock.lock(); defer { lock.unlock() }
+        owners[Key(sessionID: sessionID, runID: runID)] = candidateIndex
+    }
+    func clear(sessionID: UUID, runID: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        owners.removeValue(forKey: Key(sessionID: sessionID, runID: runID))
+    }
+}
+
 private actor MutationBoundaryState {
+    nonisolated let nativeOwners = NativeOwnerCache()
     struct Admission: Sendable {
         let boundaryReached: Bool
         let pinnedCandidateIndex: Int?
@@ -377,6 +498,7 @@ private actor MutationBoundaryState {
 
     func clear(sessionID: UUID, runID: UUID) {
         states.removeValue(forKey: Key(sessionID: sessionID, runID: runID))
+        nativeOwners.clear(sessionID: sessionID, runID: runID)
     }
 
     func recordValidatedCandidate(
@@ -389,6 +511,7 @@ private actor MutationBoundaryState {
         let key = Key(sessionID: sessionID, runID: runID)
         guard states[key]?.generation == generation else { return }
         states[key]?.pinnedCandidateIndex = candidateIndex
+        nativeOwners.record(sessionID: sessionID, runID: runID, candidateIndex: candidateIndex)
     }
 
     func admission(sessionID: UUID?, runID: UUID?) -> Admission {
@@ -427,7 +550,7 @@ private struct OwnedContinuation: Codable {
     static func wrap(_ state: ModelProviderContinuation, candidate: String) throws -> ModelProviderContinuation {
         let owned = OwnedContinuation(candidate: candidate, format: state.format, payload: state.payload)
         return ModelProviderContinuation(model: state.model, format: format,
-                                         payload: try ProviderJSON.encode(owned), origin: state.origin)
+                                         payload: try ProviderJSON.encode(owned), origin: state.origin, contextTransition: state.contextTransition)
     }
 
     static func unwrap(_ state: ModelProviderContinuation) throws -> (String, ModelProviderContinuation) {
@@ -435,6 +558,6 @@ private struct OwnedContinuation: Codable {
               let owned = try? JSONDecoder().decode(OwnedContinuation.self, from: state.payload),
               !owned.format.isEmpty, !owned.payload.isEmpty else { throw unknownOrigin }
         return (owned.candidate, ModelProviderContinuation(model: state.model, format: owned.format,
-                                                           payload: owned.payload, origin: state.origin))
+                                                           payload: owned.payload, origin: state.origin, contextTransition: state.contextTransition))
     }
 }

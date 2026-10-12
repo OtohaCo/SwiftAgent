@@ -18,7 +18,7 @@ extension AgentJournal {
                                  sessionID: sessionID, runID: runID, timestamp: Date(),
                                  durability: storage == .durable ? .durable : .memory,
                                  allowMutationSettlement: false, admissionDeadline: deadline, checkAdmissionCancellation: deadline != nil,
-                                 expectedHistory: expectedHistory)
+                                 expectedHistory: expectedHistory, admitsNewWork: false)
     }
 
     static func validateNativeContext(_ value: ModelNativeContextCheckpoint,

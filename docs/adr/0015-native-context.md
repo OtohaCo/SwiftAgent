@@ -1,4 +1,4 @@
-# ADR 0013: native context operations and append-only controls
+# ADR 0015: native context operations and append-only controls
 
 Status: accepted for implementation of #99; not a release or live qualification.
 Base: 34103af09baf0ecadfb27389803126ad0dd8f4ac, tree
@@ -147,3 +147,29 @@ Optional compact capability alone does not enable native state or require schema
 require the new opt-in format; unsupported explicit operations fail before input
 admission. Provider protocol/HTTP qualification and external public examples are
 subsequent stages and have not yet been accepted.
+
+## Protocol-stage refinements
+
+Native Core operations require an explicit deployment-scoped `AgentModelBinding`;
+the legacy `Agent(model:provider:)` identity is deliberately insufficient to name an
+endpoint/account/configuration across restart. `Agent(binding:tools:configuration:)`
+sets the frozen default without changing old initializer signatures. Disabled native
+features preserve the old path. Host identity must describe the real deployment.
+
+Native checkpoint publication checks deadline/cancellation without representing a
+new user/Run admission. This distinction is required in schema 11, whose Run-record
+contract correctly refuses a new admission lacking an admission record. The history
+witness still participates in the same transaction.
+
+Route wraps native transition metadata with the actual candidate owner and unwraps
+both the checkpoint envelope and ordinary continuations for that owner. Native
+HTTP requests/operations do not silently retry or switch candidates: a new attempt
+requires a new managed invocation. Automatic compaction is advertised only when all
+candidates agree; available standalone modes are the candidates' intersection.
+
+Anthropic on-demand HTTP 200 without a summary retains raw stop reason and usage,
+including tool_use without any executable calls. Transformations are observable on
+both generation and standalone operation streams before EOF, with whole snapshot
+replacement and nullable no-update semantics. Source maps use the actual encoded
+merged message/block positions and content digests (plus native checkpoint identity),
+not canonical array indices. Digests prove correspondence only.

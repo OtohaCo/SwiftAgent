@@ -14,7 +14,9 @@ struct AgentPreAdmissionReplanningTests {
         let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "native-rejection",
             supportsAdmissionRejections: true, supportsNativeContext: true, fault: { _ in })
         let base = rejectionProvider(), provider = EvidenceNativeProvider(base: base)
-        let session = try Agent(model: fixtureModel, provider: provider,
+        let binding = try AgentModelBinding(profileID: "native-rejection", profileRevision: "1", model: fixtureModel, provider: provider,
+            deployment: .init(serviceInstanceID: "native-rejection", endpointScope: "fixture-local", apiDialect: fixtureModel.provider))
+        let session = try Agent(binding: binding,
             tools: [try ResourceDiscovery(), try BoundedTestMutation()], configuration: .init(preAdmissionReplanning: policy))
             .makeSession(journal: journal)
         let run = try await session.run("start", operationID: "native-evidence")

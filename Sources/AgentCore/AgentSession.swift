@@ -1062,6 +1062,9 @@ public actor AgentSession {
         guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
         guard !dispatchStarting, dispatcherID == nil else { throw AgentFollowUpError.dispatchOwned }
         let binding = binding ?? defaultBinding
+        guard !binding.isLegacyBinding else {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Native context requires an explicit deployment-scoped model binding.")
+        }
         guard let provider = binding.provider as? any ModelProviderCompaction,
               provider.compactionModes.contains(mode) else {
             throw ModelProviderError(kind: .unsupportedCapability, message: "This deployment does not support the requested native compact operation.")

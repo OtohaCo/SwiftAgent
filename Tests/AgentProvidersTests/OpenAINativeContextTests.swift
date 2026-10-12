@@ -1,3 +1,5 @@
+import AgentCore
+import AgentJournalFileStore
 import AgentModels
 import AgentProviders
 import Foundation
@@ -5,11 +7,15 @@ import Testing
 
 @Suite struct OpenAINativeContextTests {
     private let endpoint = URL(string: "https://api.openai.com/v1/responses")!
+    private func scopedAgent(_ provider: any ModelProvider) throws -> Agent {
+        try Agent(binding: .init(profileID: "http-fixture", profileRevision: "1", model: .init(provider: "openai", name: "fixture"), provider: provider,
+            deployment: .init(serviceInstanceID: "fixture-account", endpointScope: endpoint.absoluteString, apiDialect: "openai")))
+    }
     private func provider(_ probe: ProviderRequestProbe, bodies: [Data], automatic: Bool = false) throws -> OpenAIResponsesProvider {
         let qualification = try NativeContextQualification(endpoint: endpoint, resolvedModelNames: ["fixture"], modes: [.openAIAutomatic, .openAIStandalone])
         return try OpenAIResponsesProvider(apiKey: "fixture-key", nativeContext: .init(qualification: qualification,
             automatic: automatic ? .init(mode: .openAIAutomatic, triggerInputTokens: 1_000) : nil),
-            transport: FixtureHTTPTransport(probe: probe, bodies: bodies, headers: ["Content-Type": automatic ? "text/event-stream" : "application/json"]))
+            transport: FixtureHTTPTransport(probe: probe, bodies: bodies, chunkBytes: 7, headers: ["Content-Type": automatic ? "text/event-stream" : "application/json"]))
     }
     private func request(_ provider: OpenAIResponsesProvider, mode: ModelCompactionMode?, messages: [ModelMessage],
                          native: ModelNativeContextCheckpoint? = nil) throws -> ModelRequest {
@@ -52,6 +58,64 @@ import Testing
         #expect(input[1]["created_by"] == .string("fixture"))
         #expect(input[2]["content"] == .string("next"))
     }
+    @Test func routeStandaloneOwnerAndCheckpointSurviveFileReopenAndReorder() async throws {
+        var phase = "setup"
+        do {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("native-route-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let compact = Data(#"{"id":"compact","created_at":1,"object":"response.compaction","output":[{"type":"compaction","id":"cmp","encrypted_content":"opaque"}],"usage":{"input_tokens":100,"output_tokens":2}}"#.utf8)
+        let a = ProviderRequestProbe(), b = ProviderRequestProbe()
+        let route = try ModelProviderRoute(id: "openai", candidates: [
+            .init(id: "owner-a", provider: provider(a, bodies: [openAITextFixture, compact, openAITextFixture])),
+            .init(id: "owner-b", provider: provider(b, bodies: [])),
+        ])
+        let id = UUID()
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "route-native", supportsNativeContext: true)
+        let session = try scopedAgent(route).makeSession(id: id, journal: journal)
+        let original = "full original source " + String(repeating: "x", count: 4_096)
+        phase = "first run"
+        let first = try await session.run(original); _ = try await first.wait(); try await first.waitForDrain()
+        let before = await session.history
+        phase = "idle compact"
+        let operation = try await session.compact(mode: .openAIStandalone)
+        let result = try await operation.wait(); try await operation.waitForDrain()
+        #expect(result.checkpoint?.continuation.format == "swiftagent.route-candidate.v1")
+        #expect(result.checkpoint?.continuation.contextTransition != nil)
+        #expect(await session.history == before)
+        phase = "next run"
+        let next = try await session.run("next"); _ = try await next.wait(); try await next.waitForDrain()
+        let canonical = await session.history
+        #expect(canonical.contains(.user([.text(original)])))
+        #expect(await a.requests.count == 3)
+        #expect(await b.requests.isEmpty)
+        let last = try #require(await a.requests.last?.httpBody)
+        #expect(!String(decoding: last, as: UTF8.self).contains(original))
+        phase = "close"
+        try await journal.close()
+        phase = "reopen"
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let freshA = ProviderRequestProbe(), freshB = ProviderRequestProbe()
+        let reordered = try ModelProviderRoute(id: "openai", candidates: [
+            .init(id: "owner-b", provider: provider(freshB, bodies: [])),
+            .init(id: "owner-a", provider: provider(freshA, bodies: [openAITextFixture])),
+        ])
+        phase = "fresh session"
+        let fresh = try scopedAgent(reordered).makeSession(id: id, journal: reopened)
+        phase = "snapshot"
+        #expect(try await fresh.conversationSnapshot().messages == canonical)
+        phase = "reopened run"
+        let resumed = try await fresh.run("reopened"); _ = try await resumed.wait(); try await resumed.waitForDrain()
+        #expect(await freshA.requests.count == 1)
+        #expect(await freshB.requests.isEmpty)
+        let body = try #require(await freshA.requests.last?.httpBody)
+        #expect(!String(decoding: body, as: UTF8.self).contains(original))
+        #expect(String(decoding: body, as: UTF8.self).contains("opaque"))
+        #expect(!String(decoding: body, as: UTF8.self).contains("swiftagent.route-candidate"))
+        phase = "final close"
+        try await reopened.close()
+        } catch { Issue.record("Native HTTP failure at \(phase)"); throw error }
+    }
+
     @Test func alreadyCancelledStandaloneCallerCannotDispatch() async throws {
         let probe = ProviderRequestProbe()
         let provider = try provider(probe, bodies: [Data(#"{"id":"none","created_at":1,"object":"response.compaction","output":[]}"#.utf8)])
@@ -141,7 +205,7 @@ import Testing
         let probe = ProviderRequestProbe()
         let compact: JSONValue = .object(["type": .string("compaction"), "id": .string("cmp"), "encrypted_content": .string("opaque"), "created_by": .string("extension")])
         let message: JSONValue = .object(["id": .string("msg"), "type": .string("message"), "role": .string("assistant"), "status": .string("completed"),
-            "content": .array([.object(["type": .string("output_text"), "text": .string("answer"), "annotations": .array([])])])])
+            "content": .array([.object(["type": .string("output_text"), "text": .string("完整答案"), "annotations": .array([])])])])
         func json(_ value: JSONValue) throws -> String { String(decoding: try JSONEncoder().encode(value), as: UTF8.self) }
         let frames: [(String, String)] = [
             ("response.created", #"{"type":"response.created","response":{"id":"resp","model":"fixture","status":"in_progress"}}"#),
@@ -171,10 +235,14 @@ import Testing
         }
         let provider = try provider(probe, bodies: [providerNamedSSE(actualFrames), openAITextFixture], automatic: true)
         let req = try request(provider, mode: nil, messages: [.user([.text("long source")])])
-        var response: ModelResponse?
-        for try await event in provider.stream(request: req) { if case .responseCompleted(let value) = event { response = value } }
+        var response: ModelResponse?, progress: [ModelCompactionProgress] = []
+        for try await event in provider.stream(request: req) {
+            if case .responseCompleted(let value) = event { response = value }
+            if case .compactionProgress(let value) = event { progress.append(value) }
+        }
+        #expect(progress == [.init(responseID: "resp", phase: "compacting")])
         let result = try #require(response)
-        #expect(result.content.contains(.text("answer")))
+        #expect(result.content.contains(.text("完整答案")))
         let state = try #require(result.content.compactMap { if case .providerContinuation(let value) = $0 { value } else { nil } }.first)
         #expect(state.contextTransition?.mode == .openAIAutomatic)
         let payload = try JSONDecoder().decode(JSONValue.self, from: state.payload)

@@ -146,6 +146,10 @@ struct ResponsesStreamDecoder {
         switch type {
         case "response.created", "response.queued", "response.in_progress":
             return try consumeLifecycle(object)
+        case "response.compaction.compacting":
+            guard let info, nativeRequest?.nativeContextSource != nil else { throw ProviderJSON.invalid() }
+            if let id = object["response_id"], id != .string(info.id) { throw ProviderJSON.invalid() }
+            return [.compactionProgress(.init(responseID: info.id, phase: "compacting"))]
         case "error":
             throw try classifyFailure(Self.errorEventPayload(object))
         case "response.failed":

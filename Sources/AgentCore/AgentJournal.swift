@@ -504,7 +504,8 @@ public actor AgentJournal {
         followUpInputID: String? = nil,
         auditDrafts: [JournalAuditDraft] = [],
         runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil,
-        expectedHistory: AgentJournalHistoryWitness? = nil
+        expectedHistory: AgentJournalHistoryWitness? = nil,
+        admitsNewWork: Bool? = nil
     ) throws -> [AgentJournalRecord] {
         try checkStartupAdmission(deadline: admissionDeadline, checkCancellation: checkAdmissionCancellation)
         let nativeTransitions = events.compactMap { event -> ModelNativeContextCheckpoint? in
@@ -519,7 +520,7 @@ public actor AgentJournal {
                                   timestamp: timestamp, view: view,
                                   allowMutationSettlement: allowMutationSettlement,
                                   followUpInputID: followUpInputID,
-                                  admitsNewWork: checkAdmissionCancellation,
+                                  admitsNewWork: admitsNewWork ?? checkAdmissionCancellation,
                                   auditDrafts: auditDrafts, runAdmission: runAdmission, runTerminal: runTerminal,
                                   expectedHistory: expectedHistory)
             }

@@ -90,6 +90,7 @@ public struct AgentModelBinding: Sendable {
     /// text, only by the Host's explicit choice.
     public let imageInput: AgentImageInputPolicy
     public let nativeContextPolicy: AgentNativeContextPolicy?
+    let isLegacyBinding: Bool
 
     public var profileID: String { info.profileID }
     public var profileRevision: String { info.profileRevision }
@@ -141,6 +142,7 @@ public struct AgentModelBinding: Sendable {
         self.legacyContinuationPolicy = legacyContinuationPolicy
         self.imageInput = imageInput
         self.nativeContextPolicy = nativeContextPolicy
+        isLegacyBinding = false
     }
 
     private init(
@@ -159,6 +161,7 @@ public struct AgentModelBinding: Sendable {
         self.legacyContinuationPolicy = legacyContinuationPolicy
         imageInput = .reject
         nativeContextPolicy = nil
+        isLegacyBinding = true
     }
 
     var continuationOrigin: ModelProviderContinuationOrigin {

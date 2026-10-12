@@ -640,12 +640,18 @@ package struct AgentLoop: Sendable {
             throw AgentLoopError.providerMismatch
         }
         if (provider as? any ModelProviderCompaction)?.automaticCompaction != nil || binding.nativeContextPolicy?.compactBeforeGeneration != nil {
+            guard !binding.isLegacyBinding else {
+                throw ModelProviderError(kind: .unsupportedCapability, message: "Native context requires an explicit deployment-scoped model binding.")
+            }
             if let journal, !journal.supportsNativeContext { throw AgentJournalError.unsupportedFormat }
         }
         if let mode = binding.nativeContextPolicy?.compactBeforeGeneration {
             guard let nativeProvider = provider as? any ModelProviderCompaction, nativeProvider.compactionModes.contains(mode) else {
                 throw ModelProviderError(kind: .unsupportedCapability, message: "The controlled compaction mode is not qualified for this deployment.")
             }
+        }
+        if await nativeContextState.current() != nil, binding.isLegacyBinding {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Restored native state requires its explicit deployment binding.")
         }
         let canonicalMessages = messages
         let messages = try await nativeContextState.effectiveMessages(messages, binding: binding, sessionID: sessionID,
@@ -832,17 +838,20 @@ package struct AgentLoop: Sendable {
     }
 
     private func scopeContinuation(_ event: ModelEvent) throws -> ModelEvent {
-        guard binding.legacyContinuationPolicy != .allowMatchingModel else { return event }
         switch event {
         case .providerContinuation(let state):
+            if binding.legacyContinuationPolicy == .allowMatchingModel, state.contextTransition == nil { return event }
             return .providerContinuation(try scoped(state))
         case .responseCompleted(let response):
+            if binding.legacyContinuationPolicy == .allowMatchingModel, !response.content.contains(where: {
+                if case .providerContinuation(let state) = $0 { state.contextTransition != nil } else { false }
+            }) { return event }
             return .responseCompleted(.init(
                 info: response.info,
                 content: try response.content.map(scoped),
                 toolCalls: response.toolCalls,
                 usage: response.usage,
-                stopReason: response.stopReason
+                stopReason: response.stopReason, inputTransformations: response.inputTransformations
             ))
         default:
             return event

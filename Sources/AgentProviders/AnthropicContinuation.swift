@@ -112,6 +112,10 @@ enum AnthropicContinuation {
             case "tool_use":
                 _ = try ProviderJSON.object(block["input"])
                 continue
+            case "compaction":
+                // The executing/replaying adapter validates the concrete compaction mode.
+                guard block["content"] != nil else { throw ProviderJSON.invalid() }
+                continue
             default: throw ProviderJSON.invalid()
             }
             switch (content.last, part) {

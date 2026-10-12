@@ -5,6 +5,7 @@ enum AnthropicRequestEncoder {
     private struct Message {
         let role: String
         var content: [JSONValue]
+        var identities: [ModelInputSourceIdentity]
         var json: JSONValue { .object(["role": .string(role), "content": .array(content)]) }
     }
     static func encode(
@@ -13,16 +14,31 @@ enum AnthropicRequestEncoder {
         thinking: AnthropicThinking,
         effort: AnthropicEffort? = nil,
         promptCaching: AnthropicPromptCaching? = nil,
-        resolvedModelName: String? = nil
+        resolvedModelName: String? = nil,
+        nativeContext: AnthropicNativeContextConfiguration? = nil
     ) throws -> JSONValue {
+        try encodeWithMapping(request, maximumOutputTokens: maximumOutputTokens, thinking: thinking, effort: effort,
+            promptCaching: promptCaching, resolvedModelName: resolvedModelName, nativeContext: nativeContext).body
+    }
+
+    static func encodeWithMapping(_ request: ModelRequest, maximumOutputTokens: Int, thinking: AnthropicThinking,
+        effort: AnthropicEffort? = nil, promptCaching: AnthropicPromptCaching? = nil, resolvedModelName: String? = nil,
+        nativeContext: AnthropicNativeContextConfiguration? = nil) throws -> (body: JSONValue, sources: [String: ModelInputSourceIdentity]) {
         guard request.model.provider == "anthropic", !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid Anthropic model identifier.")
         }
         try promptCaching?.validate(modelName: resolvedModelName ?? request.model.name)
         var system: [String] = []
         var messages: [Message] = []
+        var insertedNative = false
+        let nativeBlocks = try request.nativeContext.map { try AnthropicNativeContext.window($0, model: request.model) } ?? []
         var thinkingPrefixes: [(content: [ModelContent], blocks: [JSONValue], messages: [JSONValue])] = []
         for (messageIndex, message) in request.messages.enumerated() {
+            let messageDigest = ModelImageDigest.sha256Hex(try ProviderJSON.encode(message))
+            if message.role != .system && message.role != .developer, !insertedNative {
+                if !nativeBlocks.isEmpty { try append(role: "assistant", content: nativeBlocks, to: &messages, messageDigest: request.nativeContext.map { ModelImageDigest.sha256Hex($0.continuation.payload) } ?? "", nativeCheckpointID: request.nativeContext?.id) }
+                insertedNative = true
+            }
             switch message {
             case .system(let text), .developer(let text):
                 guard messages.isEmpty else {
@@ -30,12 +46,18 @@ enum AnthropicRequestEncoder {
                 }
                 system.append(text)
             case .user(let content):
-                try append(role: "user", content: marked(try textBlocks(content), at: messageIndex, configuration: promptCaching), to: &messages)
+                try append(role: "user", content: marked(try textBlocks(content), at: messageIndex, configuration: promptCaching), to: &messages, messageDigest: messageDigest)
             case .assistant(let content, let calls):
+                guard !content.contains(where: { if case .providerContinuation(let state) = $0 { state.contextTransition != nil } else { false } }) else {
+                    throw ModelProviderError(kind: .unsupportedCapability, message: "Native transition replay requires its published context checkpoint.")
+                }
                 guard !content.contains(where: \.isImage) else { throw ImageEncoding.assistantImage() }
                 if let restored = try AnthropicContinuation.restore(content: content, calls: calls, model: request.model) {
+                    guard !restored.contains(where: { $0["type"] == .string("compaction") }) else {
+                        throw ModelProviderError(kind: .unsupportedCapability, message: "Compaction replay requires its published native context checkpoint.")
+                    }
                     thinkingPrefixes.append((content, restored, messages.map(\.json)))
-                    try append(role: "assistant", content: marked(restored, at: messageIndex, configuration: promptCaching), to: &messages)
+                    try append(role: "assistant", content: marked(restored, at: messageIndex, configuration: promptCaching), to: &messages, messageDigest: messageDigest)
                     continue
                 }
                 var blocks = try textBlocks(content)
@@ -47,7 +69,7 @@ enum AnthropicRequestEncoder {
                     blocks.append(.object(["type": .string("tool_use"), "id": .string(call.id.rawValue),
                                             "name": .string(call.name), "input": arguments]))
                 }
-                try append(role: "assistant", content: marked(blocks, at: messageIndex, configuration: promptCaching), to: &messages)
+                try append(role: "assistant", content: marked(blocks, at: messageIndex, configuration: promptCaching), to: &messages, messageDigest: messageDigest)
             case .tool(let result):
                 let text = try result.content.compactMap { part -> String? in
                     switch part {
@@ -63,9 +85,10 @@ enum AnthropicRequestEncoder {
                 try append(role: "user", content: marked([.object([
                     "type": .string("tool_result"), "tool_use_id": .string(result.callID.rawValue),
                     "content": value, "is_error": .bool(result.isError),
-                ])], at: messageIndex, configuration: promptCaching), to: &messages)
+                ])], at: messageIndex, configuration: promptCaching), to: &messages, messageDigest: messageDigest)
             }
         }
+        if !insertedNative, !nativeBlocks.isEmpty { try append(role: "assistant", content: nativeBlocks, to: &messages, messageDigest: request.nativeContext.map { ModelImageDigest.sha256Hex($0.continuation.payload) } ?? "", nativeCheckpointID: request.nativeContext?.id) }
         guard !messages.isEmpty else { throw ModelProviderError(kind: .invalidRequest, message: "Conversation messages are required.") }
         var body: [String: JSONValue] = ["model": .string(request.model.name), "max_tokens": .number(Decimal(maximumOutputTokens)),
                                         "stream": .bool(true), "messages": .array(messages.map(\.json))]
@@ -124,22 +147,35 @@ enum AnthropicRequestEncoder {
             if let ttl = promptCaching.automaticTTL { body["cache_control"] = promptCaching.control(ttl) }
             try promptCaching.validateTTLOrder(in: body)
         }
-        for prior in thinkingPrefixes {
+        for prior in thinkingPrefixes where nativeContext?.thinkingPrefixMismatch == nil {
             try AnthropicContinuation.validatePrefix(content: prior.content, blocks: prior.blocks,
                 prefix: AnthropicContinuation.prefix(system: body["system"], tools: body["tools"], messages: prior.messages))
         }
-        return .object(body)
+        var sources: [String: ModelInputSourceIdentity] = [:]
+        for (index, message) in messages.enumerated() {
+            for (block, identity) in message.identities.enumerated() { sources["messages.\(index).content.\(block)"] = identity }
+        }
+        return (.object(body), sources)
     }
 
     private static func marked(_ blocks: [JSONValue], at index: Int, configuration: AnthropicPromptCaching?) throws -> [JSONValue] {
         try configuration?.mark(blocks, atMessage: index) ?? blocks
     }
 
-    private static func append(role: String, content: [JSONValue], to messages: inout [Message]) throws {
+    private static func append(role: String, content: [JSONValue], to messages: inout [Message],
+                               messageDigest: String, nativeCheckpointID: UUID? = nil) throws {
         if role == "assistant", content.isEmpty { return }
         guard !content.isEmpty else { throw ModelProviderError(kind: .invalidRequest, message: "Message content is required.") }
-        if messages.last?.role == role { messages[messages.count - 1].content.append(contentsOf: content) }
-        else { messages.append(.init(role: role, content: content)) }
+        let identities = try content.map { value in
+            var fields = try ProviderJSON.object(value)
+            fields.removeValue(forKey: "cache_control")
+            return ModelInputSourceIdentity(messageDigest: messageDigest,
+                contentDigest: ModelImageDigest.sha256Hex(try ProviderJSON.encode(JSONValue.object(fields))), nativeCheckpointID: nativeCheckpointID)
+        }
+        if messages.last?.role == role {
+            messages[messages.count - 1].content.append(contentsOf: content)
+            messages[messages.count - 1].identities.append(contentsOf: identities)
+        } else { messages.append(.init(role: role, content: content, identities: identities)) }
     }
 
     /// Text blocks, and images as base64 image blocks in their place.

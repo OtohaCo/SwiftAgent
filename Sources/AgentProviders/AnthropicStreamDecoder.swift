@@ -12,6 +12,10 @@ struct AnthropicStreamDecoder {
     let model: ModelID
     let responseModelName: String
     let requestPrefix: JSONValue?
+    let nativeRequest: ModelRequest?
+    let compactionMode: ModelCompactionMode?
+    let nativeIterationUsage: Bool
+    private var compactionDeltas: Set<Int> = []
     private var info: ResponseInfo?
     private var content: [ModelContent] = []
     private var nativeBlocks: [[String: JSONValue]] = []
@@ -21,8 +25,11 @@ struct AnthropicStreamDecoder {
     private var cacheWriteInputTokens: Int?
     private var reasoningTokens: Int?
     private var cacheWriteTTL: CacheWriteTTLUsage?
+    private var iterations: [ModelUsageIteration]?
     private var usage = ModelUsage()
     private var stopReason: StopReason?
+    private var inputTransformations: [ModelInputTransformation]?
+    let inputSources: [String: ModelInputSourceIdentity]
     private var ended = false
     private var activeIndex: Int?
     private var blockCount = 0
@@ -35,9 +42,14 @@ struct AnthropicStreamDecoder {
         "content_block_stop", "message_delta", "message_stop",
     ]
 
-    init(model: ModelID, responseModelName: String? = nil, requestPrefix: JSONValue? = nil) {
+    init(model: ModelID, responseModelName: String? = nil, requestPrefix: JSONValue? = nil,
+         nativeRequest: ModelRequest? = nil, compactionMode: ModelCompactionMode? = nil, inputSources: [String: ModelInputSourceIdentity] = [:], nativeIterationUsage: Bool = false) {
         self.model = model
         self.requestPrefix = requestPrefix
+        self.nativeRequest = nativeRequest
+        self.compactionMode = compactionMode
+        self.inputSources = inputSources
+        self.nativeIterationUsage = nativeIterationUsage || compactionMode != nil
         self.responseModelName = responseModelName ?? model.name
     }
 
@@ -75,7 +87,7 @@ struct AnthropicStreamDecoder {
                   responseModel.utf8.elementsEqual(responseModelName.utf8) else { throw ProviderJSON.invalid() }
             let value = ResponseInfo(id: id, model: model)
             info = value
-            return [.responseStarted(value)] + (try usageEvents(message["usage"]))
+            return [.responseStarted(value)] + (try transformationEvents(message["input_transformations"])) + (try usageEvents(message["usage"]))
         }
         guard let info else {
             if Self.knownEventTypes.contains(type) { throw ProviderJSON.invalid() }
@@ -89,6 +101,11 @@ struct AnthropicStreamDecoder {
             nativeBlocks.append(block)
             blockCount += 1
             switch try ProviderJSON.string(block["type"]) {
+            case "compaction":
+                guard nativeRequest?.nativeContextSource != nil, let compactionMode else { throw ProviderJSON.invalid() }
+                if compactionMode == .anthropicOnDemand { _ = try AnthropicNativeContext.validateBlock(.object(block), mode: compactionMode) }
+                else { guard block["content"] == .null else { throw ProviderJSON.invalid() } }
+                return []
             case "text": return append(try ProviderJSON.string(block["text"]))
             case "thinking":
                 if let signature = block["signature"], !(try ProviderJSON.string(signature)).isEmpty { signaturesStarted.insert(blockCount - 1) }
@@ -108,6 +125,14 @@ struct AnthropicStreamDecoder {
         case "content_block_delta":
             guard stopReason == nil, let activeIndex, try ProviderJSON.count(object["index"]) == activeIndex else { throw ProviderJSON.invalid() }
             let delta = try ProviderJSON.object(object["delta"])
+            if nativeBlocks[activeIndex]["type"] == .string("compaction") {
+                guard compactionMode == .anthropicThreshold, delta["type"] == .string("compaction_delta"),
+                      compactionDeltas.insert(activeIndex).inserted, delta["content"] != nil else { throw ProviderJSON.invalid() }
+                // The one delta replaces the complete summary; it is never concatenated.
+                for (key, value) in delta where key != "type" { nativeBlocks[activeIndex][key] = value }
+                _ = try AnthropicNativeContext.validateBlock(.object(nativeBlocks[activeIndex]), mode: .anthropicThreshold)
+                return []
+            }
             if let activeCall {
                 guard try ProviderJSON.string(delta["type"]) == "input_json_delta",
                       calls[activeCall].initialInput == .object([:]) else { throw ProviderJSON.invalid() }
@@ -136,6 +161,10 @@ struct AnthropicStreamDecoder {
             return append(fragment)
         case "content_block_stop":
             guard let activeIndex, try ProviderJSON.count(object["index"]) == activeIndex else { throw ProviderJSON.invalid() }
+            if nativeBlocks[activeIndex]["type"] == .string("compaction") {
+                guard let compactionMode, compactionMode != .anthropicThreshold || compactionDeltas.contains(activeIndex) else { throw ProviderJSON.invalid() }
+                _ = try AnthropicNativeContext.validateBlock(.object(nativeBlocks[activeIndex]), mode: compactionMode)
+            }
             self.activeIndex = nil
             activeCall = nil
             return []
@@ -155,11 +184,30 @@ struct AnthropicStreamDecoder {
                 guard activeIndex == nil, stopReason == nil || stopReason == mapped else { throw ProviderJSON.invalid() }
                 stopReason = mapped
             }
-            return try usageEvents(object["usage"])
+            return try transformationEvents(object["input_transformations"]) + usageEvents(object["usage"])
         case "message_stop":
-            guard activeIndex == nil, let stopReason else { throw ProviderJSON.invalid() }
+            guard activeIndex == nil, var stopReason else { throw ProviderJSON.invalid() }
+            let validBlocks = try nativeBlocks.filter { block in
+                if block["type"] != .string("compaction") { return true }
+                guard let compactionMode else { throw ProviderJSON.invalid() }
+                return try AnthropicNativeContext.validateBlock(.object(block), mode: compactionMode)
+            }
+            let latestCompaction = validBlocks.lastIndex(where: { $0["type"] == .string("compaction") })
+            if let latestCompaction {
+                guard !validBlocks.prefix(latestCompaction).contains(where: { $0["type"] == .string("tool_use") }) else { throw ProviderJSON.invalid() }
+                if stopReason == .endTurn, !validBlocks.dropFirst(latestCompaction + 1).contains(where: { $0["type"] == .string("text") || $0["type"] == .string("tool_use") }) {
+                    stopReason = .unknown("compaction")
+                }
+            }
+            if compactionMode == .anthropicOnDemand {
+                guard nativeBlocks.count <= 1, calls.isEmpty, content.isEmpty,
+                      latestCompaction == nil || stopReason == .unknown("compaction") else { throw ProviderJSON.invalid() }
+                // A billed no-summary stage may stop with tool_use without proposing a
+                // tool. Preserve that raw reason without treating it as generation work.
+                if latestCompaction == nil, stopReason == .toolCalls { stopReason = .unknown("tool_use") }
+            }
             ended = true
-            var events: [ModelEvent] = []
+            var events: [ModelEvent] = try iterationUsageEvents(complete: true)
             let completed = stopReason == .toolCalls
             var modelCalls: [ToolCall] = []
             for call in calls {
@@ -175,12 +223,25 @@ struct AnthropicStreamDecoder {
                 }
                 modelCalls.append(value)
             }
-            if stopReason == .endTurn || stopReason == .stopSequence || completed {
-                let state = try AnthropicContinuation.make(blocks: nativeBlocks.map(JSONValue.object), model: model, requestPrefix: requestPrefix)
-                content.append(.providerContinuation(state))
-                events.append(.providerContinuation(state))
+            if latestCompaction != nil || stopReason == .endTurn || stopReason == .stopSequence || completed {
+                let replayBlocks = try nativeBlocks.filter { block in
+                    if block["type"] != .string("compaction") { return true }
+                    return try AnthropicNativeContext.validateBlock(.object(block), mode: compactionMode!)
+                }.map(JSONValue.object)
+                if !replayBlocks.isEmpty {
+                    let ordinary = try AnthropicContinuation.make(blocks: replayBlocks, model: model, requestPrefix: requestPrefix)
+                    let state: ModelProviderContinuation
+                    if let latestCompaction {
+                        guard let request = nativeRequest, let source = request.nativeContextSource, let invocation = request.invocationID,
+                              let compactionMode else { throw ProviderJSON.invalid() }
+                        let transition = ModelNativeContextTransition(mode: compactionMode, source: source,
+                            replayPosition: latestCompaction, invocationID: invocation, responseID: info.id)
+                        state = .init(model: model, format: ordinary.format, payload: ordinary.payload, contextTransition: transition)
+                    } else { state = ordinary }
+                    content.append(.providerContinuation(state)); events.append(.providerContinuation(state))
+                }
             }
-            events.append(.responseCompleted(.init(info: info, content: content, toolCalls: modelCalls, usage: usage, stopReason: stopReason)))
+            events.append(.responseCompleted(.init(info: info, content: content, toolCalls: modelCalls, usage: usage, stopReason: stopReason, inputTransformations: inputTransformations)))
             return events
         default:
             return []
@@ -199,6 +260,20 @@ struct AnthropicStreamDecoder {
         if case .text(let previous) = content.last { content[content.count - 1] = .text(previous + delta) }
         else { content.append(.text(delta)) }
         return [.textDelta(delta)]
+    }
+
+    private mutating func transformationEvents(_ value: JSONValue?) throws -> [ModelEvent] {
+        guard let value, value != .null else { return [] }
+        guard case .array(let values) = value, values.count <= 10_000 else { throw ProviderJSON.invalid() }
+        let snapshot = try values.map { value in
+            let fields = try ProviderJSON.object(value)
+            let kind = try ProviderJSON.string(fields["type"]), path = try ProviderJSON.string(fields["path"])
+            guard !kind.isEmpty, !path.isEmpty else { throw ProviderJSON.invalid() }
+            let reason = try fields["reason"].flatMap { $0 == .null ? nil : try ProviderJSON.string($0) }
+            return ModelInputTransformation(kind: kind, reason: reason, path: path, source: inputSources[path])
+        }
+        inputTransformations = snapshot
+        return [.inputTransformations(snapshot)]
     }
 
     private mutating func usageEvents(_ value: JSONValue?) throws -> [ModelEvent] {
@@ -227,8 +302,57 @@ struct AnthropicStreamDecoder {
             guard !readOverflow, !writeOverflow else { throw ProviderJSON.invalid() }
             total = withWrite
         }
-        self.usage = .init(inputTokens: total, outputTokens: outputTokens, cachedInputTokens: cachedInputTokens,
-                           cacheWriteInputTokens: cacheWriteInputTokens, reasoningTokens: reasoningTokens, cacheWriteTTL: cacheWriteTTL)
+        if let value = usage["iterations"], value != .null {
+            guard case .array(let values) = value, values.count <= 1_000 else { throw ProviderJSON.invalid() }
+            iterations = try values.enumerated().map { ordinal, value in
+                let child = try ProviderJSON.object(value)
+                let kind = try ProviderJSON.string(child["type"])
+                let nativeInput = try ProviderJSON.count(child["input_tokens"])
+                let read = try ProviderJSON.count(child["cache_read_input_tokens"])
+                let write = try ProviderJSON.count(child["cache_creation_input_tokens"])
+                var inclusive: Int?
+                if let nativeInput, let read, let write {
+                    let first = nativeInput.addingReportingOverflow(read)
+                    let second = first.partialValue.addingReportingOverflow(write)
+                    guard !first.overflow, !second.overflow else { throw ProviderJSON.invalid() }
+                    inclusive = second.partialValue
+                }
+                let childModel: ModelID?
+                if let name = child["model"], name != .null {
+                    let name = try ProviderJSON.string(name)
+                    guard !name.isEmpty else { throw ProviderJSON.invalid() }
+                    childModel = .init(provider: model.provider, name: name)
+                } else if ["message", "compaction"].contains(kind) {
+                    childModel = .init(provider: model.provider, name: responseModelName)
+                } else { childModel = nil }
+                let ttl: CacheWriteTTLUsage?
+                if let value = child["cache_creation"], value != .null {
+                    let detail = try ProviderJSON.object(value)
+                    ttl = .init(fiveMinuteTokens: try ProviderJSON.count(detail["ephemeral_5m_input_tokens"]),
+                        oneHourTokens: try ProviderJSON.count(detail["ephemeral_1h_input_tokens"]))
+                } else { ttl = nil }
+                let details = try child["output_tokens_details"].flatMap { $0 == .null ? nil : try ProviderJSON.object($0) }
+                return try .init(ordinal: ordinal, kind: kind, model: childModel, inputTokens: inclusive,
+                    outputTokens: ProviderJSON.count(child["output_tokens"]), cachedInputTokens: read, cacheWriteInputTokens: write,
+                    reasoningTokens: ProviderJSON.count(details?["thinking_tokens"]), cacheWriteTTL: ttl)
+            }
+        }
+        if iterations != nil { return try iterationUsageEvents(complete: false) }
+        if nativeIterationUsage {
+            // Under the beta, parent counts exclude compaction. Until the complete
+            // iteration table arrives they cannot certify whole-invocation consumption.
+            self.usage = .init()
+        } else {
+            self.usage = .init(inputTokens: total, outputTokens: outputTokens, cachedInputTokens: cachedInputTokens,
+                cacheWriteInputTokens: cacheWriteInputTokens, reasoningTokens: reasoningTokens, cacheWriteTTL: cacheWriteTTL)
+        }
         return [.usage(self.usage)]
     }
+    private mutating func iterationUsageEvents(complete: Bool) throws -> [ModelEvent] {
+        guard let iterations else { return [] }
+        let table = try ModelIterationUsage(iterations: iterations, coverage: complete ? .complete : .partial)
+        usage = try table.aggregate()
+        return [.usage(usage)]
+    }
+
 }

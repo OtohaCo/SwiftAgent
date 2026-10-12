@@ -72,7 +72,7 @@ struct AgentNativeCompactionExecutor: Sendable {
             try Task.checkCancellation()
             guard completed == nil else { throw ModelProviderError(kind: .invalidResponse, message: "Compaction events followed the terminal response.") }
             switch event {
-            case .usage: try await emit(event)
+            case .usage, .inputTransformations, .progress: try await emit(event)
             case .completed(let response): completed = response
             }
         }

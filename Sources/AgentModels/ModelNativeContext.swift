@@ -137,13 +137,26 @@ public struct ModelCompactionResponse: Hashable, Sendable, Codable {
     public let info: ResponseInfo
     public let continuation: ModelProviderContinuation?
     public let usage: ModelUsage
+    /// Vendor stop reason for a standalone stage, including billed no-summary outcomes.
+    public let nativeStopReason: String?
+    public let inputTransformations: [ModelInputTransformation]?
     public init(info: ResponseInfo, continuation: ModelProviderContinuation?, usage: ModelUsage) {
-        self.info = info; self.continuation = continuation; self.usage = usage
+        self.init(info: info, continuation: continuation, usage: usage, nativeStopReason: nil)
+    }
+    public init(info: ResponseInfo, continuation: ModelProviderContinuation?, usage: ModelUsage, nativeStopReason: String?) {
+        self.init(info: info, continuation: continuation, usage: usage, nativeStopReason: nativeStopReason, inputTransformations: nil)
+    }
+    public init(info: ResponseInfo, continuation: ModelProviderContinuation?, usage: ModelUsage,
+                nativeStopReason: String?, inputTransformations: [ModelInputTransformation]?) {
+        self.info = info; self.continuation = continuation; self.usage = usage; self.nativeStopReason = nativeStopReason
+        self.inputTransformations = inputTransformations
     }
 }
 
 public enum ModelCompactionEvent: Hashable, Sendable, Codable {
     case usage(ModelUsage)
+    case inputTransformations([ModelInputTransformation])
+    case progress(ModelCompactionProgress)
     case completed(ModelCompactionResponse)
 }
 
