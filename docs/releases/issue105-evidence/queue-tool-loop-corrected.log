@@ -1,0 +1,22 @@
+Building for debugging...
+[Computing dependencies]
+[1 / 4] AgentDecisions
+[2 / 6] NativeContextFixtureSupport
+[3 / 7] NativeContextFixtureSupport
+[7 / 10] NativeContextFixtureSupport
+[10 / 12] ExternalClientTests-product
+[12 / 14] ExternalClientTests-product
+[15 / 16] ExternalClientTests-product
+[18 / 22] NativeContextFixture-product
+[21 / 22] NativeContextFixture-product
+Build complete! (3.60秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite NativeContextPublicClientTests started.
+◇ Test queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) started.
+◇ Test case passing 1 argument cancel → false to queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) started.
+◇ Test case passing 1 argument cancel → true to queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) started.
+✔ Test queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) with 2 test cases passed after 0.268 seconds.
+✔ Suite NativeContextPublicClientTests passed after 0.268 seconds.
+✔ Test run with 1 test in 1 suite passed after 0.268 seconds.

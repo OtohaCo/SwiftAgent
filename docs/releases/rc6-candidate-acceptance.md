@@ -1,6 +1,21 @@
 # RC6 whole-candidate acceptance
 
-Status: **prepared candidate; local/source acceptance complete, final-head and main CI pending**. This page covers the
+Status: **prepared, unreleased; final current-main acceptance is still required**.
+The initial closeout provenance below is historical. Subsequent merged native
+context, #101 and #103 changes are covered by their linked acceptance records;
+#105 first scope is in [PR #107](https://github.com/OtohaCo/SwiftAgent/pull/107),
+with [its complete scope/evidence](issue105-acceptance.md). Actual main
+`8b896eae05b5fd838e61e67a6cb69ca7c0e78458` / tree
+`3c34571d48d65e6020434bc0e60d0bc794fed149` had macOS/Apple success but failed Linux
+build CI [38229615849](https://github.com/OtohaCo/SwiftAgent/actions/runs/38229615849).
+Diagnostic PR #106 merged as `d1834ebb686dbcd467e7b07641867f3ca904750e` / tree
+`2d23d68b20ca7137a8f0d1f788b1f1dae3cce9a2`; its source PR/push checks passed, while
+that new main's [CI](https://github.com/OtohaCo/SwiftAgent/actions/runs/38235773977)
+is separately pending at this documentation snapshot. Do not infer release
+readiness from a historical green run. Final PR/main identities and outcomes
+are recorded in the corresponding acceptance comments.
+
+ This page covers the
 whole RC5 → RC6 delta; the existing audited-authorization acceptance page
 qualifies only its own historical scope. No tag or GitHub Release is created.
 

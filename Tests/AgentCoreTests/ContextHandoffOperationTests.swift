@@ -167,6 +167,34 @@ import Testing
         #expect(await provider.requests == 1)
     }
 
+    @Test(arguments: [false, true])
+    func unprovenCompletionAndPersistentInstructionsRemainRefused(_ instruction: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "handoff-eligibility", supportsContextHandoff: true)
+        let provider = HandoffProvider(controls: instruction), binding = try handoffBinding(provider)
+        let id = UUID()
+        if !instruction {
+            _ = try await journal.appendCheckpoint([.checkpoint(history: [.user([.text("imported")]), .assistant(content: [.text("answer")], toolCalls: [])], steeringIDs: [])], sessionID: id, durability: .durable)
+        }
+        let session = try Agent(binding: binding).makeSession(id: id, journal: journal)
+        if instruction {
+            let run = try await session.run("original", contextControls: .init(instructions: ["persistent constraint"]))
+            _ = try await run.wait(); try await run.waitForDrain()
+        }
+        let before = try await journal.historySnapshot(sessionID: id)
+        let operation = try await session.handoffToOrdinary(using: binding, discardingRetiredProviderContinuations: true)
+        do { _ = try await operation.wait(); Issue.record("Unproven completion or persistent instruction was retired") }
+        catch let error as ModelProviderError { #expect(error.kind == .unsupportedCapability) }
+        try await operation.waitForDrain()
+        let after = try await journal.historySnapshot(sessionID: id)
+        #expect(after.witness == before.witness && after.contextHandoff == nil)
+        #expect(after.conversationControls == before.conversationControls && after.nativeContext == before.nativeContext)
+        #expect(after.checkpoint?.history == before.checkpoint?.history)
+        #expect(await provider.requests == (instruction ? 1 : 0))
+        try await journal.close()
+    }
+
     @Test func retirementRejectsReencodedUnknownPayloadAndKeepsFutureThinking() throws {
         let origin = ModelProviderContinuationOrigin(providerID: "fixture", serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture", configurationRevision: "1")
         let model = ModelID(provider: "fixture", name: "model")
@@ -189,7 +217,9 @@ import Testing
     }
 }
 
-private actor HandoffProvider: ModelProvider {
+private actor HandoffProvider: ModelProviderConversationControls {
+    nonisolated let conversationControlCapabilities: ModelConversationControlCapabilities?
+    init(controls: Bool = false) { conversationControlCapabilities = controls ? .init(inlineTools: true, reminders: true) : nil }
     nonisolated let descriptor = ModelProviderDescriptor(id: "handoff", capabilities: [.streaming, .multiTurn])
     private(set) var requests = 0
     nonisolated func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {

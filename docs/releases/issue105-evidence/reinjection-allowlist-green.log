@@ -1,0 +1,21 @@
+Building for debugging...
+[Computing dependencies]
+[1 / 5]
+[2 / 6] AgentCore
+[3 / 7] AgentCore
+[7 / 10] AgentCore
+[10 / 11] AgentCoreTests-product
+[13 / 16] JournalTestProcess-product
+[16 / 17] AgentJournalFileStoreTests-product
+[29 / 34] WorkspaceAgent-product
+[29 / 34] MemoryJournalBenchmark-product
+[39 / 40] AgentAppleProviderTests-product
+Build complete! (3.42秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite ContextHandoffOperationTests started.
+◇ Test retirementRejectsReencodedUnknownPayloadAndKeepsFutureThinking() started.
+✔ Test retirementRejectsReencodedUnknownPayloadAndKeepsFutureThinking() passed after 0.001 seconds.
+✔ Suite ContextHandoffOperationTests passed after 0.001 seconds.
+✔ Test run with 1 test in 1 suite passed after 0.001 seconds.

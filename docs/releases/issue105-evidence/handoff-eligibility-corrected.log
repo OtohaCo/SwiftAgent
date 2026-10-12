@@ -1,0 +1,41 @@
+Building for debugging...
+[Computing dependencies]
+[1 / 4]
+[2 / 8] AgentCoreTests-product
+[4 / 10] AgentCoreTests-product
+[10 / 12] AgentCoreTests-product
+Build complete! (3.37秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite ContextHandoffOperationTests started.
+◇ Test publicationFailureNeverInstallsFictionalRetirement(_:) started.
+◇ Test case passing 1 argument unknown → false to publicationFailureNeverInstallsFictionalRetirement(_:) started.
+◇ Test case passing 1 argument unknown → true to publicationFailureNeverInstallsFictionalRetirement(_:) started.
+✔ Test publicationFailureNeverInstallsFictionalRetirement(_:) with 2 test cases passed after 0.141 seconds.
+◇ Test lateProjectionCannotPublishAfterCancellationOrDeadline(_:) started.
+◇ Test case passing 1 argument deadline → false to lateProjectionCannotPublishAfterCancellationOrDeadline(_:) started.
+◇ Test case passing 1 argument deadline → true to lateProjectionCannotPublishAfterCancellationOrDeadline(_:) started.
+✔ Test lateProjectionCannotPublishAfterCancellationOrDeadline(_:) with 2 test cases passed after 0.160 seconds.
+◇ Test revokedCapabilityCannotBecomeNewAuthorityAndDrainsLateProjection() started.
+✔ Test revokedCapabilityCannotBecomeNewAuthorityAndDrainsLateProjection() passed after 0.001 seconds.
+◇ Test staleActorAndQueueOwnershipCannotRetireConversation() started.
+✔ Test staleActorAndQueueOwnershipCannotRetireConversation() passed after 0.100 seconds.
+◇ Test metadataOnlyCompletionOrPendingChangeIsRecheckedInPublication(_:) started.
+◇ Test case passing 1 argument pending → false to metadataOnlyCompletionOrPendingChangeIsRecheckedInPublication(_:) started.
+◇ Test case passing 1 argument pending → true to metadataOnlyCompletionOrPendingChangeIsRecheckedInPublication(_:) started.
+✔ Test metadataOnlyCompletionOrPendingChangeIsRecheckedInPublication(_:) with 2 test cases passed after 0.128 seconds.
+◇ Test oldStoreCapabilityRefusesBeforeProjectionOrRequest(_:) started.
+◇ Test case passing 1 argument native → false to oldStoreCapabilityRefusesBeforeProjectionOrRequest(_:) started.
+◇ Test case passing 1 argument native → true to oldStoreCapabilityRefusesBeforeProjectionOrRequest(_:) started.
+✔ Test oldStoreCapabilityRefusesBeforeProjectionOrRequest(_:) with 2 test cases passed after 0.061 seconds.
+◇ Test targetBudgetFailureKeepsOriginalAuthorityAndHistory() started.
+✔ Test targetBudgetFailureKeepsOriginalAuthorityAndHistory() passed after 0.001 seconds.
+◇ Test unprovenCompletionAndPersistentInstructionsRemainRefused(_:) started.
+◇ Test case passing 1 argument instruction → false to unprovenCompletionAndPersistentInstructionsRemainRefused(_:) started.
+◇ Test case passing 1 argument instruction → true to unprovenCompletionAndPersistentInstructionsRemainRefused(_:) started.
+✔ Test unprovenCompletionAndPersistentInstructionsRemainRefused(_:) with 2 test cases passed after 0.064 seconds.
+◇ Test retirementRejectsReencodedUnknownPayloadAndKeepsFutureThinking() started.
+✔ Test retirementRejectsReencodedUnknownPayloadAndKeepsFutureThinking() passed after 0.001 seconds.
+✔ Suite ContextHandoffOperationTests passed after 0.661 seconds.
+✔ Test run with 9 tests in 1 suite passed after 0.661 seconds.

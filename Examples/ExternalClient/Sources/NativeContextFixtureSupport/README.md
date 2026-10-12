@@ -72,6 +72,6 @@ changed registry and rejection of a reencoded retired continuation.
 with different reminders, exact executor/admission counts and File Journal
 reopen; its cancellation variant blocks preflight and sends zero HTTP requests.
 These are HTTP fixtures, not live or cryptographic qualification.
-See [Host handoff guide](../../../../../docs/guides/swift-agent-context-handoff.md)
+See [Host handoff guide](../../../../docs/guides/swift-agent-context-handoff.md)
 for offline schema-11 upgrade and failure/drain contracts. Long tool-loop and
 between-queued-replies maintenance are not implemented.

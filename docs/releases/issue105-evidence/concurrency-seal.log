@@ -1,0 +1,143 @@
+Building for debugging...
+[Computing dependencies]
+[Pre-planning 1 / 1257]
+[Planning deferred tasks]
+[22 / 149]
+[27 / 152] JournalProcessPrimitives
+[39 / 179] AgentModels
+[50 / 184] ArchitectureTests-product
+[76 / 190] AgentProviders
+[99 / 199] AgentCore
+[114 / 199] AgentJevProvider
+[130 / 200] AgentProviders
+[134 / 201] AgentCore
+[139 / 203] AgentModelsTests-product
+[145 / 206] AgentJevProviderTests-product
+[147 / 207] AgentToolsTests-product
+[149 / 208] AgentCore
+[165 / 224] MemoryJournalBenchmark-product
+[180 / 225] MemoryJournalBenchmark-product
+[181 / 226] AgentJournalFileStore
+[218 / 246] AgentAppleProviderTests-product
+[218 / 246] JournalTestProcess
+[222 / 250] JournalTestProcess
+[232 / 253] AgentDecisionsTests-product
+[234 / 254] WorkspaceAgentTests-product
+[237 / 255] JournalTestProcess-product
+[240 / 259] JournalTestProcess
+[245 / 262] AgentDecisionsTests-product
+[246 / 262] AgentProvidersTests-product
+[255 / 264] JournalTestProcess-product
+[258 / 265] AgentProvidersTests-product
+[260 / 266] AgentCoreTests-product
+[261 / 268] AgentJournalFileStoreTests-product
+[275 / 283] AgentJournalFileStoreTests-product
+[276 / 283] AgentJournalFileStoreTests-product
+[278 / 284] AgentJournalFileStoreTests-product
+/Users/lilong/Works/SwiftAgent-issue105/Tests/AgentJournalFileStoreTests/ContextHandoffFormatTests.swift:22:24: warning: no calls to throwing functions occur within 'try' expression [#UnnecessaryEffectMarker]
+ 20 |         try await journal.appendCheckpoint([.checkpoint(history: history, steeringIDs: [])], sessionID: session, durability: .durable)
+ 21 |         let messages = try await journal.readMessages(sessionID: session, limit: 10)
+ 22 |         let identity = try await journal.storeIdentity()
+    |                        `- warning: no calls to throwing functions occur within 'try' expression [#UnnecessaryEffectMarker]
+ 23 |         let source = ModelNativeContextSource(sessionID: session, canonicalMessageCount: 2, lastMessageID: messages.last?.id,
+ 24 |             canonicalDigest: "canonical", requestDigest: "request", projectionID: "identity", projectionVersion: "1", previousCheckpointID: nil)
+
+macro expansion #expect:1:22: warning: no calls to throwing functions occur within 'try' expression [#UnnecessaryEffectMarker]
+`- /Users/lilong/Works/SwiftAgent-issue105/Tests/AgentJournalFileStoreTests/ContextHandoffFormatTests.swift:42:64: note: expanded code originates here
+ 40 |         #expect(upgraded.supportsContextHandoff)
+ 41 |         #expect(try schema(directory) == 12)
+ 42 |         #expect(try await upgraded.storeIdentity() == identity)
+    |         `- note: in expansion of macro 'expect' here
+    +--- macro expansion #expect ---------------------------------------
+    |1 | Testing.__checkValue(try await upgraded.storeIdentity() == identity,expression: .__fromSyntaxNode("try await upgraded.storeIdentity() == identity"),comments: [],isRequired: false,sourceLocation: Testing.SourceLocation.__here()).__expected()
+    |  |                      `- warning: no calls to throwing functions occur within 'try' expression [#UnnecessaryEffectMarker]
+    +-------------------------------------------------------------------
+ 43 |         #expect(try await upgraded.readMessages(sessionID: session, limit: 10) == messages)
+ 44 |         #expect(try await upgraded.nativeContextCheckpoint(sessionID: session) == native)
+
+[#UnnecessaryEffectMarker]: <https://docs.swift.org/compiler/documentation/diagnostics/unnecessary-effect-marker>
+[278 / 284] AgentCoreTests-product
+[284 / 285] AgentJournalFileStoreTests-product
+[289 / 289] MemoryJournalBenchmark-product
+[295 / 295] FollowUpQueueBenchmark-product
+Build complete! (9.05秒)
+Building for debugging...
+[Computing dependencies]
+[2 / 7] AgentModels
+[4 / 7] AgentAppleProvider
+[10 / 14] AgentCore
+[11 / 16] Crypto
+[13 / 18] AgentTools
+[15 / 18] AgentCore
+[20 / 23] AgentCore
+[26 / 29] AgentJevProvider
+[29 / 32] AgentJournalFileStore
+[31 / 34] AgentJournalFileStore
+[34 / 37] AgentProviders
+[40 / 43] WorkspaceAgent
+[44 / 45] AuditAuthorizationBenchmark-product
+[46 / 48] FollowUpQueueBenchmark-product
+[49 / 51] JournalBenchmark-product
+[52 / 54] JournalTestProcess-product
+[55 / 57] JournalTestProcess-product
+[59 / 59] AgentCoreTests-product
+[82 / 123] AgentUsageTests-product
+[85 / 123] AgentJevProviderTests-product
+[94 / 124] ArchitectureTests-product
+[94 / 123] JournalTestProcess
+[111 / 124] JournalTestProcess
+[114 / 125] AgentJournalFileStoreTests-product
+[121 / 128] AgentJournalFileStoreTests-product
+[125 / 130] AgentCoreTests-product
+Build complete! (6.62秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite ToolResourceCoordinatorTests started.
+◇ Test validatesResourcesAndPreservesExactReferenceIdentity() started.
+✔ Test validatesResourcesAndPreservesExactReferenceIdentity() passed after 0.001 seconds.
+◇ Test sharedReadsOverlapAcrossParallelAndSequential() started.
+✔ Test sharedReadsOverlapAcrossParallelAndSequential() passed after 0.001 seconds.
+◇ Test acquireRejectsInvalidResourcesBeforeAdmission() started.
+✔ Test acquireRejectsInvalidResourcesBeforeAdmission() passed after 0.001 seconds.
+◇ Test disjointExclusiveLeasesPreserveByteExactIdentity() started.
+✔ Test disjointExclusiveLeasesPreserveByteExactIdentity() passed after 0.001 seconds.
+◇ Test cancellationBeforeAcquireLeavesNoLeaseOrWaiter() started.
+✔ Test cancellationBeforeAcquireLeavesNoLeaseOrWaiter() passed after 0.001 seconds.
+◇ Test conflictingWaitersStayOrderedWhileDisjointReadsProgress() started.
+✔ Test conflictingWaitersStayOrderedWhileDisjointReadsProgress() passed after 0.001 seconds.
+◇ Test globalConflictsInEitherDirectionAndNamedListsUseAnyOverlap() started.
+✔ Test globalConflictsInEitherDirectionAndNamedListsUseAnyOverlap() passed after 0.001 seconds.
+◇ Test disjointMutationsSerializeButDisjointReadCanProceed() started.
+✔ Test disjointMutationsSerializeButDisjointReadCanProceed() passed after 0.001 seconds.
+◇ Test cancelledWaiterIsRemovedAndNoLongerBlocksReaders() started.
+✔ Test cancelledWaiterIsRemovedAndNoLongerBlocksReaders() passed after 0.001 seconds.
+◇ Test cancellingTaskAfterAcquireReturnsDoesNotReleaseActiveLease() started.
+✔ Test cancellingTaskAfterAcquireReturnsDoesNotReleaseActiveLease() passed after 0.001 seconds.
+◇ Test cancellationAtGrantReleasesOnlyTheUnreturnedLease() started.
+✔ Test cancellationAtGrantReleasesOnlyTheUnreturnedLease() passed after 0.001 seconds.
+✔ Suite ToolResourceCoordinatorTests passed after 0.002 seconds.
+✔ Test run with 11 tests in 1 suite passed after 0.003 seconds.
+Building for debugging...
+[Computing dependencies]
+Build complete! (0.70秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite AgentCompletionCommitTests started.
+◇ Test cancellationAroundCheckpointKeepsHistoryAndEventsConsistent(checkpointCommitted:) started.
+◇ Test case passing 1 argument checkpointCommitted → true to cancellationAroundCheckpointKeepsHistoryAndEventsConsistent(checkpointCommitted:) started.
+◇ Test case passing 1 argument checkpointCommitted → false to cancellationAroundCheckpointKeepsHistoryAndEventsConsistent(checkpointCommitted:) started.
+✔ Test cancellationAroundCheckpointKeepsHistoryAndEventsConsistent(checkpointCommitted:) with 2 test cases passed after 0.005 seconds.
+◇ Test simultaneousFinishersWaitForOneReservedCompletionAndKeepTheFirstOutcome() started.
+✔ Test simultaneousFinishersWaitForOneReservedCompletionAndKeepTheFirstOutcome() passed after 0.001 seconds.
+◇ Test failedCheckpointIsNotPromotedByALaterSuccessfulCheckpoint() started.
+✔ Test failedCheckpointIsNotPromotedByALaterSuccessfulCheckpoint() passed after 0.001 seconds.
+◇ Test finishingWaitsForBlockedMutationCommitAndPreservesDurableSettlement() started.
+✔ Test finishingWaitsForBlockedMutationCommitAndPreservesDurableSettlement() passed after 0.039 seconds.
+◇ Test checkpointCommittedAsTheRunEndsIsAdoptedBySessionHistory(_:) started.
+◇ Test case passing 1 argument ending → .deadline to checkpointCommittedAsTheRunEndsIsAdoptedBySessionHistory(_:) started.
+◇ Test case passing 1 argument ending → .cancellation to checkpointCommittedAsTheRunEndsIsAdoptedBySessionHistory(_:) started.
+✔ Test checkpointCommittedAsTheRunEndsIsAdoptedBySessionHistory(_:) with 2 test cases passed after 1.180 seconds.
+✔ Suite AgentCompletionCommitTests passed after 1.226 seconds.
+✔ Test run with 5 tests in 1 suite passed after 1.226 seconds.

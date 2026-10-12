@@ -1,0 +1,23 @@
+schema11 reader on schema 3: readable, appendable, no native context support
+schema11 reader inspect create-handoff-empty before: unsupportedFormat, bytes unchanged
+schema11 reader append create-handoff-empty before: unsupportedFormat, bytes unchanged
+schema11 reader maintain create-handoff-empty before: unsupportedFormat, bytes unchanged
+schema11 reader inspect create-handoff-empty after: unsupportedFormat, bytes unchanged
+schema11 reader append create-handoff-empty after: unsupportedFormat, bytes unchanged
+schema11 reader maintain create-handoff-empty after: unsupportedFormat, bytes unchanged
+schema11 reader inspect create-handoff before: unsupportedFormat, bytes unchanged
+schema11 reader append create-handoff before: unsupportedFormat, bytes unchanged
+schema11 reader maintain create-handoff before: unsupportedFormat, bytes unchanged
+retirement=1 nativeCheckpoint=none canonical=preserved
+schema11 reader inspect create-handoff after: unsupportedFormat, bytes unchanged
+schema11 reader append create-handoff after: unsupportedFormat, bytes unchanged
+schema11 reader maintain create-handoff after: unsupportedFormat, bytes unchanged
+retirement=1 nativeCheckpoint=none canonical=preserved
+schema11 reader inspect upgrade-handoff before: unsupportedFormat, bytes unchanged
+schema11 reader append upgrade-handoff before: unsupportedFormat, bytes unchanged
+schema11 reader maintain upgrade-handoff before: unsupportedFormat, bytes unchanged
+retirement=1 nativeCheckpoint=none canonical=preserved
+schema11 reader inspect upgrade-handoff after: unsupportedFormat, bytes unchanged
+schema11 reader append upgrade-handoff after: unsupportedFormat, bytes unchanged
+schema11 reader maintain upgrade-handoff after: unsupportedFormat, bytes unchanged
+retirement=1 nativeCheckpoint=none canonical=preserved
