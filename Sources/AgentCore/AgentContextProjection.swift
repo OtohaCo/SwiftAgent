@@ -324,11 +324,16 @@ public struct AgentContextTokenEstimate: Hashable, Sendable, Codable {
     }
 }
 
+/// An estimator opting into native context must count the actual native window
+/// from qualified metadata/tokenization, never infer tokens from ciphertext bytes.
+public protocol AgentNativeContextTokenEstimator: AgentContextTokenEstimator {}
+
 public struct AgentContextTokenEstimationInput: Hashable, Sendable, Codable {
     public let model: ModelID
     public let messages: [ModelMessage]
     public let tools: [ModelToolDefinition]
     public let structuredOutput: StructuredOutputSchema?
+    public let nativeContext: ModelNativeContextCheckpoint?
 
     public init(
         model: ModelID,
@@ -336,6 +341,11 @@ public struct AgentContextTokenEstimationInput: Hashable, Sendable, Codable {
         tools: [ModelToolDefinition],
         structuredOutput: StructuredOutputSchema?
     ) {
+        self.init(model: model, messages: messages, tools: tools, structuredOutput: structuredOutput, nativeContext: nil)
+    }
+    public init(model: ModelID, messages: [ModelMessage], tools: [ModelToolDefinition],
+                structuredOutput: StructuredOutputSchema?, nativeContext: ModelNativeContextCheckpoint?) {
+        self.nativeContext = nativeContext
         self.model = model
         self.messages = messages
         self.tools = tools

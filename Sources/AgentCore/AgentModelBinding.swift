@@ -89,6 +89,7 @@ public struct AgentModelBinding: Sendable {
     /// How this Run's requests carry images. Defaults to `.reject`: an image is sent, or replaced by
     /// text, only by the Host's explicit choice.
     public let imageInput: AgentImageInputPolicy
+    public let nativeContextPolicy: AgentNativeContextPolicy?
 
     public var profileID: String { info.profileID }
     public var profileRevision: String { info.profileRevision }
@@ -109,6 +110,18 @@ public struct AgentModelBinding: Sendable {
         legacyContinuationPolicy: AgentLegacyContinuationPolicy = .reject,
         imageInput: AgentImageInputPolicy = .reject
     ) throws {
+        try self.init(profileID: profileID, profileRevision: profileRevision, model: model, provider: provider,
+            deployment: deployment, configurationSummary: configurationSummary, projector: projector,
+            tokenBudget: tokenBudget, contextReports: contextReports, legacyContinuationPolicy: legacyContinuationPolicy,
+            imageInput: imageInput, nativeContextPolicy: nil)
+    }
+
+    public init(profileID: String, profileRevision: String, model: ModelID, provider: any ModelProvider,
+                deployment: AgentModelDeployment, configurationSummary: [String: JSONValue] = [:],
+                projector: any AgentContextProjector = AgentIdentityContextProjector(),
+                tokenBudget: AgentContextTokenBudget? = nil, contextReports: AgentContextReportBuffer? = nil,
+                legacyContinuationPolicy: AgentLegacyContinuationPolicy = .reject,
+                imageInput: AgentImageInputPolicy = .reject, nativeContextPolicy: AgentNativeContextPolicy?) throws {
         guard Self.valid(profileID) else { throw AgentModelBindingError.invalidIdentity("profileID") }
         guard Self.valid(profileRevision) else { throw AgentModelBindingError.invalidIdentity("profileRevision") }
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else {
@@ -127,6 +140,7 @@ public struct AgentModelBinding: Sendable {
         self.contextReports = contextReports
         self.legacyContinuationPolicy = legacyContinuationPolicy
         self.imageInput = imageInput
+        self.nativeContextPolicy = nativeContextPolicy
     }
 
     private init(
@@ -144,6 +158,7 @@ public struct AgentModelBinding: Sendable {
         self.contextReports = contextReports
         self.legacyContinuationPolicy = legacyContinuationPolicy
         imageInput = .reject
+        nativeContextPolicy = nil
     }
 
     var continuationOrigin: ModelProviderContinuationOrigin {

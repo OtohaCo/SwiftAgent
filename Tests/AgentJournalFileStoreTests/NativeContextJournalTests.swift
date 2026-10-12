@@ -83,4 +83,58 @@ import AgentModels
         #expect(try await journal.nativeContextCheckpoint(sessionID: session) == valid)
     }
 
+    @Test func oversizedReplayTailCannotReplaceEffectiveState() async throws {
+        let journal = AgentJournal(), session = UUID()
+        let history: [ModelMessage] = [.user([.text("one")]), .assistant(content: [.text("answer")], toolCalls: [])]
+        try await journal.appendCheckpoint([.checkpoint(history: history, steeringIDs: [])], sessionID: session, durability: .memory)
+        let good = candidate(sessionID: session, lastID: UUID())
+        let bad = ModelNativeContextCheckpoint(id: good.id, generation: good.generation, continuation: good.continuation,
+            transition: good.transition, rootConfigurationDigest: good.rootConfigurationDigest,
+            toolBaseline: [], usage: good.usage, canonicalTailStart: Int.max)
+        await #expect(throws: AgentJournalError.invalidRecord) {
+            try await journal.appendCheckpoint([.nativeContextCheckpoint(bad)], sessionID: session, durability: .memory)
+        }
+        #expect(try await journal.nativeContextCheckpoint(sessionID: session) == nil)
+    }
+
+    @Test func optionalCompactCapabilityDoesNotChangeDefaultSchema3Generation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("native-disabled-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "disabled")
+        let provider = CompactCapableLegacyFixture()
+        let agent = try Agent(model: .init(provider: "legacy-fixture", name: "model"), provider: provider)
+        let session = try agent.makeSession(journal: journal)
+        let run = try await session.run("ordinary")
+        #expect(try await run.wait().outcome == .completed); try await run.waitForDrain()
+        #expect(await provider.requests.first?.nativeContextSource == nil)
+        await #expect(throws: AgentJournalError.unsupportedFormat) { try await session.compact(mode: .openAIStandalone) }
+        #expect(await provider.requests.count == 1)
+        let binding = try AgentModelBinding(profileID: "compact", profileRevision: "1", model: .init(provider: "legacy-fixture", name: "model"),
+            provider: provider, deployment: .init(serviceInstanceID: "fixture", endpointScope: "fixture", apiDialect: "fixture"),
+            nativeContextPolicy: .init(compactBeforeGeneration: .openAIStandalone))
+        await #expect(throws: AgentJournalError.unsupportedFormat) { try await session.run("not admitted", using: binding) }
+        #expect(await provider.requests.count == 1)
+        #expect(try await journal.latestCheckpoint(sessionID: session.id)?.history.count == 2)
+        try await journal.close()
+    }
+
+}
+
+private actor CompactCapableLegacyFixture: ModelProviderCompaction {
+    nonisolated let descriptor = ModelProviderDescriptor(id: "legacy-fixture", capabilities: [.streaming, .multiTurn])
+    nonisolated let compactionModes: Set<ModelCompactionMode> = [.openAIStandalone]
+    var requests: [ModelRequest] = []
+    nonisolated func validateCompaction(request: ModelCompactionRequest) throws {}
+    nonisolated func compact(request: ModelCompactionRequest) -> AsyncThrowingStream<ModelCompactionEvent, Error> {
+        AsyncThrowingStream { $0.finish(throwing: AgentJournalError.unsupportedFormat) }
+    }
+    nonisolated func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        AsyncThrowingStream { c in Task {
+            await record(request)
+            let info = ResponseInfo(id: "legacy", model: request.model)
+            c.yield(.responseStarted(info)); c.yield(.textDelta("answer"))
+            c.yield(.responseCompleted(.init(info: info, content: [.text("answer")], stopReason: .endTurn))); c.finish()
+        } }
+    }
+    func record(_ request: ModelRequest) { requests.append(request) }
 }

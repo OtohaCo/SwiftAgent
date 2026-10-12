@@ -90,3 +90,12 @@ public struct ModelRequest: Hashable, Sendable, Codable {
         self.invocationID = invocationID
     }
 }
+
+public extension ModelRequest {
+    /// Returns the same validated request with Core's frozen invocation/source envelope.
+    func withNativeSource(_ source: ModelNativeContextSource, invocationID: UUID) -> Self {
+        .init(model: model, messages: messages, tools: tools, structuredOutput: structuredOutput,
+              sessionID: sessionID, runID: runID, nativeContext: nativeContext,
+              nativeContextSource: source, invocationID: invocationID)
+    }
+}

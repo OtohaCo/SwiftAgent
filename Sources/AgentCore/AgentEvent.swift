@@ -29,6 +29,8 @@ public enum AgentEvent: Equatable, Sendable {
     case runStarted(AgentRunInfo)
     case turnStarted(Int)
     case model(ModelEvent)
+    /// One independent native compact HTTP, including partial usage before cancellation.
+    case compaction(operationID: UUID, invocationID: UUID, event: ModelCompactionEvent)
     /// Runtime admission, including authorization. Not proof of an external effect.
     case toolStarted(ToolCall)
     case toolCompleted(ToolResultMessage)

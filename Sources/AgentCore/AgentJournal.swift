@@ -543,7 +543,11 @@ public actor AgentJournal {
         if let value = nativeTransitions.first {
             let count = try latestCheckpoint(sessionID: sessionID).map { UInt64(Self.formalMessages($0.history).count) } ?? 0
             try Self.validateNativeContextShape(value, previous: memorySessions[sessionID]?.nativeContext,
-                                                sessionID: sessionID, messageCount: count)
+                                                sessionID: sessionID, messageCount: count,
+                                                publishedMessageCount: events.compactMap { event in
+                                                    if case .checkpoint(let history, _) = event { return UInt64(Self.formalMessages(history).count) }
+                                                    return nil
+                                                }.last ?? count)
         }
         let committed = events.enumerated().map { offset, event in
             AgentJournalRecord(
@@ -1356,7 +1360,11 @@ extension AgentJournal {
             if case .nativeContextCheckpoint(let value) = event {
                 guard supportsNativeContext else { throw AgentJournalError.unsupportedFormat }
                 try Self.validateNativeContext(value, previous: initialHeader.nativeContext, sessionID: sessionID,
-                                               messageCount: initialHeader.messageCount, view: view)
+                                               messageCount: initialHeader.messageCount,
+                                               publishedMessageCount: events.compactMap { event in
+                                                   if case .checkpoint(let history, _) = event { return UInt64(Self.formalMessages(history).count) }
+                                                   return nil
+                                               }.last ?? initialHeader.messageCount, view: view)
                 nextHeader.nativeContext = value
             }
             if case .checkpoint(let history, let steeringIDs) = event {

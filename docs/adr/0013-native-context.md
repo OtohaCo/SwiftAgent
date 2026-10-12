@@ -119,3 +119,31 @@ Three independent final-diff reviews cover Provider, Core/Journal and
 Catalog/Usage/public clients. Run existing full gates without lowering coverage.
 No paid live calls, Host changes, version assignment, tag or Release. Fixture
 signatures do not establish current service/model/account qualification.
+
+### Core implementation decisions (stage evidence, not complete #99 acceptance)
+
+Idle compact returns `AgentCompactionOperation`; explicit `wait`, `cancel`, and
+`waitForDrain` separate logical outcomes from transport/preflight exit. A frozen
+`AgentNativeContextPolicy.compactBeforeGeneration` invokes the same executor from
+an admitted Run without reacquiring its writer reservation. Native maintenance
+never seals the final-answer deadline gate, and continuation attempts are bounded.
+Standalone usage has an independent invocation in `AgentEvent.compaction`.
+
+Canonical ranges are not silently renumbered after a native covered prefix. The
+first implementation rejects existing source-bound range/excerpt projectors in
+that combination; identity and custom suffix projectors still undergo Core
+revision/digest/epoch and tool-pair checks. Adding an explicit canonical-to-native
+range mapping is a later API extension. Covered history remains immutable.
+
+Native token budgets require an `AgentNativeContextTokenEstimator` that explicitly
+handles the opaque native window. Older estimators cannot accidentally count only
+the visible suffix as the whole request. Ciphertext length is used only for bytes,
+never tokens. The optional adapter wire-witness protocol binds publication to the
+same serialized body checked before transport. A trigger remains a service policy,
+not a pre-dispatch hard limit.
+
+Optional compact capability alone does not enable native state or require schema
+11 for ordinary requests. Actual enabled policies and restored native checkpoints
+require the new opt-in format; unsupported explicit operations fail before input
+admission. Provider protocol/HTTP qualification and external public examples are
+subsequent stages and have not yet been accepted.

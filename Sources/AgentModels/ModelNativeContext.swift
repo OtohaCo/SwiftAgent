@@ -92,13 +92,16 @@ public struct ModelNativeContextCheckpoint: Hashable, Sendable, Codable {
     public let generation: UInt64
     public let continuation: ModelProviderContinuation
     public let transition: ModelNativeContextTransition
+    /// First canonical message not already represented by this native window.
+    public let canonicalTailStart: Int
     public let rootConfigurationDigest: String
     public let toolBaseline: [ModelToolDefinition]
     public let usage: ModelUsage
     public init(id: UUID, generation: UInt64, continuation: ModelProviderContinuation,
                 transition: ModelNativeContextTransition, rootConfigurationDigest: String,
-                toolBaseline: [ModelToolDefinition], usage: ModelUsage) {
+                toolBaseline: [ModelToolDefinition], usage: ModelUsage, canonicalTailStart: Int? = nil) {
         self.id = id; self.generation = generation; self.continuation = continuation
+        self.canonicalTailStart = canonicalTailStart ?? transition.source.canonicalMessageCount
         self.transition = transition; self.rootConfigurationDigest = rootConfigurationDigest
         self.toolBaseline = toolBaseline; self.usage = usage
     }
@@ -108,12 +111,14 @@ public struct ModelNativeContextCheckpoint: Hashable, Sendable, Codable {
 /// Only explicitly qualified deployment modes may be advertised as usable.
 public protocol ModelProviderCompaction: ModelProvider {
     var compactionModes: Set<ModelCompactionMode> { get }
+    var automaticCompaction: ModelAutomaticCompaction? { get }
     func validateCompaction(request: ModelCompactionRequest) throws
     func compact(request: ModelCompactionRequest) -> AsyncThrowingStream<ModelCompactionEvent, Error>
     func waitForCompactionToDrain(sessionID: UUID, operationID: UUID) async
 }
 
 extension ModelProviderCompaction {
+    public var automaticCompaction: ModelAutomaticCompaction? { nil }
     public func waitForCompactionToDrain(sessionID: UUID, operationID: UUID) async {}
 }
 
@@ -140,4 +145,10 @@ public struct ModelCompactionResponse: Hashable, Sendable, Codable {
 public enum ModelCompactionEvent: Hashable, Sendable, Codable {
     case usage(ModelUsage)
     case completed(ModelCompactionResponse)
+}
+
+/// Optional exact wire witness for native checkpoint binding. The adapter hashes
+/// the final checked body; no vendor signature verification is implied.
+public protocol ModelProviderNativeContextWitness: ModelProviderCompaction {
+    func nativeContextRequestDigest(request: ModelRequest, compactionMode: ModelCompactionMode?) throws -> String
 }

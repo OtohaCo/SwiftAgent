@@ -22,6 +22,7 @@ public actor AgentSession {
     private let instanceID = UUID()
     private let scheduler: ToolScheduler
     private let evidenceLedger = EvidenceLedger()
+    private let nativeContextState = AgentNativeContextState()
     private let contextEffects = AgentContextEffectLedger()
     private let structuredOutput: StructuredOutputSchema?
     private let maxModelTurns: Int
@@ -54,6 +55,8 @@ public actor AgentSession {
     private var dispatcher: AgentFollowUpDispatcher?
     private var startupWaiters: [CheckedContinuation<Void, Never>] = []
     private var preflightOperations: Set<UUID> = []
+    private var compactionReservations: Set<UUID> = []
+    private var compactionPreflightWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
     private var deferredStartupReleases: Set<UUID> = []
     private var startupReservations: [UUID: StartupReservation] = [:]
     private var scopesByRunID: [UUID: AgentCapabilityScope] = [:]
@@ -283,6 +286,8 @@ public actor AgentSession {
 
     private func preflightDidFinish(_ startupID: UUID) async {
         preflightOperations.remove(startupID)
+        let waiters = compactionPreflightWaiters.removeValue(forKey: startupID) ?? []; waiters.forEach { $0.resume() }
+        guard !compactionReservations.contains(startupID) else { return }
         guard deferredStartupReleases.contains(startupID) else { return }
         await releaseStartupReservation(startupID)
     }
@@ -477,6 +482,7 @@ public actor AgentSession {
             }
             try budget.checkActive()
             persistentHistoryWitness = snapshot?.witness
+            await nativeContextState.restore(try await journal?.nativeContextCheckpoint(sessionID: id))
             applyRestoredJournalState(snapshot?.checkpoint)
         }
         if let journal, let persistentHistoryWitness {
@@ -543,7 +549,7 @@ public actor AgentSession {
         }
         let loop = AgentLoop(binding: binding, tools: selectedTools, scheduler: scheduler,
                              modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes,
-                             journal: journal, contextEffects: contextEffects,
+                             journal: journal, contextEffects: contextEffects, nativeContextState: nativeContextState,
                              capabilityScope: capabilities?.scope,
                              allowedResources: capabilities?.allowedResources,
                              preAdmissionReplanning: preAdmissionReplanning, audit: audit)
@@ -673,6 +679,11 @@ public actor AgentSession {
             keepsImages: journal?.supportsImageContent ?? true,
             mutationAdmission: journal,
             checkpoint: { messages, steering in try await self.record(messages, steering: steering, runID: runID, budget: budget) },
+            publishNativeContext: { messages, state, request, usage, tailStart in
+                try await self.publishRunNativeContext(state, request: request, usage: usage,
+                    canonicalTailStart: tailStart, history: messages, binding: loop.modelBinding,
+                    runID: runID, budget: budget)
+            },
             sourceRevision: { messages in try await self.projectionSourceRevision(messages, runID: runID) },
             checkReplanningSafety: { operationID in
                 guard let journal, journal.storage == .durable else { return false }
@@ -786,6 +797,34 @@ public actor AgentSession {
             checkpointDidExit?(runID)
             throw error
         }
+    }
+
+    private func publishRunNativeContext(_ state: ModelProviderContinuation, request: ModelRequest, usage: ModelUsage,
+                                         canonicalTailStart: Int, history messages: [ModelMessage], binding: AgentModelBinding,
+                                         runID: UUID, budget: AgentBudget) async throws -> [ModelMessage] {
+        try budget.checkActive()
+        guard activeRunID == runID else { throw CancellationError() }
+        let prepared = try await prepareCheckpoint(messages)
+        let value = try await nativeContextState.candidate(state, request: request, canonicalTailStart: canonicalTailStart,
+                                                          canonical: prepared, binding: binding, usage: usage)
+        try budget.checkActive()
+        guard activeRunID == runID else { throw CancellationError() }
+        if let journal {
+            guard journal.supportsNativeContext else { throw AgentJournalError.unsupportedFormat }
+            let snapshot = try await journal.historySnapshot(sessionID: id)
+            guard AgentContextWindow.applyingCurrentInstructions(snapshot.checkpoint?.history ?? [], instructions: instructions) == history else { throw AgentJournalError.concurrentWriter }
+            beginCommittedWrite(runID); defer { endCommittedWrite(runID) }
+            do {
+                try await journal.publishNativeContext(value, history: prepared, sessionID: id, runID: runID,
+                    expectedHistory: snapshot.witness, steeringIDs: Array(appliedSteeringIDs),
+                    deadline: budget.gate.isSettled ? nil : budget.deadline)
+            } catch AgentJournalError.commitUnknown { steeringCommitUnknown = true; throw AgentJournalError.commitUnknown }
+            catch AgentJournalStartupAdmissionError.deadlineExceeded { throw AgentLoopError.deadlineExceeded }
+        }
+        applyCommittedHistory(prepared, steering: [], runID: runID)
+        await nativeContextState.install(value)
+        advanceConversationRevision()
+        return prepared
     }
 
     private func commitMutation(_ callID: ToolCallID, receipt: ToolReceipt, output: JSONValue,
@@ -945,6 +984,7 @@ public actor AgentSession {
         guard !restoredJournalState else { return }
         let snapshot = try await journal?.historySnapshot(sessionID: id)
         persistentHistoryWitness = snapshot?.witness
+        await nativeContextState.restore(try await journal?.nativeContextCheckpoint(sessionID: id))
         applyRestoredJournalState(snapshot?.checkpoint)
     }
 
@@ -959,6 +999,125 @@ public actor AgentSession {
         let restored = AgentContextWindow.applyingCurrentInstructions(checkpoint.history, instructions: instructions)
         if restored != history { advanceConversationRevision() }
         history = restored
+    }
+
+    /// Starts native maintenance only at a drained, idle boundary. The canonical
+    /// conversation is never replaced with the returned summary.
+    public func compact(mode: ModelCompactionMode, using binding: AgentModelBinding? = nil,
+                        deadline: ContinuousClock.Instant? = nil) async throws -> AgentCompactionOperation {
+        try Task.checkCancellation()
+        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
+        guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
+        guard !dispatchStarting, dispatcherID == nil else { throw AgentFollowUpError.dispatchOwned }
+        let binding = binding ?? defaultBinding
+        guard let provider = binding.provider as? any ModelProviderCompaction,
+              provider.compactionModes.contains(mode) else {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "This deployment does not support the requested native compact operation.")
+        }
+        if let journal, !journal.supportsNativeContext { throw AgentJournalError.unsupportedFormat }
+        let deadline = deadline ?? .now.advanced(by: runTimeout)
+        let operationID = UUID(), invocationID = UUID()
+        let control = AgentCompactionControl(), drain = AgentRunDrain()
+        let channel = AsyncStream<ModelCompactionEvent>.makeStream(bufferingPolicy: .bufferingNewest(128))
+        startingRun = true
+        do {
+            if let pendingDrainTask { try await withAgentDeadline(deadline, operation: { await pendingDrainTask.value }) }
+            try Task.checkCancellation()
+            try await AgentSessionIdentityRegistry.shared.acquire(id, storeID: await journal?.storeIdentity()?.storeID)
+            do {
+                if let journal { try await journal.acquireSessionLease(sessionID: id) }
+            } catch {
+                await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal?.storeIdentity()?.storeID)
+                throw error
+            }
+            startupReservations[operationID] = .init(journalLeaseAcquired: journal != nil)
+            compactionReservations.insert(operationID)
+        } catch { startupFinished(); throw error }
+        let handle = AgentCompactionOperation(id: operationID, invocationID: invocationID, sessionID: id,
+                                              events: channel.stream, control: control, drain: drain)
+        await control.start { [self] in
+            await performCompaction(binding: binding, provider: provider, mode: mode, deadline: deadline,
+                operationID: operationID, invocationID: invocationID, control: control, drain: drain,
+                events: channel.continuation)
+        }
+        return handle
+    }
+
+    private func performCompaction(binding: AgentModelBinding, provider: any ModelProviderCompaction,
+                                   mode: ModelCompactionMode, deadline: ContinuousClock.Instant,
+                                   operationID: UUID, invocationID: UUID, control: AgentCompactionControl,
+                                   drain: AgentRunDrain, events: AsyncStream<ModelCompactionEvent>.Continuation) async -> Result<AgentCompactionResult, Error> {
+        let result: Result<AgentCompactionResult, Error>
+        do {
+            let responseAndRequest = try await withStartupDeadline(deadline, startupID: operationID) { [self] in
+                try await prepareNativeCompaction(binding: binding, provider: provider, mode: mode,
+                    operationID: operationID, invocationID: invocationID, events: events)
+            }
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
+            let (response, request) = responseAndRequest
+            var published: ModelNativeContextCheckpoint?
+            if let continuation = response.continuation {
+                let value = try await nativeContextState.candidate(continuation, request: request,
+                    canonicalTailStart: request.nativeContextSource!.canonicalMessageCount,
+                    canonical: history, binding: binding, usage: response.usage)
+                guard ContinuousClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
+                try await control.seal()
+                if let journal, let witness = persistentHistoryWitness {
+                    try await journal.publishNativeContext(value, history: history, sessionID: id, runID: nil,
+                        expectedHistory: witness, steeringIDs: Array(appliedSteeringIDs), deadline: deadline)
+                    persistentHistoryWitness = try await journal.historyWitness(sessionID: id)
+                }
+                await nativeContextState.install(value)
+                advanceConversationRevision()
+                published = value
+            }
+            events.yield(.completed(response))
+            result = .success(.init(checkpoint: published, response: response))
+        } catch AgentJournalError.commitUnknown {
+            steeringCommitUnknown = true; result = .failure(AgentJournalError.commitUnknown)
+        } catch AgentJournalStartupAdmissionError.deadlineExceeded { result = .failure(AgentLoopError.deadlineExceeded) }
+        catch { result = .failure(error) }
+        events.finish()
+        // The logical result is available while noncooperative work still owns
+        // the reservation. The shared preflight completion releases it later.
+        Task { [self] in
+            await provider.waitForCompactionToDrain(sessionID: id, operationID: operationID)
+            await waitForCompactionPreflight(operationID)
+            await releaseCompactionReservation(operationID)
+            await drain.complete()
+        }
+        return result
+    }
+
+    private func prepareNativeCompaction(binding: AgentModelBinding, provider: any ModelProviderCompaction,
+                                        mode: ModelCompactionMode, operationID: UUID, invocationID: UUID,
+                                        events: AsyncStream<ModelCompactionEvent>.Continuation) async throws -> (ModelCompactionResponse, ModelRequest) {
+        try await restoreJournalStateIfNeeded()
+        if let journal, let persistentHistoryWitness,
+           try await journal.historyWitness(sessionID: id) != persistentHistoryWitness { throw AgentJournalError.concurrentWriter }
+        let loop = AgentLoop(binding: binding, tools: tools, scheduler: scheduler,
+            modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes, journal: journal,
+            contextEffects: contextEffects, nativeContextState: nativeContextState)
+        let prepared = try await loop.preflight(messages: history, sessionID: id, runID: operationID,
+                                               conversationRevision: conversationRevision, structuredOutput: structuredOutput)
+        let source = try await nativeContextState.source(for: prepared, sessionID: id, journal: journal, provider: provider, compactionMode: mode)
+        let request = prepared.request.withNativeSource(source, invocationID: invocationID)
+        let response = try await AgentNativeCompactionExecutor(provider: provider).execute(
+            .init(request: request, mode: mode, operationID: operationID, invocationID: invocationID),
+            emit: { events.yield($0) })
+        return (response, request)
+    }
+
+    private func releaseCompactionReservation(_ id: UUID) async {
+        compactionReservations.remove(id)
+        await releaseStartupReservation(id)
+    }
+
+    private func waitForCompactionPreflight(_ id: UUID) async {
+        while preflightOperations.contains(id) {
+            await withCheckedContinuation { compactionPreflightWaiters[id, default: []].append($0) }
+        }
     }
 
     private func withStartupDeadline<Value: Sendable>(
