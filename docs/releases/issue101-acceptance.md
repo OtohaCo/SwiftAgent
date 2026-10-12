@@ -69,6 +69,15 @@ tool addition. Each was corrected without weakening SDK checks; the successful
 external compaction returns the corresponding native tool change. Complete raw
 first logs remain available locally/CI artifacts where generated.
 
+The first source's remote macOS jobs in runs 38216514281 and 38216563329
+were cancelled at the 30-minute job budget, after core tests and audited
+authorization passed, during old-reader builds/checks. Their raw logs are retained
+as `first-source-push-macos-cancelled.log` and `first-source-pr-macos-cancelled.log`.
+The workflow now grants macOS the same bounded 60-minute cold-build budget as
+Linux; all gate commands, assertions, per-stage watchdogs and SDK deadline
+semantics are unchanged. Only a new source-bound complete result can qualify
+the candidate; the cancelled jobs are not represented as passed.
+
 ## Public API and limits
 
 Two AnthropicThinking cases and Diagnostic.Reason.requestBodyTooLarge extend
