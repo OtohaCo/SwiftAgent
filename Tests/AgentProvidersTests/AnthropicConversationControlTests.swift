@@ -5,6 +5,9 @@ import AgentTools
 import AgentProviders
 import Foundation
 import Testing
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 struct AnthropicConversationControlTests {
     let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
