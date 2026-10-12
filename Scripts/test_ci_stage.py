@@ -15,6 +15,22 @@ import unittest
 STAGE = Path(__file__).with_name("ci_stage.py")
 
 class CIStageTests(unittest.TestCase):
+    def test_gdb_zero_exit_without_frames_is_not_a_stack_capture(self):
+        for output in ['ptrace: Operation not permitted.\n', 'No threads.\n',
+                       'Thread 1 (fixture):\n#0  0x1234 in read ()\n']:
+            with self.subTest(output=output), tempfile.TemporaryDirectory() as directory:
+                module = self.sampling_module()
+                def capture(command, timeout, outcome=None):
+                    if command[0] == 'env': return self.sampling_rows((100, 1))
+                    outcome.update(exitCode=0, timedOut=False)
+                    return output
+                process = mock.Mock(pid=100); process.poll.return_value = None
+                with mock.patch.object(module, 'capture', side_effect=capture), mock.patch.object(module.shutil, 'which', side_effect=lambda name: '/fixture/gdb' if name == 'gdb' else None):
+                    module.collect(Path(directory), process, {100}, 5)
+                result = json.loads((Path(directory)/'sampling.json').read_text())['targets'][0]
+                self.assertEqual(result['status'], 'sampled' if '#0 ' in output else 'unavailable_no_stack')
+                self.assertIn(output, (Path(directory)/'stack.txt').read_text())
+
     def test_sampling_depth_uses_parents_not_pid_order_and_is_bounded(self):
         module = self.sampling_module()
         rows = self.sampling_rows((100, 1), (900, 100), (10, 900), (800, 100), (5, 10))
