@@ -581,8 +581,9 @@ struct ResponsesStreamDecoder {
         let usageEvents = try updateUsage(response["usage"])
         let modelCalls = orderedCalls()
         let latestCompaction = finalOutput.lastIndex(where: { $0["type"] == .string("compaction") })
-        let afterCompaction = latestCompaction.map { Array(finalOutput.dropFirst($0 + 1)) } ?? finalOutput
-        let compactionOnly = latestCompaction != nil && !afterCompaction.contains(where: { $0["type"] == .string("message") || $0["type"] == .string("function_call") })
+        // A trailing compaction may cover an answer already emitted in this response.
+        // Its replay boundary does not determine whether the response contains an answer.
+        let compactionOnly = latestCompaction != nil && !finalOutput.contains(where: { $0["type"] == .string("message") || $0["type"] == .string("function_call") })
         let stop: StopReason = !modelCalls.isEmpty ? .toolCalls : (compactionOnly ? .unknown("compaction") : (refusal ? .refusal : .endTurn))
         ended = true
         var events = usageEvents

@@ -198,6 +198,24 @@ It is not a universal billing engine or a production tariff guarantee.
 
 ## Persistence and compatibility
 
+An OpenAI automatic response may contain a completed assistant answer before its
+last compaction item, for example `[compaction, message, compaction]`. The SDK
+finishes that answer without an extra maintenance request. Its canonical answer
+and complete native output remain persisted; only the subsequent request view
+starts at the latest compaction item. A response with compaction but no message
+or client tool call remains maintenance and retains the bounded continuation
+budget. This classification does not fabricate a provider stop reason in the Host.
+The [official compaction guide](https://developers.openai.com/api/docs/guides/compaction)
+describes output-array chaining and pruning before the latest compaction item
+(rechecked 2026-10-12).
+
+A paused follow-up dispatcher retains exclusive Session ownership. Finish or
+close that dispatcher and wait for its physical drain before idle on-demand
+compaction, then start the next direct Run. The SDK does not currently expose a
+maintenance gap between queued replies. Do not borrow a writer, synthesize a
+user boundary, or replay mutations to work around that ownership; a queue
+maintenance hook needs a separate design.
+
 `supportsNativeContext: true` opts File Journal into schema 11 within the existing
 ledger/header/checkpoint mechanism. Default schema 3 stays supported; no automatic
 migration disables old stores. Reader 11 can append old stores without claiming
