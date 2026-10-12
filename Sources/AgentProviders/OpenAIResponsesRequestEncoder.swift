@@ -10,7 +10,8 @@ enum OpenAIResponsesRequestEncoder {
         promptCacheKey: String? = nil,
         promptCaching: OpenAIResponsesPromptCaching? = nil,
         resolvedModelName: String? = nil,
-        prewarm: Bool = false
+        prewarm: Bool = false,
+        nativeContext: OpenAINativeContextConfiguration? = nil, endpoint: URL? = nil
     ) throws -> JSONValue {
         guard request.model.provider == "openai",
               !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -18,17 +19,25 @@ enum OpenAIResponsesRequestEncoder {
         }
         if prewarm, promptCaching == nil { throw PromptCacheQualification.unsupported("Prewarming requires a qualified modern cache configuration.") }
         try promptCaching?.validate(modelName: resolvedModelName ?? request.model.name, prewarm: prewarm)
-        let input = try ResponsesCanonicalRequestEncoder.encodeMessages(request.messages, images: true) { content, calls in
-            try OpenAIResponsesContinuation.restore(
-                content: content,
-                calls: calls,
-                model: request.model
-            )?.items
+        if request.nativeContext != nil || nativeContext?.automatic != nil {
+            guard !prewarm, let nativeContext, let endpoint else {
+                throw ModelProviderError(kind: .unsupportedCapability, message: "Native context requires explicit deployment qualification and cannot prewarm.")
+            }
+            let mode = request.nativeContext?.transition.mode ?? .openAIAutomatic
+            try nativeContext.qualification.validate(endpoint: endpoint, model: resolvedModelName ?? request.model.name, mode: mode)
+            if nativeContext.automatic != nil {
+                try nativeContext.qualification.validate(endpoint: endpoint, model: resolvedModelName ?? request.model.name, mode: .openAIAutomatic)
+            }
         }
+        let input = try OpenAINativeContext.input(request)
         var body: [String: JSONValue] = [
             "model": .string(request.model.name), "input": .array(input), "stream": .bool(true),
             "store": .bool(false), "max_output_tokens": .number(Decimal(maximumOutputTokens)),
         ]
+        if let automatic = nativeContext?.automatic {
+            body["context_management"] = .array([.object(["type": .string("compaction"),
+                "compact_threshold": .number(Decimal(automatic.triggerInputTokens))])])
+        }
         if let tools = ResponsesCanonicalRequestEncoder.encodeTools(request.tools) { body["tools"] = tools }
         if let structured = ResponsesCanonicalRequestEncoder.encodeStructuredOutput(request.structuredOutput) {
             body["text"] = structured
@@ -43,7 +52,7 @@ enum OpenAIResponsesRequestEncoder {
         if let promptCacheKey { body["prompt_cache_key"] = .string(promptCacheKey) }
         try promptCaching?.apply(to: &body, request: request, images: true, assistantNativeItems: { content, calls in
             try OpenAIResponsesContinuation.restore(content: content, calls: calls, model: request.model)?.items
-        }, prewarm: prewarm)
+        }, prewarm: prewarm, nativeWindowItemCount: try request.nativeContext.map { try OpenAINativeContext.window($0, model: request.model).count } ?? 0)
         return .object(body)
     }
 

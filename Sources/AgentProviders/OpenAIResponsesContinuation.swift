@@ -70,6 +70,9 @@ enum OpenAIResponsesContinuation {
                   case .array(let encodedReasoning) = object["visible_reasoning"] else {
                 throw ProviderJSON.invalid()
             }
+            if storedItems.contains(where: { $0["type"] == .string("compaction") }) {
+                guard state.contextTransition?.mode == .openAIAutomatic else { throw ProviderJSON.invalid() }
+            }
             let items = ProviderJSON.replacingInvalidArguments(in: storedItems, calls: calls)
             let expectedReasoning = try encodedReasoning.map(ProviderJSON.string)
             let storedVisibleContent: [(ContentKind, String)]?
@@ -126,13 +129,14 @@ enum OpenAIResponsesContinuation {
         var nativeContent: [(ContentKind, String)] = []
         var replayItems: [JSONValue] = []
 
+        let preservesNativeWindow = items.contains { $0["type"] == .string("compaction") }
         for item in items {
             let object = try ProviderJSON.object(item)
             switch try ProviderJSON.string(object["type"]) {
             case "reasoning":
                 let reasoning = try validateReasoning(object)
                 append(reasoning.visibleText, as: .reasoning, to: &nativeContent)
-                if reasoning.hasEncryptedContent {
+                if reasoning.hasEncryptedContent || preservesNativeWindow {
                     shouldStore = true
                     replayItems.append(item)
                 }
@@ -150,6 +154,9 @@ enum OpenAIResponsesContinuation {
                 }
                 append(message.visibleText, as: .text, to: &nativeContent)
                 replayItems.append(item)
+            case "compaction":
+                try NativeContextWire.openAICompactionItem(item)
+                shouldStore = true; replayItems.append(item)
             case "function_call":
                 try validateFunctionItem(object)
                 functionItems.append(item)
@@ -224,6 +231,13 @@ enum OpenAIResponsesContinuation {
             allowOmittedVisibleReasoning: false,
             contentBinding: .legacy
         )
+    }
+
+    static func validateNativeWindowReasoning(_ item: [String: JSONValue]) throws {
+        _ = try validateReasoning(item)
+    }
+    static func validateNativeWindowFunction(_ item: [String: JSONValue]) throws {
+        try validateFunctionItem(item)
     }
 
     private struct ReasoningValidation {
