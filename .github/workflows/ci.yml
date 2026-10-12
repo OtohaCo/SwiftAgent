@@ -74,6 +74,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y gdb
+          # The bounded watchdog debugger is a sibling of the test process.
+          # Permit same-user attachment only on this disposable CI runner.
+          sudo sysctl -w kernel.yama.ptrace_scope=0
+          python3 Scripts/verify-linux-debugger.py
       - name: Watchdog regression
         run: python3 -m unittest discover Scripts -p 'test_ci_stage.py'
       - name: Core --target build, tests, external client

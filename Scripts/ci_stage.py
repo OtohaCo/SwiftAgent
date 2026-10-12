@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import json
 import math
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -88,6 +89,12 @@ def sampling_targets(nodes, root):
     return [root, *children[:2]]
 
 
+def has_gdb_backtrace(output):
+    # GDB can exit zero after an attach error and "No threads". A successful
+    # command invocation is not evidence that any target stack was captured.
+    return re.search(r"(?m)^#\d+\s+", output) is not None
+
+
 def collect(evidence, process, owned, budget):
     deadline = time.monotonic() + budget
     remaining = lambda: max(0, deadline - time.monotonic())
@@ -131,6 +138,8 @@ def collect(evidence, process, owned, budget):
         try:
             text = capture(command, allowance, result)
             result["status"] = "timeout" if result["timedOut"] else "sampled" if result["exitCode"] == 0 else "failed"
+            if result["status"] == "sampled" and Path(debugger).name == "gdb" and not has_gdb_backtrace(text):
+                result["status"] = "unavailable_no_stack"
         except OSError as error:
             result.update(status="failed_launch", errno=error.errno)
         # External debuggers attach by PID. Recheck and label an exit/reuse race;
