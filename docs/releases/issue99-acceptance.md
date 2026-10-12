@@ -1,6 +1,8 @@
 # Issue #99 implementation acceptance
 
-Status: prepared implementation; final platform/PR/main acceptance pending.
+Status: prepared SDK implementation. Platform and landing qualification are recorded
+against exact commits in [PR #100](https://github.com/OtohaCo/SwiftAgent/pull/100);
+scoped results here do not imply unexecuted checks passed.
 No next version, tag or GitHub Release is assigned. This is after the RC6 candidate,
 not a replacement RC6 report. OtohaAI and sub2api production code are unchanged.
 
@@ -13,8 +15,11 @@ not a replacement RC6 report. OtohaAI and sub2api production code are unchanged.
   `24447b8298ccea84f9f8056374857c5c47d8f64c`; no tag moved or created.
 - SDK source through `75f88100e527c61ebea83755c0e9824042080007`, tree
   `0e3dc9ded859cc1e5cb4badf11450b3f0d80ddfb`.
-- Public examples/reader gate: `a74004c` (subsequent docs and reporting fixture
-  correction recorded separately; final source/PR/main identities to be filled).
+- Public examples/reader gate: `a74004c`; reporting fixture/docs: `d34f9866`.
+- Final test/code revision: `9cf9d505b4d15ce97542012a221540915e1d9a3b`, tree
+  `84202d44770c5c7ca819b1f9249fbc2a25c0c938`. This document follows that source
+  revision. PR head and actual merge/main identity are recorded in PR #100, so
+  documentation and source identities are not conflated.
 - Platform: macOS 27.2 (26B5101f), arm64, Apple Swift 6.4
   (swiftlang-6.4.0.34.1), Xcode 27.0 (27A266a), macOS/iPhoneOS SDK 27.0.
 
@@ -31,7 +36,7 @@ File Journal fixtures where stated. No paid live calls were made.
 | Canonical/effective state, atomic accepted tools/mutations/no-effect | NativeCompactionOperationTests plus existing mutation/tool publication suites; `native-atomic-seal.log`: 48 tests/7 suites GREEN, 31.721s |
 | Independent lifecycle, EOF/no-summary, maintenance deadline | NativeCompactionOperationTests/NativeMaintenanceDeadlineTests; summaries remain nonfinal; no entire-Run replay |
 | Append-only controls, deferred discovery, same-name updates/removal, reopen | `controls-final-scoped-corrected-fixture.log`: 17 Provider/2 suites +16 Core/2 suites GREEN; actual encoder RED retained in `controls-http-red-executed.log` |
-| Reminder parallel/retry/steering/no-new-user | AnthropicConversationControlTests: gated two parallel executions complete before the next HTTP, optional real steering coalesces one wire user turn; adapter-level 503→200 replay has identical body and one reminder; threshold/pause+reminder and invalid unanswered continuation reject locally. Core/Route automatic qualified retries remain unsupported. |
+| Reminder parallel/retry/steering/no-new-user | AnthropicConversationControlTests: gated two parallel executions complete before the next HTTP, optional real steering coalesces one wire user turn; adapter-level 503→200 replay has identical body and one reminder; threshold/pause+reminder and invalid unanswered continuation reject locally. `reminder-boundary-final.log`: 11 tests/1 suite GREEN. Core/Route automatic qualified retries remain unsupported. |
 | Compact→real user→Chinese reminder→tool loop | Public NativeContextHostExample, no @testable; `public-native-context-compat-seal.log`: 2 tests (one compatibility test, one test with two HTTP/FileStore flows) GREEN |
 | OpenAI automatic compaction and call in one response, same/next Run/reopen | Same public fixture; actual compacted body and function_call_output checked, execution once, canonical full source retained |
 | Thinking-tail exact cut, two compactions, immutable tail, reopen | `thinking-tail-final-scoped-seal.log`: 7 Provider/2 suites +1 Models proof +11 Core native operation tests GREEN |
@@ -69,8 +74,11 @@ Three read-only reviewers examined actual diff and retained execution results:
   TTL/legacy signatures/Codable and public fixture. Closed numeric precision and
   known-TTL lower-bound P2. No remaining scoped blocker.
 
-Final documentation, full applicable CI and actual merged main still require their
-own result; scoped review is not a substitute.
+Final docs/public fixture review passed in all three scopes. Provider review also
+closed the reminder integration coverage gap after inspecting the 11-test GREEN
+result. The conditional FoundationNetworking import is a portable test prerequisite.
+Full applicable CI and actual main require their own results; scoped review is not
+a substitute. [Independent review record](https://github.com/OtohaCo/SwiftAgent/pull/100#issuecomment-6118403959).
 
 ## Supported scope and remaining limitations
 
@@ -99,7 +107,23 @@ acceptance does not mean OtohaAI product integration or end-to-end acceptance.
 
 ## Full gates and landing
 
-Pending final records: complete macOS script, concurrency seal, Apple-provider
-compile, Linux CI, protected PR checks, normal PR merge and actual main SHA/tree/CI.
-No tag or Release will be created. Final status is not ready until these records
-are filled and all blocking findings resolved.
+Required gates remain the complete macOS script, concurrency seal, Apple-provider
+compile, Linux CI (including five bounded reporting reproductions), normal PR merge
+and corresponding actual main CI. See [PR checks](https://github.com/OtohaCo/SwiftAgent/pull/100/checks)
+and the PR's final acceptance record for immutable head/main SHA/tree and CI URLs.
+No tag or Release is created by this task.
+
+The first local complete-script attempt stopped at core-tests: three missing imports
+required by the ExternalClient architecture guard, and a schema-3 compact test
+rejected an absent deployment binding before reaching its intended unsupported-store
+guard. Both prerequisites were corrected; the original refusal assertions remain.
+Focused architecture and Journal tests passed (`full-gate-findings-scoped.log`).
+The subsequent local full script passed core tests and public client tests before
+this documentation revision; complete results are recorded separately in the PR.
+
+The first [PR CI run](https://github.com/OtohaCo/SwiftAgent/actions/runs/38208452800)
+at `4249387c52f848f8f3f4a7bff49a65c23f5da0af` reported Linux compile failure:
+new reminder transport lacked FoundationNetworking's URLRequest import. The exact
+failure is retained in `linux-first-ci.log`; `9cf9d50` adds the conditional import.
+Apple provider compile passed on that first head. These partial results cannot
+qualify the corrected final head; final-head checks must all pass before merge.
