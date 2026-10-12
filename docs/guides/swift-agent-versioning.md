@@ -1,5 +1,24 @@
 # SwiftAgent Semantic Versioning
 
+## Issue #99 extension (unreleased, no assigned next version)
+
+This work follows the RC6 prepared candidate. It adds opt-in native-context
+Journal schema 11 and optional Provider capability protocols, preserving the
+existing default schema 3 and old conformers. Old initializer precise signatures
+remain callable and usable as function references; new overloads have required
+new labels. Old Codable documents decode newly optional fields as nil. New
+validated types use shared constructor/decode checks.
+
+Public event enums gain `ModelEvent.inputTransformations`,
+`ModelEvent.compactionProgress` and `AgentEvent.compaction`; exhaustive client
+switches must adapt. Updated execution-reporting consumers explicitly ignore
+maintenance/diagnostics as answer/effect content. This is an acknowledged prerelease
+source delta, not a claim of universal source compatibility. New schema 11 stores
+are refused by the pre-feature schema-10 reader without byte changes, including
+empty stores and maintenance. New readers retain old-store read/append behavior
+without silently granting native capability. No migration, version bump, tag or
+Release is performed. See [native-context guide](swift-agent-native-context.md).
+
 ## RC6 closeout (prepared, unreleased)
 
 The closeout adds no public initializer parameter, protocol requirement, enum

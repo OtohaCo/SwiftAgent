@@ -79,3 +79,11 @@ After a stale persistent-history error, wait for physical drain and create a
 new Session with the same ID and Journal handle. After mutation uncertainty,
 use Host-verified reconciliation first; do not replay the mutation or alter the
 old Run's logical terminal. No whole shared Journal shutdown is required.
+
+
+Native service-written compaction is managed outside the projector lifecycle.
+See [native context and trusted controls](swift-agent-native-context.md) for
+explicit operation APIs, effective checkpoint/source protection, native-aware
+estimation, schema 11 recovery, supported combinations and public HTTP fixtures.
+The original Host summary/excerpt contracts remain request-only; a native opaque
+window does not authorize arbitrary covered-source rewriting.
