@@ -28,7 +28,8 @@ enum AnthropicRequestEncoder {
 
     static func encodeWithMapping(_ request: ModelRequest, maximumOutputTokens: Int, thinking: AnthropicThinking,
         effort: AnthropicEffort? = nil, promptCaching: AnthropicPromptCaching? = nil, resolvedModelName: String? = nil,
-        nativeContext: AnthropicNativeContextConfiguration? = nil) throws -> (body: JSONValue, sources: [String: ModelInputSourceIdentity]) {
+        nativeContext: AnthropicNativeContextConfiguration? = nil,
+        preparingPreservedReplacement: Bool = false, forceThinkingPrefixValidation: Bool = false, replacementSink: (([ModelThinkingPrefixReplacement]) -> Void)? = nil) throws -> (body: JSONValue, sources: [String: ModelInputSourceIdentity]) {
         guard request.model.provider == "anthropic", !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid Anthropic model identifier.")
         }
@@ -160,7 +161,7 @@ enum AnthropicRequestEncoder {
             if let ttl = promptCaching.automaticTTL { body["cache_control"] = promptCaching.control(ttl) }
             try promptCaching.validateTTLOrder(in: body)
         }
-        if thinkingPrefixes.contains(where: { AnthropicContinuation.containsThinking($0.blocks) }), nativeContext?.thinkingPrefixMismatch == nil,
+        if thinkingPrefixes.contains(where: { AnthropicContinuation.containsThinking($0.blocks) }), (nativeContext?.thinkingPrefixMismatch == nil || forceThinkingPrefixValidation),
            let controls = request.conversationControls,
            controls.toolBaseline.allSatisfy({ controls.deferredBaselineToolNames.contains($0.name) }),
            controls.controls.contains(where: {
@@ -170,10 +171,17 @@ enum AnthropicRequestEncoder {
             throw ModelProviderError(kind: .unsupportedCapability,
                 message: "A by-value inline tool without a non-deferred baseline anchor changes the signed thinking prefix.")
         }
-        for prior in thinkingPrefixes where nativeContext?.thinkingPrefixMismatch == nil {
-            try AnthropicContinuation.validatePrefix(content: prior.content, blocks: prior.blocks,
-                prefix: AnthropicContinuation.prefix(system: body["system"], tools: body["tools"], messages: prior.messages))
+        var replacements: [ModelThinkingPrefixReplacement] = []
+        for prior in thinkingPrefixes where nativeContext?.thinkingPrefixMismatch == nil || preparingPreservedReplacement || forceThinkingPrefixValidation {
+            let prefix = AnthropicContinuation.prefix(system: body["system"], tools: body["tools"], messages: prior.messages)
+            if preparingPreservedReplacement {
+                if let replacement = try AnthropicContinuation.prefixReplacement(content: prior.content, blocks: prior.blocks, prefix: prefix) { replacements.append(replacement) }
+            } else {
+                try AnthropicContinuation.validatePrefix(content: prior.content, blocks: prior.blocks, prefix: prefix,
+                    replacements: request.nativeContext?.preservedThinkingLineage?.replacements ?? [])
+            }
         }
+        replacementSink?(replacements)
         var sources: [String: ModelInputSourceIdentity] = [:]
         for (index, message) in messages.enumerated() {
             for (block, identity) in message.identities.enumerated() { sources["messages.\(index).content.\(block)"] = identity }

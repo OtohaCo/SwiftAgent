@@ -55,24 +55,35 @@ public struct AnthropicNativeContextConfiguration: Hashable, Sendable, Codable {
     public let inlineToolChanges: Bool
     public let runReminders: Bool
     public let thinkingPrefixMismatch: AnthropicThinkingPrefixMismatch?
+    public let preservedThinking: Bool
     public init(qualification: NativeContextQualification, automatic: ModelAutomaticCompaction? = nil,
                 inlineToolChanges: Bool = false, runReminders: Bool = false,
                 thinkingPrefixMismatch: AnthropicThinkingPrefixMismatch? = nil) throws {
-        guard qualification.modes.isSubset(of: [.anthropicThreshold, .anthropicOnDemand]),
+        try self.init(qualification: qualification, automatic: automatic, inlineToolChanges: inlineToolChanges,
+                      runReminders: runReminders, thinkingPrefixMismatch: thinkingPrefixMismatch, preservedThinking: false)
+    }
+    /// Host qualification that every managed on-demand compaction uses a model
+    /// with preserved thinking. No account capability is inferred from credentials.
+    public init(qualification: NativeContextQualification, automatic: ModelAutomaticCompaction? = nil,
+                inlineToolChanges: Bool = false, runReminders: Bool = false,
+                thinkingPrefixMismatch: AnthropicThinkingPrefixMismatch? = nil, preservedThinking: Bool) throws {
+        guard !preservedThinking || (qualification.modes.contains(.anthropicOnDemand) && automatic == nil),
+              qualification.modes.isSubset(of: [.anthropicThreshold, .anthropicOnDemand]),
               automatic == nil || (automatic?.mode == .anthropicThreshold && qualification.modes.contains(.anthropicThreshold)),
               !(automatic != nil && runReminders) else {
             throw ModelProviderError(kind: .unsupportedCapability, message: "Invalid Anthropic native context/reminder combination.")
         }
         self.qualification = qualification; self.automatic = automatic; self.inlineToolChanges = inlineToolChanges
-        self.runReminders = runReminders; self.thinkingPrefixMismatch = thinkingPrefixMismatch
+        self.runReminders = runReminders; self.thinkingPrefixMismatch = thinkingPrefixMismatch; self.preservedThinking = preservedThinking
     }
-    private enum CodingKeys: String, CodingKey { case qualification, automatic, inlineToolChanges, runReminders, thinkingPrefixMismatch }
+    private enum CodingKeys: String, CodingKey { case qualification, automatic, inlineToolChanges, runReminders, thinkingPrefixMismatch, preservedThinking }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(qualification: c.decode(NativeContextQualification.self, forKey: .qualification),
             automatic: c.decodeIfPresent(ModelAutomaticCompaction.self, forKey: .automatic),
             inlineToolChanges: c.decodeIfPresent(Bool.self, forKey: .inlineToolChanges) ?? false, runReminders: c.decodeIfPresent(Bool.self, forKey: .runReminders) ?? false,
-            thinkingPrefixMismatch: c.decodeIfPresent(AnthropicThinkingPrefixMismatch.self, forKey: .thinkingPrefixMismatch))
+            thinkingPrefixMismatch: c.decodeIfPresent(AnthropicThinkingPrefixMismatch.self, forKey: .thinkingPrefixMismatch),
+            preservedThinking: c.decodeIfPresent(Bool.self, forKey: .preservedThinking) ?? false)
     }
 }
 

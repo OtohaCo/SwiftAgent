@@ -97,9 +97,19 @@ public struct ModelNativeContextCheckpoint: Hashable, Sendable, Codable {
     public let rootConfigurationDigest: String
     public let toolBaseline: [ModelToolDefinition]
     public let usage: ModelUsage
+    public let preservedThinkingLineage: ModelPreservedThinkingLineage?
     public init(id: UUID, generation: UInt64, continuation: ModelProviderContinuation,
                 transition: ModelNativeContextTransition, rootConfigurationDigest: String,
                 toolBaseline: [ModelToolDefinition], usage: ModelUsage, canonicalTailStart: Int? = nil) {
+        self.init(id: id, generation: generation, continuation: continuation, transition: transition,
+                  rootConfigurationDigest: rootConfigurationDigest, toolBaseline: toolBaseline, usage: usage,
+                  canonicalTailStart: canonicalTailStart, preservedThinkingLineage: nil)
+    }
+    public init(id: UUID, generation: UInt64, continuation: ModelProviderContinuation,
+                transition: ModelNativeContextTransition, rootConfigurationDigest: String,
+                toolBaseline: [ModelToolDefinition], usage: ModelUsage, canonicalTailStart: Int?,
+                preservedThinkingLineage: ModelPreservedThinkingLineage?) {
+        self.preservedThinkingLineage = preservedThinkingLineage
         self.id = id; self.generation = generation; self.continuation = continuation
         self.canonicalTailStart = canonicalTailStart ?? transition.source.canonicalMessageCount
         self.transition = transition; self.rootConfigurationDigest = rootConfigurationDigest

@@ -287,10 +287,23 @@ package struct AgentLoop: Sendable {
                 }
             }
             let request: ModelRequest
-            if (provider as? any ModelProviderCompaction)?.automaticCompaction != nil || requestNeedsNativeSource(preparedRequest.request) {
+            if (provider as? any ModelProviderCompaction)?.automaticCompaction != nil || requestNeedsNativeSource(preparedRequest.request)
+                || (provider as? any ModelProviderPreservedThinkingCompaction)?.supportsPreservedThinkingCompaction == true {
                 let source = try await nativeContextState.source(for: preparedRequest, sessionID: sessionID, journal: journal, provider: provider)
                 request = preparedRequest.request.withNativeSource(source, invocationID: UUID())
             } else { request = preparedRequest.request }
+            let requestBoundary: ModelProviderRequestBoundary?
+            if let preserved = provider as? any ModelProviderPreservedThinkingCompaction,
+               preserved.supportsPreservedThinkingCompaction, !binding.isLegacyBinding,
+               let source = request.nativeContextSource, let invocationID = request.invocationID,
+               preparedRequest.request.messages == (try await nativeContextState.effectiveMessages(history, binding: binding,
+                    sessionID: sessionID, journal: journal, structuredOutput: structuredOutput)) {
+                requestBoundary = try .init(id: UUID(), source: source, invocationID: invocationID,
+                    origin: binding.continuationOrigin,
+                    rootConfigurationDigest: try AgentNativeContextState.rootDigest(history, binding: binding, structuredOutput: structuredOutput),
+                    tools: request.tools, conversationControls: request.conversationControls,
+                    witness: try preserved.preservedThinkingRequestWitness(request: request))
+            } else { requestBoundary = nil }
             try budget.checkActive()
             var accumulator = ModelEventAccumulator()
             var receivedThisTurn: [ToolCallID] = []
@@ -298,7 +311,7 @@ package struct AgentLoop: Sendable {
             for try await rawEvent in settlingModelEvents(provider.stream(request: request), gate: budget.gate) {
                 await beforeHandlingModelEvent?(rawEvent)
                 try budget.checkActive()
-                let event = try scopeContinuation(rawEvent)
+                let event = try scopeContinuation(rawEvent, requestBoundary: requestBoundary)
                 if let audit, case .toolCallStarted(let id, let name) = event {
                     if id.rawValue.utf8.count > 512 || name.utf8.count > 512
                         || id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.isEmpty
@@ -666,7 +679,8 @@ package struct AgentLoop: Sendable {
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else {
             throw AgentLoopError.providerMismatch
         }
-        if (provider as? any ModelProviderCompaction)?.automaticCompaction != nil || binding.nativeContextPolicy?.compactBeforeGeneration != nil {
+        if (provider as? any ModelProviderCompaction)?.automaticCompaction != nil || binding.nativeContextPolicy?.compactBeforeGeneration != nil
+            || (provider as? any ModelProviderPreservedThinkingCompaction)?.supportsPreservedThinkingCompaction == true {
             guard !binding.isLegacyBinding else {
                 throw ModelProviderError(kind: .unsupportedCapability, message: "Native context requires an explicit deployment-scoped model binding.")
             }
@@ -784,6 +798,15 @@ package struct AgentLoop: Sendable {
         // Images reach the model, become text or stop the request here, per the Run's explicit choice.
         let (modelMessages, described) = try binding.imageInput.apply(
             to: projection.messages, adapterSendsImages: provider.descriptor.capabilities.contains(.imageInput))
+        if let checkpoint = nativeContext, let lineage = checkpoint.preservedThinkingLineage {
+            let leading = canonicalMessages.prefix { $0.role == .system || $0.role == .developer }.count
+            let expected = Array(canonicalMessages.dropFirst(leading + checkpoint.canonicalTailStart).prefix(lineage.tailMessageCount))
+            let actual = Array(modelMessages.drop(while: { $0.role == .system || $0.role == .developer }).prefix(lineage.tailMessageCount))
+            guard expected.count == lineage.tailMessageCount, actual == expected,
+                  try AgentContextProjectionSource.digest(messages: actual) == lineage.tailDigest else {
+                throw AgentModelBindingError.invalidProjection
+            }
+        }
         // Images sent as text make this request's view lossy, and its plan says so.
         let sentProjection = described ? AgentContextProjection(
             messages: modelMessages,
@@ -877,18 +900,18 @@ package struct AgentLoop: Sendable {
         }
     }
 
-    private func scopeContinuation(_ event: ModelEvent) throws -> ModelEvent {
+    private func scopeContinuation(_ event: ModelEvent, requestBoundary: ModelProviderRequestBoundary? = nil) throws -> ModelEvent {
         switch event {
         case .providerContinuation(let state):
-            if binding.legacyContinuationPolicy == .allowMatchingModel, state.contextTransition == nil { return event }
-            return .providerContinuation(try scoped(state))
+            if binding.legacyContinuationPolicy == .allowMatchingModel, state.contextTransition == nil, requestBoundary == nil { return event }
+            return .providerContinuation(try scoped(state, requestBoundary: requestBoundary))
         case .responseCompleted(let response):
-            if binding.legacyContinuationPolicy == .allowMatchingModel, !response.content.contains(where: {
+            if binding.legacyContinuationPolicy == .allowMatchingModel, requestBoundary == nil, !response.content.contains(where: {
                 if case .providerContinuation(let state) = $0 { state.contextTransition != nil } else { false }
             }) { return event }
             return .responseCompleted(.init(
                 info: response.info,
-                content: try response.content.map(scoped),
+                content: try response.content.map { try scoped($0, requestBoundary: requestBoundary) },
                 toolCalls: response.toolCalls,
                 usage: response.usage,
                 stopReason: response.stopReason, inputTransformations: response.inputTransformations
@@ -898,17 +921,17 @@ package struct AgentLoop: Sendable {
         }
     }
 
-    private func scoped(_ content: ModelContent) throws -> ModelContent {
+    private func scoped(_ content: ModelContent, requestBoundary: ModelProviderRequestBoundary? = nil) throws -> ModelContent {
         guard case .providerContinuation(let state) = content else { return content }
-        return .providerContinuation(try scoped(state))
+        return .providerContinuation(try scoped(state, requestBoundary: requestBoundary))
     }
 
-    private func scoped(_ state: ModelProviderContinuation) throws -> ModelProviderContinuation {
+    private func scoped(_ state: ModelProviderContinuation, requestBoundary: ModelProviderRequestBoundary? = nil) throws -> ModelProviderContinuation {
         guard state.model == model,
               state.origin == nil || state.origin == binding.continuationOrigin else {
             throw AgentModelBindingError.incompatibleContinuation
         }
-        return .init(model: state.model, format: state.format, payload: state.payload, origin: binding.continuationOrigin, contextTransition: state.contextTransition)
+        return .init(model: state.model, format: state.format, payload: state.payload, origin: binding.continuationOrigin, contextTransition: state.contextTransition, requestBoundary: requestBoundary)
     }
 
     private func validToolPairs(_ messages: [ModelMessage], allowUnresolvedToolTail: Bool,

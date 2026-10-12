@@ -37,6 +37,7 @@ public struct ModelProviderContinuation: Hashable, Sendable, Codable {
     public let origin: ModelProviderContinuationOrigin?
     /// Complete native effective-context candidate; publication belongs to Core.
     public let contextTransition: ModelNativeContextTransition?
+    public let requestBoundary: ModelProviderRequestBoundary?
 
     /// Compatibility initializer for payloads created before continuation
     /// deployment scope was introduced.
@@ -56,6 +57,12 @@ public struct ModelProviderContinuation: Hashable, Sendable, Codable {
     public init(model: ModelID, format: String, payload: Data,
                 origin: ModelProviderContinuationOrigin? = nil,
                 contextTransition: ModelNativeContextTransition?) {
+        self.init(model: model, format: format, payload: payload, origin: origin, contextTransition: contextTransition, requestBoundary: nil)
+    }
+
+    public init(model: ModelID, format: String, payload: Data, origin: ModelProviderContinuationOrigin?,
+                contextTransition: ModelNativeContextTransition?, requestBoundary: ModelProviderRequestBoundary?) {
+        self.requestBoundary = requestBoundary
         self.model = model
         self.format = format
         self.payload = payload
@@ -68,7 +75,7 @@ public struct ModelProviderContinuation: Hashable, Sendable, Codable {
             && lhs.model.name.utf8.elementsEqual(rhs.model.name.utf8)
             && lhs.format.utf8.elementsEqual(rhs.format.utf8)
             && lhs.payload == rhs.payload
-            && lhs.origin == rhs.origin && lhs.contextTransition == rhs.contextTransition
+            && lhs.origin == rhs.origin && lhs.contextTransition == rhs.contextTransition && lhs.requestBoundary == rhs.requestBoundary
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -78,5 +85,6 @@ public struct ModelProviderContinuation: Hashable, Sendable, Codable {
         hasher.combine(payload)
         hasher.combine(origin)
         hasher.combine(contextTransition)
+        hasher.combine(requestBoundary)
     }
 }

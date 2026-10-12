@@ -226,3 +226,41 @@ thinking, new-Run removal, and reopen. It also covers compact→new user→remin
 tool loop through the actual fragmented HTTP encoder/decoder. These are protocol
 fixtures, not cryptographic signature or live-model qualification. Subsequent new
 user admission after an unanswered controlled turn remains an explicit refusal.
+
+## Managed preserved-thinking request boundaries
+
+A qualified direct Anthropic adapter can explicitly enable `preservedThinking`.
+Core records the exact encoded request witness and stable canonical source on a
+complete accepted assistant continuation. `compactionBoundaries()` returns only
+SDK-created selectors for the current checkpoint generation; `compact(through:)`
+reproduces and checks that exact request under the normal operation writer lease.
+The last compacted role must differ from the adjacent kept assistant role. Old
+selectors cannot compact an assistant checkpoint again using an ancestral user
+role as evidence. A second compaction needs a newly sent request boundary after
+the preceding checkpoint; every transition must remain explicitly qualified.
+
+Before preparing replacement witnesses, the adapter validates all original local
+thinking prefix proofs, even if Host selected server `error` or `drop_block`.
+Replacement pairs identify the unchanged original continuation payload, its old
+prefix, and the service-written checkpoint's new prefix. They do not replace old
+payloads, witnesses, signatures, or claim cryptographic verification. Core persists
+the whole kept-tail digest and validates the actual projected/image-processed tail
+unchanged on every request. Only newly appended suffix is eligible for the existing
+projection contract. Recovery verifies the stable boundary and protected tail once;
+normal append does not require an unchanged latest history head.
+
+Hard token budgets apply separately to the actual compact prefix and the resulting
+checkpoint-plus-tail request. The full original view is encoded only for local
+proof validation; it is not dispatched and is not incorrectly charged to the prefix
+budget. Post-summary projector/estimator validation remains within the original
+operation deadline and physical drain reservation. Cancellation cannot publish a
+late summary while a noncooperative estimator is still running.
+
+This initial managed-tail capability supports direct qualified Anthropic on-demand,
+fixed tools/root configuration, identity source views, and histories without
+nonempty trusted mid-conversation controls. Route does not expose this optional
+capability; arbitrary cuts, old generation selectors, rewritten tails, unqualified
+models/endpoints, and historical control combinations fail locally. Whole-history
+idle compaction and the separately tested new-user/reminder combination retain
+their existing support. These tests use opaque HTTP fixture signatures and do not
+qualify a live account's preserved-thinking enforcement.

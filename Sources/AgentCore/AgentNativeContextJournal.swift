@@ -34,6 +34,22 @@ extension AgentJournal {
                                           previous: ModelNativeContextCheckpoint?, sessionID: UUID,
                                           messageCount: UInt64, publishedMessageCount: UInt64) throws {
         let source = value.transition.source
+        if let lineage = value.preservedThinkingLineage {
+            guard value.transition.mode == .anthropicOnDemand, lineage.parentCheckpointID == previous?.id,
+                  lineage.boundary.source.sessionID == sessionID,
+                  lineage.boundary.source.canonicalMessageCount == value.canonicalTailStart,
+                  value.canonicalTailStart == source.canonicalMessageCount,
+                  lineage.boundary.rootConfigurationDigest == value.rootConfigurationDigest,
+                  lineage.tailMessageCount > 0, value.canonicalTailStart >= 0,
+                  UInt64(value.canonicalTailStart) <= publishedMessageCount,
+                  UInt64(lineage.tailMessageCount) <= publishedMessageCount - UInt64(value.canonicalTailStart),
+                  !lineage.tailDigest.isEmpty, !lineage.boundary.witness.prefixDigest.isEmpty,
+                  !lineage.boundary.witness.rootToolsDigest.isEmpty, !lineage.boundary.witness.qualificationScope.isEmpty,
+                  lineage.replacements.count <= 10_000,
+                  lineage.replacements.allSatisfy({ !$0.originalDigest.isEmpty && !$0.replacementDigest.isEmpty && !$0.continuationPayloadDigest.isEmpty }) else {
+                throw AgentJournalError.invalidRecord
+            }
+        }
         guard source.sessionID == sessionID, source.canonicalMessageCount > 0,
               UInt64(source.canonicalMessageCount) <= messageCount,
               value.canonicalTailStart >= source.canonicalMessageCount,

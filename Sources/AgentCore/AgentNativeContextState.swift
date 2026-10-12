@@ -38,6 +38,21 @@ package actor AgentNativeContextState {
                     throw AgentJournalError.concurrentWriter
                 }
             }
+            if let lineage = checkpoint.preservedThinkingLineage {
+                let cut = checkpoint.canonicalTailStart
+                guard lineage.boundary.source.sessionID == sessionID,
+                      lineage.boundary.source.canonicalMessageCount == cut,
+                      lineage.boundary.origin == binding.continuationOrigin,
+                      lineage.boundary.rootConfigurationDigest == checkpoint.rootConfigurationDigest,
+                      lineage.parentCheckpointID == source.previousCheckpointID,
+                      lineage.tailMessageCount > 0, lineage.tailMessageCount <= formalCount - cut,
+                      !lineage.boundary.witness.qualificationScope.isEmpty,
+                      try AgentContextProjectionSource.digest(messages: Array(canonical.dropFirst(leading + cut).prefix(lineage.tailMessageCount))) == lineage.tailDigest,
+                      case .assistant(let firstContent, _) = canonical[leading + cut],
+                      firstContent.contains(where: { if case .providerContinuation(let state) = $0 { state.requestBoundary == lineage.boundary } else { false } }) else {
+                    throw AgentModelBindingError.incompatibleContinuation
+                }
+            }
             // Restoration validates once. Normal appends use the stable anchor and history CAS;
             // neither publication revision nor every covered message is hashed on every request.
             validatedID = checkpoint.id

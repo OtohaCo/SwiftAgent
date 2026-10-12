@@ -49,6 +49,9 @@ enum AnthropicNativeContext {
                 throw ModelProviderError(kind: .unsupportedCapability, message: "Conversation controls require deployment qualification.")
             }
         }
+        if configuration?.preservedThinking == true {
+            _ = try AnthropicPreservedThinking.scope(configuration: configuration, endpoint: endpoint, resolvedModelName: resolvedModelName, thinking: thinking)
+        }
         let activeMode = mode ?? configuration?.automatic?.mode ?? request.nativeContext?.transition.mode
         if let activeMode {
             guard let configuration else {
@@ -101,6 +104,14 @@ enum AnthropicNativeContext {
             var parameters = try ProviderJSON.object(fields["thinking"])
             parameters["block_binding"] = .object(["prefix_mismatch_behavior": .string(mismatch.rawValue)])
             fields["thinking"] = .object(parameters)
+        }
+        if let lineage = request.nativeContext?.preservedThinkingLineage {
+            let scope = try AnthropicPreservedThinking.scope(configuration: configuration, endpoint: endpoint, resolvedModelName: resolvedModelName, thinking: thinking)
+            let witness = try AnthropicPreservedThinking.witness(body: .object(fields), scope: scope)
+            guard lineage.boundary.witness.qualificationScope == scope,
+                  lineage.boundary.witness.rootToolsDigest == witness.rootToolsDigest else {
+                throw ModelProviderError(kind: .unsupportedCapability, message: "The preserved-thinking replacement has an incompatible qualification or root prefix.")
+            }
         }
         return .object(fields)
     }

@@ -1097,10 +1097,42 @@ public actor AgentSession {
         await conversationControlState.install(value)
     }
 
+    /// Lists persisted complete request boundaries from the current native
+    /// generation. Selection is read-only; compact revalidates under its writer lease.
+    public func compactionBoundaries() async throws -> [AgentCompactionBoundary] {
+        guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
+        try await restoreJournalStateIfNeeded()
+        let current = await nativeContextState.current()
+        let leading = history.prefix { $0.role == .system || $0.role == .developer }.count
+        return history.enumerated().compactMap { index, message in
+            guard case .assistant(let content, _) = message,
+                  let boundary = content.compactMap({ part -> ModelProviderRequestBoundary? in
+                      if case .providerContinuation(let state) = part { state.requestBoundary } else { nil }
+                  }).first, boundary.source.sessionID == id,
+                  boundary.source.canonicalMessageCount == index - leading,
+                  boundary.source.previousCheckpointID == current?.id else { return nil }
+            return .init(id: boundary.id, sessionID: id, canonicalMessageCount: boundary.source.canonicalMessageCount)
+        }
+    }
+
+    /// Compacts exactly a previously sent request and keeps its adjacent reply
+    /// and later turns unchanged. Arbitrary history counts are not accepted.
+    public func compact(mode: ModelCompactionMode, through boundary: AgentCompactionBoundary,
+                        using binding: AgentModelBinding? = nil,
+                        deadline: ContinuousClock.Instant? = nil) async throws -> AgentCompactionOperation {
+        guard boundary.sessionID == id else { throw AgentModelBindingError.incompatibleContinuation }
+        return try await startCompaction(mode: mode, through: boundary.id, using: binding, deadline: deadline)
+    }
+
     /// Starts native maintenance only at a drained, idle boundary. The canonical
     /// conversation is never replaced with the returned summary.
     public func compact(mode: ModelCompactionMode, using binding: AgentModelBinding? = nil,
                         deadline: ContinuousClock.Instant? = nil) async throws -> AgentCompactionOperation {
+        try await startCompaction(mode: mode, through: nil, using: binding, deadline: deadline)
+    }
+
+    private func startCompaction(mode: ModelCompactionMode, through boundaryID: UUID?, using binding: AgentModelBinding?,
+                                 deadline: ContinuousClock.Instant?) async throws -> AgentCompactionOperation {
         try Task.checkCancellation()
         guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
         guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
@@ -1112,6 +1144,12 @@ public actor AgentSession {
         guard let provider = binding.provider as? any ModelProviderCompaction,
               provider.compactionModes.contains(mode) else {
             throw ModelProviderError(kind: .unsupportedCapability, message: "This deployment does not support the requested native compact operation.")
+        }
+        if boundaryID != nil {
+            guard mode == .anthropicOnDemand,
+                  (provider as? any ModelProviderPreservedThinkingCompaction)?.supportsPreservedThinkingCompaction == true else {
+                throw ModelProviderError(kind: .unsupportedCapability, message: "Managed thinking tails require a qualified preserved-thinking on-demand adapter.")
+            }
         }
         if let journal, !journal.supportsNativeContext { throw AgentJournalError.unsupportedFormat }
         let deadline = deadline ?? .now.advanced(by: runTimeout)
@@ -1135,7 +1173,7 @@ public actor AgentSession {
         let handle = AgentCompactionOperation(id: operationID, invocationID: invocationID, sessionID: id,
                                               events: channel.stream, control: control, drain: drain)
         await control.start { [self] in
-            await performCompaction(binding: binding, provider: provider, mode: mode, deadline: deadline,
+            await performCompaction(binding: binding, provider: provider, mode: mode, boundaryID: boundaryID, deadline: deadline,
                 operationID: operationID, invocationID: invocationID, control: control, drain: drain,
                 events: channel.continuation)
         }
@@ -1143,13 +1181,13 @@ public actor AgentSession {
     }
 
     private func performCompaction(binding: AgentModelBinding, provider: any ModelProviderCompaction,
-                                   mode: ModelCompactionMode, deadline: ContinuousClock.Instant,
+                                   mode: ModelCompactionMode, boundaryID: UUID?, deadline: ContinuousClock.Instant,
                                    operationID: UUID, invocationID: UUID, control: AgentCompactionControl,
                                    drain: AgentRunDrain, events: AsyncStream<ModelCompactionEvent>.Continuation) async -> Result<AgentCompactionResult, Error> {
         let result: Result<AgentCompactionResult, Error>
         do {
             let responseAndRequest = try await withStartupDeadline(deadline, startupID: operationID) { [self] in
-                try await prepareNativeCompaction(binding: binding, provider: provider, mode: mode,
+                try await prepareNativeCompaction(binding: binding, provider: provider, mode: mode, boundaryID: boundaryID,
                     operationID: operationID, invocationID: invocationID, events: events)
             }
             try Task.checkCancellation()
@@ -1157,9 +1195,33 @@ public actor AgentSession {
             let (response, request) = responseAndRequest
             var published: ModelNativeContextCheckpoint?
             if let continuation = response.continuation {
-                let value = try await nativeContextState.candidate(continuation, request: request,
+                var value = try await nativeContextState.candidate(continuation, request: request,
                     canonicalTailStart: request.nativeContextSource!.canonicalMessageCount,
                     canonical: history, binding: binding, usage: response.usage)
+                if let boundaryID {
+                    let boundary = try nativeCompactionBoundary(boundaryID)
+                    let leading = history.prefix { $0.role == .system || $0.role == .developer }.count
+                    let kept = Array(history.dropFirst(leading + boundary.source.canonicalMessageCount))
+                    guard let preserved = provider as? any ModelProviderPreservedThinkingCompaction else { throw AgentModelBindingError.incompatibleContinuation }
+                    let replacements = try preserved.preservedThinkingReplacements(request: request, replacement: value, keptMessages: kept)
+                    let lineage = try ModelPreservedThinkingLineage(boundary: boundary, parentCheckpointID: request.nativeContext?.id,
+                        tailMessageCount: kept.count, tailDigest: try AgentContextProjectionSource.digest(messages: kept), replacements: replacements)
+                    value = .init(id: value.id, generation: value.generation, continuation: value.continuation, transition: value.transition,
+                        rootConfigurationDigest: value.rootConfigurationDigest, toolBaseline: value.toolBaseline, usage: value.usage,
+                        canonicalTailStart: value.canonicalTailStart, preservedThinkingLineage: lineage)
+                    // Validate the actual replacement view, including its final budget,
+                    // before the irreversible publication. No model request is sent here.
+                    let candidateValue = value
+                    _ = try await withStartupDeadline(deadline, startupID: operationID) { [self] in
+                        let candidateState = AgentNativeContextState(); await candidateState.install(candidateValue)
+                        let validator = AgentLoop(binding: binding, tools: tools, scheduler: scheduler,
+                            modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes, journal: journal,
+                            contextEffects: contextEffects, nativeContextState: candidateState,
+                            conversationControlState: conversationControlState, contextOperation: true)
+                        return try await validator.preflight(messages: history, sessionID: id, runID: operationID,
+                            conversationRevision: conversationRevision, structuredOutput: structuredOutput)
+                    }
+                }
                 guard ContinuousClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
                 try await control.seal()
                 if let journal, let witness = persistentHistoryWitness {
@@ -1190,7 +1252,7 @@ public actor AgentSession {
     }
 
     private func prepareNativeCompaction(binding: AgentModelBinding, provider: any ModelProviderCompaction,
-                                        mode: ModelCompactionMode, operationID: UUID, invocationID: UUID,
+                                        mode: ModelCompactionMode, boundaryID: UUID?, operationID: UUID, invocationID: UUID,
                                         events: AsyncStream<ModelCompactionEvent>.Continuation) async throws -> (ModelCompactionResponse, ModelRequest) {
         try await restoreJournalStateIfNeeded()
         if let journal, let persistentHistoryWitness,
@@ -1205,14 +1267,80 @@ public actor AgentSession {
         if await conversationControlState.hasActiveReminder(in: history) {
             throw ModelProviderError(kind: .unsupportedCapability, message: "Compaction cannot cover an active turn reminder without a new legal user boundary.")
         }
-        let prepared = try await loop.preflight(messages: history, sessionID: id, runID: operationID,
-                                               conversationRevision: conversationRevision, structuredOutput: structuredOutput)
-        let source = try await nativeContextState.source(for: prepared, sessionID: id, journal: journal, provider: provider, compactionMode: mode)
-        let request = prepared.request.withNativeSource(source, invocationID: invocationID)
+        let compactionPrepared: AgentPreparedModelRequest
+        if let boundaryID {
+            compactionPrepared = try await prepareThinkingCompactionBoundary(boundaryID, binding: binding, provider: provider, operationID: operationID)
+        } else {
+            compactionPrepared = try await loop.preflight(messages: history, sessionID: id, runID: operationID,
+                conversationRevision: conversationRevision, structuredOutput: structuredOutput)
+        }
+        let source = try await nativeContextState.source(for: compactionPrepared, sessionID: id, journal: journal, provider: provider, compactionMode: mode)
+        let request = compactionPrepared.request.withNativeSource(source, invocationID: invocationID)
         let response = try await AgentNativeCompactionExecutor(provider: provider).execute(
             .init(request: request, mode: mode, operationID: operationID, invocationID: invocationID),
             emit: { events.yield($0) })
         return (response, request)
+    }
+
+    private func nativeCompactionBoundary(_ boundaryID: UUID) throws -> ModelProviderRequestBoundary {
+        let matches = history.compactMap { message -> ModelProviderRequestBoundary? in
+            guard case .assistant(let content, _) = message else { return nil }
+            return content.compactMap { part -> ModelProviderRequestBoundary? in
+                if case .providerContinuation(let state) = part, state.requestBoundary?.id == boundaryID { state.requestBoundary } else { nil }
+            }.first
+        }
+        guard matches.count == 1, let boundary = matches.first else { throw AgentModelBindingError.incompatibleContinuation }
+        return boundary
+    }
+
+    private func prepareThinkingCompactionBoundary(_ boundaryID: UUID,
+            binding: AgentModelBinding, provider: any ModelProviderCompaction, operationID: UUID) async throws -> AgentPreparedModelRequest {
+        guard let preserved = provider as? any ModelProviderPreservedThinkingCompaction,
+              preserved.supportsPreservedThinkingCompaction else { throw AgentModelBindingError.incompatibleContinuation }
+        let boundary = try nativeCompactionBoundary(boundaryID), current = await nativeContextState.current()
+        let leading = history.prefix { $0.role == .system || $0.role == .developer }.count
+        let cut = boundary.source.canonicalMessageCount
+        guard boundary.source.sessionID == id, boundary.origin == binding.continuationOrigin,
+              boundary.rootConfigurationDigest == (try AgentNativeContextState.rootDigest(history, binding: binding, structuredOutput: structuredOutput)),
+              cut > 0, leading + cut < history.count,
+              history[leading + cut].role == .assistant,
+              history[leading + cut - 1].role != history[leading + cut].role,
+              (current == nil || cut > current!.canonicalTailStart),
+              boundary.source.previousCheckpointID == current?.id else {
+            throw AgentModelBindingError.incompatibleContinuation
+        }
+        if let state = await conversationControlState.current(), !state.entries.isEmpty {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Managed thinking-tail compaction does not yet support historical conversation controls.")
+        }
+        let prefix = Array(history.prefix(leading + cut))
+        let prefixControls = AgentConversationControlState()
+        if let state = await conversationControlState.current() {
+            let snapshot = try ModelConversationControlState(generation: state.generation, origin: state.origin,
+                rootConfigurationDigest: state.rootConfigurationDigest, toolBaseline: state.toolBaseline, activeTools: state.activeTools,
+                entries: [], lastBoundaryMessageCount: cut, deferredBaselineToolNames: state.deferredBaselineToolNames)
+            try await prefixControls.restore(snapshot, history: prefix)
+        }
+        let prefixLoop = AgentLoop(binding: binding, tools: tools, scheduler: scheduler,
+            modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes, journal: journal,
+            contextEffects: contextEffects, nativeContextState: nativeContextState,
+            conversationControlState: prefixControls, contextOperation: true)
+        let prepared = try await prefixLoop.preflight(messages: prefix, sessionID: id, runID: operationID,
+            conversationRevision: conversationRevision, structuredOutput: structuredOutput)
+        let witness = try preserved.preservedThinkingRequestWitness(request: prepared.request)
+        guard witness.rootToolsDigest == boundary.witness.rootToolsDigest,
+              witness.qualificationScope == boundary.witness.qualificationScope else { throw AgentModelBindingError.incompatibleContinuation }
+        guard prepared.request.tools == boundary.tools, witness == boundary.witness,
+              try preserved.nativeContextRequestDigest(request: prepared.request, compactionMode: nil) == boundary.source.requestDigest else {
+            throw AgentModelBindingError.incompatibleContinuation
+        }
+        // This is proof validation, not a dispatched request. Budget only the
+        // actual compact input above and the replacement view before publication.
+        let oldView = try await nativeContextState.effectiveMessages(history, binding: binding, sessionID: id,
+            journal: journal, structuredOutput: structuredOutput)
+        try preserved.validatePreservedThinkingTail(request: .init(model: prepared.request.model, messages: oldView,
+            tools: prepared.request.tools, structuredOutput: structuredOutput, sessionID: id, runID: operationID,
+            nativeContext: current, conversationControls: prepared.request.conversationControls))
+        return prepared
     }
 
     private func releaseCompactionReservation(_ id: UUID) async {

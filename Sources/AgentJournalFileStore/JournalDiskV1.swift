@@ -115,15 +115,17 @@ struct DiskContinuationV1: Codable {
     let payload: Data
     let origin: DiskOriginV1?
     let contextTransition: ModelNativeContextTransition?
+    let requestBoundary: ModelProviderRequestBoundary?
     init(_ value: ModelProviderContinuation) {
         modelProvider = value.model.provider; modelName = value.model.name
         format = value.format; payload = value.payload
         origin = value.origin.map(DiskOriginV1.init)
         contextTransition = value.contextTransition
+        requestBoundary = value.requestBoundary
     }
     func value() -> ModelProviderContinuation {
         ModelProviderContinuation(model: .init(provider: modelProvider, name: modelName),
-                                  format: format, payload: payload, origin: origin?.value(), contextTransition: contextTransition)
+                                  format: format, payload: payload, origin: origin?.value(), contextTransition: contextTransition, requestBoundary: requestBoundary)
     }
 }
 

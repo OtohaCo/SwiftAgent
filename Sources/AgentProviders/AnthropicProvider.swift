@@ -254,6 +254,54 @@ extension AnthropicProvider: ModelProviderRequestValidator {
     }
 }
 
+extension AnthropicProvider: ModelProviderPreservedThinkingCompaction {
+    public var supportsPreservedThinkingCompaction: Bool { nativeContext?.preservedThinking == true }
+    public func preservedThinkingRequestWitness(request: ModelRequest) throws -> ModelPreservedThinkingRequestWitness {
+        let (_, body, _) = try encodedRequest(request)
+        let scope = try AnthropicPreservedThinking.scope(configuration: nativeContext, endpoint: endpoint,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, thinking: thinking)
+        return try AnthropicPreservedThinking.witness(body: body, scope: scope)
+    }
+    public func validatePreservedThinkingTail(request: ModelRequest) throws {
+        _ = try AnthropicPreservedThinking.scope(configuration: nativeContext, endpoint: endpoint,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, thinking: thinking)
+        let encoded = try AnthropicRequestEncoder.encodeWithMapping(request, maximumOutputTokens: maximumOutputTokens,
+            thinking: thinking, effort: effort, promptCaching: promptCaching,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, nativeContext: nativeContext,
+            forceThinkingPrefixValidation: true)
+        _ = try AnthropicNativeContext.configure(encoded.body, request: request, mode: nil,
+            configuration: nativeContext, endpoint: endpoint,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, thinking: thinking)
+    }
+    public func preservedThinkingReplacements(request: ModelRequest, replacement: ModelNativeContextCheckpoint,
+                                               keptMessages: [ModelMessage]) throws -> [ModelThinkingPrefixReplacement] {
+        let scope = try preservedThinkingRequestWitness(request: request).qualificationScope
+        guard replacement.transition.mode == .anthropicOnDemand,
+              let boundary = keptMessages.first.flatMap({ message -> ModelProviderRequestBoundary? in
+                  guard case .assistant(let content, _) = message else { return nil }
+                  return content.compactMap { if case .providerContinuation(let state) = $0 { state.requestBoundary } else { nil } }.first
+              }), boundary.witness.qualificationScope == scope else {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "The kept thinking tail lacks a qualified real request boundary.")
+        }
+        let root = request.messages.prefix { $0.role == .system || $0.role == .developer }
+        let continued = ModelRequest(model: request.model, messages: Array(root) + keptMessages, tools: request.tools,
+            structuredOutput: request.structuredOutput, sessionID: request.sessionID, runID: request.runID,
+            nativeContext: replacement, conversationControls: request.conversationControls)
+        var replacements: [ModelThinkingPrefixReplacement] = []
+        let encoded = try AnthropicRequestEncoder.encodeWithMapping(continued, maximumOutputTokens: maximumOutputTokens,
+            thinking: thinking, effort: effort, promptCaching: promptCaching,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, nativeContext: nativeContext,
+            preparingPreservedReplacement: true, replacementSink: { replacements = $0 })
+        let configured = try AnthropicNativeContext.configure(encoded.body, request: continued, mode: nil,
+            configuration: nativeContext, endpoint: endpoint, resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, thinking: thinking)
+        let witness = try AnthropicPreservedThinking.witness(body: configured, scope: scope)
+        guard witness.rootToolsDigest == boundary.witness.rootToolsDigest else {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "The preserved thinking root instructions or tools changed.")
+        }
+        return replacements
+    }
+}
+
 extension AnthropicProvider: ModelProviderNativeContextWitness {
     public var compactionModes: Set<ModelCompactionMode> { nativeContext?.qualification.modes ?? [] }
     public var automaticCompaction: ModelAutomaticCompaction? { nativeContext?.automatic }
