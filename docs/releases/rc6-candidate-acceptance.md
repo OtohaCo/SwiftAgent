@@ -11,7 +11,8 @@ build CI [38229615849](https://github.com/OtohaCo/SwiftAgent/actions/runs/382296
 Diagnostic PR #106 merged as `d1834ebb686dbcd467e7b07641867f3ca904750e` / tree
 `2d23d68b20ca7137a8f0d1f788b1f1dae3cce9a2`; its source PR/push checks passed, while
 that new main's [CI](https://github.com/OtohaCo/SwiftAgent/actions/runs/38235773977)
-is separately pending at this documentation snapshot. Do not infer release
+passed all three jobs (exact clean-source Linux/macOS artifacts checked). This
+is diagnostic-main acceptance, not the still-required #105 merge acceptance. Do not infer release
 readiness from a historical green run. Final PR/main identities and outcomes
 are recorded in the corresponding acceptance comments.
 
