@@ -518,3 +518,11 @@ is nil. Detail snapshots replace the whole table (nil preserves, empty clears),
 while aggregate counts retain their cumulative contract. Snapshot ordinals are
 invocation-local; partial coverage does not manufacture a whole-response total.
 No service compaction capability is implied by these foundation types alone.
+
+Native operation request/checkpoint and the optional `ModelProviderCompaction`
+protocol do not add requirements to `ModelProvider`. `ModelRequest` and
+`ModelProviderContinuation` preserve old initializer signatures with separate
+required-new-label overloads. Old optional data remains absent/unknown.
+Response classification is shared by streaming and steering. Compaction,
+pause and unrecognized stop reasons do not settle the final-answer deadline;
+known final responses retain the RC6 slow-publication contract.

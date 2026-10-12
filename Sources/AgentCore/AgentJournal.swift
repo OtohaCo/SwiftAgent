@@ -87,6 +87,8 @@ public enum AgentJournalEvent: Codable, Equatable, Sendable {
     case mutationSettled(callID: ToolCallID, receipt: ToolReceipt, source: AgentMutationSettlementSource)
     case mutationAborted(callID: ToolCallID, confirmation: AgentNoEffectConfirmation)
     case checkpoint(history: [ModelMessage], steeringIDs: [UUID])
+    /// Effective view state only; never a tool receipt or a user answer.
+    case nativeContextCheckpoint(ModelNativeContextCheckpoint)
     case runCompleted(AgentJournalRunOutcome)
     /// Actual Run-owner logical termination; physical drain remains separate.
     case runTerminated(AgentRunTerminal)
@@ -254,6 +256,7 @@ public actor AgentJournal {
         var lastRunID: UUID?
         var runIDs: Set<UUID> = []
         var checkpoint: AgentJournalRecord?
+        var nativeContext: ModelNativeContextCheckpoint?
     }
     private var memorySessions: [UUID: MemorySessionState] = [:]
     private var nextSequence: UInt64
@@ -276,6 +279,7 @@ public actor AgentJournal {
     /// Whether messages may carry images: always in memory; for a durable store, format schema 10
     /// (`supportsImageContent` at creation), which keeps each image once by digest. A store without
     /// it fails explicitly on an image (`unsupportedFormat`); existing stores are never migrated.
+    public nonisolated let supportsNativeContext: Bool
     public nonisolated let supportsImageContent: Bool
     /// 0: unsupported; 1: schema 6; 2: schema 7+. Existing stores are never migrated.
     public nonisolated let noEffectProofVersion: Int
@@ -312,6 +316,7 @@ public actor AgentJournal {
         supportsRunRecords = false
         supportsPerCallFollowUps = false
         supportsImageContent = true
+        supportsNativeContext = true
     }
 
     package init(store: any JournalStore) {
@@ -328,6 +333,7 @@ public actor AgentJournal {
         supportsRunRecords = store.supportsRunRecords
         supportsPerCallFollowUps = store.supportsPerCallFollowUps
         supportsImageContent = store.supportsImageContent
+        supportsNativeContext = store.supportsNativeContext
     }
 
     package func acquireSessionLease(sessionID: UUID, dispatcherID: UUID? = nil) throws {
@@ -397,6 +403,10 @@ public actor AgentJournal {
         }
         return .init(checkpoint: try latestCheckpoint(sessionID: sessionID),
                      witness: try historyWitness(sessionID: sessionID))
+    }
+
+    func memoryNativeContext(sessionID: UUID) -> ModelNativeContextCheckpoint? {
+        memorySessions[sessionID]?.nativeContext
     }
 
     @discardableResult
@@ -497,6 +507,11 @@ public actor AgentJournal {
         expectedHistory: AgentJournalHistoryWitness? = nil
     ) throws -> [AgentJournalRecord] {
         try checkStartupAdmission(deadline: admissionDeadline, checkCancellation: checkAdmissionCancellation)
+        let nativeTransitions = events.compactMap { event -> ModelNativeContextCheckpoint? in
+            if case .nativeContextCheckpoint(let value) = event { return value }
+            return nil
+        }
+        guard nativeTransitions.count <= 1 else { throw AgentJournalError.invalidRecord }
         if let store {
             guard !closing else { throw AgentJournalError.storeClosed }
             let result = try writeStore(store) { view in
@@ -525,6 +540,11 @@ public actor AgentJournal {
         if events.contains(where: Self.isMutationLifecycleEvent) {
             throw AgentJournalError.persistenceUnavailable("mutation lifecycle events require durable persistence")
         }
+        if let value = nativeTransitions.first {
+            let count = try latestCheckpoint(sessionID: sessionID).map { UInt64(Self.formalMessages($0.history).count) } ?? 0
+            try Self.validateNativeContextShape(value, previous: memorySessions[sessionID]?.nativeContext,
+                                                sessionID: sessionID, messageCount: count)
+        }
         let committed = events.enumerated().map { offset, event in
             AgentJournalRecord(
                 sequence: nextSequence + UInt64(offset),
@@ -544,6 +564,7 @@ public actor AgentJournal {
             switch record.event {
             case .sessionCreated: memorySessions[sessionID, default: .init()].created = true
             case .checkpoint: memorySessions[sessionID, default: .init()].checkpoint = record
+            case .nativeContextCheckpoint(let value): memorySessions[sessionID, default: .init()].nativeContext = value
             default: break
             }
         }
@@ -1332,6 +1353,12 @@ extension AgentJournal {
         var messageStart = initialHeader.messageCount
         var changedMessages: [JournalMessage] = []
         for event in events {
+            if case .nativeContextCheckpoint(let value) = event {
+                guard supportsNativeContext else { throw AgentJournalError.unsupportedFormat }
+                try Self.validateNativeContext(value, previous: initialHeader.nativeContext, sessionID: sessionID,
+                                               messageCount: initialHeader.messageCount, view: view)
+                nextHeader.nativeContext = value
+            }
             if case .checkpoint(let history, let steeringIDs) = event {
                 let formal = Self.formalMessages(history)
                 guard initialHeader.messageCount <= UInt64(formal.count) else {

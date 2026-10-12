@@ -35,6 +35,8 @@ public struct ModelProviderContinuation: Hashable, Sendable, Codable {
     public let payload: Data
     /// Missing only on journal data written before scoped continuations existed.
     public let origin: ModelProviderContinuationOrigin?
+    /// Complete native effective-context candidate; publication belongs to Core.
+    public let contextTransition: ModelNativeContextTransition?
 
     /// Compatibility initializer for payloads created before continuation
     /// deployment scope was introduced.
@@ -48,10 +50,17 @@ public struct ModelProviderContinuation: Hashable, Sendable, Codable {
         payload: Data,
         origin: ModelProviderContinuationOrigin?
     ) {
+        self.init(model: model, format: format, payload: payload, origin: origin, contextTransition: nil)
+    }
+
+    public init(model: ModelID, format: String, payload: Data,
+                origin: ModelProviderContinuationOrigin? = nil,
+                contextTransition: ModelNativeContextTransition?) {
         self.model = model
         self.format = format
         self.payload = payload
         self.origin = origin
+        self.contextTransition = contextTransition
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
@@ -59,7 +68,7 @@ public struct ModelProviderContinuation: Hashable, Sendable, Codable {
             && lhs.model.name.utf8.elementsEqual(rhs.model.name.utf8)
             && lhs.format.utf8.elementsEqual(rhs.format.utf8)
             && lhs.payload == rhs.payload
-            && lhs.origin == rhs.origin
+            && lhs.origin == rhs.origin && lhs.contextTransition == rhs.contextTransition
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -68,5 +77,6 @@ public struct ModelProviderContinuation: Hashable, Sendable, Codable {
         hasher.combine(Array(format.utf8))
         hasher.combine(payload)
         hasher.combine(origin)
+        hasher.combine(contextTransition)
     }
 }
