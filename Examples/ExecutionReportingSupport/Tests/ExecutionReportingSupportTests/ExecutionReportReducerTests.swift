@@ -6,6 +6,19 @@ import Foundation
 import Testing
 
 struct ExecutionReportReducerTests {
+    @Test func nativeMaintenanceAndDiagnosticsAreNotAnswersOrExecutionFacts() {
+        let ids = IdentityFixture()
+        var reducer = ExecutionReportReducer(sessionID: ids.sessionID, runID: ids.runID)
+        reducer.consume(.runStarted(ids.info))
+        reducer.consume(.compaction(operationID: UUID(), invocationID: UUID(), event: .completed(
+            .init(info: ids.response.info, continuation: nil, usage: .init(inputTokens: 100)))))
+        reducer.consume(.model(.inputTransformations([.init(kind: "thinking_dropped", reason: "prefix_binding_mismatch", path: nil, source: nil)])))
+        reducer.consume(.model(.compactionProgress(.init(responseID: "fixture", phase: "compacting"))))
+        #expect(reducer.report.modelText.isEmpty)
+        #expect(reducer.report.receipts.isEmpty && reducer.report.toolObservations.isEmpty)
+        #expect(reducer.report.runtimeTermination == nil)
+    }
+
     @Test func committedMutationSurvivesMalformedPresentation() throws {
         let ids = IdentityFixture()
         let receipt = try ids.receipt()

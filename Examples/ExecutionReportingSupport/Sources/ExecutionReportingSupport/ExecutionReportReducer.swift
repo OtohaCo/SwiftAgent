@@ -297,7 +297,7 @@ public struct ExecutionReportReducer: Sendable {
         switch event {
         case .runStarted:
             break
-        case .turnStarted:
+        case .turnStarted, .compaction:
             break
         case .model(let event):
             consume(event)
@@ -426,7 +426,7 @@ public struct ExecutionReportReducer: Sendable {
 
     private mutating func consume(_ event: ModelEvent) {
         switch event {
-        case .responseStarted, .reasoningDelta, .providerContinuation, .toolCallArgumentsDelta, .usage:
+        case .responseStarted, .reasoningDelta, .providerContinuation, .toolCallArgumentsDelta, .usage, .inputTransformations, .compactionProgress:
             break
         case .textDelta(let text):
             let appended = appendBounded(text, to: streamedText)

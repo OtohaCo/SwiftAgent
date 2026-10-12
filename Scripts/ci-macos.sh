@@ -22,6 +22,7 @@ run_stage replanning-python python3 -m unittest discover Examples/ExternalClient
 run_stage decision-eval-build swift build --package-path Examples/DecisionEvaluation
 run_stage decision-eval-regressions python3 -m unittest discover Examples/DecisionEvaluation -p 'test_*.py'
 run_stage context-pipeline swift run --package-path Examples/ExternalClient ContextPipelineFixture
+run_stage native-context swift run --package-path Examples/ExternalClient NativeContextFixture
 run_stage scoped-capability swift run --package-path Examples/ExternalClient ScopedCapabilityFixture
 run_stage follow-up-queue swift run --package-path Examples/ExternalClient FollowUpQueueFixture
 run_stage durable-run-records swift run --package-path Examples/ExternalClient RunRecordFixture
@@ -39,3 +40,5 @@ bash Scripts/verify-per-call-compatibility.sh
 
 bash Scripts/verify-run-record-compatibility.sh
 bash Scripts/verify-image-content-compatibility.sh
+
+bash Scripts/verify-native-context-compatibility.sh
