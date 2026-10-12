@@ -107,3 +107,34 @@ and usage modules; see the [usage guide](../../docs/guides/swift-agent-usage.md)
 Real gateway cache and billing effects require a separately bounded experiment,
 tracked in [#89](https://github.com/OtohaCo/SwiftAgent/issues/89). Official API
 prices cannot establish a subscription or gateway's effective tariff.
+
+### Native sampling price tiers (fictional fixture)
+
+`HostIterationPricing.swift` maps the documented sub2api `priceTiers` shape
+(`aboveInputTokens`, `inclusive`, `input`, `output`, `cachedInput`) to
+`ModelPromptPricing`. Fixture prices are fictional currency units per million
+tokens; any service group multiplier is already reflected in the published rate.
+The mapper preserves numeric lexemes and exact decimal strings, rejecting amounts
+that cannot be represented exactly. It never passes money through `Double`.
+
+Freeze `HostIterationPricingSnapshot(revision:tariffs:)` from one catalog revision,
+keying each quote by both `ModelID` and `ModelServiceScope`. Pass the measured
+`ModelUsage` and actual invocation service scope to `estimate`. Each ordered
+sampling uses its own reported model and inclusive prompt tokens to select a
+whole-sampling tier; the HTTP/Run aggregate never selects its tier. Input, output,
+and cache-read use the same selected rates. The existing Host router calculator
+continues to handle independently verified cache-write/TTL rates and classification.
+
+The public-API test uses 99-token compaction and 101-token message samplings with
+fictional base input/output rates 1/2 and rates 10/20 at 100 tokens. It yields
+USD 0.001131, while the incorrect 200-token aggregate selection yields 0.00204.
+Other-service quotes stay separate. Missing model, price, cache categories, or
+partial iteration coverage leave `total` unknown; `knownSubtotal` sums only known
+rows in its reported currency. A missing write tariff never becomes zero. An
+explicitly reported zero-write category or verified no-separate-charge tariff
+retains the existing supported calculation. No SDK billing engine or production
+sub2api change is introduced.
+
+```sh
+swift test --package-path Examples/DynamicModelRouting --filter HostIterationPricingTests
+```
