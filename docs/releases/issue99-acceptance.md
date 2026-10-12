@@ -127,3 +127,10 @@ new reminder transport lacked FoundationNetworking's URLRequest import. The exac
 failure is retained in `linux-first-ci.log`; `9cf9d50` adds the conditional import.
 Apple provider compile passed on that first head. These partial results cannot
 qualify the corrected final head; final-head checks must all pass before merge.
+
+The next complete local script passed core, iOS, external/public-native and qualification
+stages, then caught AppleChat's exhaustive switches missing additive events.
+ConversationDisplay now ignores maintenance/transformations/progress as answer or
+terminal content; `apple-chat-event-final.log` reports 32 tests/4 suites GREEN,
+including an explicit no-answer/no-terminal diagnostic regression. Final corrected
+head CI must include this consumer fix, not qualify the preceding head.
