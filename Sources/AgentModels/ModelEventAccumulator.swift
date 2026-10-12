@@ -75,7 +75,8 @@ public struct ModelEventAccumulator: Sendable {
                 cacheWriteTTL: newer.cacheWriteTTL == nil && usage.cacheWriteTTL == nil ? nil : .init(
                     fiveMinuteTokens: newer.cacheWriteTTL?.fiveMinuteTokens ?? usage.cacheWriteTTL?.fiveMinuteTokens,
                     oneHourTokens: newer.cacheWriteTTL?.oneHourTokens ?? usage.cacheWriteTTL?.oneHourTokens
-                )
+                ),
+                iterationUsage: newer.iterationUsage ?? usage.iterationUsage
             )
             let counts = [(usage.inputTokens, merged.inputTokens), (usage.outputTokens, merged.outputTokens),
                           (usage.cachedInputTokens, merged.cachedInputTokens),

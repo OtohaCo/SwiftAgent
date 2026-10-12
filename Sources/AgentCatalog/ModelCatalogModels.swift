@@ -242,6 +242,8 @@ public struct ModelCatalogEntry: Hashable, Sendable, Codable {
     public let metadataComplete: Bool
     public let sources: [ModelCatalogSource]
     public let conflicts: [ModelCatalogConflict]
+    public let promptPricing: ModelPromptPricing?
+    public let compaction: ModelCompactionCatalog?
 
     public init(
         model: ModelID,
@@ -258,6 +260,31 @@ public struct ModelCatalogEntry: Hashable, Sendable, Codable {
         sources: [ModelCatalogSource],
         conflicts: [ModelCatalogConflict] = []
     ) {
+        self.init(model: model, deploymentID: deploymentID, serviceScope: serviceScope,
+                  displayName: displayName, aliases: aliases, resolvedModel: resolvedModel,
+                  capabilities: capabilities, reasoningControls: reasoningControls,
+                  maximumInputTokens: maximumInputTokens, maximumOutputTokens: maximumOutputTokens,
+                  metadataComplete: metadataComplete, sources: sources, conflicts: conflicts,
+                  promptPricing: nil, compaction: nil)
+    }
+
+    public init(
+        model: ModelID,
+        deploymentID: String,
+        serviceScope: ModelServiceScope,
+        displayName: String? = nil,
+        aliases: [String] = [],
+        resolvedModel: ModelID? = nil,
+        capabilities: ModelCatalogCapabilities = .unknown,
+        reasoningControls: [ModelReasoningControlDescriptor] = [],
+        maximumInputTokens: Int? = nil,
+        maximumOutputTokens: Int? = nil,
+        metadataComplete: Bool = false,
+        sources: [ModelCatalogSource],
+        conflicts: [ModelCatalogConflict] = [],
+        promptPricing: ModelPromptPricing?,
+        compaction: ModelCompactionCatalog? = nil
+    ) {
         self.model = model
         self.deploymentID = deploymentID
         self.serviceScope = serviceScope
@@ -271,6 +298,8 @@ public struct ModelCatalogEntry: Hashable, Sendable, Codable {
         self.metadataComplete = metadataComplete
         self.sources = sources
         self.conflicts = conflicts
+        self.promptPricing = promptPricing
+        self.compaction = compaction
     }
 }
 

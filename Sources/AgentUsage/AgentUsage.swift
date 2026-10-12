@@ -334,7 +334,7 @@ public struct UsageAccumulator: Sendable {
         if let existing = observations[observation.identity], existing.status == .finalized {
             if Self.fields(of: observation.usage).allSatisfy({ metric, incoming in
                 incoming == nil || Self.value(for: metric, in: existing.usage) == incoming
-            }) {
+            }) && (observation.usage.iterationUsage == nil || observation.usage.iterationUsage == existing.usage.iterationUsage) {
                 return .init(disposition: .duplicate)
             }
             return .init(
@@ -538,7 +538,8 @@ public struct UsageAccumulator: Sendable {
             reasoningTokens: reasoning,
             cacheWriteTTL: existing.cacheWriteTTL == nil && incoming.cacheWriteTTL == nil ? nil : .init(
                 fiveMinuteTokens: fiveMinute, oneHourTokens: oneHour
-            )
+            ),
+            iterationUsage: incoming.iterationUsage ?? existing.iterationUsage
         ))
     }
 

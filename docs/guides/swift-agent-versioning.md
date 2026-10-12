@@ -497,3 +497,24 @@ schema 9 before append/maintenance, including an empty schema-9 store. See
 [ADR 0014](../adr/0014-durable-run-association.md) and the public offline
 `RunRecordFixture`. Exhaustive switches over `AgentJournalEvent` must handle
 `runTerminated`; added API parameters also change stored function signatures.
+
+## Native context foundations (issue #99, unversioned development)
+
+`ModelCatalogEntry` preserves its original initializer function signature and
+adds a separate overload requiring `promptPricing:`. Optional `promptPricing`
+and `compaction` decode absent fields as nil, including old manifest/cache data.
+Service support does not grant configured adapter executability.
+
+Prompt rates are exact `Decimal` amounts per million tokens with explicit
+currency/provenance. The new serialized rate contract uses decimal strings;
+nonrepresentable precision, negative values and malformed rates reject rather
+than round. Tier selection applies to the whole sampling, not incremental
+excess tokens. Source numeric mappings must preserve decimal lexical precision;
+they must not route prices through Double or JSONValue.number.
+
+`ModelUsage` preserves both existing five-parameter and TTL-detail six-parameter
+initializers. A separate overload requires `iterationUsage:`; absent old data
+is nil. Detail snapshots replace the whole table (nil preserves, empty clears),
+while aggregate counts retain their cumulative contract. Snapshot ordinals are
+invocation-local; partial coverage does not manufacture a whole-response total.
+No service compaction capability is implied by these foundation types alone.
