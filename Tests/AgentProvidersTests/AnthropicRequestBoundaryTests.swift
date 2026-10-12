@@ -16,7 +16,10 @@ struct AnthropicRequestBoundaryTests {
         do {
             for try await _ in provider.stream(request: request) {}
             Issue.record("Oversize body reached transport")
-        } catch let error as ModelProviderError { #expect(error.kind == .invalidRequest) }
+        } catch let error as ModelProviderError {
+            #expect(error.kind == .invalidRequest)
+            #expect(error.diagnostic == .init(stage: .requestValidation, reason: .requestBodyTooLarge))
+        }
         #expect(await probe.requests.isEmpty)
         #expect(throws: ModelProviderError.self) { try provider.validate(request: request) }
     }
@@ -84,7 +87,10 @@ struct AnthropicRequestBoundaryTests {
             let probe = ProviderRequestProbe()
             let provider = try AnthropicProvider(apiKey: "k", maximumOutputTokens: 64, transport: FixtureHTTPTransport(probe: probe, bodies: [anthropicTextFixture]))
             do { for try await _ in provider.stream(request: request) {}; Issue.record("Legal raw images exceeded whole body limit") }
-            catch let error as ModelProviderError { #expect(error.kind == .invalidRequest) }
+            catch let error as ModelProviderError {
+                #expect(error.kind == .invalidRequest)
+                #expect(error.diagnostic == .init(stage: .requestValidation, reason: .requestBodyTooLarge))
+            }
             #expect(await probe.requests.isEmpty)
         }
         func mixed(_ text: String) -> ModelRequest {
@@ -100,7 +106,10 @@ struct AnthropicRequestBoundaryTests {
         #expect(await probe.requests.first?.httpBody?.count == 32_000_000)
         let excessive = mixed(String(repeating: "x", count: 32_000_001 - overhead))
         do { for try await _ in provider.stream(request: excessive) {}; Issue.record("One byte over limit dispatched") }
-        catch let error as ModelProviderError { #expect(error.kind == .invalidRequest) }
+        catch let error as ModelProviderError {
+            #expect(error.kind == .invalidRequest)
+            #expect(error.diagnostic == .init(stage: .requestValidation, reason: .requestBodyTooLarge))
+        }
         #expect(await probe.requests.count == 1)
         print("RC6 mixed exact body=32000000 accepted transports=1; body=32000001 rejected transports=1")
     }

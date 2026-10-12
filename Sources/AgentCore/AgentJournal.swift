@@ -509,7 +509,7 @@ public actor AgentJournal {
         auditDrafts: [JournalAuditDraft] = [],
         runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil,
         expectedHistory: AgentJournalHistoryWitness? = nil,
-        admitsNewWork: Bool? = nil
+        admitsNewWork: Bool? = nil, completedReminderProof: CompletedReminderTurnProof? = nil
     ) throws -> [AgentJournalRecord] {
         try checkStartupAdmission(deadline: admissionDeadline, checkCancellation: checkAdmissionCancellation)
         let nativeTransitions = events.compactMap { event -> ModelNativeContextCheckpoint? in
@@ -530,7 +530,7 @@ public actor AgentJournal {
                                   followUpInputID: followUpInputID,
                                   admitsNewWork: admitsNewWork ?? checkAdmissionCancellation,
                                   auditDrafts: auditDrafts, runAdmission: runAdmission, runTerminal: runTerminal,
-                                  expectedHistory: expectedHistory)
+                                  expectedHistory: expectedHistory, completedReminderProof: completedReminderProof)
             }
             scheduleMaintenanceIfNeeded()
             return result
@@ -1300,7 +1300,7 @@ extension AgentJournal {
         followUpInputID: String? = nil, admitsNewWork: Bool = false,
         auditDrafts: [JournalAuditDraft] = [],
         runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil,
-        expectedHistory: AgentJournalHistoryWitness? = nil
+        expectedHistory: AgentJournalHistoryWitness? = nil, completedReminderProof: CompletedReminderTurnProof? = nil
     ) throws -> [AgentJournalRecord] {
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
@@ -1308,6 +1308,10 @@ extension AgentJournal {
         }
         let initialHeader = try view.header(sessionID) ?? JournalSessionHeader()
         if let expectedHistory, expectedHistory.head != initialHeader.historyHead {
+            throw AgentJournalError.concurrentWriter
+        }
+        if let proof = completedReminderProof,
+           try !Self.isCompletedReminderTurn(sessionID: sessionID, proof: proof, header: initialHeader, view: view) {
             throw AgentJournalError.concurrentWriter
         }
         let sequence = try view.nextRecordSequence()

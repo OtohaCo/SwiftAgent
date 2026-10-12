@@ -93,7 +93,7 @@ enum AnthropicNativeContext {
         if let mismatch = configuration?.thinkingPrefixMismatch {
             guard configuration?.qualification.endpoint == endpoint,
                   configuration?.qualification.resolvedModelNames.contains(resolvedModelName) == true,
-                  thinking != .disabled else {
+                  thinking.supportsBindingControls else {
                 throw ModelProviderError(kind: .unsupportedCapability, message: "Thinking binding controls require a qualified thinking configuration.")
             }
             // These families only accept block_binding with adaptive thinking. The Host

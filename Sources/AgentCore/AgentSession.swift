@@ -70,6 +70,9 @@ public actor AgentSession {
     private var startupReservations: [UUID: StartupReservation] = [:]
     private var scopesByRunID: [UUID: AgentCapabilityScope] = [:]
     private var conversationRevision: UInt64 = 0
+    // Bounded completion proof for a Session without durable Run records. It is
+    // useful only after physical drain and while the canonical revision matches.
+    private var completedTurnRevision: UInt64?
     /// Retained corrections a definite Journal failure kept out of history; the next Run admits them.
     private var owedSteering: [AgentSteeringInput] = []
     /// Retained corrections whose commit outcome is unknown. Only a reopened Journal can say whether
@@ -968,6 +971,8 @@ public actor AgentSession {
                 try await journal.commitRunTerminal(history: prepared, sessionID: id, runID: runID, terminal: terminal)
             } catch { failure = error }
         }
+        completedTurnRevision = failure == nil && outcome.map({ AgentRunTerminal.from($0) == .completed }) == true
+            ? conversationRevision : nil
         activeRunID = nil
         appliedSteeringIDs.removeAll()
         drainingRunID = runID
@@ -1125,7 +1130,10 @@ public actor AgentSession {
     }
 
     /// Starts native maintenance only at a drained, idle boundary. The canonical
-    /// conversation is never replaced with the returned summary.
+    /// conversation is never replaced with the returned summary. Whole-history
+    /// Anthropic on-demand may cover a prior active reminder only when the prior
+    /// Run is provably completed and physically drained. Persistent instructions
+    /// and unknown/noncompleted reminder turns remain unsupported.
     public func compact(mode: ModelCompactionMode, using binding: AgentModelBinding? = nil,
                         deadline: ContinuousClock.Instant? = nil) async throws -> AgentCompactionOperation {
         try await startCompaction(mode: mode, through: nil, using: binding, deadline: deadline)
@@ -1192,7 +1200,7 @@ public actor AgentSession {
             }
             try Task.checkCancellation()
             guard ContinuousClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
-            let (response, request) = responseAndRequest
+            let (response, request, reminderProof) = responseAndRequest
             var published: ModelNativeContextCheckpoint?
             if let continuation = response.continuation {
                 var value = try await nativeContextState.candidate(continuation, request: request,
@@ -1226,11 +1234,14 @@ public actor AgentSession {
                 try await control.seal()
                 if let journal, let witness = persistentHistoryWitness {
                     try await journal.publishNativeContext(value, history: history, sessionID: id, runID: nil,
-                        expectedHistory: witness, steeringIDs: Array(appliedSteeringIDs), deadline: deadline)
+                        expectedHistory: witness, steeringIDs: Array(appliedSteeringIDs), deadline: deadline,
+                        completedReminderProof: reminderProof)
                     persistentHistoryWitness = try await journal.historyWitness(sessionID: id)
                 }
                 await nativeContextState.install(value)
+                let completed = completedTurnRevision == conversationRevision
                 advanceConversationRevision()
+                if completed { completedTurnRevision = conversationRevision }
                 published = value
             }
             events.yield(.completed(response))
@@ -1253,7 +1264,7 @@ public actor AgentSession {
 
     private func prepareNativeCompaction(binding: AgentModelBinding, provider: any ModelProviderCompaction,
                                         mode: ModelCompactionMode, boundaryID: UUID?, operationID: UUID, invocationID: UUID,
-                                        events: AsyncStream<ModelCompactionEvent>.Continuation) async throws -> (ModelCompactionResponse, ModelRequest) {
+                                        events: AsyncStream<ModelCompactionEvent>.Continuation) async throws -> (ModelCompactionResponse, ModelRequest, CompletedReminderTurnProof?) {
         try await restoreJournalStateIfNeeded()
         if let journal, let persistentHistoryWitness,
            try await journal.historyWitness(sessionID: id) != persistentHistoryWitness { throw AgentJournalError.concurrentWriter }
@@ -1264,8 +1275,21 @@ public actor AgentSession {
         if await conversationControlState.hasPersistentInstructions() {
             throw ModelProviderError(kind: .unsupportedCapability, message: "Compaction cannot erase persistent trusted instruction authority.")
         }
-        if await conversationControlState.hasActiveReminder(in: history) {
-            throw ModelProviderError(kind: .unsupportedCapability, message: "Compaction cannot cover an active turn reminder without a new legal user boundary.")
+        var reminderProof: CompletedReminderTurnProof?
+        if let boundary = await conversationControlState.activeReminderBoundary(in: history) {
+            var completed = false
+            if mode == .anthropicOnDemand, boundaryID == nil {
+                if let journal, let persistentHistoryWitness, journal.storage == .durable {
+                    reminderProof = try await journal.completedReminderTurn(sessionID: id, boundary: boundary,
+                        expectedHistory: persistentHistoryWitness)
+                    completed = reminderProof != nil
+                } else {
+                    completed = completedTurnRevision == conversationRevision
+                }
+            }
+            guard completed else {
+                throw ModelProviderError(kind: .unsupportedCapability, message: "Only drained, provably completed reminder turns may be covered by idle whole-history on-demand compaction.")
+            }
         }
         let compactionPrepared: AgentPreparedModelRequest
         if let boundaryID {
@@ -1279,7 +1303,7 @@ public actor AgentSession {
         let response = try await AgentNativeCompactionExecutor(provider: provider).execute(
             .init(request: request, mode: mode, operationID: operationID, invocationID: invocationID),
             emit: { events.yield($0) })
-        return (response, request)
+        return (response, request, reminderProof)
     }
 
     private func nativeCompactionBoundary(_ boundaryID: UUID) throws -> ModelProviderRequestBoundary {

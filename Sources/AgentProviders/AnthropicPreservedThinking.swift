@@ -4,7 +4,7 @@ import Foundation
 enum AnthropicPreservedThinking {
     static func scope(configuration: AnthropicNativeContextConfiguration?, endpoint: URL,
                       resolvedModelName: String, thinking: AnthropicThinking) throws -> String {
-        guard let configuration, configuration.preservedThinking, thinking != .disabled else {
+        guard let configuration, configuration.preservedThinking, thinking.supportsBindingControls else {
             throw ModelProviderError(kind: .unsupportedCapability, message: "Preserved-thinking compaction requires explicit deployment and thinking qualification.")
         }
         try configuration.qualification.validate(endpoint: endpoint, model: resolvedModelName, mode: .anthropicOnDemand)
