@@ -1,6 +1,6 @@
 # Issue #105: explicit native context exit and queued reminders
 
-Status: **draft for scope/design review; no runtime implementation or acceptance claim**.
+Status: **scope/design approved by the user on 2026-10-12; implementation pending**.
 
 Baseline: main `8b896eae05b5fd838e61e67a6cb69ca7c0e78458`, tree
 `3c34571d48d65e6020434bc0e60d0bc794fed149`. #102 fixes the unsafe
@@ -39,6 +39,15 @@ new request view. No default or automatic fallback discards them. The transition
 does not call a model, generate a summary, admit a user, execute a tool, reclassify
 an old terminal or authorize reconciliation. Ordinary generated output remains
 owned by a later normal Run.
+
+Omission is bound to formal message IDs/positions at the retirement boundary,
+not to all future continuations. Newly produced target-provider thinking remains
+eligible for its normal native continuation checks. Core rejects projection
+that reintroduces a retired payload, even when model/origin happen to match.
+Source-referencing material is verified against the original Journal bytes
+before applying the frozen omission to the corresponding source view. The
+handoff accepts optional explicit capability binding, matching normal Run
+registry selection, so its trusted tool baseline uses the actual frozen registry.
 
 Eligibility is deliberately narrow: idle, no dispatcher reservation, no active
 Run/maintenance, physically drained prior work, provably completed last Run,
@@ -99,6 +108,23 @@ The upgrade must have its own crash/definite/unknown recovery proof and preserve
 the complete existing session/native/control state. If that format transition
 cannot be proved safely in the first PR, split it into a prerequisite PR; do not
 claim existing schema-11 native sessions can exit until both parts land.
+
+Independent review found that FORMAT and CURRENT cannot be changed by two
+ordinary writes and called that gap blocking. The prerequisite uses an explicit
+offline URL operation: close/drain all owners of the shared Journal first, then
+acquire the existing whole-store writer lock. It prepares a target root equal to
+the old root except formatDigest. The new schema-12 format embeds a bounded
+upgrade bridge: exact old format bytes, old CURRENT identity, and target root ID.
+Its digest binds the prepared target root; it does not embed the target root's
+digest, avoiding a hash cycle. Persist the new format/reader gate, then publish
+CURRENT. Before any normal open truncation or maintenance, a new reader seeing
+the exact bridged old CURRENT verifies old format/root and that target-root
+equivalence, then rolls forward to the prepared target. Any other mismatching
+state refuses. Once CURRENT names a normal schema-12 root, the bridge grants no
+rollback or repair authority. Existing old-format handles never survive the
+offline upgrade. Format replacement may-have-happened errors are commitUnknown;
+pre-gate failures preserve the schema-11 store. This upgrade and a later per-
+Session retirement are distinct publications with separate acceptance evidence.
 
 ## Queued controls
 
