@@ -284,6 +284,9 @@ public actor AgentJournal {
     /// (`supportsImageContent` at creation), which keeps each image once by digest. A store without
     /// it fails explicitly on an image (`unsupportedFormat`); existing stores are never migrated.
     public nonisolated let supportsNativeContext: Bool
+    /// Whether this store can persist explicit context-authority retirement.
+    /// Durable stores require opt-in schema 12; older formats are never upgraded automatically.
+    public nonisolated let supportsContextHandoff: Bool
     public nonisolated let supportsImageContent: Bool
     /// 0: unsupported; 1: schema 6; 2: schema 7+. Existing stores are never migrated.
     public nonisolated let noEffectProofVersion: Int
@@ -321,6 +324,7 @@ public actor AgentJournal {
         supportsPerCallFollowUps = false
         supportsImageContent = true
         supportsNativeContext = true
+        supportsContextHandoff = true
     }
 
     package init(store: any JournalStore) {
@@ -338,6 +342,7 @@ public actor AgentJournal {
         supportsPerCallFollowUps = store.supportsPerCallFollowUps
         supportsImageContent = store.supportsImageContent
         supportsNativeContext = store.supportsNativeContext
+        supportsContextHandoff = store.supportsContextHandoff
     }
 
     package func acquireSessionLease(sessionID: UUID, dispatcherID: UUID? = nil) throws {

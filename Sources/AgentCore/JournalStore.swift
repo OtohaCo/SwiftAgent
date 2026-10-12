@@ -39,6 +39,7 @@ package protocol JournalStore: Sendable {
     var supportsRunRecords: Bool { get }
     var supportsImageContent: Bool { get }
     var supportsNativeContext: Bool { get }
+    var supportsContextHandoff: Bool { get }
     func auditDigest(_ bytes: Data) -> String
     func read<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
     func write<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
@@ -261,3 +262,4 @@ public struct JournalMaintenanceStatus: Sendable, Equatable {
 }
 
 package extension JournalStore { var supportsNativeContext: Bool { false } }
+package extension JournalStore { var supportsContextHandoff: Bool { false } }

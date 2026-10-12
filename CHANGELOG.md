@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased: issue #105 storage preparation
+
+- Adds explicit opt-in context-handoff schema 12 and a closed-store schema-11 upgrade with a durable reader gate, exact recovery witness and unchanged canonical/native/execution facts.
+- Keeps existing creation signatures, default schema 3 and native schema 11 unchanged. Old schema-11 readers reject schema 12 before inspect/append/maintenance can alter bytes.
+- Session authority retirement and queued reminders remain dependent work; this prerequisite alone does not implement native→ordinary exit. See [storage upgrade guide](docs/guides/swift-agent-context-handoff.md).
+
 ## Unreleased: issue #103 automatic compaction final answers
 
 - OpenAI Responses automatic compaction now classifies completed assistant messages across the entire validated response output, including messages before a trailing compaction item. Such answers finish once instead of entering the bounded maintenance loop.

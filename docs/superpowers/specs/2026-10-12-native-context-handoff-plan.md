@@ -3,14 +3,14 @@
 Approved design: [native-context-handoff-design.md](2026-10-12-native-context-handoff-design.md).
 No automatic summary, Host edits, paid calls or release publication.
 
-1. **Storage prerequisite PR.** Add explicit opt-in schema 12 and exact old API
+1. **Storage prerequisite commit.** Add explicit opt-in schema 12 and exact old API
    overload compatibility. Implement offline schema-11 upgrade with a bounded
    FORMAT bridge and prepared identical-content root. New open verifies/recovers
    only the exact old→target CURRENT transition before ordinary writes. TDD covers
    supported creation, lock contention, data/identity preservation, old-reader
    refusal, every pre/post-gate fault point, forged/missing bridge/root refusal,
    and reopen/maintenance. Keep schema 3–11 unchanged by default.
-2. **Authority handoff PR, depending on storage.** Add typed generation/parent-
+2. **Authority handoff commit, depending on storage.** Add typed generation/parent-
    bound retirement state in the existing Session header/events and snapshots.
    Core builds a stable original-to-ordinary source mapping, omitting only
    explicitly authorized retired provider state. Preflight uses the target
@@ -39,3 +39,7 @@ and validates real Linux ptrace before testing; it changes no SDK deadline,
 assertion, coverage or watchdog budget. The current Linux build SIGSEGV and the
 separate unattributed test watchdog remain documented until actual evidence
 resolves them. A green different platform/run is not a substitute.
+
+Storage and retirement-aware runtime must land in one PR and candidate. A
+schema-12 reader unaware of retirement must never be independently published;
+otherwise optional future header fields could be ignored and authority revived.
