@@ -433,7 +433,9 @@ package struct AgentLoop: Sendable {
                         "message": .string("\(detail); this call was denied before execution."),
                     ]))], isError: true)
                     let proposed = history + [
-                        .assistant(content: checkpointContent(response, retainingToolCalls: 1), toolCalls: [call.call]),
+                        .assistant(content: checkpointContent(response, retainingToolCalls: 1).filter {
+                            if case .providerContinuation(let state) = $0 { state.contextTransition == nil } else { true }
+                        }, toolCalls: [call.call]),
                         .tool(message),
                     ]
                     try budget.checkActive()
@@ -467,6 +469,10 @@ package struct AgentLoop: Sendable {
                     replayCalls[index] = ToolCall(id: call.id, name: call.name,
                         argumentsJSON: ToolCall.replacedInvalidArgumentsJSON, completeness: .complete)
                 }
+            }
+            if replayCalls == response.toolCalls, let stage = lifecycle?.stageNativeContext,
+               let state = try nativeCandidate(response, request: request) {
+                try await stage(state, request, response.usage, request.nativeContextSource!.canonicalMessageCount + 1)
             }
             let progress = AgentToolBatchProgress(prefix: history, response: response, calls: replayCalls,
                                                   rejected: rejectedArguments, budget: budget,
@@ -503,7 +509,7 @@ package struct AgentLoop: Sendable {
                 await markMutationBoundaryIfNeeded(sessionID: sessionID, runID: runID)
             }
             history = completed.history
-            if replayCalls == response.toolCalls, completed.count == response.toolCalls.count,
+            if lifecycle?.stageNativeContext == nil, replayCalls == response.toolCalls, completed.count == response.toolCalls.count,
                let state = try nativeCandidate(response, request: request) {
                 history = try await publishNative(state, request: request, response: response, history: history,
                     tailStart: request.nativeContextSource!.canonicalMessageCount + 1, lifecycle: lifecycle)

@@ -8,6 +8,28 @@ import Testing
 struct AgentPreAdmissionReplanningTests {
     private let policy = AgentPreAdmissionReplanning.evidenceRejection(toolNames: [BoundedTestMutation.name])
 
+    @Test func evidenceRejectedNativeProposalCannotRetainUnpublishedTransition() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "native-rejection",
+            supportsAdmissionRejections: true, supportsNativeContext: true, fault: { _ in })
+        let base = rejectionProvider(), provider = EvidenceNativeProvider(base: base)
+        let session = try Agent(model: fixtureModel, provider: provider,
+            tools: [try ResourceDiscovery(), try BoundedTestMutation()], configuration: .init(preAdmissionReplanning: policy))
+            .makeSession(journal: journal)
+        let run = try await session.run("start", operationID: "native-evidence")
+        #expect(try await run.wait().outcome == .completed); try await run.waitForDrain()
+        #expect(await base.log.requests.count == 3)
+        #expect(try await journal.nativeContextCheckpoint(sessionID: session.id) == nil)
+        for message in try await session.conversationSnapshot().messages {
+            if case .assistant(let content, _) = message {
+                #expect(!content.contains { if case .providerContinuation(let state) = $0 { state.contextTransition != nil } else { false } })
+            }
+        }
+        #expect(try await journal.pendingMutations().isEmpty)
+        try await journal.close()
+    }
+
     @Test func optInRequiresARejectionCapableStoreBeforeProviderOrInputCommit() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replan-legacy-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -573,5 +595,37 @@ private struct BoundedTestMutation: AgentTool {
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
         Issue.record("A missing-Evidence mutation must not reach the executor")
         throw EvidenceError.unavailable(.init(namespace: "resource", id: input.id))
+    }
+}
+
+private struct EvidenceNativeProvider: ModelProviderCompaction {
+    let base: ScriptedProvider
+    var descriptor: ModelProviderDescriptor { base.descriptor }
+    let automaticCompaction: ModelAutomaticCompaction? = try! .init(mode: .anthropicThreshold, triggerInputTokens: 50_000)
+    let compactionModes: Set<ModelCompactionMode> = []
+    func validateCompaction(request: ModelCompactionRequest) throws { throw FixtureError.invalidOperation }
+    func compact(request: ModelCompactionRequest) -> AsyncThrowingStream<ModelCompactionEvent, Error> {
+        .init { $0.finish(throwing: FixtureError.invalidOperation) }
+    }
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        .init { continuation in
+            let task = Task {
+                do {
+                    for try await event in base.stream(request: request) {
+                        if case .responseCompleted(let response) = event,
+                           response.toolCalls.contains(where: { $0.name == BoundedTestMutation.name }) {
+                            let transition = ModelNativeContextTransition(mode: .anthropicThreshold, source: request.nativeContextSource!,
+                                replayPosition: 0, invocationID: request.invocationID!, responseID: response.info.id)
+                            let state = ModelProviderContinuation(model: response.info.model, format: "fixture-native", payload: Data("opaque".utf8), contextTransition: transition)
+                            continuation.yield(.providerContinuation(state))
+                            continuation.yield(.responseCompleted(.init(info: response.info, content: response.content + [.providerContinuation(state)],
+                                toolCalls: response.toolCalls, usage: response.usage, stopReason: response.stopReason)))
+                        } else { continuation.yield(event) }
+                    }
+                    continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 }

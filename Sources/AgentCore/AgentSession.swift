@@ -23,6 +23,14 @@ public actor AgentSession {
     private let scheduler: ToolScheduler
     private let evidenceLedger = EvidenceLedger()
     private let nativeContextState = AgentNativeContextState()
+    private struct PendingNativePublication: Sendable {
+        let state: ModelProviderContinuation
+        let request: ModelRequest
+        let usage: ModelUsage
+        let tailStart: Int
+        let binding: AgentModelBinding
+    }
+    private var pendingNativePublications: [UUID: PendingNativePublication] = [:]
     private let contextEffects = AgentContextEffectLedger()
     private let structuredOutput: StructuredOutputSchema?
     private let maxModelTurns: Int
@@ -684,6 +692,10 @@ public actor AgentSession {
                     canonicalTailStart: tailStart, history: messages, binding: loop.modelBinding,
                     runID: runID, budget: budget)
             },
+            stageNativeContext: { state, request, usage, tailStart in
+                try await self.stageRunNativeContext(state, request: request, usage: usage,
+                    tailStart: tailStart, binding: loop.modelBinding, runID: runID, budget: budget)
+            },
             sourceRevision: { messages in try await self.projectionSourceRevision(messages, runID: runID) },
             checkReplanningSafety: { operationID in
                 guard let journal, journal.storage == .durable else { return false }
@@ -704,12 +716,14 @@ public actor AgentSession {
                 guard let journal, let proof = result.confirmedNoEffect else { throw AgentJournalError.invalidRecord }
                 let drafts = try await (call.auditAuthorization as? AgentAuditInvocation)?.resultDrafts(result) ?? []
                 let prepared = try await self.prepareCheckpoint(messages)
+                let native = try await self.stagedNativeCheckpoint(history: prepared, runID: runID)
                 await self.beginCommittedWrite(runID)
                 do {
                     try await journal.commitExecutorNoEffect(sessionID: self.id, runID: runID, callID: call.call.id,
                         proof: proof, message: .init(callID: call.call.id, content: [.json(result.output)], isError: true),
-                        history: prepared, auditDrafts: drafts)
+                        history: prepared, auditDrafts: drafts, nativeContext: native)
                     await self.applyCommittedHistory(prepared, steering: [], runID: runID)
+                    await self.installStagedNativeCheckpoint(native, runID: runID)
                     await self.endCommittedWrite(runID)
                     return prepared
                 } catch {
@@ -723,17 +737,19 @@ public actor AgentSession {
                 }
                 let drafts = try await owner.resultDrafts(result)
                 let prepared = try await self.prepareCheckpoint(messages)
+                let native = try await self.stagedNativeCheckpoint(history: prepared, runID: runID)
                 await self.beginCommittedWrite(runID)
                 do {
                     if call.policy.effect == .mutation, !result.isIdempotentReplay {
                         guard let receipt = result.receipt else { throw ToolReceiptError.missing }
                         try await journal.commitMutation(sessionID: self.id, runID: runID, callID: call.call.id,
-                            receipt: receipt, output: result.output, history: prepared, steeringIDs: [], auditDrafts: drafts)
+                            receipt: receipt, output: result.output, history: prepared, steeringIDs: [], auditDrafts: drafts, nativeContext: native)
                     } else {
                         try await journal.commitAuditedCheckpoint(history: prepared, steeringIDs: [],
-                            sessionID: self.id, runID: runID, drafts: drafts)
+                            sessionID: self.id, runID: runID, drafts: drafts, nativeContext: native)
                     }
                     await self.applyCommittedHistory(prepared, steering: [], runID: runID)
+                    await self.installStagedNativeCheckpoint(native, runID: runID)
                     await self.endCommittedWrite(runID)
                     return prepared
                 } catch { await self.endCommittedWrite(runID); throw error }
@@ -770,8 +786,9 @@ public actor AgentSession {
             let prepared = try await prepareCheckpoint(messages)
             try budget.checkActive()
             guard activeRunID == runID else { throw CancellationError() }
+            let native = try await stagedNativeCheckpoint(history: prepared, runID: runID)
             if let journal {
-                var events: [AgentJournalEvent] = []
+                var events: [AgentJournalEvent] = native.map { [.nativeContextCheckpoint($0)] } ?? []
                 if let rejection {
                     guard rejection.sessionID == id, rejection.runID == runID else { throw CancellationError() }
                     events.append(.toolAdmissionRejected(callID: rejection.callID,
@@ -791,12 +808,43 @@ public actor AgentSession {
             } else {
                 applyCommittedHistory(prepared, steering: steering, runID: runID)
             }
+            await installStagedNativeCheckpoint(native, runID: runID)
             checkpointDidExit?(runID)
             return prepared
         } catch {
             checkpointDidExit?(runID)
             throw error
         }
+    }
+
+    private func stageRunNativeContext(_ state: ModelProviderContinuation, request: ModelRequest,
+                                       usage: ModelUsage, tailStart: Int, binding: AgentModelBinding,
+                                       runID: UUID, budget: AgentBudget) throws {
+        try budget.checkActive()
+        guard activeRunID == runID, pendingNativePublications[runID] == nil,
+              state.contextTransition?.source == request.nativeContextSource else {
+            throw AgentModelBindingError.incompatibleContinuation
+        }
+        pendingNativePublications[runID] = .init(state: state, request: request, usage: usage,
+                                               tailStart: tailStart, binding: binding)
+    }
+
+    /// Partial tool batches strip opaque state. Only the complete, accepted response can
+    /// publish its candidate, in the same transaction as its last tool result/settlement.
+    private func stagedNativeCheckpoint(history messages: [ModelMessage], runID: UUID) async throws -> ModelNativeContextCheckpoint? {
+        let rootCount = messages.prefix(while: { $0.role == .system || $0.role == .developer }).count
+        guard let pending = pendingNativePublications[runID],
+              pending.tailStart > 0, messages.count - rootCount >= pending.tailStart,
+              case .assistant(let content, _) = messages[rootCount + pending.tailStart - 1],
+              content.contains(.providerContinuation(pending.state)) else { return nil }
+        return try await nativeContextState.candidate(pending.state, request: pending.request,
+            canonicalTailStart: pending.tailStart, canonical: messages, binding: pending.binding, usage: pending.usage)
+    }
+
+    private func installStagedNativeCheckpoint(_ value: ModelNativeContextCheckpoint?, runID: UUID) async {
+        guard let value else { return }
+        await nativeContextState.install(value)
+        pendingNativePublications.removeValue(forKey: runID)
     }
 
     private func publishRunNativeContext(_ state: ModelProviderContinuation, request: ModelRequest, usage: ModelUsage,
@@ -834,6 +882,7 @@ public actor AgentSession {
             throw AgentJournalError.persistenceUnavailable("mutation history cannot be committed without a journal")
         }
         let prepared = try await prepareCheckpoint(messages)
+        let native = try await stagedNativeCheckpoint(history: prepared, runID: runID)
         beginCommittedWrite(runID)
         defer { endCommittedWrite(runID) }
         try await journal.commitMutation(
@@ -843,9 +892,11 @@ public actor AgentSession {
             receipt: receipt,
             output: output,
             history: prepared,
-            steeringIDs: steering.map(\.id)
+            steeringIDs: steering.map(\.id),
+            nativeContext: native
         )
         applyCommittedHistory(prepared, steering: steering, runID: runID)
+        await installStagedNativeCheckpoint(native, runID: runID)
         return prepared
     }
 
@@ -882,6 +933,7 @@ public actor AgentSession {
         guard activeRunID == runID else { return nil }
         await waitForCommittedWrites(runID)
         guard activeRunID == runID else { return nil }
+        pendingNativePublications.removeValue(forKey: runID)
         let retained = pending.filter { !appliedSteeringIDs.contains($0.id) }
         var failure = retained.isEmpty ? nil : await retain(retained, runID: runID)
         if let outcome, let journal, journal.supportsRunRecords {

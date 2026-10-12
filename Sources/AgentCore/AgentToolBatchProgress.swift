@@ -168,7 +168,12 @@ actor AgentToolBatchProgress {
             if case .providerContinuation = $0 { return false }
             return true
         }
-        return prefix + [.assistant(content: content, toolCalls: replayed)] + indices.compactMap { results[$0].map(ModelMessage.tool) }
+        // A native transition binds the original calls. Argument replacement cannot reuse it.
+        let acceptedContent = calls == response.toolCalls ? content : content.filter {
+            if case .providerContinuation(let state) = $0, state.contextTransition != nil { return false }
+            return true
+        }
+        return prefix + [.assistant(content: acceptedContent, toolCalls: replayed)] + indices.compactMap { results[$0].map(ModelMessage.tool) }
     }
 
     private func updateCanonicalPrefix(_ history: [ModelMessage], committedHistory: [ModelMessage]) {

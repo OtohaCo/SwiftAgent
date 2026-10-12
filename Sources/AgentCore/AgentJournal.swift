@@ -637,7 +637,8 @@ public actor AgentJournal {
         output: JSONValue,
         history: [ModelMessage],
         steeringIDs: [UUID],
-        auditDrafts: [JournalAuditDraft] = []
+        auditDrafts: [JournalAuditDraft] = [],
+        nativeContext: ModelNativeContextCheckpoint? = nil
     ) throws {
         let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
         guard let record = try mutationRecord(for: key) else { throw AgentJournalError.mutationNotFound }
@@ -648,7 +649,7 @@ public actor AgentJournal {
         try ToolReceiptValidator.validate(receipt, operationID: record.intent.idempotencyKey, expectation: expectation)
         let accepted = AgentToolReceipt(callID: callID, effect: .mutation, receipt: receipt)
         _ = try appendCheckpoint(
-            [
+            (nativeContext.map { [.nativeContextCheckpoint($0)] } ?? []) + [
                 .toolReceipt(accepted),
                 .mutationOutput(callID: callID, output: output),
                 .mutationSettled(callID: callID, receipt: receipt, source: .executor),
@@ -678,7 +679,7 @@ public actor AgentJournal {
 
     package func commitExecutorNoEffect(sessionID: UUID, runID: UUID, callID: ToolCallID,
         proof: ToolNoEffectProof, message: ToolResultMessage, history: [ModelMessage],
-        auditDrafts: [JournalAuditDraft]) throws {
+        auditDrafts: [JournalAuditDraft], nativeContext: ModelNativeContextCheckpoint? = nil) throws {
         guard supportsConfirmedNoEffect, proof.version <= noEffectProofVersion else { throw AgentJournalError.unsupportedFormat }
         let key = MutationKey(sessionID: sessionID, runID: runID, callID: callID)
         guard let record = try mutationRecord(for: key), record.state == .intent,
@@ -690,7 +691,7 @@ public actor AgentJournal {
             resources: record.intent.resources, expectation: record.intent.receiptExpectation,
             originalArgumentsUTF8Bytes: record.intent.call.argumentsJSON.utf8.count)
         if let links = record.auditLinks { guard links.invocationID == proof.invocationID else { throw AgentJournalError.invalidRecord } }
-        _ = try appendCheckpoint([
+        _ = try appendCheckpoint((nativeContext.map { [.nativeContextCheckpoint($0)] } ?? []) + [
             .mutationAborted(callID: callID, confirmation: .init(executorProof: proof)),
             .toolCompleted(message), .checkpoint(history: history, steeringIDs: []),
         ], sessionID: sessionID, runID: runID, timestamp: Date(), durability: .durable,

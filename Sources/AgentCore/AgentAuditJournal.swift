@@ -74,8 +74,9 @@ extension AgentJournal {
     }
 
     package func commitAuditedCheckpoint(history: [ModelMessage], steeringIDs: [UUID],
-                                         sessionID: UUID, runID: UUID, drafts: [JournalAuditDraft]) throws {
-        _ = try appendCheckpoint([.checkpoint(history: history, steeringIDs: steeringIDs)],
+                                         sessionID: UUID, runID: UUID, drafts: [JournalAuditDraft],
+                                         nativeContext: ModelNativeContextCheckpoint? = nil) throws {
+        _ = try appendCheckpoint((nativeContext.map { [.nativeContextCheckpoint($0)] } ?? []) + [.checkpoint(history: history, steeringIDs: steeringIDs)],
             sessionID: sessionID, runID: runID, timestamp: Date(), durability: .durable,
             allowMutationSettlement: false, auditDrafts: drafts)
     }

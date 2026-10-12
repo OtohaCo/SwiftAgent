@@ -1,9 +1,98 @@
+import AgentJournalFileStore
+import AgentTools
 import AgentModels
 import Foundation
 import Testing
 @testable import AgentCore
 
 @Suite struct NativeCompactionOperationTests {
+    @Test func automaticToolFactsAndCheckpointUseOnePublication() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let barrier = NativeCompactionBarrier()
+        let provider = NativeOperationFixture(generationBarrier: barrier, automaticToolResponse: true)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "native-tool",
+                                                                   supportsNativeContext: true, fault: { _ in })
+        let agent = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider,
+                              tools: [AddTool(log: EffectLog())], configuration: .init(instructions: "root"))
+        let session = try agent.makeSession(journal: journal)
+        let run = try await session.run("source")
+        let observer = Task {
+            do { _ = try await run.wait() }
+            catch { Issue.record(error); await barrier.signalEntered() }
+        }
+        await barrier.waitEntered()
+        // Startup and the complete tool-result publication. A third batch would mean the
+        // tool facts became durable before their dependent native context checkpoint.
+        #expect(await journal.storageMetrics()?.committedBatches == 2)
+        #expect(try await journal.nativeContextCheckpoint(sessionID: session.id) != nil)
+        #expect(try await session.conversationSnapshot().messages.count == 4)
+        await barrier.release()
+        _ = try await run.wait(); try await run.waitForDrain()
+        await observer.value
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        #expect(try await reopened.nativeContextCheckpoint(sessionID: session.id) != nil)
+        #expect(try await reopened.latestCheckpoint(sessionID: session.id)?.history.count == 4)
+        try await reopened.close()
+    }
+    @Test(arguments: ["success", "conflict"], [false, true])
+    func nativeSettlementAndEffectLedgerPublishTogether(_ mode: String, _ audited: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "native-settlement",
+            supportsAuthorizationAudit: audited, supportsConfirmedNoEffect: true, supportsNativeContext: true, fault: { _ in })
+        let counts = NoEffectCounts(), file = directory.appendingPathComponent("effect")
+        let calls = [ToolCall(id: .init(rawValue: "native-add"), name: "add", argumentsJSON: #"{"lhs":2,"rhs":3}"#, completeness: .complete),
+            ToolCall(id: .init(rawValue: "native-mutation"), name: "no_effect_file", argumentsJSON: "{}", completeness: .complete)]
+        let provider = NativeOperationFixture(automaticToolCalls: calls)
+        let agent = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider,
+            tools: [AddTool(log: EffectLog()), try NoEffectFileTool(file: file, counts: counts, mode: mode)],
+            configuration: audited ? .init(authorization: auditTestConfiguration()) : .init())
+        let session = try agent.makeSession(journal: journal)
+        let run = try await session.run("source", operationID: "native-settlement")
+        _ = try await run.wait(); try await run.waitForDrain()
+        #expect(await counts.executions == 1)
+        #expect(await counts.effects == (mode == "success" ? 1 : 0))
+        #expect(try await journal.pendingMutations().isEmpty)
+        #expect(try await journal.nativeContextCheckpoint(sessionID: session.id) != nil)
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        #expect(try await reopened.nativeContextCheckpoint(sessionID: session.id) != nil)
+        let facts = try await reopened.latestCheckpoint(sessionID: session.id)?.history ?? []
+        #expect(facts.count == 5)
+        #expect(facts.contains { if case .tool(let result) = $0 { result.callID == calls[1].id && result.isError == (mode == "conflict") } else { false } })
+        #expect((try await reopened.executorNoEffectConfirmation(sessionID: session.id, runID: run.id, callID: calls[1].id) != nil) == (mode == "conflict"))
+        if audited { #expect(try await !reopened.auditRecords(matching: .init(runID: run.id)).records.isEmpty) }
+        try await reopened.close()
+    }
+
+    @Test(arguments: [false, true])
+    func nativeNoEffectPublicationFailureHasNoHalfCheckpoint(_ unknown: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = NativeSettlementFault(unknown: unknown)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "native-fault",
+            supportsAuthorizationAudit: true, supportsConfirmedNoEffect: true, supportsNativeContext: true, fault: { try fault.check($0) })
+        let call = ToolCall(id: .init(rawValue: "native-mutation"), name: "no_effect_file", argumentsJSON: "{}", completeness: .complete)
+        let counts = NoEffectCounts(), provider = NativeOperationFixture(automaticToolCalls: [call])
+        let session = try Agent(model: .init(provider: "native-fixture", name: "model"), provider: provider,
+            tools: [try NoEffectFileTool(file: directory.appendingPathComponent("effect"), counts: counts, beforeReturn: { fault.arm() })],
+            configuration: .init(authorization: auditTestConfiguration())).makeSession(journal: journal)
+        let run = try await session.run("source", operationID: "native-fault")
+        await #expect(throws: (any Error).self) { try await run.wait() }; try await run.waitForDrain()
+        #expect(await counts.effects == 0); #expect(await counts.executions == 1)
+        #expect(await provider.requests.count == 1)
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let native = try await reopened.nativeContextCheckpoint(sessionID: session.id)
+        let proof = try await reopened.executorNoEffectConfirmation(sessionID: session.id, runID: run.id, callID: call.id)
+        #expect((native != nil) == unknown); #expect((proof != nil) == unknown)
+        let facts = try await reopened.latestCheckpoint(sessionID: session.id)?.history ?? []
+        #expect(facts.count == (unknown ? 3 : 1))
+        #expect(try await reopened.pendingMutations().map(\.state) == (unknown ? [] : [.needsReconciliation]))
+        try await reopened.close()
+    }
     @Test func idleCompactPreservesCanonicalAndNextRunUsesNativeWindow() async throws {
         let provider = NativeOperationFixture()
         let model = ModelID(provider: "native-fixture", name: "model")
@@ -137,16 +226,18 @@ import Testing
 }
 
 private actor NativeOperationFixture: ModelProviderCompaction, ModelProviderRunDrain {
-    nonisolated let descriptor = ModelProviderDescriptor(id: "native-fixture", capabilities: [.streaming, .multiTurn])
+    nonisolated let descriptor = ModelProviderDescriptor(id: "native-fixture", capabilities: [.streaming, .multiTurn, .tools])
     nonisolated let automaticCompaction: ModelAutomaticCompaction?
     nonisolated let compactionModes: Set<ModelCompactionMode> = [.openAIStandalone]
+    let automaticToolCalls: [ToolCall]?
+    let automaticToolResponse: Bool
     let noSummary: Bool
     let barrier: NativeCompactionBarrier?
     let maintenanceResponses: Int
     let maintenanceToolProposal: Bool
     let generationBarrier: NativeCompactionBarrier?
     var requests: [ModelRequest] = []
-    init(noSummary: Bool = false, barrier: NativeCompactionBarrier? = nil, maintenanceResponses: Int = 0, generationBarrier: NativeCompactionBarrier? = nil, maintenanceToolProposal: Bool = false) { self.maintenanceToolProposal = maintenanceToolProposal; self.noSummary = noSummary; self.barrier = barrier; self.maintenanceResponses = maintenanceResponses; self.generationBarrier = generationBarrier; self.automaticCompaction = maintenanceResponses > 0 ? try! .init(mode: .anthropicThreshold, triggerInputTokens: 50_000) : nil }
+    init(noSummary: Bool = false, barrier: NativeCompactionBarrier? = nil, maintenanceResponses: Int = 0, generationBarrier: NativeCompactionBarrier? = nil, maintenanceToolProposal: Bool = false, automaticToolResponse: Bool = false, automaticToolCalls: [ToolCall]? = nil) { self.automaticToolCalls = automaticToolCalls; self.automaticToolResponse = automaticToolResponse || automaticToolCalls != nil; self.maintenanceToolProposal = maintenanceToolProposal; self.noSummary = noSummary; self.barrier = barrier; self.maintenanceResponses = maintenanceResponses; self.generationBarrier = generationBarrier; self.automaticCompaction = maintenanceResponses > 0 || automaticToolResponse || automaticToolCalls != nil ? try! .init(mode: .anthropicThreshold, triggerInputTokens: 50_000) : nil }
     nonisolated func validateCompaction(request: ModelCompactionRequest) throws {}
     nonisolated func compact(request: ModelCompactionRequest) -> AsyncThrowingStream<ModelCompactionEvent, Error> {
         AsyncThrowingStream { c in
@@ -187,6 +278,19 @@ private actor NativeOperationFixture: ModelProviderCompaction, ModelProviderRunD
                     c.yield(.responseCompleted(.init(info: info, content: [.providerContinuation(state)], toolCalls: calls, stopReason: .unknown("compaction"))))
                     c.finish(); return
                 }
+                if automaticToolResponse && ordinal == 1 {
+                    let transition = ModelNativeContextTransition(mode: .anthropicThreshold, source: request.nativeContextSource!,
+                        replayPosition: 0, invocationID: request.invocationID!, responseID: info.id)
+                    let state = ModelProviderContinuation(model: info.model, format: "fixture-native", payload: Data("opaque".utf8), contextTransition: transition)
+                    let call = ToolCall(id: .init(rawValue: "native-add"), name: "add", argumentsJSON: #"{"lhs":2,"rhs":3}"#, completeness: .complete)
+                    let calls = automaticToolCalls ?? [call]
+                    c.yield(.providerContinuation(state))
+                    for call in calls {
+                        c.yield(.toolCallStarted(call.id, name: call.name)); c.yield(.toolCallArgumentsDelta(call.id, call.argumentsJSON)); c.yield(.toolCallCompleted(call))
+                    }
+                    c.yield(.responseCompleted(.init(info: info, content: [.providerContinuation(state)], toolCalls: calls, stopReason: .toolCalls)))
+                    c.finish(); return
+                }
                 if let generationBarrier { await generationBarrier.block() }
                 c.yield(.textDelta("answer"))
                 c.yield(.responseCompleted(.init(info: info, content: [.text("answer")], stopReason: .endTurn))); c.finish()
@@ -207,8 +311,26 @@ private actor NativeCompactionBarrier {
         entered = true; enterWaiters.forEach { $0.resume() }; enterWaiters.removeAll()
         if !released { await withCheckedContinuation { releaseWaiter = $0 } }
     }
+    func signalEntered() { entered = true; enterWaiters.forEach { $0.resume() }; enterWaiters.removeAll() }
     func waitEntered() async { if !entered { await withCheckedContinuation { enterWaiters.append($0) } } }
     func release() { released = true; releaseWaiter?.resume(); releaseWaiter = nil }
     func finish() { finished = true; finishWaiters.forEach { $0.resume() }; finishWaiters.removeAll() }
     func waitFinished() async { if !finished { await withCheckedContinuation { finishWaiters.append($0) } } }
+}
+
+private final class NativeSettlementFault: @unchecked Sendable {
+    private let lock = NSLock()
+    private var armed = false
+    let unknown: Bool
+    init(unknown: Bool) { self.unknown = unknown }
+    func arm() { lock.withLock { armed = true } }
+    func check(_ stage: JournalFileFaultStage) throws {
+        let eligible: Bool
+        if unknown { if case .afterCurrentReplace = stage { eligible = true } else { eligible = false } }
+        else { if case .beforeAppend = stage { eligible = true } else { eligible = false } }
+        guard eligible else { return }
+        if lock.withLock({ let value = armed; armed = false; return value }) {
+            throw AgentJournalError.persistenceUnavailable("native settlement publication fixture")
+        }
+    }
 }
