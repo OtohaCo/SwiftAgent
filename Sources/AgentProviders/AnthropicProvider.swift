@@ -41,7 +41,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
     private let maximumOutputTokens: Int
     private let thinking: AnthropicThinking
     private let effort: AnthropicEffort?
-    private let nativeContext: AnthropicNativeContextConfiguration?
+    let nativeContext: AnthropicNativeContextConfiguration?
     private let promptCaching: AnthropicPromptCaching?
     private let resolvedModelIDsByAlias: [String: String]
     private let transport: any ProviderHTTPTransport

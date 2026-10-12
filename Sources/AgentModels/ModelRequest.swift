@@ -62,6 +62,7 @@ public struct ModelRequest: Hashable, Sendable, Codable {
     public let nativeContext: ModelNativeContextCheckpoint?
     public let nativeContextSource: ModelNativeContextSource?
     public let invocationID: UUID?
+    public let conversationControls: ModelConversationControlView?
 
     public init(
         model: ModelID,
@@ -79,6 +80,16 @@ public struct ModelRequest: Hashable, Sendable, Codable {
                 structuredOutput: StructuredOutputSchema? = nil, sessionID: UUID? = nil, runID: UUID? = nil,
                 nativeContext: ModelNativeContextCheckpoint?, nativeContextSource: ModelNativeContextSource? = nil,
                 invocationID: UUID? = nil) {
+        self.init(model: model, messages: messages, tools: tools, structuredOutput: structuredOutput,
+            sessionID: sessionID, runID: runID, nativeContext: nativeContext, nativeContextSource: nativeContextSource,
+            invocationID: invocationID, conversationControls: nil)
+    }
+
+    public init(model: ModelID, messages: [ModelMessage], tools: [ModelToolDefinition] = [],
+                structuredOutput: StructuredOutputSchema? = nil, sessionID: UUID? = nil, runID: UUID? = nil,
+                nativeContext: ModelNativeContextCheckpoint? = nil, nativeContextSource: ModelNativeContextSource? = nil,
+                invocationID: UUID? = nil, conversationControls: ModelConversationControlView?) {
+        self.conversationControls = conversationControls
         self.model = model
         self.messages = messages
         self.tools = tools
@@ -96,6 +107,6 @@ public extension ModelRequest {
     func withNativeSource(_ source: ModelNativeContextSource, invocationID: UUID) -> Self {
         .init(model: model, messages: messages, tools: tools, structuredOutput: structuredOutput,
               sessionID: sessionID, runID: runID, nativeContext: nativeContext,
-              nativeContextSource: source, invocationID: invocationID)
+              nativeContextSource: source, invocationID: invocationID, conversationControls: conversationControls)
     }
 }

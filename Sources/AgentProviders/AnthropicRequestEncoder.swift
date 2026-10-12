@@ -6,7 +6,12 @@ enum AnthropicRequestEncoder {
         let role: String
         var content: [JSONValue]
         var identities: [ModelInputSourceIdentity]
-        var json: JSONValue { .object(["role": .string(role), "content": .array(content)]) }
+        var clearAt: String? = nil
+        var json: JSONValue {
+            var fields: [String: JSONValue] = ["role": .string(role), "content": .array(content)]
+            if let clearAt { fields["clear_at"] = .string(clearAt) }
+            return .object(fields)
+        }
     }
     static func encode(
         _ request: ModelRequest,
@@ -27,6 +32,7 @@ enum AnthropicRequestEncoder {
         guard request.model.provider == "anthropic", !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid Anthropic model identifier.")
         }
+        try AnthropicConversationControls.validate(request, configuration: nativeContext)
         try promptCaching?.validate(modelName: resolvedModelName ?? request.model.name)
         var system: [String] = []
         var messages: [Message] = []
@@ -87,6 +93,11 @@ enum AnthropicRequestEncoder {
                     "content": value, "is_error": .bool(result.isError),
                 ])], at: messageIndex, configuration: promptCaching), to: &messages, messageDigest: messageDigest)
             }
+            for control in request.conversationControls?.controls.filter({ $0.afterMessageIndex == messageIndex }) ?? [] {
+                let clearAt: String? = if case .reminder = control.entry.control { "next_user_message" } else { nil }
+                try append(role: "system", content: [AnthropicConversationControls.block(control.entry.control, baseline: request.tools)], to: &messages,
+                    messageDigest: ModelImageDigest.sha256Hex(try ProviderJSON.encode(control.entry)), clearAt: clearAt)
+            }
         }
         if !insertedNative, !nativeBlocks.isEmpty { try append(role: "assistant", content: nativeBlocks, to: &messages, messageDigest: request.nativeContext.map { ModelImageDigest.sha256Hex($0.continuation.payload) } ?? "", nativeCheckpointID: request.nativeContext?.id) }
         guard !messages.isEmpty else { throw ModelProviderError(kind: .invalidRequest, message: "Conversation messages are required.") }
@@ -120,8 +131,10 @@ enum AnthropicRequestEncoder {
         }
         if !outputConfiguration.isEmpty { body["output_config"] = .object(outputConfiguration) }
         if !request.tools.isEmpty {
-            body["tools"] = .array(request.tools.map {
-                .object(["name": .string($0.name), "description": .string($0.description), "input_schema": $0.inputSchema])
+            body["tools"] = .array(request.tools.map { tool in
+                var fields: [String: JSONValue] = ["name": .string(tool.name), "description": .string(tool.description), "input_schema": tool.inputSchema]
+                if request.conversationControls?.deferredBaselineToolNames.contains(tool.name) == true { fields["defer_loading"] = .bool(true) }
+                return .object(fields)
             })
         }
         if let promptCaching {
@@ -147,6 +160,16 @@ enum AnthropicRequestEncoder {
             if let ttl = promptCaching.automaticTTL { body["cache_control"] = promptCaching.control(ttl) }
             try promptCaching.validateTTLOrder(in: body)
         }
+        if thinkingPrefixes.contains(where: { AnthropicContinuation.containsThinking($0.blocks) }), nativeContext?.thinkingPrefixMismatch == nil,
+           let controls = request.conversationControls,
+           controls.toolBaseline.allSatisfy({ controls.deferredBaselineToolNames.contains($0.name) }),
+           controls.controls.contains(where: {
+               if case .toolAddition(let tool) = $0.entry.control { return !controls.toolBaseline.contains(tool) }
+               return false
+           }) {
+            throw ModelProviderError(kind: .unsupportedCapability,
+                message: "A by-value inline tool without a non-deferred baseline anchor changes the signed thinking prefix.")
+        }
         for prior in thinkingPrefixes where nativeContext?.thinkingPrefixMismatch == nil {
             try AnthropicContinuation.validatePrefix(content: prior.content, blocks: prior.blocks,
                 prefix: AnthropicContinuation.prefix(system: body["system"], tools: body["tools"], messages: prior.messages))
@@ -163,7 +186,7 @@ enum AnthropicRequestEncoder {
     }
 
     private static func append(role: String, content: [JSONValue], to messages: inout [Message],
-                               messageDigest: String, nativeCheckpointID: UUID? = nil) throws {
+                               messageDigest: String, nativeCheckpointID: UUID? = nil, clearAt: String? = nil) throws {
         if role == "assistant", content.isEmpty { return }
         guard !content.isEmpty else { throw ModelProviderError(kind: .invalidRequest, message: "Message content is required.") }
         let identities = try content.map { value in
@@ -172,10 +195,10 @@ enum AnthropicRequestEncoder {
             return ModelInputSourceIdentity(messageDigest: messageDigest,
                 contentDigest: ModelImageDigest.sha256Hex(try ProviderJSON.encode(JSONValue.object(fields))), nativeCheckpointID: nativeCheckpointID)
         }
-        if messages.last?.role == role {
+        if role != "system", messages.last?.role == role {
             messages[messages.count - 1].content.append(contentsOf: content)
             messages[messages.count - 1].identities.append(contentsOf: identities)
-        } else { messages.append(.init(role: role, content: content, identities: identities)) }
+        } else { messages.append(.init(role: role, content: content, identities: identities, clearAt: clearAt)) }
     }
 
     /// Text blocks, and images as base64 image blocks in their place.

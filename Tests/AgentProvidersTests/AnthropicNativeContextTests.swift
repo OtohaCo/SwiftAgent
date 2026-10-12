@@ -83,6 +83,30 @@ import Testing
         #expect(!String(decoding: sent[1].httpBody!, as: UTF8.self).contains("full source"))
     }
 
+    @Test(arguments: [false, true])
+    func missingToolChangesCannotEstablishContradictoryCoveredTools(_ explicitNull: Bool) async throws {
+        let baseline = ModelToolDefinition(name: "base", description: "Trusted baseline", inputSchema: .object(["type": .string("object")]))
+        let foreign = ModelToolDefinition(name: "different", description: "Unestablished active tool", inputSchema: baseline.inputSchema)
+        var block: [String: JSONValue] = ["type": .string("compaction"), "content": .string("summary"), "signature": .string("fixture-not-live")]
+        if explicitNull { block["tool_changes"] = .null }
+        let probe = ProviderRequestProbe()
+        let qualified = try NativeContextQualification(endpoint: endpoint, resolvedModelNames: ["fixture"], modes: [.anthropicOnDemand])
+        let provider = try AnthropicProvider(apiKey: "fixture", nativeContext: .init(qualification: qualified, inlineToolChanges: true),
+            transport: FixtureHTTPTransport(probe: probe, bodies: [try fixture(block: .object(block), threshold: false), anthropicTextFixture]))
+        let initial = try request(provider, mode: .anthropicOnDemand)
+        var continuation: ModelProviderContinuation?
+        for try await event in provider.compact(request: .init(request: initial, mode: .anthropicOnDemand, operationID: UUID(), invocationID: initial.invocationID!)) {
+            if case .completed(let response) = event { continuation = response.continuation }
+        }
+        let state = try #require(continuation)
+        let checkpoint = ModelNativeContextCheckpoint(id: UUID(), generation: 1, continuation: state, transition: state.contextTransition!, rootConfigurationDigest: "fixture", toolBaseline: [], usage: .init())
+        let next = ModelRequest(model: model, messages: [.user([.text("next")])], tools: [baseline], nativeContext: checkpoint,
+            conversationControls: .init(toolBaseline: [baseline], activeTools: [foreign], controls: [], coveredTools: [foreign], coveredToolChanges: false))
+        do { for try await _ in provider.stream(request: next) {}; Issue.record("Unestablished covered tools dispatched") }
+        catch let error as ModelProviderError { #expect(error.kind == .invalidRequest) }
+        #expect(await probe.requests.count == 1)
+    }
+
     @Test(arguments: ["max_tokens", "refusal", "tool_use", "end_turn"])
     func billedOnDemandWithoutSummaryIsNotAnAnswerOrCheckpoint(_ reason: String) async throws {
         let probe = ProviderRequestProbe()
@@ -260,7 +284,7 @@ import Testing
         #expect(await nextProbe.requests.isEmpty)
     }
 
-    private func fixture(block: JSONValue?, threshold: Bool, reason: String = "compaction") throws -> Data {
+    func fixture(block: JSONValue?, threshold: Bool, reason: String = "compaction") throws -> Data {
         func json(_ value: JSONValue) throws -> String { String(decoding: try JSONEncoder().encode(value), as: UTF8.self) }
         var frames: [(String, String)] = [("message_start", #"{"type":"message_start","message":{"id":"compact","type":"message","role":"assistant","model":"fixture","content":[],"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"iterations":[]}}}"#)]
         if let block {

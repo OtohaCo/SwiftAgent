@@ -153,7 +153,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
 
         let (owner, request) = try continuationOwner(of: request)
         let admission = await boundaryState.admission(sessionID: request.sessionID, runID: request.runID)
-        if request.nativeContextSource != nil || request.nativeContext != nil {
+        if request.conversationControls != nil || request.nativeContextSource != nil || request.nativeContext != nil {
             // Exact wire provenance is qualified for one actual owner. A retry would
             // need a new managed invocation; never silently reuse its identity.
             let index = try nativeOwnerIndex(owner: owner, request: request)
@@ -352,7 +352,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
         return (owner, ModelRequest(model: request.model, messages: messages, tools: request.tools,
                                     structuredOutput: request.structuredOutput,
                                     sessionID: request.sessionID, runID: request.runID, nativeContext: checkpoint,
-                                    nativeContextSource: request.nativeContextSource, invocationID: request.invocationID))
+                                    nativeContextSource: request.nativeContextSource, invocationID: request.invocationID, conversationControls: request.conversationControls))
     }
 
     private func validatedEvents(from candidate: any ModelProvider, request: ModelRequest) async throws -> [ModelEvent] {
@@ -392,7 +392,7 @@ extension ModelProviderRoute: ModelProviderNativeContextWitness, ModelProviderRe
         return owner ?? selected ?? 0
     }
     public func validate(request: ModelRequest) throws {
-        guard request.nativeContext != nil || request.nativeContextSource != nil || candidates.contains(where: { ($0.provider as? any ModelProviderCompaction)?.automaticCompaction != nil }) else { return }
+        guard request.conversationControls != nil || request.nativeContext != nil || request.nativeContextSource != nil || candidates.contains(where: { ($0.provider as? any ModelProviderCompaction)?.automaticCompaction != nil }) else { return }
         let (candidate, unwrapped) = try nativeOwner(request)
         if candidates.contains(where: { ($0.provider as? any ModelProviderCompaction)?.automaticCompaction != nil }), automaticCompaction == nil {
             throw ModelProviderError(kind: .unsupportedCapability, message: "Route candidates must agree on their automatic compaction policy.")
@@ -559,5 +559,13 @@ private struct OwnedContinuation: Codable {
               !owned.format.isEmpty, !owned.payload.isEmpty else { throw unknownOrigin }
         return (owned.candidate, ModelProviderContinuation(model: state.model, format: owned.format,
                                                            payload: owned.payload, origin: state.origin, contextTransition: state.contextTransition))
+    }
+}
+
+extension ModelProviderRoute: ModelProviderConversationControls {
+    public var conversationControlCapabilities: ModelConversationControlCapabilities? {
+        let values = candidates.map { ($0.provider as? any ModelProviderConversationControls)?.conversationControlCapabilities }
+        guard let first = values.first ?? nil, values.allSatisfy({ $0 == first }) else { return nil }
+        return first
     }
 }

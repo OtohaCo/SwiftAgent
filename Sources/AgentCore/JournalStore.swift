@@ -153,11 +153,12 @@ package struct JournalSessionHeader: Codable, Equatable, Sendable {
     package var messageCount: UInt64
     package var pendingIdentity: String?
     package var nativeContext: ModelNativeContextCheckpoint?
+    package var conversationControls: ModelConversationControlState?
 
     package init(revision: UInt64 = 0, created: Bool = false, lastRunID: UUID? = nil,
                  steeringIDs: [UUID] = [], historyHead: UInt64? = nil,
                  messageCount: UInt64 = 0, pendingIdentity: String? = nil,
-                 nativeContext: ModelNativeContextCheckpoint? = nil) {
+                 nativeContext: ModelNativeContextCheckpoint? = nil, conversationControls: ModelConversationControlState? = nil) {
         self.revision = revision
         self.created = created
         self.lastRunID = lastRunID
@@ -166,6 +167,7 @@ package struct JournalSessionHeader: Codable, Equatable, Sendable {
         self.messageCount = messageCount
         self.pendingIdentity = pendingIdentity
         self.nativeContext = nativeContext
+        self.conversationControls = conversationControls
     }
 }
 

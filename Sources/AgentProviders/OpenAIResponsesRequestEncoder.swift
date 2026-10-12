@@ -13,6 +13,9 @@ enum OpenAIResponsesRequestEncoder {
         prewarm: Bool = false,
         nativeContext: OpenAINativeContextConfiguration? = nil, endpoint: URL? = nil
     ) throws -> JSONValue {
+        guard request.conversationControls == nil else {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Anthropic conversation controls cannot be replayed by OpenAI Responses.")
+        }
         guard request.model.provider == "openai",
               !request.model.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid OpenAI model identifier.")

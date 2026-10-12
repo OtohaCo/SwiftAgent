@@ -90,6 +90,7 @@ public struct AgentModelBinding: Sendable {
     /// text, only by the Host's explicit choice.
     public let imageInput: AgentImageInputPolicy
     public let nativeContextPolicy: AgentNativeContextPolicy?
+    public let continuationBindingRevision: String
     let isLegacyBinding: Bool
 
     public var profileID: String { info.profileID }
@@ -123,6 +124,22 @@ public struct AgentModelBinding: Sendable {
                 tokenBudget: AgentContextTokenBudget? = nil, contextReports: AgentContextReportBuffer? = nil,
                 legacyContinuationPolicy: AgentLegacyContinuationPolicy = .reject,
                 imageInput: AgentImageInputPolicy = .reject, nativeContextPolicy: AgentNativeContextPolicy?) throws {
+        try self.init(profileID: profileID, profileRevision: profileRevision, model: model, provider: provider,
+            deployment: deployment, configurationSummary: configurationSummary, projector: projector, tokenBudget: tokenBudget,
+            contextReports: contextReports, legacyContinuationPolicy: legacyContinuationPolicy, imageInput: imageInput,
+            nativeContextPolicy: nativeContextPolicy, continuationBindingRevision: profileRevision)
+    }
+
+    /// Stable root/deployment configuration identity. Append-only tool/reminder
+    /// state may change profileRevision while this identity remains fixed.
+    public init(profileID: String, profileRevision: String, model: ModelID, provider: any ModelProvider,
+                deployment: AgentModelDeployment, configurationSummary: [String: JSONValue] = [:],
+                projector: any AgentContextProjector = AgentIdentityContextProjector(),
+                tokenBudget: AgentContextTokenBudget? = nil, contextReports: AgentContextReportBuffer? = nil,
+                legacyContinuationPolicy: AgentLegacyContinuationPolicy = .reject, imageInput: AgentImageInputPolicy = .reject,
+                nativeContextPolicy: AgentNativeContextPolicy? = nil, continuationBindingRevision: String) throws {
+        guard Self.valid(continuationBindingRevision) else { throw AgentModelBindingError.invalidIdentity("continuationBindingRevision") }
+        self.continuationBindingRevision = continuationBindingRevision
         guard Self.valid(profileID) else { throw AgentModelBindingError.invalidIdentity("profileID") }
         guard Self.valid(profileRevision) else { throw AgentModelBindingError.invalidIdentity("profileRevision") }
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else {
@@ -161,6 +178,7 @@ public struct AgentModelBinding: Sendable {
         self.legacyContinuationPolicy = legacyContinuationPolicy
         imageInput = .reject
         nativeContextPolicy = nil
+        continuationBindingRevision = info.profileRevision
         isLegacyBinding = true
     }
 
@@ -171,7 +189,7 @@ public struct AgentModelBinding: Sendable {
             endpointScope: deployment.endpointScope,
             apiDialect: deployment.apiDialect,
             apiVersion: deployment.apiVersion,
-            configurationRevision: profileRevision
+            configurationRevision: continuationBindingRevision
         )
     }
 

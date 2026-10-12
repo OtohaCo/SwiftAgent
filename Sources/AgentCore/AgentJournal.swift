@@ -12,6 +12,8 @@ package struct AgentJournalHistoryWitness: Equatable, Sendable {
 package struct AgentJournalHistorySnapshot: Sendable {
     let checkpoint: (history: [ModelMessage], steeringIDs: [UUID])?
     let witness: AgentJournalHistoryWitness
+    var nativeContext: ModelNativeContextCheckpoint? = nil
+    var conversationControls: ModelConversationControlState? = nil
 }
 
 public enum AgentJournalRunOutcome: Codable, Equatable, Sendable {
@@ -89,6 +91,7 @@ public enum AgentJournalEvent: Codable, Equatable, Sendable {
     case checkpoint(history: [ModelMessage], steeringIDs: [UUID])
     /// Effective view state only; never a tool receipt or a user answer.
     case nativeContextCheckpoint(ModelNativeContextCheckpoint)
+    case conversationControlState(ModelConversationControlState)
     case runCompleted(AgentJournalRunOutcome)
     /// Actual Run-owner logical termination; physical drain remains separate.
     case runTerminated(AgentRunTerminal)
@@ -257,6 +260,7 @@ public actor AgentJournal {
         var runIDs: Set<UUID> = []
         var checkpoint: AgentJournalRecord?
         var nativeContext: ModelNativeContextCheckpoint?
+        var conversationControls: ModelConversationControlState?
     }
     private var memorySessions: [UUID: MemorySessionState] = [:]
     private var nextSequence: UInt64
@@ -398,11 +402,11 @@ public actor AgentJournal {
                     return .init(checkpoint: nil, witness: .init(head: nil))
                 }
                 return .init(checkpoint: (current.history, current.header.steeringIDs),
-                             witness: .init(head: head))
+                             witness: .init(head: head), nativeContext: current.header.nativeContext, conversationControls: current.header.conversationControls)
             }
         }
         return .init(checkpoint: try latestCheckpoint(sessionID: sessionID),
-                     witness: try historyWitness(sessionID: sessionID))
+                     witness: try historyWitness(sessionID: sessionID), nativeContext: memorySessions[sessionID]?.nativeContext, conversationControls: memorySessions[sessionID]?.conversationControls)
     }
 
     func memoryNativeContext(sessionID: UUID) -> ModelNativeContextCheckpoint? {
@@ -513,6 +517,10 @@ public actor AgentJournal {
             return nil
         }
         guard nativeTransitions.count <= 1 else { throw AgentJournalError.invalidRecord }
+        let controls = events.compactMap { event -> ModelConversationControlState? in
+            if case .conversationControlState(let value) = event { return value }; return nil
+        }
+        guard controls.count <= 1 else { throw AgentJournalError.invalidRecord }
         if let store {
             guard !closing else { throw AgentJournalError.storeClosed }
             let result = try writeStore(store) { view in
@@ -550,6 +558,12 @@ public actor AgentJournal {
                                                     return nil
                                                 }.last ?? count)
         }
+        if let value = controls.first {
+            guard supportsNativeContext, let history = events.compactMap({ event -> [ModelMessage]? in
+                if case .checkpoint(let history, _) = event { return history }; return nil
+            }).last else { throw AgentJournalError.unsupportedFormat }
+            try Self.validateConversationControls(value, previous: memorySessions[sessionID]?.conversationControls, history: history)
+        }
         let committed = events.enumerated().map { offset, event in
             AgentJournalRecord(
                 sequence: nextSequence + UInt64(offset),
@@ -570,6 +584,7 @@ public actor AgentJournal {
             case .sessionCreated: memorySessions[sessionID, default: .init()].created = true
             case .checkpoint: memorySessions[sessionID, default: .init()].checkpoint = record
             case .nativeContextCheckpoint(let value): memorySessions[sessionID, default: .init()].nativeContext = value
+            case .conversationControlState(let value): memorySessions[sessionID, default: .init()].conversationControls = value
             default: break
             }
         }
@@ -1359,6 +1374,13 @@ extension AgentJournal {
         var messageStart = initialHeader.messageCount
         var changedMessages: [JournalMessage] = []
         for event in events {
+            if case .conversationControlState(let value) = event {
+                guard supportsNativeContext, let history = events.compactMap({ event -> [ModelMessage]? in
+                    if case .checkpoint(let history, _) = event { return history }; return nil
+                }).last else { throw AgentJournalError.unsupportedFormat }
+                try Self.validateConversationControls(value, previous: initialHeader.conversationControls, history: history)
+                nextHeader.conversationControls = value
+            }
             if case .nativeContextCheckpoint(let value) = event {
                 guard supportsNativeContext else { throw AgentJournalError.unsupportedFormat }
                 try Self.validateNativeContext(value, previous: initialHeader.nativeContext, sessionID: sessionID,

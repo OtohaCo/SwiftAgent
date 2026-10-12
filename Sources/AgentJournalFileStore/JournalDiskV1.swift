@@ -323,15 +323,17 @@ struct DiskHeaderV1: Codable {
     let messageCount: UInt64
     let pendingIdentity: String?
     let nativeContext: ModelNativeContextCheckpoint?
+    let conversationControls: ModelConversationControlState?
     init(_ value: JournalSessionHeader) {
         revision = value.revision; created = value.created; lastRunID = value.lastRunID
         steeringIDs = value.steeringIDs; historyHead = value.historyHead
         messageCount = value.messageCount; pendingIdentity = value.pendingIdentity
         nativeContext = value.nativeContext
+        conversationControls = value.conversationControls
     }
     func value() -> JournalSessionHeader {
         .init(revision: revision, created: created, lastRunID: lastRunID,
               steeringIDs: steeringIDs, historyHead: historyHead,
-              messageCount: messageCount, pendingIdentity: pendingIdentity, nativeContext: nativeContext)
+              messageCount: messageCount, pendingIdentity: pendingIdentity, nativeContext: nativeContext, conversationControls: conversationControls)
     }
 }

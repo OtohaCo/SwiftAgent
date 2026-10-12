@@ -2328,7 +2328,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                   change.header.messageCount >= (try header(change.sessionID)?.messageCount ?? 0) else {
                 throw AgentJournalError.concurrentWriter
             }
-            guard store.supportsNativeContext || (change.header.nativeContext == nil && !change.messages.contains { message in
+            guard store.supportsNativeContext || (change.header.nativeContext == nil && change.header.conversationControls == nil && !change.messages.contains { message in
                 guard case .assistant(let parts, _) = message.value else { return false }
                 return parts.contains { if case .providerContinuation(let value) = $0 { return value.contextTransition != nil }; return false }
             }) else { throw AgentJournalError.unsupportedFormat }

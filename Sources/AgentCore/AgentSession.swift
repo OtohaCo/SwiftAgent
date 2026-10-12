@@ -23,6 +23,7 @@ public actor AgentSession {
     private let scheduler: ToolScheduler
     private let evidenceLedger = EvidenceLedger()
     private let nativeContextState = AgentNativeContextState()
+    private let conversationControlState = AgentConversationControlState()
     private struct PendingNativePublication: Sendable {
         let state: ModelProviderContinuation
         let request: ModelRequest
@@ -181,6 +182,17 @@ public actor AgentSession {
                                    tools: tools)
     }
 
+    /// Adds trusted harness instructions/reminders without changing user steering
+    /// identity or leading root instructions. Requires a qualified adapter.
+    public func run(_ text: String, contextControls: AgentRunContextControls,
+                    using binding: AgentModelBinding? = nil, capabilities: AgentCapabilityBinding? = nil,
+                    expectedConversationRevision: UInt64? = nil, budget: AgentBudget? = nil,
+                    operationID: String? = nil, correlation: AgentRunCorrelation? = nil) async throws -> AgentRun {
+        try await runInternal(text, using: binding ?? defaultBinding, capabilities: capabilities,
+            expectedConversationRevision: expectedConversationRevision, budget: budget,
+            operationID: operationID, correlation: correlation, contextControls: contextControls)
+    }
+
     private func runInternal(
         _ text: String,
         using binding: AgentModelBinding,
@@ -190,7 +202,7 @@ public actor AgentSession {
         operationID: String?,
         correlation: AgentRunCorrelation? = nil,
         dispatchOwnerID: UUID? = nil,
-        followUpInputID: String? = nil
+        followUpInputID: String? = nil, contextControls: AgentRunContextControls? = nil
     ) async throws -> AgentRun {
         try Task.checkCancellation()
         if correlation != nil, journal == nil { throw AgentJournalError.unsupportedFormat }
@@ -255,7 +267,7 @@ public actor AgentSession {
                         budget: runBudget,
                         operationID: operationID,
                         startupID: startupID,
-                        followUpInputID: followUpInputID, runAdmission: runAdmission
+                        followUpInputID: followUpInputID, runAdmission: runAdmission, contextControls: contextControls
                     )
                     startupReservations.removeValue(forKey: startupID)
                     startupFinished()
@@ -479,7 +491,7 @@ public actor AgentSession {
         operationID: String?,
         startupID: UUID,
         followUpInputID: String? = nil,
-        runAdmission: JournalRunAdmission? = nil
+        runAdmission: JournalRunAdmission? = nil, contextControls: AgentRunContextControls? = nil
     ) async throws -> AgentRun {
         try budget.checkActive()
         if !restoredJournalState {
@@ -490,7 +502,8 @@ public actor AgentSession {
             }
             try budget.checkActive()
             persistentHistoryWitness = snapshot?.witness
-            await nativeContextState.restore(try await journal?.nativeContextCheckpoint(sessionID: id))
+            await nativeContextState.restore(snapshot?.nativeContext)
+            try await conversationControlState.restore(snapshot?.conversationControls, history: snapshot?.checkpoint?.history ?? [])
             applyRestoredJournalState(snapshot?.checkpoint)
         }
         if let journal, let persistentHistoryWitness {
@@ -558,6 +571,7 @@ public actor AgentSession {
         let loop = AgentLoop(binding: binding, tools: selectedTools, scheduler: scheduler,
                              modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes,
                              journal: journal, contextEffects: contextEffects, nativeContextState: nativeContextState,
+                             conversationControlState: conversationControlState, runContextControls: contextControls,
                              capabilityScope: capabilities?.scope,
                              allowedResources: capabilities?.allowedResources,
                              preAdmissionReplanning: preAdmissionReplanning, audit: audit)
@@ -597,6 +611,9 @@ public actor AgentSession {
                 history: candidateMessages,
                 steeringIDs: Array(appliedSteeringIDs) + owed.map(\.id)
             ))
+            if let controls = preparedRequest.conversationControls, await conversationControlState.current() != controls {
+                lifecycleEvents.append(.conversationControlState(controls))
+            }
             lifecycleEvents.append(.userMessage(text))
             await startupCommitWillBegin?(runID)
             try Task.checkCancellation()
@@ -625,6 +642,9 @@ public actor AgentSession {
             // append begins, cancellation/deadline cannot roll back an
             // atomic journal commit; continue creating the corresponding Run
             // rather than leaving a durable user event without an owner.
+        }
+        if !uncertainStartup, let controls = preparedRequest.conversationControls {
+            await conversationControlState.install(controls)
         }
         // A slow Host observer must not accumulate an unbounded queue of
         // transient progress while the durable conversation continues.
@@ -695,6 +715,9 @@ public actor AgentSession {
             stageNativeContext: { state, request, usage, tailStart in
                 try await self.stageRunNativeContext(state, request: request, usage: usage,
                     tailStart: tailStart, binding: loop.modelBinding, runID: runID, budget: budget)
+            },
+            publishConversationControls: { controls, messages in
+                try await self.publishRunConversationControls(controls, messages: messages, runID: runID, budget: budget)
             },
             sourceRevision: { messages in try await self.projectionSourceRevision(messages, runID: runID) },
             checkReplanningSafety: { operationID in
@@ -1036,7 +1059,8 @@ public actor AgentSession {
         guard !restoredJournalState else { return }
         let snapshot = try await journal?.historySnapshot(sessionID: id)
         persistentHistoryWitness = snapshot?.witness
-        await nativeContextState.restore(try await journal?.nativeContextCheckpoint(sessionID: id))
+        await nativeContextState.restore(snapshot?.nativeContext)
+        try await conversationControlState.restore(snapshot?.conversationControls, history: snapshot?.checkpoint?.history ?? [])
         applyRestoredJournalState(snapshot?.checkpoint)
     }
 
@@ -1051,6 +1075,26 @@ public actor AgentSession {
         let restored = AgentContextWindow.applyingCurrentInstructions(checkpoint.history, instructions: instructions)
         if restored != history { advanceConversationRevision() }
         history = restored
+    }
+
+    private func publishRunConversationControls(_ value: ModelConversationControlState, messages: [ModelMessage],
+                                                runID: UUID, budget: AgentBudget) async throws {
+        guard activeRunID == runID, messages == history else { throw AgentJournalError.concurrentWriter }
+        try budget.checkActive()
+        beginCommittedWrite(runID); defer { endCommittedWrite(runID) }
+        if let journal {
+            let snapshot = try await journal.historySnapshot(sessionID: id)
+            guard AgentContextWindow.applyingCurrentInstructions(snapshot.checkpoint?.history ?? [], instructions: instructions) == messages,
+                  snapshot.conversationControls == (await conversationControlState.current()),
+                  snapshot.nativeContext == (await nativeContextState.current()) else { throw AgentJournalError.concurrentWriter }
+            do {
+                try await journal.publishConversationControls(value, history: messages, sessionID: id, runID: runID,
+                    steeringIDs: Array(appliedSteeringIDs), expectedHistory: snapshot.witness, deadline: budget.deadline)
+            } catch AgentJournalError.commitUnknown { steeringCommitUnknown = true; throw AgentJournalError.commitUnknown }
+            catch AgentJournalStartupAdmissionError.deadlineExceeded { throw AgentLoopError.deadlineExceeded }
+            persistentHistoryWitness = try await journal.historyWitness(sessionID: id)
+        }
+        await conversationControlState.install(value)
     }
 
     /// Starts native maintenance only at a drained, idle boundary. The canonical
@@ -1153,7 +1197,14 @@ public actor AgentSession {
            try await journal.historyWitness(sessionID: id) != persistentHistoryWitness { throw AgentJournalError.concurrentWriter }
         let loop = AgentLoop(binding: binding, tools: tools, scheduler: scheduler,
             modelContextByteLimit: contextPolicy.maxModelContextUTF8Bytes, journal: journal,
-            contextEffects: contextEffects, nativeContextState: nativeContextState)
+            contextEffects: contextEffects, nativeContextState: nativeContextState,
+            conversationControlState: conversationControlState, contextOperation: true)
+        if await conversationControlState.hasPersistentInstructions() {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Compaction cannot erase persistent trusted instruction authority.")
+        }
+        if await conversationControlState.hasActiveReminder(in: history) {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Compaction cannot cover an active turn reminder without a new legal user boundary.")
+        }
         let prepared = try await loop.preflight(messages: history, sessionID: id, runID: operationID,
                                                conversationRevision: conversationRevision, structuredOutput: structuredOutput)
         let source = try await nativeContextState.source(for: prepared, sessionID: id, journal: journal, provider: provider, compactionMode: mode)

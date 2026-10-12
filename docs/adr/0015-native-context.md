@@ -173,3 +173,56 @@ both generation and standalone operation streams before EOF, with whole snapshot
 replacement and nullable no-update semantics. Source maps use the actual encoded
 merged message/block positions and content digests (plus native checkpoint identity),
 not canonical array indices. Digests prove correspondence only.
+
+## Trusted control publication refinement
+
+Controls use a typed append-only state in the existing schema-11 Session header
+and Journal events, rather than adding cases to ModelMessage or changing user
+identity. Each entry binds a complete canonical user/tool-result group boundary.
+The baseline top-level tools are frozen at first enabled admission; additions,
+updates and removals are derived only from the current frozen executor registry.
+Preflight prepares a provisional state; admission or a subsequent checkpoint CAS
+publishes it before dispatch. Every control publication includes a checkpoint so
+existing history-head witnesses also reject stale control snapshots. Recovery
+reads history, native checkpoint and controls from one store snapshot.
+
+Core maps controls to request positions only when the actual projected messages
+retain the effective source exactly. Baseline plus visible controls enter both
+budgeting and encoding. Covered controls require native tool_changes checked
+against trusted state; absent, null and empty remain distinct. No provider-returned
+definition grants an executor. Reminders are separate text-only messages and
+clear at every actual new user boundary, including a complete tool-result group.
+Idle on-demand refuses a still-active reminder; the first supported combination
+uses a drained prior Run without a reminder, then compact, then a new real user
+with the new reminder. Threshold plus required reminders remains unsupported.
+
+Permanent mid-conversation instructions are never restored from summary text.
+The first implementation refuses compaction that would cover one, including
+automatic threshold configurations, before HTTP. A future explicit instruction
+handoff/reassertion needs its own protocol proof. Controls publication compares
+both the cached native checkpoint and controls against its atomic store snapshot;
+a fresh history witness alone cannot authorize a stale effective context.
+
+If a request ending in a trusted system control fails before an accepted assistant
+turn, a subsequent new user cannot be appended to its wire history: the vendor
+explicitly forbids system→user even for a cleared reminder. Core preflight fails
+locally before new admission and keeps the failed Run/history/control facts. No
+fabricated assistant or automatic mutation replay closes that gap. A future resume
+API must reuse the existing user/control boundary under a separately proven
+lifecycle; it is outside this initial support matrix.
+
+The local inline-tools bound follows the active definition set after each control,
+not the sum of historical additions: at most 10,000 inline/deferred available tools
+and 4,194,304 serialized bytes of active inline client definitions. Removal frees
+this budget; same-name updates replace it; identical retry declarations do not
+accumulate. The service's private rendered-tool-text limit cannot be predicted
+exactly by this adapter and still requires deployment qualification. A by-value
+addition without a non-deferred baseline anchor is refused when replaying signed
+thinking under the local strict policy; unsigned continuations remain supported.
+
+The controls stage has a real encoder RED (old encoder emitted one message rather
+than the expected three) and FileStore GREEN covering deferred discovery, immutable
+thinking, new-Run removal, and reopen. It also covers compact→new user→reminder→
+tool loop through the actual fragmented HTTP encoder/decoder. These are protocol
+fixtures, not cryptographic signature or live-model qualification. Subsequent new
+user admission after an unanswered controlled turn remains an explicit refusal.

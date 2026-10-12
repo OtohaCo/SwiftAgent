@@ -6,6 +6,7 @@ package struct AgentPreparedModelRequest: Sendable {
     package let request: ModelRequest
     package let projection: AgentContextProjection
     package let canonicalMessages: [ModelMessage]
+    package var conversationControls: ModelConversationControlState? = nil
 }
 
 /// Package orchestration for one model → tool → model loop. SDK users go through
@@ -17,6 +18,9 @@ package struct AgentLoop: Sendable {
     private let modelContextByteLimit: Int?
     private let journal: AgentJournal?
     private let nativeContextState: AgentNativeContextState
+    private let conversationControlState: AgentConversationControlState
+    private let runContextControls: AgentRunContextControls?
+    private let contextOperation: Bool
     private let contextEffects: AgentContextEffectLedger
     private let capabilityScope: AgentCapabilityScope?
     private let allowedResources: Set<ToolResource>?
@@ -36,6 +40,7 @@ package struct AgentLoop: Sendable {
                  journal: AgentJournal? = nil,
                  contextEffects: AgentContextEffectLedger = .init(),
                  nativeContextState: AgentNativeContextState = .init(),
+                 conversationControlState: AgentConversationControlState = .init(), runContextControls: AgentRunContextControls? = nil, contextOperation: Bool = false,
                  capabilityScope: AgentCapabilityScope? = nil,
                  allowedResources: Set<ToolResource>? = nil,
                  preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled,
@@ -48,6 +53,9 @@ package struct AgentLoop: Sendable {
         self.modelContextByteLimit = modelContextByteLimit
         self.journal = journal
         self.nativeContextState = nativeContextState
+        self.conversationControlState = conversationControlState
+        self.runContextControls = runContextControls
+        self.contextOperation = contextOperation
         self.contextEffects = contextEffects
         self.capabilityScope = capabilityScope
         self.allowedResources = allowedResources
@@ -76,7 +84,8 @@ package struct AgentLoop: Sendable {
             contextEpoch: conversationRevision,
             modelTurn: 1,
             structuredOutput: structuredOutput,
-            declaredTools: tools.initiallyDeclaredNames
+            declaredTools: tools.initiallyDeclaredNames,
+            isStartupPreflight: true
         )
     }
 
@@ -269,6 +278,14 @@ package struct AgentLoop: Sendable {
                     allowUnresolvedToolTail: initialRequest == nil && modelTurns == 1
                 )
             }
+            if let controls = preparedRequest.conversationControls, await conversationControlState.current() != controls {
+                if let publish = lifecycle?.publishConversationControls {
+                    try await publish(controls, history)
+                } else {
+                    guard journal == nil else { throw AgentJournalError.invalidRecord }
+                    await conversationControlState.install(controls)
+                }
+            }
             let request: ModelRequest
             if (provider as? any ModelProviderCompaction)?.automaticCompaction != nil || requestNeedsNativeSource(preparedRequest.request) {
                 let source = try await nativeContextState.source(for: preparedRequest, sessionID: sessionID, journal: journal, provider: provider)
@@ -313,13 +330,20 @@ package struct AgentLoop: Sendable {
             try requireConfiguredModel(response.info.model)
             try await emitter?.send(.model(.responseCompleted(response)))
             if response.stopReason == .cancelled { throw CancellationError() }
-            if let lifecycle {
+            if let lifecycle, preparedRequest.conversationControls == nil || response.classification == .finalResponse {
                 let inputs = try await lifecycle.control.takeSteering(atTermination: response.classification == .finalResponse)
                 if !inputs.isEmpty {
                     // Another model turn follows: the answer just settled is not the last, and the deadline limits it.
                     budget.gate.reopen()
                     for call in response.toolCalls { try await audit?.rejected(call.id, reason: "steering_superseded") }
                     guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
+                    if preparedRequest.conversationControls != nil {
+                        let accepted = checkpointContent(response, retainingToolCalls: 0).filter {
+                            if case .providerContinuation(let state) = $0 { state.contextTransition == nil } else { true }
+                        }
+                        guard !accepted.isEmpty else { throw ModelProviderError(kind: .unsupportedCapability, message: "Steering needs a real assistant boundary after trusted controls.") }
+                        history.append(.assistant(content: accepted, toolCalls: []))
+                    }
                     try await applySteering(inputs, to: &history, lifecycle: lifecycle, emitter: emitter)
                     (projectionRevision, contextEpoch) = try advancedProjectionCoordinates(
                         revision: projectionRevision,
@@ -606,7 +630,8 @@ package struct AgentLoop: Sendable {
         modelTurn: Int,
         structuredOutput: StructuredOutputSchema?,
         declaredTools: Set<String>,
-        allowUnresolvedToolTail: Bool = false
+        allowUnresolvedToolTail: Bool = false,
+        isStartupPreflight: Bool = false
     ) async throws -> AgentPreparedModelRequest {
         try Task.checkCancellation()
         await projectionDrain.begin()
@@ -616,7 +641,8 @@ package struct AgentLoop: Sendable {
                 messages: messages, sessionID: sessionID, runID: runID,
                 conversationRevision: conversationRevision, contextEpoch: contextEpoch,
                 modelTurn: modelTurn, structuredOutput: structuredOutput,
-                declaredTools: declaredTools, allowUnresolvedToolTail: allowUnresolvedToolTail)
+                declaredTools: declaredTools, allowUnresolvedToolTail: allowUnresolvedToolTail,
+                isStartupPreflight: isStartupPreflight)
             await projectionDrain.finish()
             return prepared
         } catch {
@@ -634,7 +660,8 @@ package struct AgentLoop: Sendable {
         modelTurn: Int,
         structuredOutput: StructuredOutputSchema?,
         declaredTools: Set<String>,
-        allowUnresolvedToolTail: Bool
+        allowUnresolvedToolTail: Bool,
+        isStartupPreflight: Bool
     ) async throws -> AgentPreparedModelRequest {
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else {
             throw AgentLoopError.providerMismatch
@@ -665,7 +692,14 @@ package struct AgentLoop: Sendable {
                 message: "Canonical range projectors cannot reinterpret ranges across a native covered prefix; use an identity or native-suffix projector.")
         }
         // Requests, capability checks and token estimates see the declared tools only.
-        let toolDefinitions = tools.definitions(declared: declaredTools)
+        let activeDefinitions = contextOperation ? (await conversationControlState.current()?.activeTools ?? tools.definitions(declared: declaredTools)) : tools.definitions(declared: declaredTools)
+        let controlsInput: AgentRunContextControls?
+        if isStartupPreflight { controlsInput = runContextControls }
+        else { controlsInput = try runContextControls.map { try .init(reminder: $0.reminder) } }
+        let proposedControls = try await conversationControlState.prepare(canonical: canonicalMessages, binding: binding,
+            definitions: activeDefinitions, baselineDefinitions: tools.definitions, baselineDeclaredNames: tools.initiallyDeclaredNames, instructions: controlsInput, structuredOutput: structuredOutput)
+        if proposedControls != nil, let journal, !journal.supportsNativeContext { throw AgentJournalError.unsupportedFormat }
+        let toolDefinitions = proposedControls?.toolBaseline ?? activeDefinitions
         var required: ModelCapabilities = []
         if !toolDefinitions.isEmpty { required.formUnion([.tools, .multiTurn]) }
         if messages.contains(where: { $0.role == .assistant || $0.role == .tool }) { required.insert(.multiTurn) }
@@ -759,10 +793,13 @@ package struct AgentLoop: Sendable {
                         reason: projection.plan.reason ?? "Images were sent as their text substitutes."),
             report: projection.report
         ) : projection
+        let controlView = try proposedControls.map { try AgentConversationControlState.view($0, canonical: canonicalMessages,
+            effective: modelMessages, native: nativeContext) }
+        let controlBytes = try controlView.map { try AgentConversationControlState.encode($0.controls).count } ?? 0
         let visibleBytes = sharesCanonicalMessageStorage(modelMessages, messages)
             ? sourceEncoding.byteCount : try AgentContextWindow.encodedByteCount(modelMessages)
         let nativeBytes = nativeContext.map { $0.continuation.payload.count } ?? 0
-        let (requestBytes, byteOverflow) = visibleBytes.addingReportingOverflow(nativeBytes)
+        let (requestBytes, byteOverflow) = visibleBytes.addingReportingOverflow(nativeBytes + controlBytes)
         guard !byteOverflow else { throw AgentModelBindingError.invalidProjection }
         if let modelContextByteLimit {
             let bytes = requestBytes
@@ -779,11 +816,14 @@ package struct AgentLoop: Sendable {
             if nativeContext != nil, !(budget.estimator is any AgentNativeContextTokenEstimator) {
                 throw AgentModelBindingError.contextWindowUnknown
             }
+            if controlView?.controls.isEmpty == false, !(budget.estimator is any AgentConversationControlTokenEstimator) {
+                throw AgentModelBindingError.contextWindowUnknown
+            }
             let estimate: AgentContextTokenEstimate
             do {
                 estimate = try await budget.estimator.estimate(.init(
                     model: model, messages: modelMessages,
-                    tools: toolDefinitions, structuredOutput: structuredOutput, nativeContext: nativeContext
+                    tools: toolDefinitions, structuredOutput: structuredOutput, nativeContext: nativeContext, conversationControls: controlView
                 ))
             } catch {
                 if let report = projection.report, let sink = binding.contextReports {
@@ -811,13 +851,13 @@ package struct AgentLoop: Sendable {
             tools: toolDefinitions,
             structuredOutput: structuredOutput,
             sessionID: sessionID,
-            runID: runID, nativeContext: nativeContext
+            runID: runID, nativeContext: nativeContext, conversationControls: controlView
         )
         try (provider as? any ModelProviderRequestValidator)?.validate(request: request)
         if let report = projection.report, let sink = binding.contextReports {
             await sink.append(report.withBudget(requestBytes: requestBytes, estimate: tokenEstimate))
         }
-        return .init(request: request, projection: sentProjection, canonicalMessages: canonicalMessages)
+        return .init(request: request, projection: sentProjection, canonicalMessages: canonicalMessages, conversationControls: proposedControls)
     }
 
     private func validateContinuations(_ messages: [ModelMessage]) throws {

@@ -234,6 +234,17 @@ struct AnthropicStreamDecoder {
                     if let latestCompaction {
                         guard let request = nativeRequest, let source = request.nativeContextSource, let invocation = request.invocationID,
                               let compactionMode else { throw ProviderJSON.invalid() }
+                        if let view = request.conversationControls {
+                            let changed = view.coveredToolChanges || view.controls.contains {
+                                switch $0.entry.control { case .toolAddition, .toolRemoval: true; default: false }
+                            }
+                            do {
+                                try AnthropicConversationControls.validateNativeChanges(replayBlocks[latestCompaction], view: view,
+                                    expectedTools: view.activeTools, changed: changed)
+                            } catch {
+                                throw ModelProviderError(kind: .invalidResponse, message: "Native compaction tool changes cannot establish the trusted active tool state.")
+                            }
+                        }
                         let transition = ModelNativeContextTransition(mode: compactionMode, source: source,
                             replayPosition: latestCompaction, invocationID: invocation, responseID: info.id)
                         state = .init(model: model, format: ordinary.format, payload: ordinary.payload, contextTransition: transition)

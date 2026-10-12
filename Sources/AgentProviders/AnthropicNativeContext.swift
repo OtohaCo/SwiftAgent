@@ -43,12 +43,23 @@ enum AnthropicNativeContext {
                           configuration: AnthropicNativeContextConfiguration?, endpoint: URL,
                           resolvedModelName: String, thinking: AnthropicThinking) throws -> JSONValue {
         var fields = try ProviderJSON.object(body)
+        if request.conversationControls != nil {
+            guard let configuration, configuration.qualification.endpoint == endpoint,
+                  configuration.qualification.resolvedModelNames.contains(resolvedModelName) else {
+                throw ModelProviderError(kind: .unsupportedCapability, message: "Conversation controls require deployment qualification.")
+            }
+        }
         let activeMode = mode ?? configuration?.automatic?.mode ?? request.nativeContext?.transition.mode
         if let activeMode {
             guard let configuration else {
                 throw ModelProviderError(kind: .unsupportedCapability, message: "Anthropic native context requires deployment qualification.")
             }
             try configuration.qualification.validate(endpoint: endpoint, model: resolvedModelName, mode: activeMode)
+        }
+        if mode != nil || configuration?.automatic != nil,
+           let controls = request.conversationControls,
+           controls.containsPersistentInstructions || controls.controls.contains(where: { if case .instruction = $0.entry.control { true } else { false } }) {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Native compaction cannot preserve persistent mid-conversation instruction authority.")
         }
         if let mode {
             guard mode == .anthropicOnDemand, configuration?.automatic == nil,
@@ -99,6 +110,8 @@ enum AnthropicNativeContext {
         if mode == .anthropicOnDemand || request.nativeContext?.transition.mode == .anthropicOnDemand { values.append("compact-2026-09-04") }
         if configuration?.automatic != nil || request.nativeContext?.transition.mode == .anthropicThreshold { values.append("compact-2026-01-12") }
         if configuration?.thinkingPrefixMismatch != nil { values.append("thinking-binding-controls-2026-08-01") }
+        if configuration?.inlineToolChanges == true { values.append("inline-tools-2026-09-15") }
+        if configuration?.runReminders == true { values.append("mid-conversation-system-clear-at-2026-08-21") }
         return values
     }
 
