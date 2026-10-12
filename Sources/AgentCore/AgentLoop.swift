@@ -701,8 +701,9 @@ package struct AgentLoop: Sendable {
         if await nativeContextState.current() != nil, binding.isLegacyBinding {
             throw ModelProviderError(kind: .unsupportedCapability, message: "Restored native state requires its explicit deployment binding.")
         }
-        let canonicalMessages = messages
-        let messages = try await nativeContextState.effectiveMessages(messages, binding: binding, sessionID: sessionID,
+        let originalCanonicalMessages = messages
+        let canonicalMessages = try await nativeContextState.ordinaryMessages(messages)
+        let messages = try await nativeContextState.effectiveMessages(originalCanonicalMessages, binding: binding, sessionID: sessionID,
                                                                       journal: journal, structuredOutput: structuredOutput)
         let nativeContext = await nativeContextState.current()
         let nativePending = await nativeContextState.pendingCalls(in: canonicalMessages)
@@ -728,6 +729,7 @@ package struct AgentLoop: Sendable {
         let missing = required.subtracting(provider.descriptor.capabilities)
         guard missing.isEmpty else { throw AgentLoopError.unsupportedCapabilities(missing) }
 
+        var originalHistoryDigests: [AgentContextHistorySpan: String] = [:]
         var formalMessageIDs: [Int: UUID] = [:]
         var verifiedReadOnlyResults: [ToolCallID: AgentContextVerifiedReadOnlyResult] = [:]
         if let requirements = binding.projector as? any AgentContextSourceReferencing {
@@ -745,9 +747,10 @@ package struct AgentLoop: Sendable {
                 let page = try await journal.readMessages(sessionID: sessionID,
                                                           after: UInt64(span.start), limit: span.messageIDs.count)
                 guard page.count == span.messageIDs.count,
-                      page.map(\.message) == Array(formal[span.start..<(span.start + page.count)]) else {
+                      page.map(\.message) == Array(originalCanonicalMessages.dropFirst(prefix).dropFirst(span.start).prefix(page.count)) else {
                     throw AgentContextPipelineError.staleSummary
                 }
+                originalHistoryDigests[span] = try AgentContextProjectionSource.digest(messages: page.map(\.message))
                 for (offset, entry) in page.enumerated() { formalMessageIDs[span.start + offset] = entry.id }
             }
             for callID in requirements.toolResultCallIDs {
@@ -756,7 +759,7 @@ package struct AgentLoop: Sendable {
                     return false
                 }), let journal else { throw AgentContextPipelineError.staleToolExcerpt }
                 let page = try await journal.readMessages(sessionID: sessionID, after: UInt64(index), limit: 1)
-                guard page.count == 1, page[0].message == formal[index] else {
+                guard page.count == 1, page[0].message == Array(originalCanonicalMessages.dropFirst(prefix))[index] else {
                     throw AgentContextPipelineError.staleToolExcerpt
                 }
                 formalMessageIDs[index] = page[0].id
@@ -794,6 +797,7 @@ package struct AgentLoop: Sendable {
             verifiedReadOnlyResults: verifiedReadOnlyResults
         )
         projectionInput.bindSourceEncoding(sourceEncoding)
+        projectionInput.bindOriginalHistoryDigests(originalHistoryDigests)
         let projection = try await binding.projector.project(projectionInput)
         guard projection.plan.sourceRevision == conversationRevision,
               projection.plan.sourceDigest == sourceEncoding.digest,
@@ -801,6 +805,7 @@ package struct AgentLoop: Sendable {
               validToolPairs(projection.messages, allowUnresolvedToolTail: allowUnresolvedToolTail, initialPending: nativePending) else {
             throw AgentModelBindingError.invalidProjection
         }
+        try await nativeContextState.rejectRetiredReinjection(projection.messages, canonical: originalCanonicalMessages)
         try validateContinuations(projection.messages)
         // Images reach the model, become text or stop the request here, per the Run's explicit choice.
         let (modelMessages, described) = try binding.imageInput.apply(
@@ -823,8 +828,9 @@ package struct AgentLoop: Sendable {
                         reason: projection.plan.reason ?? "Images were sent as their text substitutes."),
             report: projection.report
         ) : projection
+        let retiredPrefix = await nativeContextState.currentHandoff()?.canonicalMessageCount
         let controlView = try proposedControls.map { try AgentConversationControlState.view($0, canonical: canonicalMessages,
-            effective: modelMessages, native: nativeContext) }
+            effective: modelMessages, native: nativeContext, retiredPrefix: retiredPrefix) }
         let controlBytes = try controlView.map { try AgentConversationControlState.encode($0.controls).count } ?? 0
         let visibleBytes = sharesCanonicalMessageStorage(modelMessages, messages)
             ? sourceEncoding.byteCount : try AgentContextWindow.encodedByteCount(modelMessages)
@@ -887,7 +893,7 @@ package struct AgentLoop: Sendable {
         if let report = projection.report, let sink = binding.contextReports {
             await sink.append(report.withBudget(requestBytes: requestBytes, estimate: tokenEstimate))
         }
-        return .init(request: request, projection: sentProjection, canonicalMessages: canonicalMessages, conversationControls: proposedControls)
+        return .init(request: request, projection: sentProjection, canonicalMessages: originalCanonicalMessages, conversationControls: proposedControls)
     }
 
     private func validateContinuations(_ messages: [ModelMessage]) throws {

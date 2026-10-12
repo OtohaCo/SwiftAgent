@@ -21,6 +21,7 @@ public struct AgentContextProjectionInput: Hashable, Sendable, Codable {
     /// Core supplies these only for previously committed read-only results.
     public let verifiedReadOnlyResults: [ToolCallID: AgentContextVerifiedReadOnlyResult]
     private var sourceEncoding: AgentContextSourceEncoding? = nil
+    private var originalHistoryDigests: [AgentContextHistorySpan: String] = [:]
 
     // The runtime cache is neither archival data nor part of value identity.
     private enum CodingKeys: String, CodingKey {
@@ -48,6 +49,13 @@ public struct AgentContextProjectionInput: Hashable, Sendable, Codable {
     public func sourceDigest() throws -> String {
         if let sourceEncoding { return sourceEncoding.digest }
         return try AgentContextProjectionSource.digest(messages: canonicalMessages)
+    }
+
+    // Runtime-only evidence loaded from the original Journal before applying a
+    // frozen authority retirement. Public initializers/decoders cannot grant it.
+    package mutating func bindOriginalHistoryDigests(_ values: [AgentContextHistorySpan: String]) { originalHistoryDigests = values }
+    package func historyDigest(for span: AgentContextHistorySpan, messages: [ModelMessage]) throws -> String {
+        try originalHistoryDigests[span] ?? AgentContextProjectionSource.digest(messages: messages)
     }
 
     package mutating func bindSourceEncoding(_ encoding: AgentContextSourceEncoding) {

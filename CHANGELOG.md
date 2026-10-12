@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased: issue #105 storage preparation
+## Unreleased: issue #105 explicit context handoff and queued reminders
 
 - Adds explicit opt-in context-handoff schema 12 and a closed-store schema-11 upgrade with a durable reader gate, exact recovery witness and unchanged canonical/native/execution facts.
 - Keeps existing creation signatures, default schema 3 and native schema 11 unchanged. Old schema-11 readers reject schema 12 before inspect/append/maintenance can alter bytes.
-- Session authority retirement and queued reminders remain dependent work; this prerequisite alone does not implement native→ordinary exit. See [storage upgrade guide](docs/guides/swift-agent-context-handoff.md).
+- Adds explicit `AgentSession.handoffToOrdinary` with deadline/cancellation/drain, source-checked ordinary projection, transactionally retired native/control authority and unchanged canonical/execution facts. Future thinking and a fresh native chain remain supported under their normal qualification.
+- Adds a required-label queued `contextControls` initializer overload while retaining the old exact signature. Existing Run-local reminder/compaction refusal remains; long-tool-loop and between-replies maintenance are deferred.
+- Adds public `AgentJournalEvent.contextHandoff` (exhaustive switches must adapt). Storage and retirement-aware runtime ship together. See [handoff and recovery guide](docs/guides/swift-agent-context-handoff.md).
 
 ## Unreleased: issue #103 automatic compaction final answers
 

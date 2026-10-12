@@ -272,6 +272,7 @@ public enum AgentIncrementalJournal {
                                          supportsRunRecords: Bool = false,
                                          supportsImageContent: Bool = false,
                                          supportsNativeContext: Bool = false,
+                                         supportsContextHandoff: Bool = false,
                                          fault: @escaping @Sendable (JournalFileFaultStage) throws -> Void) throws -> AgentJournal {
         AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
                                                               policy: policy,
@@ -282,6 +283,7 @@ public enum AgentIncrementalJournal {
                                                               supportsRunRecords: supportsRunRecords,
                                                               supportsImageContent: supportsImageContent,
                                                               supportsNativeContext: supportsNativeContext,
+                                                              supportsContextHandoff: supportsContextHandoff,
                                                               fault: fault))
     }
 }
@@ -2463,6 +2465,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                   change.header.messageCount >= (try header(change.sessionID)?.messageCount ?? 0) else {
                 throw AgentJournalError.concurrentWriter
             }
+            guard store.supportsContextHandoff || change.header.contextHandoff == nil else { throw AgentJournalError.unsupportedFormat }
             guard store.supportsNativeContext || (change.header.nativeContext == nil && change.header.conversationControls == nil && !change.messages.contains { message in
                 guard case .assistant(let parts, _) = message.value else { return false }
                 return parts.contains { if case .providerContinuation(let value) = $0 { return value.contextTransition != nil }; return false }

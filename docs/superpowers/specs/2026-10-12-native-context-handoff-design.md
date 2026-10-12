@@ -1,6 +1,6 @@
 # Issue #105: explicit native context exit and queued reminders
 
-Status: **scope/design approved by the user on 2026-10-12; implementation pending**.
+Status: **scope/design approved by the user on 2026-10-12; implementation prepared; acceptance pending**.
 
 Baseline: main `8b896eae05b5fd838e61e67a6cb69ca7c0e78458`, tree
 `3c34571d48d65e6020434bc0e60d0bc794fed149`. #102 fixes the unsafe
@@ -105,12 +105,12 @@ Existing native stores need an explicit, writer-exclusive format upgrade path
 before this operation can be supported there. No automatic upgrade, silent
 copy to a new Session or global physical revision used as a history witness.
 The upgrade must have its own crash/definite/unknown recovery proof and preserve
-the complete existing session/native/control state. If that format transition
-cannot be proved safely in the first PR, split it into a prerequisite PR; do not
-claim existing schema-11 native sessions can exit until both parts land.
+the complete existing session/native/control state. Storage and retirement-aware runtime must land in the same PR/candidate: a
+storage-only schema-12 reader could ignore a later retirement header. Separate
+commits do not grant permission to publish an intermediate reader.
 
 Independent review found that FORMAT and CURRENT cannot be changed by two
-ordinary writes and called that gap blocking. The prerequisite uses an explicit
+ordinary writes and called that gap blocking. The storage implementation uses an explicit
 offline URL operation: close/drain all owners of the shared Journal first, then
 acquire the existing whole-store writer lock. It prepares a target root equal to
 the old root except formatDigest. The new schema-12 format embeds a bounded

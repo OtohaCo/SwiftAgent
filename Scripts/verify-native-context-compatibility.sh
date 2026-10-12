@@ -54,6 +54,7 @@ for mode in create-handoff-empty create-handoff upgrade-handoff; do
   directory="$scratch/$mode"
   if [[ "$mode" == upgrade-handoff ]]; then "$native_old_bin" create-native-context "$directory" "$session"; fi
   "$new_bin" "$mode" "$directory" "$session"
+  if [[ "$mode" != create-handoff-empty ]]; then "$new_bin" retire-handoff "$directory" "$session"; fi
   for phase in before after; do
     for action in inspect append maintain; do
       original="$(store_digest "$directory")"
@@ -63,6 +64,6 @@ for mode in create-handoff-empty create-handoff upgrade-handoff; do
       echo "schema11 reader $action $mode $phase: unsupportedFormat, bytes unchanged"
     done
     "$new_bin" maintain "$directory" "$session"
-    if [[ "$mode" != create-handoff-empty ]]; then "$new_bin" inspect-native-context "$directory" "$session"; fi
+    if [[ "$mode" != create-handoff-empty ]]; then "$new_bin" inspect-handoff "$directory" "$session"; fi
   done
 done

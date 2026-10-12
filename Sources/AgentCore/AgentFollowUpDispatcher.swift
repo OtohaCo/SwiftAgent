@@ -21,11 +21,21 @@ public struct AgentFollowUpConfiguration: Sendable {
     public let model: AgentModelBinding
     public let capabilities: AgentCapabilityBinding
     public let expectedConversationRevision: UInt64?
+    /// Frozen trusted controls supplied by the Host resolver for this Run.
+    public let contextControls: AgentRunContextControls?
 
     public init(model: AgentModelBinding, capabilities: AgentCapabilityBinding,
                 expectedConversationRevision: UInt64? = nil) {
         self.model = model; self.capabilities = capabilities
         self.expectedConversationRevision = expectedConversationRevision
+        self.contextControls = nil
+    }
+
+    public init(model: AgentModelBinding, capabilities: AgentCapabilityBinding,
+                expectedConversationRevision: UInt64? = nil, contextControls: AgentRunContextControls) {
+        self.model = model; self.capabilities = capabilities
+        self.expectedConversationRevision = expectedConversationRevision
+        self.contextControls = contextControls
     }
 }
 

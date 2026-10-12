@@ -1,9 +1,88 @@
-# Context handoff storage preparation
+# Explicit native-to-ordinary context handoff
 
-Status: unreleased storage prerequisite for issue #105. The Session-level
-native→ordinary handoff and queued reminder API are dependent implementation in the same PR/candidate;
-creating or upgrading a store alone does not retire any native checkpoint,
-thinking payload or trusted control.
+Status: prepared, unreleased issue #105 first scope. Storage and retirement-aware
+runtime must ship together. No automatic fallback, live qualification or Host
+integration is implied.
+
+## Host call order
+
+Finish the current Run and call `waitForDrain()`. Stop and physically drain any
+follow-up dispatcher; pausing retains its ownership. Use an explicitly capable
+Journal (or perform the offline upgrade below). Prepare a frozen target binding,
+its tools/capability scope, projector, token/byte budgets and deployment identity.
+Then explicitly authorize omission of the retired provider continuation prefix:
+
+```swift
+let operation = try await session.handoffToOrdinary(
+    using: targetBinding,
+    discardingRetiredProviderContinuations: true)
+let retirement = try await operation.wait()
+try await operation.waitForDrain()
+let nextRun = try await session.run("next real input", using: targetBinding)
+```
+
+If a target capability binding selects the tools, pass it to both handoff and the
+later Run. Handoff does not replace the Session's default model binding. After
+reopen, reconstruct the same Session ID with the target deployment/root binding;
+use its persisted retirement rather than reconstructing authority from summaries.
+The public fixture in `Examples/ExternalClient/Sources/NativeContextFixtureSupport`
+shows the exact callable API, a deterministic source-bound summary, changed
+registry/model, target thinking and a new native chain followed by reopen.
+
+Handoff makes no HTTP request, admits no input and executes no tool. It preserves
+canonical messages/IDs, opaque signed bytes, mutation identity and receipts,
+pending state, Run terminals and usage. Only the request view omits continuation
+blocks in the retired prefix. Future target continuations remain subject to their
+normal compatibility checks; arbitrary/reencoded reinjection is refused. The new
+control epoch uses the explicitly selected registry and does not replay old trusted
+control entries. A later native checkpoint starts a new chain, not an ancestral
+checkpoint. Host summary correctness is still the Host's responsibility.
+
+Core verifies original Journal source IDs/digests before applying the authorized
+ordinary view, then verifies projection pairing, continuation constraints and
+final budgets. Cache prepared source material by original span digest, binding and
+generator/configuration version; an ordinary view digest is not a replacement
+for original source proof. Built-in summaries remain prepared transformations of
+supported historical ranges; this feature does not enable arbitrary current-Run
+tool-result excerpts or recover historical read-only proof from today's registry.
+
+## Refusal and recovery
+
+This first scope requires an idle, physically drained, provably completed closed
+turn, no pending/quarantined mutation and matching durable history/native/control
+witnesses. It refuses persistent trusted instructions, unanswered/incomplete turns,
+unsupported stores, stale actors, queue ownership, invalid sources and incompatible
+or over-budget target views. Existing Run-local compaction with required reminders
+remains refused. No whole-Run retry or tool replay is performed.
+
+Cancellation/deadline apply through asynchronous projection and the publication
+seal. Capability scope is checked again after projection; that check authorizes
+the wire baseline, not tool execution. Publication after sealing has the normal
+definite-failure/commitUnknown semantics; late cancellation cannot undo committed
+facts. `wait()` is logical completion; `waitForDrain()` also waits for late projector
+work and releases writer/capability ownership. A cancelled waiter does not by
+itself cancel the operation: call `operation.cancel()` explicitly.
+
+A definite publication failure keeps old authority. `commitUnknown` blocks use of
+the old actor: drain, inspect through a fresh Session/reopen and follow the actual
+durable record. Do not assume completion or retry a mutation. Reconciliation still
+uses verified receipt/output and a fresh same-ID Session on the same handle.
+
+## Queued reminders
+
+The resolver may return `AgentFollowUpConfiguration(model:capabilities:
+contextControls:)` with an explicit `AgentRunContextControls(reminder:)`. The old
+initializer signature remains available. The dispatcher freezes one resolver
+result and passes controls through normal preflight/admission; they are not
+instruction text smuggled into persisted user input. Each real queued user gets
+its own reminder. Resolution after reopen retains existing at-least-once resolver
+semantics, not permission to replay admitted input or completed tools.
+
+The public HTTP fixture covers two queued tool-loop replies, distinct reminders,
+exact execution/admission counts, cancellation before dispatch and reopen. There
+is no between-replies maintenance callback in this scope. Stop/drain the queue
+before handoff/idle compaction. Long tool-loop maintenance remains a separate #105
+task; no OtohaAI code or SDK pin is changed here.
 
 ## Explicit store capability
 

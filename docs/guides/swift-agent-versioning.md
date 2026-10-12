@@ -1,6 +1,6 @@
 # SwiftAgent Semantic Versioning
 
-## Issue #105 storage prerequisite (unreleased)
+## Issue #105 explicit context handoff (unreleased)
 
 Adds the required-label `AgentIncrementalJournal.create(...,
 supportsContextHandoff:)` overload, explicit offline
@@ -10,7 +10,14 @@ default schema 3 and opt-in native schema 11 remain unchanged. The new opt-in
 schema 12 is deliberately rejected by the prior schema-11 reader before writes.
 Only explicit closed-store schema-11 upgrade is supported, using a durable
 reader gate and narrowly validated recovery bridge; no automatic migration or
-canonical history rewrite occurs. Session handoff is subsequent dependent work.
+canonical history rewrite occurs. Storage and retirement-aware runtime ship in
+one candidate. Adds `AgentContextHandoff`, its operation handle, Session handoff,
+Journal read access and a required-label queued `contextControls` overload; the
+old queue initializer remains exact. No protocol requirement is added.
+`AgentJournalEvent.contextHandoff` is an acknowledged prerelease enum case delta;
+exhaustive client switches must handle it. Newly optional header fields decode
+as nil in compatible new readers; old readers are protected by schema 12, not
+by assuming unknown-field rejection.
 See [storage preparation and recovery](swift-agent-context-handoff.md).
 
 ## Issue #99 extension (unreleased, no assigned next version)

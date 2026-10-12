@@ -59,3 +59,19 @@ and empty pending state at qualification and again inside publication. Repeated
 compaction/reopen uses that same contract. Unknown or failed prior terminals stay
 refused. Threshold/reminder is a currently unimplemented SDK scheduling combination,
 not a universal vendor restriction. Fixture success is not live qualification.
+
+## Explicit handoff and queued reminder fixtures (#105)
+
+`ordinaryHandoff()` uses opt-in schema 12, completed/drained idle compaction,
+explicit native/control retirement, an original-source-bound deterministic
+summary, a new target binding and a new generation-1 native chain; reopen
+retains the correct chain and unchanged canonical prefix.
+`thinkingAcrossOrdinaryHandoff()` (see the public test entry point) checks target thinking,
+changed registry and rejection of a reencoded retired continuation.
+`queuedReminders()` uses the public resolver overload for two tool-loop replies
+with different reminders, exact executor/admission counts and File Journal
+reopen; its cancellation variant blocks preflight and sends zero HTTP requests.
+These are HTTP fixtures, not live or cryptographic qualification.
+See [Host handoff guide](../../../../../docs/guides/swift-agent-context-handoff.md)
+for offline schema-11 upgrade and failure/drain contracts. Long tool-loop and
+between-queued-replies maintenance are not implemented.

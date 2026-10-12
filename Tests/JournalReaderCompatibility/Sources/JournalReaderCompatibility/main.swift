@@ -62,6 +62,18 @@ import Foundation
             #if CONTEXT_HANDOFF_RUNTIME
             case "create-handoff-empty", "upgrade-handoff":
                 guard journal.supportsContextHandoff else { throw AgentJournalError.invalidRecord }
+            case "retire-handoff":
+                let model = ModelID(provider: "reader-matrix", name: "script")
+                let binding = try AgentModelBinding(profileID: "matrix-native", profileRevision: "1", model: model,
+                    provider: MatrixNativeProvider(), deployment: .init(serviceInstanceID: "matrix", endpointScope: "local", apiDialect: "matrix"))
+                let session = try Agent(binding: binding).makeSession(id: sessionID, journal: journal)
+                let operation = try await session.handoffToOrdinary(using: binding, discardingRetiredProviderContinuations: true)
+                _ = try await operation.wait(); try await operation.waitForDrain()
+                guard try await journal.nativeContextCheckpoint(sessionID: sessionID) == nil else { throw AgentJournalError.invalidRecord }
+            case "inspect-handoff":
+                guard try await journal.contextHandoff(sessionID: sessionID)?.generation == 1,
+                      try await journal.nativeContextCheckpoint(sessionID: sessionID) == nil else { throw AgentJournalError.invalidRecord }
+                print("retirement=1 nativeCheckpoint=none canonical=preserved")
             case "create-handoff":
                 try await createNativeCheckpoint(journal: journal, sessionID: sessionID)
                 guard journal.supportsContextHandoff, try await journal.nativeContextCheckpoint(sessionID: sessionID)?.generation == 1 else { throw AgentJournalError.invalidRecord }

@@ -14,6 +14,7 @@ package struct AgentJournalHistorySnapshot: Sendable {
     let witness: AgentJournalHistoryWitness
     var nativeContext: ModelNativeContextCheckpoint? = nil
     var conversationControls: ModelConversationControlState? = nil
+    var contextHandoff: AgentContextHandoff? = nil
 }
 
 public enum AgentJournalRunOutcome: Codable, Equatable, Sendable {
@@ -92,6 +93,8 @@ public enum AgentJournalEvent: Codable, Equatable, Sendable {
     /// Effective view state only; never a tool receipt or a user answer.
     case nativeContextCheckpoint(ModelNativeContextCheckpoint)
     case conversationControlState(ModelConversationControlState)
+    /// Explicit request-authority retirement; never an execution settlement.
+    case contextHandoff(AgentContextHandoff)
     case runCompleted(AgentJournalRunOutcome)
     /// Actual Run-owner logical termination; physical drain remains separate.
     case runTerminated(AgentRunTerminal)
@@ -261,6 +264,7 @@ public actor AgentJournal {
         var checkpoint: AgentJournalRecord?
         var nativeContext: ModelNativeContextCheckpoint?
         var conversationControls: ModelConversationControlState?
+        var contextHandoff: AgentContextHandoff?
     }
     private var memorySessions: [UUID: MemorySessionState] = [:]
     private var nextSequence: UInt64
@@ -407,11 +411,11 @@ public actor AgentJournal {
                     return .init(checkpoint: nil, witness: .init(head: nil))
                 }
                 return .init(checkpoint: (current.history, current.header.steeringIDs),
-                             witness: .init(head: head), nativeContext: current.header.nativeContext, conversationControls: current.header.conversationControls)
+                             witness: .init(head: head), nativeContext: current.header.nativeContext, conversationControls: current.header.conversationControls, contextHandoff: current.header.contextHandoff)
             }
         }
         return .init(checkpoint: try latestCheckpoint(sessionID: sessionID),
-                     witness: try historyWitness(sessionID: sessionID), nativeContext: memorySessions[sessionID]?.nativeContext, conversationControls: memorySessions[sessionID]?.conversationControls)
+                     witness: try historyWitness(sessionID: sessionID), nativeContext: memorySessions[sessionID]?.nativeContext, conversationControls: memorySessions[sessionID]?.conversationControls, contextHandoff: memorySessions[sessionID]?.contextHandoff)
     }
 
     func memoryNativeContext(sessionID: UUID) -> ModelNativeContextCheckpoint? {
@@ -526,6 +530,10 @@ public actor AgentJournal {
             if case .conversationControlState(let value) = event { return value }; return nil
         }
         guard controls.count <= 1 else { throw AgentJournalError.invalidRecord }
+        let handoffs = events.compactMap { event -> AgentContextHandoff? in
+            if case .contextHandoff(let value) = event { return value }; return nil
+        }
+        guard handoffs.count <= 1, handoffs.isEmpty || (controls.isEmpty && nativeTransitions.isEmpty && expectedHistory != nil && runID == nil) else { throw AgentJournalError.invalidRecord }
         if let store {
             guard !closing else { throw AgentJournalError.storeClosed }
             let result = try writeStore(store) { view in
@@ -553,6 +561,14 @@ public actor AgentJournal {
         }
         if events.contains(where: Self.isMutationLifecycleEvent) {
             throw AgentJournalError.persistenceUnavailable("mutation lifecycle events require durable persistence")
+        }
+        if let value = handoffs.first {
+            guard supportsContextHandoff, let history = events.compactMap({ event -> [ModelMessage]? in
+                if case .checkpoint(let history, _) = event { return history }; return nil
+            }).last else { throw AgentJournalError.unsupportedFormat }
+            try Self.validateHandoff(value, previous: memorySessions[sessionID]?.contextHandoff,
+                native: memorySessions[sessionID]?.nativeContext, controls: memorySessions[sessionID]?.conversationControls,
+                messageCount: Self.formalMessages(history).count)
         }
         if let value = nativeTransitions.first {
             let count = try latestCheckpoint(sessionID: sessionID).map { UInt64(Self.formalMessages($0.history).count) } ?? 0
@@ -589,6 +605,10 @@ public actor AgentJournal {
             case .sessionCreated: memorySessions[sessionID, default: .init()].created = true
             case .checkpoint: memorySessions[sessionID, default: .init()].checkpoint = record
             case .nativeContextCheckpoint(let value): memorySessions[sessionID, default: .init()].nativeContext = value
+            case .contextHandoff(let value):
+                memorySessions[sessionID, default: .init()].contextHandoff = value
+                memorySessions[sessionID, default: .init()].nativeContext = nil
+                memorySessions[sessionID, default: .init()].conversationControls = value.targetControls
             case .conversationControlState(let value): memorySessions[sessionID, default: .init()].conversationControls = value
             default: break
             }
@@ -1376,8 +1396,26 @@ extension AgentJournal {
                                         identityMembers: &identityMembers,
                                         unresolvedBySession: &unresolvedBySession)
         }
+        let handoffs = events.compactMap { event -> AgentContextHandoff? in
+            if case .contextHandoff(let value) = event { return value }; return nil
+        }
+        if let value = handoffs.first {
+            guard supportsContextHandoff, runID == nil, let lastRunID = initialHeader.lastRunID,
+                  value.completedRunID == lastRunID,
+                  try view.runTerminal(sessionID: sessionID, runID: lastRunID) == .completed,
+                  initialHeader.pendingIdentity == nil, try view.pending(sessionID: sessionID).isEmpty else { throw AgentJournalError.invalidRecord }
+            try Self.validateHandoff(value, previous: initialHeader.contextHandoff, native: initialHeader.nativeContext,
+                controls: initialHeader.conversationControls, messageCount: Int(initialHeader.messageCount))
+            let anchor = try view.messages(sessionID: sessionID, after: initialHeader.messageCount - 1, limit: 1)
+            guard anchor.count == 1, anchor[0].id == value.lastMessageID else { throw AgentJournalError.concurrentWriter }
+        }
         var nextHeader = initialHeader
         nextHeader.revision += 1
+        if let value = handoffs.first {
+            nextHeader.contextHandoff = value
+            nextHeader.nativeContext = nil
+            nextHeader.conversationControls = value.targetControls
+        }
         nextHeader.created = nextHeader.created || events.contains { if case .sessionCreated = $0 { return true }; return false }
         if let runID { nextHeader.lastRunID = runID }
         var messageStart = initialHeader.messageCount
