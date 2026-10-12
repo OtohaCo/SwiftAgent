@@ -115,8 +115,11 @@ Reminder is a text-only native mid-conversation system control with
 `clear_at:next_user_message`, separate from tool changes and cache controls. Complete
 client tool-result groups count as user boundaries. One reminder is prepared per
 new complete boundary, not per HTTP attempt or Run ID. Parallel results finish as
-one group; paused continuations without a new user do not add another reminder.
-User steering remains a real user message. Historical controls are never rewritten
+one group; adjacent user steering joins that wire turn before its one reminder.
+User steering remains a real canonical user message. Threshold/pause plus reminder
+is rejected rather than inventing a user boundary. Adapter replay of a frozen
+request retains exactly the same controls; Core/Route does not automatically retry
+provenance-qualified requests (a new attempt requires a managed invocation). Historical controls are never rewritten
 or deleted to manufacture expiry. A summary's words do not inherit system authority.
 
 The supported compact/reminder combination is: drained prior Run without active
@@ -133,9 +136,8 @@ or mutation replay repairs it automatically.
 Default replay keeps RC6 strict unchanged-prefix validation. Explicit
 `thinkingPrefixMismatch: .error` or `.dropBlock` maps to
 `thinking.block_binding.prefix_mismatch_behavior` with
-`thinking-binding-controls-2026-08-01`. The adapter validates supported endpoint,
-model family and adaptive-thinking configuration; Host must qualify actual account
-behavior. Origin, payload integrity, visible tool calls and executor checks remain
+`thinking-binding-controls-2026-08-01`. The adapter validates the qualified endpoint/resolved model and known
+adaptive-only constraints; Host must qualify actual model/account support. Origin, payload integrity, visible tool calls and executor checks remain
 mandatory. The policy never edits or re-signs stored thinking.
 
 A qualified direct Anthropic on-demand adapter may set `preservedThinking: true`

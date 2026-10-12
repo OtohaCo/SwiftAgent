@@ -20,8 +20,8 @@ not a replacement RC6 report. OtohaAI and sub2api production code are unchanged.
 
 ## Requirement mapping and local evidence
 
-All filenames below are retained under `.ci-logs/issue99/` locally and uploaded by
-CI. A filename containing “green” is not itself evidence of success; explicit
+The focused logs below are retained locally under `.ci-logs/issue99/`. CI uploads
+its own runner-generated logs; this does not upload local historical RED/GREEN logs. A filename containing “green” is not itself evidence of success; explicit
 results below supersede names. Tests are Swift encoder/decoder/transport and real
 File Journal fixtures where stated. No paid live calls were made.
 
@@ -31,6 +31,7 @@ File Journal fixtures where stated. No paid live calls were made.
 | Canonical/effective state, atomic accepted tools/mutations/no-effect | NativeCompactionOperationTests plus existing mutation/tool publication suites; `native-atomic-seal.log`: 48 tests/7 suites GREEN, 31.721s |
 | Independent lifecycle, EOF/no-summary, maintenance deadline | NativeCompactionOperationTests/NativeMaintenanceDeadlineTests; summaries remain nonfinal; no entire-Run replay |
 | Append-only controls, deferred discovery, same-name updates/removal, reopen | `controls-final-scoped-corrected-fixture.log`: 17 Provider/2 suites +16 Core/2 suites GREEN; actual encoder RED retained in `controls-http-red-executed.log` |
+| Reminder parallel/retry/steering/no-new-user | AnthropicConversationControlTests: gated two parallel executions complete before the next HTTP, optional real steering coalesces one wire user turn; adapter-level 503→200 replay has identical body and one reminder; threshold/pause+reminder and invalid unanswered continuation reject locally. Core/Route automatic qualified retries remain unsupported. |
 | Compact→real user→Chinese reminder→tool loop | Public NativeContextHostExample, no @testable; `public-native-context-compat-seal.log`: 2 tests (one compatibility test, one test with two HTTP/FileStore flows) GREEN |
 | OpenAI automatic compaction and call in one response, same/next Run/reopen | Same public fixture; actual compacted body and function_call_output checked, execution once, canonical full source retained |
 | Thinking-tail exact cut, two compactions, immutable tail, reopen | `thinking-tail-final-scoped-seal.log`: 7 Provider/2 suites +1 Models proof +11 Core native operation tests GREEN |

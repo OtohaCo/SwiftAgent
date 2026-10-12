@@ -107,11 +107,11 @@ import AgentModels
         let run = try await session.run("ordinary")
         #expect(try await run.wait().outcome == .completed); try await run.waitForDrain()
         #expect(await provider.requests.first?.nativeContextSource == nil)
-        await #expect(throws: AgentJournalError.unsupportedFormat) { try await session.compact(mode: .openAIStandalone) }
-        #expect(await provider.requests.count == 1)
         let binding = try AgentModelBinding(profileID: "compact", profileRevision: "1", model: .init(provider: "legacy-fixture", name: "model"),
             provider: provider, deployment: .init(serviceInstanceID: "fixture", endpointScope: "fixture", apiDialect: "fixture"),
             nativeContextPolicy: .init(compactBeforeGeneration: .openAIStandalone))
+        await #expect(throws: AgentJournalError.unsupportedFormat) { try await session.compact(mode: .openAIStandalone, using: binding) }
+        #expect(await provider.requests.count == 1)
         await #expect(throws: AgentJournalError.unsupportedFormat) { try await session.run("not admitted", using: binding) }
         #expect(await provider.requests.count == 1)
         #expect(try await journal.latestCheckpoint(sessionID: session.id)?.history.count == 2)

@@ -20,6 +20,97 @@ struct AnthropicConversationControlTests {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return ModelImageDigest.sha256Hex(try encoder.encode(message))
     }
+    @Test(arguments: [false, true])
+    func reminderWaitsForParallelResultGroupAndRealSteering(_ steering: Bool) async throws {
+        let probe = ProviderRequestProbe(), gate = ReminderToolGate()
+        let frames = [
+            #"{"type":"message_start","message":{"id":"parallel","type":"message","role":"assistant","model":"fixture","content":[],"usage":{"input_tokens":5,"output_tokens":0}}}"#,
+            #"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"parallel-1","name":"calculator","input":{"a":2,"b":3}}}"#,
+            #"{"type":"content_block_stop","index":0}"#,
+            #"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"parallel-2","name":"calculator","input":{"a":4,"b":5}}}"#,
+            #"{"type":"content_block_stop","index":1}"#,
+            #"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":7}}"#,
+            #"{"type":"message_stop"}"#,
+        ]
+        let provider = try provider(probe, bodies: [providerSSE(frames), anthropicTextFixture])
+        let binding = try AgentModelBinding(profileID: "parallel-reminder", profileRevision: "1", model: model, provider: provider,
+            deployment: .init(serviceInstanceID: "fixture", endpointScope: endpoint.absoluteString, apiDialect: "anthropic"))
+        let session = try Agent(binding: binding, tools: [ReminderParallelTool(gate: gate)]).makeSession()
+        let run = try await session.run("real user", contextControls: .init(reminder: "本轮请用中文回答"))
+        await gate.waitForBoth()
+        #expect(await probe.requests.count == 1)
+        if steering { _ = try await run.steer("real correction") }
+        await gate.release()
+        #expect(try await run.wait().outcome == .completed); try await run.waitForDrain()
+        #expect(await gate.executions == 2)
+        let requests = await probe.requests
+        #expect(requests.count == 2)
+        let body = try JSONDecoder().decode(JSONValue.self, from: requests[1].httpBody!)
+        guard case .array(let messages) = body["messages"] else { Issue.record("missing messages"); return }
+        let reminders = messages.indices.filter { messages[$0]["clear_at"] == .string("next_user_message") }
+        // One reminder for the initial real user and one after the complete result group.
+        // Adjacent steering user content joins that wire user turn before its reminder.
+        #expect(reminders.count == 2)
+        let groups = messages.indices.filter { index in
+            guard case .array(let content) = messages[index]["content"] else { return false }
+            return content.contains { $0["type"] == .string("tool_result") }
+        }
+        #expect(groups.count == 1)
+        let groupIndex = try #require(groups.first)
+        guard case .array(let results) = messages[groupIndex]["content"] else { return }
+        #expect(results.filter { $0["type"] == .string("tool_result") }.count == 2)
+        #expect(reminders.contains(groupIndex + 1))
+        if steering {
+            #expect(messages.contains { message in
+                guard message["role"] == .string("user"), case .array(let content) = message["content"] else { return false }
+                return content.contains { $0["type"] == .string("text") && $0["text"] == .string("real correction") }
+            })
+            #expect(await session.history.contains(.user([.text("real correction")])))
+        }
+        #expect(await session.history.filter { $0.role == .tool }.count == 2)
+    }
+
+    @Test func retryWithoutNewUserReusesExactlyOneBoundaryReminder() async throws {
+        let probe = ProviderRequestProbe()
+        let adapter = try AnthropicProvider(apiKey: "fixture", nativeContext: .init(qualification: .init(endpoint: endpoint,
+            resolvedModelNames: ["fixture"], modes: [.anthropicOnDemand]), runReminders: true),
+            transport: ReminderRetryTransport(probe: probe))
+        let user = ModelMessage.user([.text("real user")])
+        let reminder = try ModelConversationControlEntry(canonicalMessageCount: 1, boundaryDigest: digest(user), control: .reminder("本轮请用中文回答"))
+        let controls = ModelConversationControlView(toolBaseline: [], activeTools: [],
+            controls: [.init(entry: reminder, afterMessageIndex: 0)], coveredTools: [], coveredToolChanges: false)
+        // Adapter-level replay of the frozen view, with distinct attempts. Core/Route
+        // deliberately does not automatically retry provenance-qualified operations.
+        for attempt in 0..<2 {
+            let request = ModelRequest(model: model, messages: [user], invocationID: UUID(), conversationControls: controls)
+            do {
+                for try await _ in adapter.stream(request: request) {}
+                #expect(attempt == 1)
+            } catch let error as ModelProviderError { #expect(attempt == 0 && error.kind == .unavailable) }
+        }
+        let requests = await probe.requests
+        #expect(requests.count == 2)
+        #expect(requests[0].httpBody == requests[1].httpBody)
+        for request in requests {
+            let body = try JSONDecoder().decode(JSONValue.self, from: request.httpBody!)
+            guard case .array(let messages) = body["messages"] else { Issue.record("missing messages"); return }
+            #expect(messages.filter { $0["clear_at"] == .string("next_user_message") }.count == 1)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func thresholdPauseCannotIntroduceReminderWithoutNewUser(_ pause: Bool) async throws {
+        let probe = ProviderRequestProbe()
+        do {
+            _ = try AnthropicProvider(apiKey: "fixture", nativeContext: .init(qualification: .init(endpoint: endpoint,
+                resolvedModelNames: ["fixture"], modes: [.anthropicThreshold]),
+                automatic: .init(mode: .anthropicThreshold, triggerInputTokens: 50_000, pauseAfterCompaction: pause), runReminders: true),
+                transport: FixtureHTTPTransport(probe: probe, bodies: [anthropicTextFixture]))
+            Issue.record("threshold plus required reminder accepted")
+        } catch let error as ModelProviderError { #expect(error.kind == .unsupportedCapability) }
+        #expect(await probe.requests.isEmpty)
+    }
+
     @Test func typedToolAdditionAndReminderEncodeAsSeparateSystemMessages() async throws {
         let probe = ProviderRequestProbe(), provider = try provider(probe, bodies: [anthropicTextFixture])
         let user = ModelMessage.user([.text("real user")])
@@ -328,5 +419,49 @@ private struct TrustedNewToolV2: AgentTool {
     let probe: ProviderExecutionProbe
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
         await probe.record(); return .init(output: .init(result: "version 2"))
+    }
+}
+
+private actor ReminderToolGate {
+    var executions = 0
+    private var entered: CheckedContinuation<Void, Never>?
+    private var blocked: [CheckedContinuation<Void, Never>] = []
+    func waitForBoth() async {
+        if executions == 2 { return }
+        await withCheckedContinuation { entered = $0 }
+    }
+    func execute() async {
+        executions += 1
+        if executions == 2 { entered?.resume(); entered = nil }
+        await withCheckedContinuation { blocked.append($0) }
+    }
+    func release() { blocked.forEach { $0.resume() }; blocked.removeAll() }
+}
+private struct ReminderParallelTool: AgentTool {
+    typealias Input = ProviderCalculator.Input
+    typealias Output = ProviderCalculator.Output
+    static let name = "calculator"
+    static let description = ProviderCalculator.description
+    static let inputSchema = ProviderCalculator.inputSchema
+    static let outputSchema = ProviderCalculator.outputSchema
+    let policy = try! ToolPolicy.readOnly(authorization: .notRequired)
+    let gate: ReminderToolGate
+    func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
+        await gate.execute()
+        return .init(output: .init(sum: input.a + input.b))
+    }
+}
+private struct ReminderRetryTransport: ProviderHTTPTransport {
+    let probe: ProviderRequestProbe
+    func stream(_ request: URLRequest) -> AsyncThrowingStream<ProviderHTTPEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                let attempt = await probe.record(request)
+                continuation.yield(.response(status: attempt == 1 ? 503 : 200, headers: ["Content-Type": "text/event-stream"]))
+                if attempt == 1 { continuation.yield(.data(Data(#"{"error":{"type":"overloaded_error","message":"fixture retry"}}"#.utf8))) }
+                else { continuation.yield(.data(anthropicTextFixture)) }
+                continuation.finish()
+            }
+        }
     }
 }
