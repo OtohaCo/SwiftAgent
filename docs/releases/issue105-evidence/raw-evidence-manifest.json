@@ -39,5 +39,17 @@
   "handoff-eligibility-corrected.log": {
     "sha256": "f8ad274d98ba6d6cbec8e800fca6b0620b131073fcefa033b3aff97df0e41b97",
     "bytes": 3359
+  },
+  "signed-source-red.log": {
+    "sha256": "739c58aa9bcc08a5dc3930255f1cd7c558729adc8443e98c5a3c6485569c22fc",
+    "bytes": 1151
+  },
+  "signed-source-green.log": {
+    "sha256": "1a44df6a9e23bd73f9157a160e89ad8e6608fbd38bc652e1d9247458cb9b20e1",
+    "bytes": 831
+  },
+  "signed-source-public-suite-green.log": {
+    "sha256": "0bf79734ebe7b22de924ffbf83bee078b05effdfbf970c2b4a137353def35ff8",
+    "bytes": 1753
   }
 }

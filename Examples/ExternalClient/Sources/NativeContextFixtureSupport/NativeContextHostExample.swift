@@ -29,7 +29,7 @@ public enum NativeContextHostExample {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ordinary-handoff-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
-        let oldHTTP = FixtureExchange([Fixtures.anthropicAnswer, Fixtures.anthropicCompact])
+        let oldHTTP = FixtureExchange([Fixtures.anthropicThinkingAnswer, Fixtures.anthropicCompact])
         let oldProvider = try AnthropicProvider(apiKey: "fixture", nativeContext: .init(qualification: .init(
             endpoint: endpoint, resolvedModelNames: ["fixture"], modes: [.anthropicOnDemand]), runReminders: true), transport: oldHTTP)
         let oldBinding = try AgentModelBinding(profileID: "old", profileRevision: "1", model: .init(provider: "anthropic", name: "fixture"), provider: oldProvider,
@@ -42,6 +42,10 @@ public enum NativeContextHostExample {
         let compact = try await session.compact(mode: .anthropicOnDemand)
         _ = try await compact.wait(); try await compact.waitForDrain()
         let canonical = await session.history
+        guard canonical.contains(where: { message in
+            guard case .assistant(let content, _) = message else { return false }
+            return content.contains { if case .providerContinuation = $0 { true } else { false } }
+        }) else { throw ExampleFailure.invariant }
         let oldCheckpoint = try await journal.nativeContextCheckpoint(sessionID: session.id)
         let newHTTP = FixtureExchange([Fixtures.anthropicAnswer, Fixtures.anthropicCompact, Fixtures.anthropicAnswer])
         let newProvider = try AnthropicProvider(apiKey: "fixture", nativeContext: .init(qualification: .init(
@@ -415,6 +419,13 @@ private struct RetiredPrefixSummaryProjector: AgentContextSourceReferencing {
     var toolResultCallIDs: [ToolCallID] { [] }
     func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
         let formal = input.canonicalMessages.drop(while: { $0.role == .system || $0.role == .developer })
+        let ordinaryPrefix = Array(formal.dropFirst(span.start).prefix(span.messageIDs.count))
+        guard ordinaryPrefix.count == span.messageIDs.count,
+              try AgentContextProjectionSource.digest(messages: ordinaryPrefix) != span.sourceDigest,
+              !ordinaryPrefix.contains(where: { message in
+                  guard case .assistant(let content, _) = message else { return false }
+                  return content.contains { if case .providerContinuation = $0 { true } else { false } }
+              }) else { throw ExampleFailure.invariant }
         if formal.count <= span.start + span.messageIDs.count { return try await AgentIdentityContextProjector().project(input) }
         return try await AgentCompositeContextProjector(summaries: [.init(span: span, generatorVersion: "deterministic-v1", text: "keep this constraint")]).project(input)
     }

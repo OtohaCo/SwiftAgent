@@ -24,3 +24,8 @@ contains18 old-reader refusals and4 retirement checks. Concurrency seal then
 passed independently (11+5 tests). Remote/current-main gates are not inferred.
 The later test/documentation commit does not change SDK implementation; its
 additional eligibility cases and final diff are reviewed separately in PR #107.
+
+Provider reviewer additionally inspected the final signed-source positive delta
+and its actual RED/GREEN logs: original signed source → retired ordinary view →
+Core-bound Composite summary → new native chain/reopen. Scoped PASS, no SDK
+implementation changes, no live/signature-verification claim.

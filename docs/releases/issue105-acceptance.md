@@ -118,3 +118,20 @@ commit additionally checks imported closed history without completed Run proof
 and persistent-instruction refusal (nine operation tests GREEN, 0.661s); it changes no SDK implementation. Remote
 exact-head and actual merge/main CI remain separately required, with results
 recorded in PR #107 acceptance comments.
+
+## Signed-source retirement regression
+
+The final public fixture now starts with an HTTP thinking-plus-text response.
+It asserts canonical signed continuation retention, absence from the ordinary
+projector input, and a different ordinary-prefix digest from the original Journal
+span. The same source-bound Composite summary then succeeds, followed by a fresh
+native generation-1 chain and close/reopen. This is local HTTP fixture coverage,
+not vendor signature verification or live qualification.
+
+Temporarily omitting only Core's original-history digest binding produced a real
+`target Run / staleSummary` failure (one test, exit 1); restoring the unchanged SDK
+implementation passed (one test, 0.223s). The affected entire public native suite
+then passed five tests (including both queue cases), 0.965s. Raw RED/GREEN logs are
+archived alongside their SHA-256 hashes. This closes a test gap in the new bridge;
+it does not establish a new defect in the prior release. Exact final-head remote
+CI remains required after this fixture/documentation-only change.
