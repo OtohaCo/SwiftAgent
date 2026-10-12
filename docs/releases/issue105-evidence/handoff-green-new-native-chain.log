@@ -1,0 +1,40 @@
+Building for debugging...
+[Computing dependencies]
+[2 / 6] AgentCore
+[3 / 7] AgentCore
+[9 / 13] AgentJournalFileStore
+[10 / 14] AgentJournalFileStore
+[13 / 16] ConfirmedNoEffectFixture-product
+[15 / 19] ConfirmedNoEffectFixture
+[17 / 21] BoundedReplanningFixture
+[19 / 23] ExecutionReportingSupport
+[21 / 24] JournalReplayFixture-product
+[24 / 29] NativeContextFixtureSupport
+[25 / 29] NativeContextFixtureSupport
+[26 / 30] NativeContextFixtureSupport
+[31 / 34] AgentCore
+[32 / 35] AgentCore
+[37 / 40] ConfirmedNoEffectFixture-product
+[42 / 45] JournalReplayFixture-product
+[47 / 50] NativeContextFixtureSupport
+[51 / 53] ExternalClientTests-product
+[53 / 56] ExternalClientTests-product
+[56 / 57] ExternalClientTests-product
+[59 / 62] ReplanningEvalTrial-product
+[61 / 65] ReplanningEvalTrial
+[64 / 67] ReplanningEvalTrial-product
+[68 / 70] ReplanningEvalTrialTests-product
+[71 / 72] ReplanningEvalTrialTests-product
+[80 / 96] BoundedReplanningProbe-product
+[101 / 102] BoundedReplanningProbe-product
+[106 / 106] NativeContextFixture-product
+[112 / 112] ContextPipelineFixture-product
+Build complete! (9.39秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite NativeContextPublicClientTests started.
+◇ Test durableOrdinaryHandoffUsesOnlyPublicAPI() started.
+✔ Test durableOrdinaryHandoffUsesOnlyPublicAPI() passed after 0.236 seconds.
+✔ Suite NativeContextPublicClientTests passed after 0.236 seconds.
+✔ Test run with 1 test in 1 suite passed after 0.236 seconds.

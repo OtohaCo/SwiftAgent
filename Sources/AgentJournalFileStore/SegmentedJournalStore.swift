@@ -61,6 +61,8 @@ package enum JournalFileFaultStage: Sendable, Equatable {
     case beforePackDelete
     case beforeClose
     case beforeSessionRead
+    case beforeFormatReplace
+    case afterFormatReplace
 }
 
 /// Default fail-fast ownership, or an explicit finite absolute lock-wait deadline.
@@ -234,6 +236,33 @@ public enum AgentIncrementalJournal {
         catch { throw normalized(error) }
     }
 
+    /// Creates an explicitly opted-in context-handoff store (schema 12).
+    /// Existing creation signatures and their default formats remain unchanged.
+    public static func create(at directory: URL, operationDomain: String,
+                              policy: JournalMaintenancePolicy = .default,
+                              supportsContextHandoff: Bool) throws -> AgentJournal {
+        do {
+            return AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
+                policy: policy, supportsContextHandoff: supportsContextHandoff))
+        } catch { throw normalized(error) }
+    }
+
+    /// Explicit offline schema-11 to schema-12 upgrade. Drain all work and close
+    /// every owner of the shared Journal first; this operation acquires the whole
+    /// store writer lock and returns a new handle. No Session history is rewritten.
+    /// A format publication with an uncertain outcome throws `commitUnknown`;
+    /// reopen to inspect/recover the actual durable format before continuing.
+    public static func upgradeForContextHandoff(at directory: URL,
+                                               policy: JournalMaintenancePolicy = .default) throws -> AgentJournal {
+        do { return AgentJournal(store: try SegmentedJournalStore.upgradeForContextHandoff(at: directory, policy: policy)) }
+        catch { throw normalized(error) }
+    }
+
+    package static func upgradeForContextHandoffForTesting(at directory: URL,
+        fault: @escaping @Sendable (JournalFileFaultStage) throws -> Void) throws -> AgentJournal {
+        AgentJournal(store: try SegmentedJournalStore.upgradeForContextHandoff(at: directory, policy: .default, fault: fault))
+    }
+
     package static func createForTesting(at directory: URL, operationDomain: String,
                                          policy: JournalMaintenancePolicy = .default,
                                          supportsAdmissionRejections: Bool = false,
@@ -243,6 +272,7 @@ public enum AgentIncrementalJournal {
                                          supportsRunRecords: Bool = false,
                                          supportsImageContent: Bool = false,
                                          supportsNativeContext: Bool = false,
+                                         supportsContextHandoff: Bool = false,
                                          fault: @escaping @Sendable (JournalFileFaultStage) throws -> Void) throws -> AgentJournal {
         AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
                                                               policy: policy,
@@ -253,6 +283,7 @@ public enum AgentIncrementalJournal {
                                                               supportsRunRecords: supportsRunRecords,
                                                               supportsImageContent: supportsImageContent,
                                                               supportsNativeContext: supportsNativeContext,
+                                                              supportsContextHandoff: supportsContextHandoff,
                                                               fault: fault))
     }
 }
@@ -292,6 +323,16 @@ private struct Format: Codable {
     let schema: Int
     let storeID: UUID
     let domain: String
+    var upgrade: FormatUpgrade? = nil
+}
+
+/// The reader gate and recovery witness are one atomically replaced format file.
+/// Target root ID precedes its bytes, avoiding a digest cycle with formatDigest.
+private struct FormatUpgrade: Codable {
+    let version: Int
+    let oldFormat: Data
+    let oldCurrent: Current
+    let targetRootID: UUID
 }
 
 private struct Location: Codable {
@@ -488,6 +529,13 @@ private struct Root: Codable {
     let lastFrame: Location?
     let lastDigest: String?
     var auditRecordCount: UInt64? = nil
+
+    func replacingFormatDigest(_ digest: String) -> Root {
+        .init(storeID: storeID, formatDigest: digest, sequence: sequence, nextRecordSequence: nextRecordSequence,
+              active: active, activeEnd: activeEnd, activeBatches: activeBatches, layout: layout,
+              layoutDigest: layoutDigest, layoutGeneration: layoutGeneration, lastFrame: lastFrame,
+              lastDigest: lastDigest, auditRecordCount: auditRecordCount)
+    }
 }
 
 private struct Current: Codable, Equatable {
@@ -588,6 +636,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     /// Format schema 10: messages may carry images, kept once each by digest under `images/`.
     let supportsImageContent: Bool
     let supportsNativeContext: Bool
+    let supportsContextHandoff: Bool
     private var callsIndex: IndexKind<UInt64> { .init("calls", witnessed: supportsConfirmedNoEffect) }
     let supportsAuthorizationAudit: Bool
     private let policy: JournalMaintenancePolicy
@@ -621,6 +670,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         supportsRunRecords = format.schema >= 9
         supportsImageContent = format.schema >= 10
         supportsNativeContext = format.schema >= 11
+        supportsContextHandoff = format.schema >= 12
         supportsPerCallFollowUps = format.schema >= 8
         noEffectProofVersion = format.schema >= 7 ? 2 : format.schema == 6 ? 1 : 0
         expectedFormatDigest = formatDigest
@@ -639,7 +689,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                        supportsRunRecords: Bool = false,
                        supportsImageContent: Bool = false,
                        supportsNativeContext: Bool = false,
+                       supportsContextHandoff: Bool = false,
                        fault: (@Sendable (JournalFileFaultStage) throws -> Void)? = nil) throws -> SegmentedJournalStore {
+        let supportsNativeContext = supportsNativeContext || supportsContextHandoff
         let supportsImageContent = supportsImageContent || supportsNativeContext
         let supportsRunRecords = supportsRunRecords || supportsImageContent
         let supportsPerCallFollowUps = supportsPerCallFollowUps || supportsRunRecords
@@ -657,7 +709,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
         }
         let descriptor = try lockStore(directory)
-        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsNativeContext ? 11 : supportsImageContent ? 10 : supportsRunRecords ? 9 : supportsPerCallFollowUps ? 8 : supportsConfirmedNoEffect ? 7 : supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
+        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsContextHandoff ? 12 : supportsNativeContext ? 11 : supportsImageContent ? 10 : supportsRunRecords ? 9 : supportsPerCallFollowUps ? 8 : supportsConfirmedNoEffect ? 7 : supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
                             storeID: UUID(), domain: domain)
         let formatBytes = try JSONEncoder().encode(format)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -687,7 +739,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     static func open(at url: URL, policy: JournalMaintenancePolicy,
                      lockRetry: (@Sendable () throws -> Void)? = nil,
-                     observer: (@Sendable (JournalOpeningStage) -> Void)? = nil) throws -> SegmentedJournalStore {
+                     observer: (@Sendable (JournalOpeningStage) -> Void)? = nil,
+                     requiredSchema: Int? = nil) throws -> SegmentedJournalStore {
         let directory = canonical(url)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) else {
@@ -725,14 +778,17 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard format.magic == "SWIFTAGENT-SEGMENTED-JOURNAL", !format.domain.isEmpty else {
             throw AgentJournalError.invalidHeader
         }
-        guard format.schema == 3 || format.schema == 4 || format.schema == 5 || format.schema == 6 || format.schema == 7 || format.schema == 8 || format.schema == 9 || format.schema == 10 || format.schema == 11 else { throw AgentJournalError.unsupportedFormat }
+        guard format.schema == 3 || format.schema == 4 || format.schema == 5 || format.schema == 6 || format.schema == 7 || format.schema == 8 || format.schema == 9 || format.schema == 10 || format.schema == 11 || format.schema == 12 else { throw AgentJournalError.unsupportedFormat }
+        guard format.upgrade == nil || format.schema == 12 else { throw AgentJournalError.invalidHeader }
         observer?(.formatValidated)
         let descriptor = try lockStore(directory, retry: lockRetry, observer: observer)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
                                           descriptor: descriptor, formatDigest: Self.digest(formatBytes),
                                           policy: policy)
         do {
+            if let requiredSchema, format.schema != requiredSchema { throw AgentJournalError.unsupportedFormat }
             try store.validateManagedDirectories()
+            try store.recoverFormatUpgrade(format)
             let (root, _) = try store.currentRoot()
             try store.requireWorkBudget(root: root, layout: try store.layout(root))
             if let location = root.lastFrame {
@@ -760,6 +816,86 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     private static func canonical(_ url: URL) -> URL {
         url.standardizedFileURL.resolvingSymlinksInPath()
+    }
+
+    static func upgradeForContextHandoff(at directory: URL, policy: JournalMaintenancePolicy,
+        fault: (@Sendable (JournalFileFaultStage) throws -> Void)? = nil) throws -> SegmentedJournalStore {
+        // Open owns the whole-store lock, validates the committed root and closes
+        // any unpublished physical tail before the separate format transaction.
+        let old = try open(at: directory, policy: policy, requiredSchema: 11)
+        defer { try? old.close() }
+        let formatBytes = try old.readData(old.directoryURL.appendingPathComponent("format.json"))
+        let format = try JSONDecoder().decode(Format.self, from: formatBytes)
+        guard format.schema == 11 else { throw AgentJournalError.unsupportedFormat }
+        let (root, _) = try old.currentRoot()
+        let current = try JSONDecoder().decode(Current.self, from: old.readData(old.directoryURL.appendingPathComponent("CURRENT")))
+        let targetID = UUID()
+        var next = Format(magic: format.magic, schema: 12, storeID: format.storeID, domain: format.domain)
+        next.upgrade = .init(version: 1, oldFormat: formatBytes, oldCurrent: current, targetRootID: targetID)
+        let nextBytes = try JSONEncoder().encode(next)
+        let targetBytes = try JSONEncoder().encode(root.replacingFormatDigest(Self.digest(nextBytes)))
+        let target = Current(root: targetID, digest: Self.digest(targetBytes))
+        var formatMayHaveChanged = false
+        do {
+            try old.writeNew(targetBytes, at: old.rootURL(targetID))
+            try fault?(.beforeFormatReplace)
+            try old.atomicWrite(nextBytes, at: old.directoryURL.appendingPathComponent("format.json"),
+                                willReplace: { formatMayHaveChanged = true })
+            try fault?(.afterFormatReplace)
+            try fault?(.beforeCurrentReplace)
+            try old.atomicWrite(JSONEncoder().encode(target), at: old.directoryURL.appendingPathComponent("CURRENT"))
+            try fault?(.afterCurrentReplace)
+            try old.close()
+            return try open(at: directory, policy: policy)
+        } catch {
+            if formatMayHaveChanged {
+                old.poisoned = true
+                throw AgentJournalError.commitUnknown
+            }
+            throw error
+        }
+    }
+
+    /// Runs under the whole-store lock, before normal open may truncate or maintain.
+    /// Recovery is allowed only for the exact old CURRENT named by the durable gate.
+    private func recoverFormatUpgrade(_ format: Format) throws {
+        guard let bridge = format.upgrade else { return }
+        guard format.schema == 12, bridge.version == 1, bridge.oldFormat.count <= 16_384,
+              bridge.targetRootID != bridge.oldCurrent.root else { throw AgentJournalError.invalidHeader }
+        let current = try JSONDecoder().decode(Current.self, from: readData(directoryURL.appendingPathComponent("CURRENT")))
+        let bytes = try readData(rootURL(current.root))
+        guard Self.digest(bytes) == current.digest else { throw AgentJournalError.checksumMismatch }
+        let root = try JSONDecoder().decode(Root.self, from: bytes)
+        // Normal later schema-12 publications need no ancestral files or repair.
+        if root.formatDigest == expectedFormatDigest { return }
+        guard current == bridge.oldCurrent else { throw AgentJournalError.checksumMismatch }
+        let prior = try JSONDecoder().decode(Format.self, from: bridge.oldFormat)
+        guard prior.schema == 11, prior.upgrade == nil, prior.magic == format.magic,
+              prior.storeID == format.storeID, prior.domain == format.domain,
+              root.storeID == storeID, root.nextRecordSequence > 0,
+              root.auditRecordCount != nil,
+              root.formatDigest == Self.digest(bridge.oldFormat) else { throw AgentJournalError.invalidHeader }
+        let targetBytes = try readData(rootURL(bridge.targetRootID))
+        let target = try JSONDecoder().decode(Root.self, from: targetBytes)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        guard try encoder.encode(target) == encoder.encode(root.replacingFormatDigest(expectedFormatDigest)) else {
+            throw AgentJournalError.invalidRecord
+        }
+        // Validate shared layout/frame evidence before changing CURRENT. The target
+        // copies every logical/physical field; no history or recovery fact is edited.
+        try requireWorkBudget(root: root, layout: layout(root))
+        if let location = root.lastFrame {
+            let batch = try load(location)
+            guard batch.sequence == root.sequence, try frameDigest(location) == root.lastDigest else {
+                throw AgentJournalError.invalidRecord
+            }
+        }
+        let activeURL = segmentURL(root.active)
+        let activeHandle = try openRegularFile(activeURL)
+        try activeHandle.close()
+        guard try Self.fileSize(activeURL) >= root.activeEnd else { throw AgentJournalError.invalidFrame }
+        try atomicWrite(JSONEncoder().encode(Current(root: bridge.targetRootID, digest: Self.digest(targetBytes))),
+                        at: directoryURL.appendingPathComponent("CURRENT"))
     }
 
     /// The lock lives exactly as long as this handle's descriptor. O_CLOEXEC keeps a child the Host
@@ -1158,12 +1294,13 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         try Self.syncDirectory(url.deletingLastPathComponent())
     }
 
-    private func atomicWrite(_ data: Data, at url: URL) throws {
+    private func atomicWrite(_ data: Data, at url: URL, willReplace: (() -> Void)? = nil) throws {
         try validateManagedDirectory(url.deletingLastPathComponent())
         let temporary = directoryURL.appendingPathComponent("tmp/\(managedName(UUID())).tmp")
         try writeNew(data, at: temporary)
         defer { try? FileManager.default.removeItem(at: temporary) }
         if url.lastPathComponent == "CURRENT" { try fault?(.beforeCurrentReplace) }
+        willReplace?()
         guard rename(temporary.path, url.path) == 0 else { throw Self.ioError("publish managed file") }
         if url.lastPathComponent == "CURRENT" { try fault?(.afterCurrentReplace) }
         try Self.syncDirectory(url.deletingLastPathComponent())
@@ -2328,6 +2465,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                   change.header.messageCount >= (try header(change.sessionID)?.messageCount ?? 0) else {
                 throw AgentJournalError.concurrentWriter
             }
+            guard store.supportsContextHandoff || change.header.contextHandoff == nil else { throw AgentJournalError.unsupportedFormat }
             guard store.supportsNativeContext || (change.header.nativeContext == nil && change.header.conversationControls == nil && !change.messages.contains { message in
                 guard case .assistant(let parts, _) = message.value else { return false }
                 return parts.contains { if case .providerContinuation(let value) = $0 { return value.contextTransition != nil }; return false }

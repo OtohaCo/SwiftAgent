@@ -1,0 +1,31 @@
+Building for debugging...
+[Computing dependencies]
+[2 / 6] AgentCore
+[3 / 7] AgentCore
+[8 / 10] AgentCore
+[11 / 12] AgentCoreTests-product
+[14 / 17] JournalTestProcess-product
+[17 / 18] AgentJournalFileStoreTests-product
+[30 / 34] AgentCore-product
+[30 / 35] JournalBenchmark-product
+[37 / 39] AgentDecisionsTests-product
+[46 / 46] FollowUpQueueBenchmark-product
+Build complete! (5.24秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite ContextHandoffOperationTests started.
+◇ Test retirementRejectsReencodedUnknownPayloadAndKeepsFutureThinking() started.
+✘ Test retirementRejectsReencodedUnknownPayloadAndKeepsFutureThinking() recorded an issue at ContextHandoffOperationTests.swift:139:9: Expectation failed: an error was expected but none was thrown
+↳ AgentModelBindingError.invalidProjection → <not evaluated>
+↳   AgentModelBindingError → <not evaluated>
+↳   invalidProjection → <not evaluated>
+✘ Test retirementRejectsReencodedUnknownPayloadAndKeepsFutureThinking() recorded an issue at ContextHandoffOperationTests.swift:142:9: Expectation failed: an error was expected but none was thrown
+↳ AgentModelBindingError.invalidProjection → <not evaluated>
+↳   AgentModelBindingError → <not evaluated>
+↳   invalidProjection → <not evaluated>
+✘ Test retirementRejectsReencodedUnknownPayloadAndKeepsFutureThinking() failed after 0.001 seconds with 2 issues.
+✘ Suite ContextHandoffOperationTests failed after 0.001 seconds with 2 issues.
+✘ Test run with 1 test in 1 suite failed after 0.001 seconds with 2 issues.
+Note: Some test targets reported failures:
+  - AgentCoreTests (Swift Testing)

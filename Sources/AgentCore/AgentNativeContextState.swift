@@ -5,16 +5,40 @@ import Foundation
 package actor AgentNativeContextState {
     package init() {}
     private var checkpoint: ModelNativeContextCheckpoint?
+    private var handoff: AgentContextHandoff?
+    private var validatedHandoffID: UUID?
     private var restored = false
     private var validatedID: UUID?
-    func restore(_ value: ModelNativeContextCheckpoint?) {
-        guard !restored else { return }; restored = true; checkpoint = value
+    func restore(_ value: ModelNativeContextCheckpoint?, handoff: AgentContextHandoff? = nil) {
+        guard !restored else { return }; restored = true; checkpoint = value; self.handoff = handoff
     }
     func current() -> ModelNativeContextCheckpoint? { checkpoint }
+    func currentHandoff() -> AgentContextHandoff? { handoff }
+    func installHandoff(_ value: AgentContextHandoff) { handoff = value; checkpoint = nil; restored = true; validatedID = nil; validatedHandoffID = value.id }
+    func ordinaryMessages(_ canonical: [ModelMessage]) throws -> [ModelMessage] { try handoff?.ordinaryView(canonical) ?? canonical }
+    func rejectRetiredReinjection(_ projected: [ModelMessage], canonical: [ModelMessage]) throws {
+        try handoff?.rejectReinjection(projected, canonical: canonical)
+    }
     func install(_ value: ModelNativeContextCheckpoint) { checkpoint = value; restored = true; validatedID = value.id }
 
     func effectiveMessages(_ canonical: [ModelMessage], binding: AgentModelBinding,
                            sessionID: UUID, journal: AgentJournal?, structuredOutput: StructuredOutputSchema?) async throws -> [ModelMessage] {
+        let original = canonical
+        if let handoff {
+            guard handoff.targetOrigin == binding.continuationOrigin,
+                  handoff.targetRootDigest == (try Self.rootDigest(original, binding: binding, structuredOutput: structuredOutput)) else {
+                throw AgentModelBindingError.incompatibleContinuation
+            }
+            if validatedHandoffID != handoff.id, let journal, journal.storage == .durable {
+                let anchor = try await journal.readMessages(sessionID: sessionID, after: UInt64(handoff.canonicalMessageCount - 1), limit: 1)
+                let leading = original.prefix { $0.role == .system || $0.role == .developer }.count
+                guard anchor.count == 1, anchor[0].id == handoff.lastMessageID,
+                      original.indices.contains(leading + handoff.canonicalMessageCount - 1),
+                      anchor[0].message == original[leading + handoff.canonicalMessageCount - 1] else { throw AgentJournalError.concurrentWriter }
+                validatedHandoffID = handoff.id
+            }
+        }
+        let canonical = try ordinaryMessages(original)
         guard let checkpoint else { return canonical }
         let leading = canonical.prefix { $0.role == .system || $0.role == .developer }.count
         let formalCount = canonical.count - leading
@@ -34,7 +58,7 @@ package actor AgentNativeContextState {
             if let journal, journal.storage == .durable {
                 let anchor = try await journal.readMessages(sessionID: sessionID, after: UInt64(source.canonicalMessageCount - 1), limit: 1)
                 guard anchor.count == 1, anchor[0].id == source.lastMessageID,
-                      anchor[0].message == canonical[leading + source.canonicalMessageCount - 1] else {
+                      anchor[0].message == original[leading + source.canonicalMessageCount - 1] else {
                     throw AgentJournalError.concurrentWriter
                 }
             }

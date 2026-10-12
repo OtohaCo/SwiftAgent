@@ -52,6 +52,7 @@ package actor AgentConversationControlState {
         restored = true; state = value
     }
     func current() -> ModelConversationControlState? { state }
+    func installHandoff(_ value: ModelConversationControlState?) { state = value; restored = true }
     func install(_ value: ModelConversationControlState) { state = value; restored = true }
 
     func prepare(canonical: [ModelMessage], binding: AgentModelBinding, definitions: [ModelToolDefinition],
@@ -98,11 +99,21 @@ package actor AgentConversationControlState {
     }
 
     static func view(_ state: ModelConversationControlState, canonical: [ModelMessage], effective: [ModelMessage],
-                     native: ModelNativeContextCheckpoint?) throws -> ModelConversationControlView {
+                     native: ModelNativeContextCheckpoint?, retiredPrefix: Int? = nil) throws -> ModelConversationControlView {
         let leading = canonical.prefix { $0.role == .system || $0.role == .developer }.count
         let covered = native?.canonicalTailStart ?? 0
         let expected = Array(canonical.prefix(leading)) + canonical.dropFirst(leading + covered)
-        guard effective == expected else { throw AgentModelBindingError.invalidProjection }
+        var retiredTailStart: Int?
+        if effective != expected {
+            // Only the explicitly retired prefix may be projected. Every newer
+            // user/tool/assistant message and every active control boundary stays exact.
+            guard native == nil, let retiredPrefix, retiredPrefix <= canonical.count - leading,
+                  state.entries.allSatisfy({ $0.canonicalMessageCount > retiredPrefix }),
+                  Array(effective.prefix(leading)) == Array(canonical.prefix(leading)) else { throw AgentModelBindingError.invalidProjection }
+            let tail = Array(canonical.dropFirst(leading + retiredPrefix))
+            guard effective.count >= leading + tail.count, Array(effective.suffix(tail.count)) == tail else { throw AgentModelBindingError.invalidProjection }
+            retiredTailStart = effective.count - tail.count
+        }
         var coveredTools = Dictionary(uniqueKeysWithValues: state.toolBaseline.filter { !state.deferredBaselineToolNames.contains($0.name) }.map { ($0.name, $0) })
         var coveredChanges = false
         var controls: [ModelRequestConversationControl] = []
@@ -116,7 +127,8 @@ package actor AgentConversationControlState {
                 }
                 continue
             }
-            let index = leading + entry.canonicalMessageCount - covered - 1
+            let index = retiredTailStart.map { $0 + entry.canonicalMessageCount - (retiredPrefix ?? 0) - 1 }
+                ?? (leading + entry.canonicalMessageCount - covered - 1)
             guard effective.indices.contains(index),
                   entry.boundaryDigest == ModelImageDigest.sha256Hex(try encode(effective[index])) else { throw AgentJournalError.concurrentWriter }
             controls.append(.init(entry: entry, afterMessageIndex: index))

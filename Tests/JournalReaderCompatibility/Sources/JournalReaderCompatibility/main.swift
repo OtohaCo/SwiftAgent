@@ -13,6 +13,12 @@ import Foundation
         do {
             let journal: AgentJournal
             switch mode {
+            #if CONTEXT_HANDOFF_RUNTIME
+            case "create-handoff-empty", "create-handoff":
+                journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsContextHandoff: true)
+            case "upgrade-handoff":
+                journal = try AgentIncrementalJournal.upgradeForContextHandoff(at: directory)
+            #endif
             #if NATIVE_CONTEXT_RUNTIME
             case "create-native-context-empty", "create-native-context":
                 journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsNativeContext: true)
@@ -53,19 +59,30 @@ import Foundation
                 journal = try AgentIncrementalJournal.open(at: directory)
             }
             switch mode {
+            #if CONTEXT_HANDOFF_RUNTIME
+            case "create-handoff-empty", "upgrade-handoff":
+                guard journal.supportsContextHandoff else { throw AgentJournalError.invalidRecord }
+            case "retire-handoff":
+                let model = ModelID(provider: "reader-matrix", name: "script")
+                let binding = try AgentModelBinding(profileID: "matrix-native", profileRevision: "1", model: model,
+                    provider: MatrixNativeProvider(), deployment: .init(serviceInstanceID: "matrix", endpointScope: "local", apiDialect: "matrix"))
+                let session = try Agent(binding: binding).makeSession(id: sessionID, journal: journal)
+                let operation = try await session.handoffToOrdinary(using: binding, discardingRetiredProviderContinuations: true)
+                _ = try await operation.wait(); try await operation.waitForDrain()
+                guard try await journal.nativeContextCheckpoint(sessionID: sessionID) == nil else { throw AgentJournalError.invalidRecord }
+            case "inspect-handoff":
+                guard try await journal.contextHandoff(sessionID: sessionID)?.generation == 1,
+                      try await journal.nativeContextCheckpoint(sessionID: sessionID) == nil else { throw AgentJournalError.invalidRecord }
+                print("retirement=1 nativeCheckpoint=none canonical=preserved")
+            case "create-handoff":
+                try await createNativeCheckpoint(journal: journal, sessionID: sessionID)
+                guard journal.supportsContextHandoff, try await journal.nativeContextCheckpoint(sessionID: sessionID)?.generation == 1 else { throw AgentJournalError.invalidRecord }
+            #endif
             #if NATIVE_CONTEXT_RUNTIME
             case "create-native-context-empty": break
             case "create-native-context", "inspect-native-context":
                 if mode == "create-native-context" {
-                    let model = ModelID(provider: "reader-matrix", name: "script")
-                    let provider = MatrixNativeProvider()
-                    let binding = try AgentModelBinding(profileID: "matrix-native", profileRevision: "1", model: model,
-                        provider: provider, deployment: .init(serviceInstanceID: "matrix", endpointScope: "local", apiDialect: "matrix"))
-                    let session = try Agent(binding: binding).makeSession(id: sessionID, journal: journal)
-                    let run = try await session.run("native source"); _ = try await run.wait(); try await run.waitForDrain()
-                    let operation = try await session.compact(mode: .openAIStandalone)
-                    guard try await operation.wait().checkpoint != nil else { throw AgentJournalError.invalidRecord }
-                    try await operation.waitForDrain()
+                    try await createNativeCheckpoint(journal: journal, sessionID: sessionID)
                 }
                 guard journal.supportsNativeContext,
                       try await journal.nativeContextCheckpoint(sessionID: sessionID)?.generation == 1 else { throw AgentJournalError.invalidRecord }
@@ -363,6 +380,20 @@ private struct MatrixImageTool: AgentTool {
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<String> {
         .init(output: "frame", images: [try Self.image()])
     }
+}
+#endif
+
+#if NATIVE_CONTEXT_RUNTIME
+private func createNativeCheckpoint(journal: AgentJournal, sessionID: UUID) async throws {
+                    let model = ModelID(provider: "reader-matrix", name: "script")
+                    let provider = MatrixNativeProvider()
+                    let binding = try AgentModelBinding(profileID: "matrix-native", profileRevision: "1", model: model,
+                        provider: provider, deployment: .init(serviceInstanceID: "matrix", endpointScope: "local", apiDialect: "matrix"))
+                    let session = try Agent(binding: binding).makeSession(id: sessionID, journal: journal)
+                    let run = try await session.run("native source"); _ = try await run.wait(); try await run.waitForDrain()
+                    let operation = try await session.compact(mode: .openAIStandalone)
+                    guard try await operation.wait().checkpoint != nil else { throw AgentJournalError.invalidRecord }
+                    try await operation.waitForDrain()
 }
 #endif
 

@@ -1,0 +1,21 @@
+Building for debugging...
+[Computing dependencies]
+[Pre-planning 1 / 860]
+[Planning deferred tasks]
+[2 / 66]
+[9 / 47] AgentUsage
+[27 / 47] AgentJevProvider
+[37 / 49] NativeContextFixture-product
+[38 / 49] NativeContextFixtureSupport
+[43 / 48] ExternalClientTests-product
+[47 / 50] ExternalClientTests-product
+[51 / 51] ExternalClientTests-product
+Build complete! (4.26秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite NativeContextPublicClientTests started.
+◇ Test durableOrdinaryHandoffUsesOnlyPublicAPI() started.
+✔ Test durableOrdinaryHandoffUsesOnlyPublicAPI() passed after 0.223 seconds.
+✔ Suite NativeContextPublicClientTests passed after 0.223 seconds.
+✔ Test run with 1 test in 1 suite passed after 0.223 seconds.

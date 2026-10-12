@@ -1,6 +1,7 @@
 import AgentCatalog
 import AgentCore
 import AgentDecisions
+import AgentJournalFileStore
 import AgentJevProvider
 import AgentModels
 import AgentProviders
@@ -25,6 +26,26 @@ struct NativeContextPublicClientTests {
         #expect(response(.init(id: "fixture", model: entry.model), [], [], usage(1, 2, 0, 0, 0), .endTurn).usage.iterationUsage == nil)
         let compact: (ModelCompactionMode, AgentModelBinding?, ContinuousClock.Instant?) async throws -> AgentCompactionOperation = try Agent(model: entry.model, provider: LegacyProvider()).makeSession().compact
         _ = compact
+        let oldCreate: (URL, String, JournalMaintenancePolicy, Bool, Bool, Bool, Bool, Bool, Bool) throws -> AgentJournal = AgentIncrementalJournal.create
+        let newCreate: (URL, String, JournalMaintenancePolicy, Bool) throws -> AgentJournal = AgentIncrementalJournal.create
+        let upgrade: (URL, JournalMaintenancePolicy) throws -> AgentJournal = AgentIncrementalJournal.upgradeForContextHandoff
+        let nativeCreate: (URL, String, JournalMaintenancePolicy, Bool, Bool, Bool, Bool, Bool, Bool, Bool) throws -> AgentJournal = AgentIncrementalJournal.create
+        let oldQueue: (AgentModelBinding, AgentCapabilityBinding, UInt64?) -> AgentFollowUpConfiguration = AgentFollowUpConfiguration.init
+        let controlledQueue: (AgentModelBinding, AgentCapabilityBinding, UInt64?, AgentRunContextControls) -> AgentFollowUpConfiguration = AgentFollowUpConfiguration.init
+        _ = (oldCreate, nativeCreate, newCreate, upgrade, oldQueue, controlledQueue)
+    }
+
+    @Test func thinkingContinuesOnlyInTheNewAuthorityEpoch() async throws {
+        try await NativeContextHostExample.thinkingAcrossOrdinaryHandoff()
+    }
+
+    @Test func durableOrdinaryHandoffUsesOnlyPublicAPI() async throws {
+        try await NativeContextHostExample.ordinaryHandoff()
+    }
+
+    @Test(arguments: [false, true])
+    func queuedRemindersUsePublicResolverAndRealHTTPEncoding(_ cancel: Bool) async throws {
+        try await NativeContextHostExample.queuedReminders(cancelBeforeDispatch: cancel)
     }
 
     @Test func nativeHostFlowUsesOnlyPublicSDKAndRealHTTPFixtures() async throws {

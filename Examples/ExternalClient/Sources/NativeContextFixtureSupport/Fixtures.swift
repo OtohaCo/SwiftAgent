@@ -20,6 +20,17 @@ enum Fixtures {
         #"{"type":"content_block_stop","index":0}"#,
         #"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
         #"{"type":"message_stop"}"#])
+    static let anthropicThinkingAnswer = anthropic([
+        #"{"type":"message_start","message":{"id":"answer","type":"message","role":"assistant","model":"fixture","content":[],"usage":{"input_tokens":5,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#,
+        #"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}"#,
+        #"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Fixture reasoning, not signature validation."}}"#,
+        #"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"fixture-thinking-signature"}}"#,
+        #"{"type":"content_block_stop","index":0}"#,
+        #"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
+        #"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"中文回答"}}"#,
+        #"{"type":"content_block_stop","index":1}"#,
+        #"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
+        #"{"type":"message_stop"}"#])
     static let anthropicCompact = anthropic([
         #"{"type":"message_start","message":{"id":"summary","type":"message","role":"assistant","model":"fixture","content":[],"usage":{"input_tokens":0,"output_tokens":0,"iterations":[]}}}"#,
         #"{"type":"content_block_start","index":0,"content_block":{"type":"compaction","content":"Native summary, not an answer","signature":"fixture-compaction-signature","tool_changes":[]}}"#,

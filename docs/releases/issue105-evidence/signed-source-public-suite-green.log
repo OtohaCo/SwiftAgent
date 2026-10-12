@@ -1,0 +1,31 @@
+Building for debugging...
+[Computing dependencies]
+[1 / 1]
+[2 / 46] AgentCore
+[4 / 48] AgentCore
+[7 / 38] AgentCore
+[19 / 33] EnterpriseAuthorizationFixture-product
+[26 / 34] JournalReplayFixture-product
+[27 / 29] ReplanningEvalTrialTests-product
+[32 / 32] ScopedCapabilityFixture-product
+[38 / 38] FollowUpQueueFixture-product
+[44 / 44] BoundedReplanningProbe-product
+Build complete! (5.44秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite NativeContextPublicClientTests started.
+◇ Test thinkingContinuesOnlyInTheNewAuthorityEpoch() started.
+◇ Test nativeHostFlowUsesOnlyPublicSDKAndRealHTTPFixtures() started.
+◇ Test legacyFactoriesKeepExactNonthrowingFunctionSignatures() started.
+◇ Test durableOrdinaryHandoffUsesOnlyPublicAPI() started.
+◇ Test queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) started.
+◇ Test case passing 1 argument cancel → false to queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) started.
+◇ Test case passing 1 argument cancel → true to queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) started.
+✔ Test legacyFactoriesKeepExactNonthrowingFunctionSignatures() passed after 0.001 seconds.
+✔ Test queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) with 2 test cases passed after 0.261 seconds.
+✔ Test durableOrdinaryHandoffUsesOnlyPublicAPI() passed after 0.281 seconds.
+✔ Test thinkingContinuesOnlyInTheNewAuthorityEpoch() passed after 0.506 seconds.
+✔ Test nativeHostFlowUsesOnlyPublicSDKAndRealHTTPFixtures() passed after 0.965 seconds.
+✔ Suite NativeContextPublicClientTests passed after 0.965 seconds.
+✔ Test run with 5 tests in 1 suite passed after 0.965 seconds.

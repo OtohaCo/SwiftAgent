@@ -338,7 +338,7 @@ public struct AgentCompositeContextProjector: AgentContextSourceReferencing {
             }
             let range = span.start..<end.partialValue
             guard range.allSatisfy({ input.formalMessageIDs[$0] == span.messageIDs[$0 - span.start] }),
-                  try AgentContextProjectionSource.digest(messages: Array(formal[range])) == span.sourceDigest else {
+                  try input.historyDigest(for: span, messages: Array(formal[range])) == span.sourceDigest else {
                 throw AgentContextPipelineError.staleSummary
             }
             // Without a trusted effect annotation, no tool group may be

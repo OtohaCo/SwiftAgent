@@ -1,0 +1,55 @@
+{
+  "reinjection-predecessor-red.log": {
+    "sha256": "d26856fff5e7de15f8ed3d6b70993832e01917632fec8a5853ba72d767b1d187",
+    "bytes": 1727
+  },
+  "reinjection-allowlist-green.log": {
+    "sha256": "2ad675954980c6af4e1394c6dbc16ccc038154319fe720662fa0990f22726c67",
+    "bytes": 875
+  },
+  "handoff-operation-final.log": {
+    "sha256": "2edb8b13a4f06ce36e55307216b1fac794033e78ac923a171326f6a1109f649a",
+    "bytes": 2933
+  },
+  "handoff-green-new-native-chain.log": {
+    "sha256": "d9683a99fb68216fc943df86f28ee2f5e3539a6d8984a49acfbd0480bfb85378",
+    "bytes": 1650
+  },
+  "handoff-green-reinjection-http.log": {
+    "sha256": "11c10f5dc39f85e9d40bb74d47d1c629b8af96806ea04c9784c1bd8ee2b480d8",
+    "bytes": 2256
+  },
+  "queue-tool-loop-corrected.log": {
+    "sha256": "0f5c6f4373e3a6f6a63e3c0c9a848e5750ea5f6d2ce52b9360856f145a3f0f21",
+    "bytes": 1140
+  },
+  "format-green-sequential.log": {
+    "sha256": "7fc8fd361bce34ac09d98689636bf73e7a1e22f1a031c6dbe9e611d33dede3f3",
+    "bytes": 3457
+  },
+  "concurrency-seal.log": {
+    "sha256": "84dd515902a74ec1dcb3ef987332b715fb899f1ff9cbe3f9299cb8797de273f8",
+    "bytes": 8825
+  },
+  "full-macos-first.log": {
+    "sha256": "1832bd8e1e0bfc51cee03758b8024488dd896079c29a57cd9059b65466e07f68",
+    "bytes": 407176,
+    "location": "retained in isolated issue105 .ci-logs/issue105; full gates also uploaded by corresponding CI"
+  },
+  "handoff-eligibility-corrected.log": {
+    "sha256": "f8ad274d98ba6d6cbec8e800fca6b0620b131073fcefa033b3aff97df0e41b97",
+    "bytes": 3359
+  },
+  "signed-source-red.log": {
+    "sha256": "739c58aa9bcc08a5dc3930255f1cd7c558729adc8443e98c5a3c6485569c22fc",
+    "bytes": 1151
+  },
+  "signed-source-green.log": {
+    "sha256": "1a44df6a9e23bd73f9157a160e89ad8e6608fbd38bc652e1d9247458cb9b20e1",
+    "bytes": 831
+  },
+  "signed-source-public-suite-green.log": {
+    "sha256": "0bf79734ebe7b22de924ffbf83bee078b05effdfbf970c2b4a137353def35ff8",
+    "bytes": 1753
+  }
+}

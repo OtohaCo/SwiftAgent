@@ -39,6 +39,7 @@ package protocol JournalStore: Sendable {
     var supportsRunRecords: Bool { get }
     var supportsImageContent: Bool { get }
     var supportsNativeContext: Bool { get }
+    var supportsContextHandoff: Bool { get }
     func auditDigest(_ bytes: Data) -> String
     func read<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
     func write<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
@@ -154,11 +155,13 @@ package struct JournalSessionHeader: Codable, Equatable, Sendable {
     package var pendingIdentity: String?
     package var nativeContext: ModelNativeContextCheckpoint?
     package var conversationControls: ModelConversationControlState?
+    package var contextHandoff: AgentContextHandoff? = nil
 
     package init(revision: UInt64 = 0, created: Bool = false, lastRunID: UUID? = nil,
                  steeringIDs: [UUID] = [], historyHead: UInt64? = nil,
                  messageCount: UInt64 = 0, pendingIdentity: String? = nil,
-                 nativeContext: ModelNativeContextCheckpoint? = nil, conversationControls: ModelConversationControlState? = nil) {
+                 nativeContext: ModelNativeContextCheckpoint? = nil, conversationControls: ModelConversationControlState? = nil,
+                 contextHandoff: AgentContextHandoff? = nil) {
         self.revision = revision
         self.created = created
         self.lastRunID = lastRunID
@@ -168,6 +171,7 @@ package struct JournalSessionHeader: Codable, Equatable, Sendable {
         self.pendingIdentity = pendingIdentity
         self.nativeContext = nativeContext
         self.conversationControls = conversationControls
+        self.contextHandoff = contextHandoff
     }
 }
 
@@ -261,3 +265,4 @@ public struct JournalMaintenanceStatus: Sendable, Equatable {
 }
 
 package extension JournalStore { var supportsNativeContext: Bool { false } }
+package extension JournalStore { var supportsContextHandoff: Bool { false } }

@@ -1,0 +1,53 @@
+Building for debugging...
+[Computing dependencies]
+[2 / 6] AgentJournalFileStore
+[3 / 7] AgentJournalFileStore
+[8 / 11] ConfirmedNoEffectFixture-product
+[9 / 12] ConfirmedNoEffectFixture-product
+[11 / 15] ConfirmedNoEffectFixture
+[12 / 16] ConfirmedNoEffectFixture
+[15 / 19] BoundedReplanningFixture
+[16 / 20] BoundedReplanningFixture
+[19 / 22] JournalReplayFixture-product
+[20 / 23] JournalReplayFixture-product
+[22 / 26] JournalReplayFixture
+[23 / 27] JournalReplayFixture
+[26 / 30] NativeContextFixtureSupport
+[27 / 31] NativeContextFixtureSupport
+[32 / 35] AgentJournalFileStore
+[35 / 39] ConfirmedNoEffectFixture-product
+[37 / 40] ConfirmedNoEffectFixture-product
+[40 / 43] ConfirmedNoEffectFixture
+[42 / 46] JournalReplayFixture-product
+[44 / 47] JournalReplayFixture-product
+[47 / 50] JournalReplayFixture
+[49 / 52] BoundedReplanningFixture
+[51 / 54] NativeContextFixtureSupport
+[54 / 56] ExternalClientTests-product
+[58 / 60] ExternalClientTests-product
+[62 / 63] ExternalClientTests-product
+[65 / 68] ReplanningEvalTrial-product
+[66 / 69] ReplanningEvalTrial-product
+[68 / 72] ReplanningEvalTrial
+[69 / 73] ReplanningEvalTrial
+[72 / 76] ReplanningEvalTrial-product
+[74 / 77] ReplanningEvalTrial-product
+[77 / 80] ReplanningEvalTrial
+[79 / 81] ReplanningEvalTrialTests-product
+[82 / 83] ReplanningEvalTrialTests-product
+[91 / 107] BoundedReplanningProbe-product
+[106 / 120] RunRecordFixture-product
+[111 / 121] EnterpriseAuthorizationFixture-product
+[123 / 126] RunRecordFixture-product
+[125 / 126] ScopedCapabilityFixture-product
+[130 / 130] NativeContextFixture-product
+[135 / 135] EnterpriseAuthorizationFixture-product
+Build complete! (12.72秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite NativeContextPublicClientTests started.
+◇ Test thinkingContinuesOnlyInTheNewAuthorityEpoch() started.
+✔ Test thinkingContinuesOnlyInTheNewAuthorityEpoch() passed after 0.463 seconds.
+✔ Suite NativeContextPublicClientTests passed after 0.463 seconds.
+✔ Test run with 1 test in 1 suite passed after 0.463 seconds.
