@@ -63,6 +63,7 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
     private let promptCacheKey: String?
     private let promptCaching: OpenAIResponsesPromptCaching?
     private let resolvedModelIDsByAlias: [String: String]
+    private let nativeContext: OpenAINativeContextConfiguration?
     private let transport: any ProviderHTTPTransport
 
     public var description: String { "OpenAIResponsesProvider" }
@@ -112,6 +113,16 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         promptCaching: OpenAIResponsesPromptCaching?,
         transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
     ) throws {
+        try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
+            reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary, promptCacheKey: promptCacheKey,
+            resolvedModelIDsByAlias: resolvedModelIDsByAlias, promptCaching: promptCaching, nativeContext: nil, transport: transport)
+    }
+
+    public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
+                reasoningEffort: OpenAIReasoningEffort? = nil, reasoningSummary: OpenAIReasoningSummary? = nil,
+                promptCacheKey: String? = nil, resolvedModelIDsByAlias: [String: String] = [:],
+                promptCaching: OpenAIResponsesPromptCaching? = nil, nativeContext: OpenAINativeContextConfiguration?,
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !apiKey.contains("\r"), !apiKey.contains("\n"), maximumOutputTokens > 0,
               let endpoint = endpoint ?? URL(string: "https://api.openai.com/v1/responses") else {
@@ -148,6 +159,10 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         self.promptCaching = promptCaching
         self.resolvedModelIDsByAlias = resolvedModelIDsByAlias
         self.transport = transport
+        if let nativeContext, nativeContext.qualification.endpoint != endpoint {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Native context endpoint qualification does not match the provider.")
+        }
+        self.nativeContext = nativeContext
     }
 
     public func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
@@ -165,12 +180,12 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         ModelEventStream.make { emit in
             let body: Data
             do {
-                body = try ProviderJSON.encode(OpenAIResponsesRequestEncoder.encode(
+                body = try NativeContextWire.checked(OpenAIResponsesRequestEncoder.encode(
                     request, maximumOutputTokens: maximumOutputTokens,
                     reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary,
                     promptCacheKey: promptCacheKey, promptCaching: promptCaching,
                     resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name,
-                    prewarm: prewarm
+                    prewarm: prewarm, nativeContext: nativeContext, endpoint: endpoint
                 ))
             } catch let error as ModelProviderError {
                 throw error
@@ -178,6 +193,12 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
                 throw ModelProviderError(kind: .invalidRequest, message: "The provider request cannot be encoded.")
             }
 
+            if nativeContext?.automatic != nil, request.nativeContextSource == nil {
+                throw ModelProviderError(kind: .invalidRequest, message: "Automatic native context requires a Core-managed source snapshot.")
+            }
+            if let source = request.nativeContextSource, source.requestDigest != ModelImageDigest.sha256Hex(body) {
+                throw ModelProviderError(kind: .invalidRequest, message: "Native request changed after its verified source snapshot.")
+            }
             var http = URLRequest(url: endpoint)
             http.httpMethod = "POST"
             http.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -187,7 +208,7 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
 
             var sse = try ProviderSSEDecoder()
             let responseModelName = resolvedModelIDsByAlias[request.model.name] ?? request.model.name
-            var decoder = OpenAIResponsesStreamDecoder(model: request.model, responseModelName: responseModelName)
+            var decoder = OpenAIResponsesStreamDecoder(model: request.model, responseModelName: responseModelName, nativeRequest: nativeContext?.automatic != nil ? request : nil)
             var validation = ModelEventAccumulator()
             var receivedHeader = false
             var events = transport.stream(http).makeAsyncIterator()
@@ -229,7 +250,72 @@ extension OpenAIResponsesProvider: ModelProviderRequestValidator {
             reasoningEffort: reasoningEffort,
             reasoningSummary: reasoningSummary,
             promptCacheKey: promptCacheKey, promptCaching: promptCaching,
-            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name,
+            nativeContext: nativeContext, endpoint: endpoint
         )
+    }
+}
+
+extension OpenAIResponsesProvider: ModelProviderNativeContextWitness {
+    public var compactionModes: Set<ModelCompactionMode> { nativeContext?.qualification.modes ?? [] }
+    public var automaticCompaction: ModelAutomaticCompaction? { nativeContext?.automatic }
+    public func nativeContextRequestDigest(request: ModelRequest, compactionMode: ModelCompactionMode?) throws -> String {
+        ModelImageDigest.sha256Hex(try nativeBody(request, mode: compactionMode))
+    }
+    private func nativeBody(_ request: ModelRequest, mode: ModelCompactionMode?) throws -> Data {
+        if let mode {
+            guard mode == .openAIStandalone, let nativeContext else { throw ModelProviderError(kind: .unsupportedCapability, message: "OpenAI standalone compact is not qualified.") }
+            try nativeContext.qualification.validate(endpoint: endpoint, model: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, mode: mode)
+            var fields = try ProviderJSON.object(OpenAINativeContext.standalone(request, promptCacheKey: promptCacheKey))
+            try promptCaching?.validate(modelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name)
+            try promptCaching?.apply(to: &fields, request: request, images: true, assistantNativeItems: { content, calls in
+                try OpenAIResponsesContinuation.restore(content: content, calls: calls, model: request.model)?.items
+            }, nativeWindowItemCount: try request.nativeContext.map { try OpenAINativeContext.window($0, model: request.model).count } ?? 0)
+            return try NativeContextWire.checked(.object(fields))
+        }
+        return try NativeContextWire.checked(OpenAIResponsesRequestEncoder.encode(request,
+            maximumOutputTokens: maximumOutputTokens, reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary,
+            promptCacheKey: promptCacheKey, promptCaching: promptCaching,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name,
+            nativeContext: nativeContext, endpoint: endpoint))
+    }
+    public func validateCompaction(request: ModelCompactionRequest) throws { _ = try nativeBody(request.request, mode: request.mode) }
+    public func compact(request: ModelCompactionRequest) -> AsyncThrowingStream<ModelCompactionEvent, Error> {
+        AsyncThrowingStream { continuation in
+            guard !Task.isCancelled else { continuation.finish(throwing: CancellationError()); return }
+            let worker = Task {
+                do {
+                    try Task.checkCancellation()
+                    guard request.request.nativeContextSource != nil else { throw ModelProviderError(kind: .invalidRequest, message: "Native compact requires a Core-managed source snapshot.") }
+                    let body = try nativeBody(request.request, mode: request.mode)
+                    if let source = request.request.nativeContextSource, source.requestDigest != ModelImageDigest.sha256Hex(body) { throw ProviderJSON.invalid() }
+                    var http = URLRequest(url: endpoint.appendingPathComponent("compact"))
+                    http.httpMethod = "POST"; http.httpBody = body
+                    http.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+                    http.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    http.setValue("application/json", forHTTPHeaderField: "Accept")
+                    var receivedHeader = false, data = Data()
+                    try Task.checkCancellation()
+                    var events = transport.stream(http).makeAsyncIterator()
+                    while let event = try await events.next() {
+                        try Task.checkCancellation()
+                        switch event {
+                        case .response(let status, let headers):
+                            guard !receivedHeader else { throw ProviderJSON.invalid() }
+                            guard status == 200 else { throw try await ProviderHTTPFailure.classify(status, headers: headers, remainingBody: &events, signals: .responses) }
+                            receivedHeader = true
+                        case .data(let chunk):
+                            guard receivedHeader, chunk.count <= 32_000_000 - data.count else { throw ProviderJSON.invalid() }
+                            data.append(chunk)
+                        }
+                    }
+                    try Task.checkCancellation()
+                    guard receivedHeader, !data.isEmpty, let text = String(data: data, encoding: .utf8) else { throw ProviderJSON.invalid() }
+                    let response = try OpenAINativeContext.response(.object(try ProviderJSON.decode(text)), request: request)
+                    continuation.yield(.usage(response.usage)); continuation.yield(.completed(response)); continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in worker.cancel() }
+        }
     }
 }

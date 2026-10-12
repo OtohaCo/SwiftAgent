@@ -96,11 +96,28 @@ public enum AgentIncrementalJournal {
                                    supportsRunRecords: Bool = false,
                                    supportsImageContent: Bool = false,
                                    deadline: ContinuousClock.Instant? = nil) async throws -> AgentJournal {
+        try await createAsync(at: directory, operationDomain: operationDomain, policy: policy,
+                              supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit,
+                              supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps,
+                              supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent,
+                              supportsNativeContext: false, deadline: deadline)
+    }
+
+    public static func createAsync(at directory: URL, operationDomain: String,
+                                   policy: JournalMaintenancePolicy = .default,
+                                   supportsAdmissionRejections: Bool = false,
+                                   supportsAuthorizationAudit: Bool = false,
+                                   supportsConfirmedNoEffect: Bool = false,
+                                   supportsPerCallFollowUps: Bool = false,
+                                   supportsRunRecords: Bool = false,
+                                   supportsImageContent: Bool = false,
+                                   supportsNativeContext: Bool,
+                                   deadline: ContinuousClock.Instant? = nil) async throws -> AgentJournal {
         try Task.checkCancellation()
         if let deadline, ContinuousClock.now >= deadline { throw AgentJournalError.deadlineExceeded }
         let journal = try await openOwned(deadline: deadline) { _ in
             try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy,
-                                             supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps, supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent)
+                                             supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps, supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent, supportsNativeContext: supportsNativeContext)
         }
         try Task.checkCancellation()
         return journal
@@ -190,9 +207,24 @@ public enum AgentIncrementalJournal {
                               supportsPerCallFollowUps: Bool = false,
                               supportsRunRecords: Bool = false,
                               supportsImageContent: Bool = false) throws -> AgentJournal {
+        try create(at: directory, operationDomain: operationDomain, policy: policy,
+                   supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit,
+                   supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps,
+                   supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent, supportsNativeContext: false)
+    }
+
+    public static func create(at directory: URL, operationDomain: String,
+                              policy: JournalMaintenancePolicy = .default,
+                              supportsAdmissionRejections: Bool = false,
+                              supportsAuthorizationAudit: Bool = false,
+                              supportsConfirmedNoEffect: Bool = false,
+                              supportsPerCallFollowUps: Bool = false,
+                              supportsRunRecords: Bool = false,
+                              supportsImageContent: Bool = false,
+                              supportsNativeContext: Bool) throws -> AgentJournal {
         do {
             return AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
-                policy: policy, supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps, supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent))
+                policy: policy, supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit, supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps, supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent, supportsNativeContext: supportsNativeContext))
         } catch { throw normalized(error) }
     }
 
@@ -210,6 +242,7 @@ public enum AgentIncrementalJournal {
                                          supportsPerCallFollowUps: Bool = false,
                                          supportsRunRecords: Bool = false,
                                          supportsImageContent: Bool = false,
+                                         supportsNativeContext: Bool = false,
                                          fault: @escaping @Sendable (JournalFileFaultStage) throws -> Void) throws -> AgentJournal {
         AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain,
                                                               policy: policy,
@@ -219,6 +252,7 @@ public enum AgentIncrementalJournal {
                                                               supportsPerCallFollowUps: supportsPerCallFollowUps,
                                                               supportsRunRecords: supportsRunRecords,
                                                               supportsImageContent: supportsImageContent,
+                                                              supportsNativeContext: supportsNativeContext,
                                                               fault: fault))
     }
 }
@@ -553,6 +587,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     let supportsRunRecords: Bool
     /// Format schema 10: messages may carry images, kept once each by digest under `images/`.
     let supportsImageContent: Bool
+    let supportsNativeContext: Bool
     private var callsIndex: IndexKind<UInt64> { .init("calls", witnessed: supportsConfirmedNoEffect) }
     let supportsAuthorizationAudit: Bool
     private let policy: JournalMaintenancePolicy
@@ -585,6 +620,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         supportsConfirmedNoEffect = format.schema >= 6
         supportsRunRecords = format.schema >= 9
         supportsImageContent = format.schema >= 10
+        supportsNativeContext = format.schema >= 11
         supportsPerCallFollowUps = format.schema >= 8
         noEffectProofVersion = format.schema >= 7 ? 2 : format.schema == 6 ? 1 : 0
         expectedFormatDigest = formatDigest
@@ -602,7 +638,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                        supportsPerCallFollowUps: Bool = false,
                        supportsRunRecords: Bool = false,
                        supportsImageContent: Bool = false,
+                       supportsNativeContext: Bool = false,
                        fault: (@Sendable (JournalFileFaultStage) throws -> Void)? = nil) throws -> SegmentedJournalStore {
+        let supportsImageContent = supportsImageContent || supportsNativeContext
         let supportsRunRecords = supportsRunRecords || supportsImageContent
         let supportsPerCallFollowUps = supportsPerCallFollowUps || supportsRunRecords
         let supportsConfirmedNoEffect = supportsConfirmedNoEffect || supportsPerCallFollowUps
@@ -619,7 +657,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
         }
         let descriptor = try lockStore(directory)
-        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsImageContent ? 10 : supportsRunRecords ? 9 : supportsPerCallFollowUps ? 8 : supportsConfirmedNoEffect ? 7 : supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
+        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsNativeContext ? 11 : supportsImageContent ? 10 : supportsRunRecords ? 9 : supportsPerCallFollowUps ? 8 : supportsConfirmedNoEffect ? 7 : supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
                             storeID: UUID(), domain: domain)
         let formatBytes = try JSONEncoder().encode(format)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -687,7 +725,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard format.magic == "SWIFTAGENT-SEGMENTED-JOURNAL", !format.domain.isEmpty else {
             throw AgentJournalError.invalidHeader
         }
-        guard format.schema == 3 || format.schema == 4 || format.schema == 5 || format.schema == 6 || format.schema == 7 || format.schema == 8 || format.schema == 9 || format.schema == 10 else { throw AgentJournalError.unsupportedFormat }
+        guard format.schema == 3 || format.schema == 4 || format.schema == 5 || format.schema == 6 || format.schema == 7 || format.schema == 8 || format.schema == 9 || format.schema == 10 || format.schema == 11 else { throw AgentJournalError.unsupportedFormat }
         observer?(.formatValidated)
         let descriptor = try lockStore(directory, retry: lockRetry, observer: observer)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -2290,6 +2328,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                   change.header.messageCount >= (try header(change.sessionID)?.messageCount ?? 0) else {
                 throw AgentJournalError.concurrentWriter
             }
+            guard store.supportsNativeContext || (change.header.nativeContext == nil && change.header.conversationControls == nil && !change.messages.contains { message in
+                guard case .assistant(let parts, _) = message.value else { return false }
+                return parts.contains { if case .providerContinuation(let value) = $0 { return value.contextTransition != nil }; return false }
+            }) else { throw AgentJournalError.unsupportedFormat }
             let hasCheckpoint = change.records.contains { if case .checkpoint = $0.event { return true }; return false }
             guard hasCheckpoint || change.messages.isEmpty else { throw AgentJournalError.invalidRecord }
             let rejections = change.records.compactMap { record -> JournalAdmissionRejection? in

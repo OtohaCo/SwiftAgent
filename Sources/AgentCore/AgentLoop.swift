@@ -6,6 +6,7 @@ package struct AgentPreparedModelRequest: Sendable {
     package let request: ModelRequest
     package let projection: AgentContextProjection
     package let canonicalMessages: [ModelMessage]
+    package var conversationControls: ModelConversationControlState? = nil
 }
 
 /// Package orchestration for one model → tool → model loop. SDK users go through
@@ -16,22 +17,30 @@ package struct AgentLoop: Sendable {
     private let scheduler: ToolScheduler
     private let modelContextByteLimit: Int?
     private let journal: AgentJournal?
+    private let nativeContextState: AgentNativeContextState
+    private let conversationControlState: AgentConversationControlState
+    private let runContextControls: AgentRunContextControls?
+    private let contextOperation: Bool
     private let contextEffects: AgentContextEffectLedger
     private let capabilityScope: AgentCapabilityScope?
     private let allowedResources: Set<ToolResource>?
     private let preAdmissionReplanning: AgentPreAdmissionReplanning
     private let projectionDrain = AgentProjectionDrain()
+    private let nativeOperations = AgentNativeOperationIDs()
     private let audit: AgentAuditRuntime?
     /// Test seam: runs before the loop handles each model event, to make the consumer lag behind the model source.
     private let beforeHandlingModelEvent: (@Sendable (ModelEvent) async -> Void)?
 
     private var model: ModelID { binding.model }
     private var provider: any ModelProvider { binding.provider }
+    var modelBinding: AgentModelBinding { binding }
 
     package init(binding: AgentModelBinding, tools: ToolRegistry,
                  scheduler: ToolScheduler = .init(), modelContextByteLimit: Int? = nil,
                  journal: AgentJournal? = nil,
                  contextEffects: AgentContextEffectLedger = .init(),
+                 nativeContextState: AgentNativeContextState = .init(),
+                 conversationControlState: AgentConversationControlState = .init(), runContextControls: AgentRunContextControls? = nil, contextOperation: Bool = false,
                  capabilityScope: AgentCapabilityScope? = nil,
                  allowedResources: Set<ToolResource>? = nil,
                  preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled,
@@ -43,6 +52,10 @@ package struct AgentLoop: Sendable {
         self.scheduler = scheduler
         self.modelContextByteLimit = modelContextByteLimit
         self.journal = journal
+        self.nativeContextState = nativeContextState
+        self.conversationControlState = conversationControlState
+        self.runContextControls = runContextControls
+        self.contextOperation = contextOperation
         self.contextEffects = contextEffects
         self.capabilityScope = capabilityScope
         self.allowedResources = allowedResources
@@ -71,7 +84,8 @@ package struct AgentLoop: Sendable {
             contextEpoch: conversationRevision,
             modelTurn: 1,
             structuredOutput: structuredOutput,
-            declaredTools: tools.initiallyDeclaredNames
+            declaredTools: tools.initiallyDeclaredNames,
+            isStartupPreflight: true
         )
     }
 
@@ -110,6 +124,9 @@ package struct AgentLoop: Sendable {
         await toolDrain
         await contextDrain
         await audit?.waitForDrain()
+        if let provider = provider as? any ModelProviderCompaction {
+            for id in await nativeOperations.ids() { await provider.waitForCompactionToDrain(sessionID: sessionID, operationID: id) }
+        }
     }
 
     private func waitForProviderToDrain(sessionID: UUID, runID: UUID) async {
@@ -173,6 +190,7 @@ package struct AgentLoop: Sendable {
         try budget.checkActive()
         var history = messages
         var modelTurns = 0
+        var maintenanceRounds = 0
         var toolCalls = 0
         var admissionFeedbackUsed = false
         var mutationObserved = false
@@ -189,6 +207,34 @@ package struct AgentLoop: Sendable {
             case .tool(let result): usedCallIDs.insert(result.callID)
             default: break
             }
+        }
+        if let mode = binding.nativeContextPolicy?.compactBeforeGeneration {
+            guard let nativeProvider = provider as? any ModelProviderCompaction else {
+                throw ModelProviderError(kind: .unsupportedCapability, message: "The binding requests an unavailable native compact operation.")
+            }
+            let prepared = try await prepareRequest(messages: history, sessionID: sessionID, runID: runID,
+                conversationRevision: projectionRevision, contextEpoch: contextEpoch, modelTurn: 0,
+                structuredOutput: structuredOutput, declaredTools: declaredTools)
+            let source = try await nativeContextState.source(for: prepared, sessionID: sessionID, journal: journal, provider: provider, compactionMode: mode)
+            let invocation = UUID(), operation = UUID()
+            let request = prepared.request.withNativeSource(source, invocationID: invocation)
+            await nativeOperations.insert(operation)
+            let response = try await executeNativeCompact(provider: nativeProvider,
+                request: .init(request: request, mode: mode, operationID: operation, invocationID: invocation),
+                emit: { event in try await emitter?.send(.compaction(operationID: operation, invocationID: invocation, event: event)) })
+            try budget.checkActive()
+            if let state = response.continuation {
+                guard state.contextTransition?.responseID == response.info.id else { throw AgentModelBindingError.incompatibleContinuation }
+                if let publish = lifecycle?.publishNativeContext {
+                    history = try await publish(history, state, request, response.usage, source.canonicalMessageCount)
+                } else {
+                    guard journal == nil else { throw AgentJournalError.invalidRecord }
+                    let value = try await nativeContextState.candidate(state, request: request, canonicalTailStart: source.canonicalMessageCount,
+                        canonical: history, binding: binding, usage: response.usage)
+                    await nativeContextState.install(value)
+                }
+            }
+            try await emitter?.send(.compaction(operationID: operation, invocationID: invocation, event: .completed(response)))
         }
         while true {
             try budget.checkActive()
@@ -217,7 +263,7 @@ package struct AgentLoop: Sendable {
             let preparedRequest: AgentPreparedModelRequest
             if modelTurns == 1,
                let initialRequest,
-               initialRequest.canonicalMessages == history {
+               initialRequest.canonicalMessages == history, binding.nativeContextPolicy?.compactBeforeGeneration == nil {
                 preparedRequest = initialRequest
             } else {
                 preparedRequest = try await prepareRequest(
@@ -232,7 +278,32 @@ package struct AgentLoop: Sendable {
                     allowUnresolvedToolTail: initialRequest == nil && modelTurns == 1
                 )
             }
-            let request = preparedRequest.request
+            if let controls = preparedRequest.conversationControls, await conversationControlState.current() != controls {
+                if let publish = lifecycle?.publishConversationControls {
+                    try await publish(controls, history)
+                } else {
+                    guard journal == nil else { throw AgentJournalError.invalidRecord }
+                    await conversationControlState.install(controls)
+                }
+            }
+            let request: ModelRequest
+            if (provider as? any ModelProviderCompaction)?.automaticCompaction != nil || requestNeedsNativeSource(preparedRequest.request)
+                || (provider as? any ModelProviderPreservedThinkingCompaction)?.supportsPreservedThinkingCompaction == true {
+                let source = try await nativeContextState.source(for: preparedRequest, sessionID: sessionID, journal: journal, provider: provider)
+                request = preparedRequest.request.withNativeSource(source, invocationID: UUID())
+            } else { request = preparedRequest.request }
+            let requestBoundary: ModelProviderRequestBoundary?
+            if let preserved = provider as? any ModelProviderPreservedThinkingCompaction,
+               preserved.supportsPreservedThinkingCompaction, !binding.isLegacyBinding,
+               let source = request.nativeContextSource, let invocationID = request.invocationID,
+               preparedRequest.request.messages == (try await nativeContextState.effectiveMessages(history, binding: binding,
+                    sessionID: sessionID, journal: journal, structuredOutput: structuredOutput)) {
+                requestBoundary = try .init(id: UUID(), source: source, invocationID: invocationID,
+                    origin: binding.continuationOrigin,
+                    rootConfigurationDigest: try AgentNativeContextState.rootDigest(history, binding: binding, structuredOutput: structuredOutput),
+                    tools: request.tools, conversationControls: request.conversationControls,
+                    witness: try preserved.preservedThinkingRequestWitness(request: request))
+            } else { requestBoundary = nil }
             try budget.checkActive()
             var accumulator = ModelEventAccumulator()
             var receivedThisTurn: [ToolCallID] = []
@@ -240,7 +311,7 @@ package struct AgentLoop: Sendable {
             for try await rawEvent in settlingModelEvents(provider.stream(request: request), gate: budget.gate) {
                 await beforeHandlingModelEvent?(rawEvent)
                 try budget.checkActive()
-                let event = try scopeContinuation(rawEvent)
+                let event = try scopeContinuation(rawEvent, requestBoundary: requestBoundary)
                 if let audit, case .toolCallStarted(let id, let name) = event {
                     if id.rawValue.utf8.count > 512 || name.utf8.count > 512
                         || id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.isEmpty
@@ -272,13 +343,20 @@ package struct AgentLoop: Sendable {
             try requireConfiguredModel(response.info.model)
             try await emitter?.send(.model(.responseCompleted(response)))
             if response.stopReason == .cancelled { throw CancellationError() }
-            if let lifecycle {
-                let inputs = try await lifecycle.control.takeSteering(atTermination: response.stopReason != .toolCalls)
+            if let lifecycle, preparedRequest.conversationControls == nil || response.classification == .finalResponse {
+                let inputs = try await lifecycle.control.takeSteering(atTermination: response.classification == .finalResponse)
                 if !inputs.isEmpty {
                     // Another model turn follows: the answer just settled is not the last, and the deadline limits it.
                     budget.gate.reopen()
                     for call in response.toolCalls { try await audit?.rejected(call.id, reason: "steering_superseded") }
                     guard modelTurns < budget.maxModelTurns else { throw AgentLoopError.modelTurnLimitReached }
+                    if preparedRequest.conversationControls != nil {
+                        let accepted = checkpointContent(response, retainingToolCalls: 0).filter {
+                            if case .providerContinuation(let state) = $0 { state.contextTransition == nil } else { true }
+                        }
+                        guard !accepted.isEmpty else { throw ModelProviderError(kind: .unsupportedCapability, message: "Steering needs a real assistant boundary after trusted controls.") }
+                        history.append(.assistant(content: accepted, toolCalls: []))
+                    }
                     try await applySteering(inputs, to: &history, lifecycle: lifecycle, emitter: emitter)
                     (projectionRevision, contextEpoch) = try advancedProjectionCoordinates(
                         revision: projectionRevision,
@@ -287,6 +365,27 @@ package struct AgentLoop: Sendable {
                     continue
                 }
             }
+            if response.classification == .maintenance {
+                guard response.toolCalls.isEmpty else {
+                    throw ModelProviderError(kind: .invalidResponse, message: "Maintenance cannot publish unaccepted client tool proposals.")
+                }
+                maintenanceRounds += 1
+                let configuredLimits = [binding.nativeContextPolicy?.maximumMaintenanceRounds,
+                    (provider as? any ModelProviderCompaction)?.automaticCompaction?.maximumMaintenanceRounds].compactMap { $0 }
+                guard maintenanceRounds <= (configuredLimits.min() ?? 4) else {
+                    throw ModelProviderError(kind: .invalidResponse, message: "Native maintenance did not converge within its bounded continuation budget.")
+                }
+                if let state = try nativeCandidate(response, request: request) {
+                    history = try await publishNative(state, request: request, response: response, history: history,
+                        tailStart: request.nativeContextSource!.canonicalMessageCount, lifecycle: lifecycle)
+                } else if response.stopReason == .unknown("compaction") {
+                    throw ModelProviderError(kind: .invalidResponse, message: "Compaction pause has no complete native checkpoint.")
+                }
+                (projectionRevision, contextEpoch) = try advancedProjectionCoordinates(revision: projectionRevision, contextEpoch: contextEpoch)
+                try budget.checkActive()
+                continue
+            }
+            maintenanceRounds = 0
             if response.stopReason != .toolCalls {
                 for call in response.toolCalls { try await audit?.rejected(call.id, reason: "not_dispatched") }
                 let outcome: AgentLoopOutcome
@@ -299,7 +398,10 @@ package struct AgentLoop: Sendable {
                 // Unexecuted proposals stay in the terminal response, not model-ready history.
                 let content = checkpointContent(response, retainingToolCalls: 0)
                 if !content.isEmpty { history.append(.assistant(content: content, toolCalls: [])) }
-                if let lifecycle { history = try await lifecycle.checkpoint(history, []) }
+                if response.toolCalls.isEmpty, let state = try nativeCandidate(response, request: request) {
+                    history = try await publishNative(state, request: request, response: response, history: history,
+                        tailStart: history.count - history.prefix { $0.role == .system || $0.role == .developer }.count, lifecycle: lifecycle)
+                } else if let lifecycle { history = try await lifecycle.checkpoint(history, []) }
                 return AgentLoopResult(response: response, history: history, outcome: outcome,
                                        modelTurns: modelTurns, toolCalls: toolCalls, receipts: receipts)
             }
@@ -370,7 +472,9 @@ package struct AgentLoop: Sendable {
                         "message": .string("\(detail); this call was denied before execution."),
                     ]))], isError: true)
                     let proposed = history + [
-                        .assistant(content: checkpointContent(response, retainingToolCalls: 1), toolCalls: [call.call]),
+                        .assistant(content: checkpointContent(response, retainingToolCalls: 1).filter {
+                            if case .providerContinuation(let state) = $0 { state.contextTransition == nil } else { true }
+                        }, toolCalls: [call.call]),
                         .tool(message),
                     ]
                     try budget.checkActive()
@@ -404,6 +508,10 @@ package struct AgentLoop: Sendable {
                     replayCalls[index] = ToolCall(id: call.id, name: call.name,
                         argumentsJSON: ToolCall.replacedInvalidArgumentsJSON, completeness: .complete)
                 }
+            }
+            if replayCalls == response.toolCalls, let stage = lifecycle?.stageNativeContext,
+               let state = try nativeCandidate(response, request: request) {
+                try await stage(state, request, response.usage, request.nativeContextSource!.canonicalMessageCount + 1)
             }
             let progress = AgentToolBatchProgress(prefix: history, response: response, calls: replayCalls,
                                                   rejected: rejectedArguments, budget: budget,
@@ -440,6 +548,11 @@ package struct AgentLoop: Sendable {
                 await markMutationBoundaryIfNeeded(sessionID: sessionID, runID: runID)
             }
             history = completed.history
+            if lifecycle?.stageNativeContext == nil, replayCalls == response.toolCalls, completed.count == response.toolCalls.count,
+               let state = try nativeCandidate(response, request: request) {
+                history = try await publishNative(state, request: request, response: response, history: history,
+                    tailStart: request.nativeContextSource!.canonicalMessageCount + 1, lifecycle: lifecycle)
+            }
             (projectionRevision, contextEpoch) = try advancedProjectionCoordinates(
                 revision: projectionRevision,
                 contextEpoch: contextEpoch
@@ -450,6 +563,46 @@ package struct AgentLoop: Sendable {
                 || completed.receipts.contains { $0.effect == .mutation }
             toolCalls += completed.count
         }
+    }
+
+    private func executeNativeCompact(provider: any ModelProviderCompaction, request: ModelCompactionRequest,
+                                      emit: @escaping @Sendable (ModelCompactionEvent) async throws -> Void) async throws -> ModelCompactionResponse {
+        await projectionDrain.begin()
+        do {
+            let response = try await AgentNativeCompactionExecutor(provider: provider).execute(request, emit: emit)
+            await projectionDrain.finish()
+            return response
+        } catch { await projectionDrain.finish(); throw error }
+    }
+
+    private func requestNeedsNativeSource(_ request: ModelRequest) -> Bool {
+        request.nativeContext != nil || binding.nativeContextPolicy?.compactBeforeGeneration != nil
+    }
+
+    private func nativeCandidate(_ response: ModelResponse, request: ModelRequest) throws -> ModelProviderContinuation? {
+        let states = response.content.compactMap { content -> ModelProviderContinuation? in
+            guard case .providerContinuation(let state) = content, state.contextTransition != nil else { return nil }
+            return state
+        }
+        guard states.count <= 1 else { throw AgentModelBindingError.incompatibleContinuation }
+        if let state = states.first {
+            guard state.contextTransition?.responseID == response.info.id,
+                  state.contextTransition?.source == request.nativeContextSource,
+                  request.nativeContextSource != nil else { throw AgentModelBindingError.incompatibleContinuation }
+        }
+        return states.first
+    }
+
+    private func publishNative(_ state: ModelProviderContinuation, request: ModelRequest, response: ModelResponse,
+                               history: [ModelMessage], tailStart: Int, lifecycle: AgentLoopLifecycle?) async throws -> [ModelMessage] {
+        if let publish = lifecycle?.publishNativeContext {
+            return try await publish(history, state, request, response.usage, tailStart)
+        }
+        guard journal == nil else { throw AgentJournalError.invalidRecord }
+        let value = try await nativeContextState.candidate(state, request: request, canonicalTailStart: tailStart,
+                                                          canonical: history, binding: binding, usage: response.usage)
+        await nativeContextState.install(value)
+        return history
     }
 
     private func markMutationBoundaryIfNeeded(sessionID: UUID, runID: UUID) async {
@@ -492,7 +645,8 @@ package struct AgentLoop: Sendable {
         modelTurn: Int,
         structuredOutput: StructuredOutputSchema?,
         declaredTools: Set<String>,
-        allowUnresolvedToolTail: Bool = false
+        allowUnresolvedToolTail: Bool = false,
+        isStartupPreflight: Bool = false
     ) async throws -> AgentPreparedModelRequest {
         try Task.checkCancellation()
         await projectionDrain.begin()
@@ -502,7 +656,8 @@ package struct AgentLoop: Sendable {
                 messages: messages, sessionID: sessionID, runID: runID,
                 conversationRevision: conversationRevision, contextEpoch: contextEpoch,
                 modelTurn: modelTurn, structuredOutput: structuredOutput,
-                declaredTools: declaredTools, allowUnresolvedToolTail: allowUnresolvedToolTail)
+                declaredTools: declaredTools, allowUnresolvedToolTail: allowUnresolvedToolTail,
+                isStartupPreflight: isStartupPreflight)
             await projectionDrain.finish()
             return prepared
         } catch {
@@ -520,13 +675,47 @@ package struct AgentLoop: Sendable {
         modelTurn: Int,
         structuredOutput: StructuredOutputSchema?,
         declaredTools: Set<String>,
-        allowUnresolvedToolTail: Bool
+        allowUnresolvedToolTail: Bool,
+        isStartupPreflight: Bool
     ) async throws -> AgentPreparedModelRequest {
         guard provider.descriptor.id.utf8.elementsEqual(model.provider.utf8) else {
             throw AgentLoopError.providerMismatch
         }
+        if (provider as? any ModelProviderCompaction)?.automaticCompaction != nil || binding.nativeContextPolicy?.compactBeforeGeneration != nil
+            || (provider as? any ModelProviderPreservedThinkingCompaction)?.supportsPreservedThinkingCompaction == true {
+            guard !binding.isLegacyBinding else {
+                throw ModelProviderError(kind: .unsupportedCapability, message: "Native context requires an explicit deployment-scoped model binding.")
+            }
+            if let journal, !journal.supportsNativeContext { throw AgentJournalError.unsupportedFormat }
+        }
+        if let mode = binding.nativeContextPolicy?.compactBeforeGeneration {
+            guard let nativeProvider = provider as? any ModelProviderCompaction, nativeProvider.compactionModes.contains(mode) else {
+                throw ModelProviderError(kind: .unsupportedCapability, message: "The controlled compaction mode is not qualified for this deployment.")
+            }
+        }
+        if await nativeContextState.current() != nil, binding.isLegacyBinding {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Restored native state requires its explicit deployment binding.")
+        }
+        let canonicalMessages = messages
+        let messages = try await nativeContextState.effectiveMessages(messages, binding: binding, sessionID: sessionID,
+                                                                      journal: journal, structuredOutput: structuredOutput)
+        let nativeContext = await nativeContextState.current()
+        let nativePending = await nativeContextState.pendingCalls(in: canonicalMessages)
+        if nativeContext != nil,
+           let requirements = binding.projector as? any AgentContextSourceReferencing,
+           !requirements.historySpans.isEmpty || !requirements.toolResultCallIDs.isEmpty {
+            throw ModelProviderError(kind: .unsupportedCapability,
+                message: "Canonical range projectors cannot reinterpret ranges across a native covered prefix; use an identity or native-suffix projector.")
+        }
         // Requests, capability checks and token estimates see the declared tools only.
-        let toolDefinitions = tools.definitions(declared: declaredTools)
+        let activeDefinitions = contextOperation ? (await conversationControlState.current()?.activeTools ?? tools.definitions(declared: declaredTools)) : tools.definitions(declared: declaredTools)
+        let controlsInput: AgentRunContextControls?
+        if isStartupPreflight { controlsInput = runContextControls }
+        else { controlsInput = try runContextControls.map { try .init(reminder: $0.reminder) } }
+        let proposedControls = try await conversationControlState.prepare(canonical: canonicalMessages, binding: binding,
+            definitions: activeDefinitions, baselineDefinitions: tools.definitions, baselineDeclaredNames: tools.initiallyDeclaredNames, instructions: controlsInput, structuredOutput: structuredOutput)
+        if proposedControls != nil, let journal, !journal.supportsNativeContext { throw AgentJournalError.unsupportedFormat }
+        let toolDefinitions = proposedControls?.toolBaseline ?? activeDefinitions
         var required: ModelCapabilities = []
         if !toolDefinitions.isEmpty { required.formUnion([.tools, .multiTurn]) }
         if messages.contains(where: { $0.role == .assistant || $0.role == .tool }) { required.insert(.multiTurn) }
@@ -604,13 +793,22 @@ package struct AgentLoop: Sendable {
         guard projection.plan.sourceRevision == conversationRevision,
               projection.plan.sourceDigest == sourceEncoding.digest,
               projection.plan.contextEpoch == contextEpoch,
-              validToolPairs(projection.messages, allowUnresolvedToolTail: allowUnresolvedToolTail) else {
+              validToolPairs(projection.messages, allowUnresolvedToolTail: allowUnresolvedToolTail, initialPending: nativePending) else {
             throw AgentModelBindingError.invalidProjection
         }
         try validateContinuations(projection.messages)
         // Images reach the model, become text or stop the request here, per the Run's explicit choice.
         let (modelMessages, described) = try binding.imageInput.apply(
             to: projection.messages, adapterSendsImages: provider.descriptor.capabilities.contains(.imageInput))
+        if let checkpoint = nativeContext, let lineage = checkpoint.preservedThinkingLineage {
+            let leading = canonicalMessages.prefix { $0.role == .system || $0.role == .developer }.count
+            let expected = Array(canonicalMessages.dropFirst(leading + checkpoint.canonicalTailStart).prefix(lineage.tailMessageCount))
+            let actual = Array(modelMessages.drop(while: { $0.role == .system || $0.role == .developer }).prefix(lineage.tailMessageCount))
+            guard expected.count == lineage.tailMessageCount, actual == expected,
+                  try AgentContextProjectionSource.digest(messages: actual) == lineage.tailDigest else {
+                throw AgentModelBindingError.invalidProjection
+            }
+        }
         // Images sent as text make this request's view lossy, and its plan says so.
         let sentProjection = described ? AgentContextProjection(
             messages: modelMessages,
@@ -620,8 +818,14 @@ package struct AgentLoop: Sendable {
                         reason: projection.plan.reason ?? "Images were sent as their text substitutes."),
             report: projection.report
         ) : projection
-        let requestBytes = sharesCanonicalMessageStorage(modelMessages, messages)
+        let controlView = try proposedControls.map { try AgentConversationControlState.view($0, canonical: canonicalMessages,
+            effective: modelMessages, native: nativeContext) }
+        let controlBytes = try controlView.map { try AgentConversationControlState.encode($0.controls).count } ?? 0
+        let visibleBytes = sharesCanonicalMessageStorage(modelMessages, messages)
             ? sourceEncoding.byteCount : try AgentContextWindow.encodedByteCount(modelMessages)
+        let nativeBytes = nativeContext.map { $0.continuation.payload.count } ?? 0
+        let (requestBytes, byteOverflow) = visibleBytes.addingReportingOverflow(nativeBytes + controlBytes)
+        guard !byteOverflow else { throw AgentModelBindingError.invalidProjection }
         if let modelContextByteLimit {
             let bytes = requestBytes
             guard bytes <= modelContextByteLimit else {
@@ -634,11 +838,17 @@ package struct AgentLoop: Sendable {
         }
         var tokenEstimate: AgentContextTokenEstimate?
         if let budget = binding.tokenBudget {
+            if nativeContext != nil, !(budget.estimator is any AgentNativeContextTokenEstimator) {
+                throw AgentModelBindingError.contextWindowUnknown
+            }
+            if controlView?.controls.isEmpty == false, !(budget.estimator is any AgentConversationControlTokenEstimator) {
+                throw AgentModelBindingError.contextWindowUnknown
+            }
             let estimate: AgentContextTokenEstimate
             do {
                 estimate = try await budget.estimator.estimate(.init(
                     model: model, messages: modelMessages,
-                    tools: toolDefinitions, structuredOutput: structuredOutput
+                    tools: toolDefinitions, structuredOutput: structuredOutput, nativeContext: nativeContext, conversationControls: controlView
                 ))
             } catch {
                 if let report = projection.report, let sink = binding.contextReports {
@@ -666,13 +876,13 @@ package struct AgentLoop: Sendable {
             tools: toolDefinitions,
             structuredOutput: structuredOutput,
             sessionID: sessionID,
-            runID: runID
+            runID: runID, nativeContext: nativeContext, conversationControls: controlView
         )
         try (provider as? any ModelProviderRequestValidator)?.validate(request: request)
         if let report = projection.report, let sink = binding.contextReports {
             await sink.append(report.withBudget(requestBytes: requestBytes, estimate: tokenEstimate))
         }
-        return .init(request: request, projection: sentProjection, canonicalMessages: messages)
+        return .init(request: request, projection: sentProjection, canonicalMessages: canonicalMessages, conversationControls: proposedControls)
     }
 
     private func validateContinuations(_ messages: [ModelMessage]) throws {
@@ -692,40 +902,45 @@ package struct AgentLoop: Sendable {
         }
     }
 
-    private func scopeContinuation(_ event: ModelEvent) throws -> ModelEvent {
-        guard binding.legacyContinuationPolicy != .allowMatchingModel else { return event }
+    private func scopeContinuation(_ event: ModelEvent, requestBoundary: ModelProviderRequestBoundary? = nil) throws -> ModelEvent {
         switch event {
         case .providerContinuation(let state):
-            return .providerContinuation(try scoped(state))
+            if binding.legacyContinuationPolicy == .allowMatchingModel, state.contextTransition == nil, requestBoundary == nil { return event }
+            return .providerContinuation(try scoped(state, requestBoundary: requestBoundary))
         case .responseCompleted(let response):
+            if binding.legacyContinuationPolicy == .allowMatchingModel, requestBoundary == nil, !response.content.contains(where: {
+                if case .providerContinuation(let state) = $0 { state.contextTransition != nil } else { false }
+            }) { return event }
             return .responseCompleted(.init(
                 info: response.info,
-                content: try response.content.map(scoped),
+                content: try response.content.map { try scoped($0, requestBoundary: requestBoundary) },
                 toolCalls: response.toolCalls,
                 usage: response.usage,
-                stopReason: response.stopReason
+                stopReason: response.stopReason, inputTransformations: response.inputTransformations
             ))
         default:
             return event
         }
     }
 
-    private func scoped(_ content: ModelContent) throws -> ModelContent {
+    private func scoped(_ content: ModelContent, requestBoundary: ModelProviderRequestBoundary? = nil) throws -> ModelContent {
         guard case .providerContinuation(let state) = content else { return content }
-        return .providerContinuation(try scoped(state))
+        return .providerContinuation(try scoped(state, requestBoundary: requestBoundary))
     }
 
-    private func scoped(_ state: ModelProviderContinuation) throws -> ModelProviderContinuation {
+    private func scoped(_ state: ModelProviderContinuation, requestBoundary: ModelProviderRequestBoundary? = nil) throws -> ModelProviderContinuation {
         guard state.model == model,
               state.origin == nil || state.origin == binding.continuationOrigin else {
             throw AgentModelBindingError.incompatibleContinuation
         }
-        return .init(model: state.model, format: state.format, payload: state.payload, origin: binding.continuationOrigin)
+        return .init(model: state.model, format: state.format, payload: state.payload, origin: binding.continuationOrigin, contextTransition: state.contextTransition, requestBoundary: requestBoundary)
     }
 
-    private func validToolPairs(_ messages: [ModelMessage], allowUnresolvedToolTail: Bool) -> Bool {
-        var pending = Set<ToolCallID>()
-        var seenCallIDs = Set<ToolCallID>()
+    private func validToolPairs(_ messages: [ModelMessage], allowUnresolvedToolTail: Bool,
+                                initialPending: Set<ToolCallID> = []) -> Bool {
+        var pending = initialPending
+        var seenCallIDs = initialPending
+        let leading = messages.prefix { $0.role == .system || $0.role == .developer }.count
         for (index, message) in messages.enumerated() {
             switch message {
             case .assistant(_, let calls):
@@ -737,7 +952,7 @@ package struct AgentLoop: Sendable {
             case .tool(let result):
                 guard pending.remove(result.callID) != nil else { return false }
             case .user, .system, .developer:
-                guard pending.isEmpty else { return false }
+                if index >= leading { guard pending.isEmpty else { return false } }
             }
             if allowUnresolvedToolTail, index == messages.index(before: messages.endIndex) {
                 return true
@@ -842,6 +1057,12 @@ package struct AgentLoop: Sendable {
 
 /// A timed-out noncooperative projector/estimator may still be physically
 /// running. Session drain must retain the Run and store lease until it exits.
+private actor AgentNativeOperationIDs {
+    private var values: Set<UUID> = []
+    func insert(_ id: UUID) { values.insert(id) }
+    func ids() -> Set<UUID> { values }
+}
+
 private actor AgentProjectionDrain {
     private var active = 0
     private var waiters: [CheckedContinuation<Void, Never>] = []

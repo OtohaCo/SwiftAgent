@@ -40,6 +40,8 @@ public struct ModelUsage: Hashable, Sendable, Codable {
     public let cacheWriteInputTokens: Int?
     public let reasoningTokens: Int?
     public let cacheWriteTTL: CacheWriteTTLUsage?
+    /// Ordered per-sampling replacement snapshot. Nil means unreported.
+    public let iterationUsage: ModelIterationUsage?
 
     public init(
         inputTokens: Int? = nil,
@@ -62,12 +64,23 @@ public struct ModelUsage: Hashable, Sendable, Codable {
         reasoningTokens: Int? = nil,
         cacheWriteTTL: CacheWriteTTLUsage?
     ) {
+        self.init(inputTokens: inputTokens, outputTokens: outputTokens,
+                  cachedInputTokens: cachedInputTokens, cacheWriteInputTokens: cacheWriteInputTokens,
+                  reasoningTokens: reasoningTokens, cacheWriteTTL: cacheWriteTTL, iterationUsage: nil)
+    }
+
+    /// Required new label preserves both old initializer function signatures.
+    public init(inputTokens: Int? = nil, outputTokens: Int? = nil,
+                cachedInputTokens: Int? = nil, cacheWriteInputTokens: Int? = nil,
+                reasoningTokens: Int? = nil, cacheWriteTTL: CacheWriteTTLUsage? = nil,
+                iterationUsage: ModelIterationUsage?) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.cachedInputTokens = cachedInputTokens
         self.cacheWriteInputTokens = cacheWriteInputTokens
         self.reasoningTokens = reasoningTokens
         self.cacheWriteTTL = cacheWriteTTL
+        self.iterationUsage = iterationUsage
     }
 }
 

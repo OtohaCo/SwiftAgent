@@ -6,6 +6,21 @@ import Foundation
 import Testing
 
 struct ConversationProjectionTests {
+    @Test func nativeMaintenanceDiagnosticsDoNotBecomeDisplayedAnswers() throws {
+        let model = ModelID(provider: "anthropic", name: "fixture")
+        var projection = ConversationProjection(conversationID: UUID())
+        projection.beginUserTurn("real user", generation: 1)
+        projection.apply(.turnStarted(1))
+        projection.apply(.compaction(operationID: UUID(), invocationID: UUID(), event: .completed(
+            .init(info: .init(id: "compact", model: model), continuation: nil, usage: .init(inputTokens: 100)))))
+        projection.apply(.model(.inputTransformations([.init(kind: "thinking_dropped", reason: "prefix_binding_mismatch", path: "messages.1.content.0", source: nil)])))
+        projection.apply(.model(.compactionProgress(.init(responseID: "fixture", phase: "compacting"))))
+        let assistant = try #require(projection.snapshot.items.compactMap(\.assistant).first)
+        #expect(assistant.text.isEmpty && assistant.reasoning.isEmpty)
+        #expect(assistant.responseID == nil)
+        #expect(projection.snapshot.terminal == nil)
+    }
+
     @Test func completedResponseDoesNotDuplicateStreamedText() throws {
         let conversationID = UUID()
         let runID = UUID()

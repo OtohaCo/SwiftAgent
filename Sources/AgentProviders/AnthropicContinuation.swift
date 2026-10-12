@@ -54,17 +54,30 @@ enum AnthropicContinuation {
     }
 
     /// A local witness of the encoded prefix, never verification of the vendor signature.
-    static func validatePrefix(content: [ModelContent], blocks: [JSONValue], prefix: JSONValue) throws {
+    static func validatePrefix(content: [ModelContent], blocks: [JSONValue], prefix: JSONValue,
+                               replacements: [ModelThinkingPrefixReplacement] = []) throws {
         guard containsThinking(blocks) else { return }
         let state = content.compactMap { part -> ModelProviderContinuation? in
             if case .providerContinuation(let value) = part { value } else { nil }
         }.first
         guard let state, let payload = try? JSONDecoder().decode(JSONValue.self, from: state.payload),
               case .object(let object) = payload, case .string(let digest) = object["prefixDigest"],
-              digest == (try prefixDigest(prefix)) else {
+              (digest == (try prefixDigest(prefix)) || replacements.contains(where: {
+                  $0.originalDigest == digest && $0.replacementDigest == (try? prefixDigest(prefix))
+                  && $0.continuationPayloadDigest == ModelImageDigest.sha256Hex(state.payload)
+              })) else {
             throw ModelProviderError(kind: .invalidRequest,
                 message: "Anthropic signed thinking requires its unchanged system, tools and preceding messages, with an RC6 prefix witness. Use fixed declarations and an append-only request view; do not retry the Run.")
         }
+    }
+
+    static func prefixReplacement(content: [ModelContent], blocks: [JSONValue], prefix: JSONValue) throws -> ModelThinkingPrefixReplacement? {
+        guard containsThinking(blocks) else { return nil }
+        let state = content.compactMap { if case .providerContinuation(let state) = $0 { state } else { nil } }.first
+        guard let state, case .object(let payload) = try JSONDecoder().decode(JSONValue.self, from: state.payload),
+              case .string(let original) = payload["prefixDigest"], !original.isEmpty else { throw ProviderJSON.invalid() }
+        return try .init(originalDigest: original, replacementDigest: try prefixDigest(prefix),
+                     continuationPayloadDigest: ModelImageDigest.sha256Hex(state.payload))
     }
 
     static func prefix(system: JSONValue?, tools: JSONValue?, messages: [JSONValue]) -> JSONValue {
@@ -111,6 +124,10 @@ enum AnthropicContinuation {
                 continue
             case "tool_use":
                 _ = try ProviderJSON.object(block["input"])
+                continue
+            case "compaction":
+                // The executing/replaying adapter validates the concrete compaction mode.
+                guard block["content"] != nil else { throw ProviderJSON.invalid() }
                 continue
             default: throw ProviderJSON.invalid()
             }

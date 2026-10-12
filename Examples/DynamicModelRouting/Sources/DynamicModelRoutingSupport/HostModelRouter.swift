@@ -465,13 +465,19 @@ public struct HostModelRouter: Sendable {
     public func costEstimate(for candidate: HostModelCandidate) -> HostCostEstimate {
         guard let usage = candidate.forecast else { return .init(value: nil, unknownReason: .missingForecast) }
         guard let pricing = candidate.pricing else { return .init(value: nil, unknownReason: .missingQuote) }
+        return costEstimate(usage: usage, pricing: pricing, model: candidate.binding.model)
+    }
+
+    /// The same classified cache-write calculation used for routing forecasts,
+    /// applied to one measured sampling with a Host-selected, service-scoped quote.
+    public func costEstimate(usage: RoutingUsageForecast, pricing: HostPricingQuote, model: ModelID) -> HostCostEstimate {
         func unknown(_ reason: HostCostUnknownReason) -> HostCostEstimate { .init(value: nil, unknownReason: reason) }
         let counts = [usage.inputTokens, usage.outputTokens, usage.cachedInputTokens,
             usage.cacheWriteInputTokens, usage.cacheWriteTTL?.fiveMinuteTokens, usage.cacheWriteTTL?.oneHourTokens]
         guard counts.compactMap({ $0 }).allSatisfy({ $0 >= 0 }) else { return unknown(.invalidCount) }
         guard let cached = usage.cachedInputTokens else { return unknown(.missingReadUsage) }
         guard cached <= usage.inputTokens else { return unknown(.invalidClassification) }
-        guard pricing.model == nil || pricing.model == candidate.binding.model,
+        guard pricing.model == nil || pricing.model == model,
               !pricing.currency.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !pricing.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               pricing.asOf.timeIntervalSince1970.isFinite else { return unknown(.invalidQuote) }

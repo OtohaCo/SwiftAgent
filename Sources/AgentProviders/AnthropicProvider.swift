@@ -41,6 +41,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
     private let maximumOutputTokens: Int
     private let thinking: AnthropicThinking
     private let effort: AnthropicEffort?
+    let nativeContext: AnthropicNativeContextConfiguration?
     private let promptCaching: AnthropicPromptCaching?
     private let resolvedModelIDsByAlias: [String: String]
     private let transport: any ProviderHTTPTransport
@@ -94,6 +95,16 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
                 resolvedModelIDsByAlias: [String: String] = [:],
                 promptCaching: AnthropicPromptCaching?,
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+        try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
+            thinking: thinking, effort: effort, resolvedModelIDsByAlias: resolvedModelIDsByAlias,
+            promptCaching: promptCaching, nativeContext: nil, transport: transport)
+    }
+
+    public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
+                thinking: AnthropicThinking = .disabled, effort: AnthropicEffort? = nil,
+                resolvedModelIDsByAlias: [String: String] = [:], promptCaching: AnthropicPromptCaching? = nil,
+                nativeContext: AnthropicNativeContextConfiguration?,
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !apiKey.contains("\r"), !apiKey.contains("\n"), maximumOutputTokens > 0,
               let endpoint = endpoint ?? URL(string: "https://api.anthropic.com/v1/messages") else {
@@ -126,6 +137,10 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
         self.thinking = thinking
         self.effort = effort
         try promptCaching?.validate(endpoint: endpoint)
+        guard nativeContext == nil || nativeContext?.qualification.endpoint == endpoint else {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "Native qualification does not match the endpoint.")
+        }
+        self.nativeContext = nativeContext
         self.promptCaching = promptCaching
         self.resolvedModelIDsByAlias = resolvedModelIDsByAlias
         self.transport = transport
@@ -147,8 +162,21 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
     }
 
     public func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        stream(request: request, compactionMode: nil)
+    }
+
+    private func stream(request: ModelRequest, compactionMode: ModelCompactionMode?) -> AsyncThrowingStream<ModelEvent, Error> {
         ModelEventStream.make { emit in
-            let (body, encoded) = try encodedRequest(request)
+            let (body, encoded, sources) = try encodedRequest(request, compactionMode: compactionMode)
+            if compactionMode != nil || nativeContext?.automatic != nil || request.nativeContext != nil {
+                guard let source = request.nativeContextSource, request.invocationID != nil,
+                      source.requestDigest == ModelImageDigest.sha256Hex(body) else {
+                    throw ModelProviderError(kind: .invalidRequest, message: "Native context requires an unchanged Core-managed source snapshot.")
+                }
+            }
+            if let source = request.nativeContextSource, source.requestDigest != ModelImageDigest.sha256Hex(body) {
+                throw ModelProviderError(kind: .invalidRequest, message: "Native source does not match the final encoded body.")
+            }
             var http = URLRequest(url: endpoint)
             http.httpMethod = "POST"
             http.setValue(apiKey, forHTTPHeaderField: "x-api-key")
@@ -156,14 +184,20 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
             http.setValue("application/json", forHTTPHeaderField: "Content-Type")
             http.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             http.httpBody = body
+            let betas = AnthropicNativeContext.betas(request: request, mode: compactionMode, configuration: nativeContext)
+            if !betas.isEmpty { http.setValue(betas.joined(separator: ","), forHTTPHeaderField: "anthropic-beta") }
             var sse = try ProviderSSEDecoder()
             let responseModelName = resolvedModelIDsByAlias[request.model.name] ?? request.model.name
             let fields = try ProviderJSON.object(encoded)
             guard case .array(let messages) = fields["messages"] else { throw ProviderJSON.invalid() }
             var decoder = AnthropicStreamDecoder(model: request.model, responseModelName: responseModelName,
-                requestPrefix: AnthropicContinuation.prefix(system: fields["system"], tools: fields["tools"], messages: messages))
+                requestPrefix: AnthropicContinuation.prefix(system: fields["system"], tools: fields["tools"], messages: messages),
+                nativeRequest: compactionMode != nil || nativeContext?.automatic != nil ? request : nil,
+                compactionMode: compactionMode ?? nativeContext?.automatic?.mode, inputSources: sources,
+                nativeIterationUsage: request.nativeContext != nil)
             var validation = ModelEventAccumulator()
             var receivedHeader = false
+            try Task.checkCancellation()
             var events = transport.stream(http).makeAsyncIterator()
             while let event = try await events.next() {
                 try Task.checkCancellation()
@@ -200,20 +234,122 @@ extension AnthropicProvider: ModelProviderRequestValidator {
     }
 
     /// The checked bytes are the same bytes assigned to the actual HTTP body.
-    private func encodedRequest(_ request: ModelRequest) throws -> (Data, JSONValue) {
+    private func encodedRequest(_ request: ModelRequest, compactionMode: ModelCompactionMode? = nil) throws -> (Data, JSONValue, [String: ModelInputSourceIdentity]) {
         do {
-            let encoded = try AnthropicRequestEncoder.encode(request,
+            let ordinary = try AnthropicRequestEncoder.encodeWithMapping(request,
                 maximumOutputTokens: maximumOutputTokens, thinking: thinking, effort: effort,
                 promptCaching: promptCaching,
-                resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name)
+                resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, nativeContext: nativeContext)
+            let encoded = try AnthropicNativeContext.configure(ordinary.body, request: request, mode: compactionMode,
+                configuration: nativeContext, endpoint: endpoint, resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, thinking: thinking)
             let body = try ProviderJSON.encode(encoded)
             // The official limit is 32 MB. Use decimal MB conservatively, not 32 MiB.
             guard body.count <= 32_000_000 else {
                 throw ModelProviderError(kind: .invalidRequest,
                     message: "Anthropic encoded request body is \(body.count) bytes; the local limit is 32000000 bytes (32 MB), including base64 images and all JSON fields.")
             }
-            return (body, encoded)
+            return (body, encoded, ordinary.sources)
         } catch let error as ModelProviderError { throw error }
         catch { throw ModelProviderError(kind: .invalidRequest, message: "The provider request cannot be encoded.") }
+    }
+}
+
+extension AnthropicProvider: ModelProviderPreservedThinkingCompaction {
+    public var supportsPreservedThinkingCompaction: Bool { nativeContext?.preservedThinking == true }
+    public func preservedThinkingRequestWitness(request: ModelRequest) throws -> ModelPreservedThinkingRequestWitness {
+        let (_, body, _) = try encodedRequest(request)
+        let scope = try AnthropicPreservedThinking.scope(configuration: nativeContext, endpoint: endpoint,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, thinking: thinking)
+        return try AnthropicPreservedThinking.witness(body: body, scope: scope)
+    }
+    public func validatePreservedThinkingTail(request: ModelRequest) throws {
+        _ = try AnthropicPreservedThinking.scope(configuration: nativeContext, endpoint: endpoint,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, thinking: thinking)
+        let encoded = try AnthropicRequestEncoder.encodeWithMapping(request, maximumOutputTokens: maximumOutputTokens,
+            thinking: thinking, effort: effort, promptCaching: promptCaching,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, nativeContext: nativeContext,
+            forceThinkingPrefixValidation: true)
+        _ = try AnthropicNativeContext.configure(encoded.body, request: request, mode: nil,
+            configuration: nativeContext, endpoint: endpoint,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, thinking: thinking)
+    }
+    public func preservedThinkingReplacements(request: ModelRequest, replacement: ModelNativeContextCheckpoint,
+                                               keptMessages: [ModelMessage]) throws -> [ModelThinkingPrefixReplacement] {
+        let scope = try preservedThinkingRequestWitness(request: request).qualificationScope
+        guard replacement.transition.mode == .anthropicOnDemand,
+              let boundary = keptMessages.first.flatMap({ message -> ModelProviderRequestBoundary? in
+                  guard case .assistant(let content, _) = message else { return nil }
+                  return content.compactMap { if case .providerContinuation(let state) = $0 { state.requestBoundary } else { nil } }.first
+              }), boundary.witness.qualificationScope == scope else {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "The kept thinking tail lacks a qualified real request boundary.")
+        }
+        let root = request.messages.prefix { $0.role == .system || $0.role == .developer }
+        let continued = ModelRequest(model: request.model, messages: Array(root) + keptMessages, tools: request.tools,
+            structuredOutput: request.structuredOutput, sessionID: request.sessionID, runID: request.runID,
+            nativeContext: replacement, conversationControls: request.conversationControls)
+        var replacements: [ModelThinkingPrefixReplacement] = []
+        let encoded = try AnthropicRequestEncoder.encodeWithMapping(continued, maximumOutputTokens: maximumOutputTokens,
+            thinking: thinking, effort: effort, promptCaching: promptCaching,
+            resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, nativeContext: nativeContext,
+            preparingPreservedReplacement: true, replacementSink: { replacements = $0 })
+        let configured = try AnthropicNativeContext.configure(encoded.body, request: continued, mode: nil,
+            configuration: nativeContext, endpoint: endpoint, resolvedModelName: resolvedModelIDsByAlias[request.model.name] ?? request.model.name, thinking: thinking)
+        let witness = try AnthropicPreservedThinking.witness(body: configured, scope: scope)
+        guard witness.rootToolsDigest == boundary.witness.rootToolsDigest else {
+            throw ModelProviderError(kind: .unsupportedCapability, message: "The preserved thinking root instructions or tools changed.")
+        }
+        return replacements
+    }
+}
+
+extension AnthropicProvider: ModelProviderNativeContextWitness {
+    public var compactionModes: Set<ModelCompactionMode> { nativeContext?.qualification.modes ?? [] }
+    public var automaticCompaction: ModelAutomaticCompaction? { nativeContext?.automatic }
+    public func nativeContextRequestDigest(request: ModelRequest, compactionMode: ModelCompactionMode?) throws -> String {
+        ModelImageDigest.sha256Hex(try encodedRequest(request, compactionMode: compactionMode).0)
+    }
+    public func validateCompaction(request: ModelCompactionRequest) throws {
+        _ = try encodedRequest(request.request, compactionMode: request.mode)
+    }
+    private static func nativeStopReason(_ reason: StopReason) -> String {
+        switch reason {
+        case .endTurn: "end_turn"
+        case .toolCalls: "tool_use"
+        case .maxOutputTokens: "max_tokens"
+        case .stopSequence: "stop_sequence"
+        case .refusal: "refusal"
+        case .cancelled: "cancelled"
+        case .unknown(let value): value
+        }
+    }
+
+    public func compact(request: ModelCompactionRequest) -> AsyncThrowingStream<ModelCompactionEvent, Error> {
+        AsyncThrowingStream { continuation in
+            guard !Task.isCancelled else { continuation.finish(throwing: CancellationError()); return }
+            let worker = Task {
+                do {
+                    try Task.checkCancellation()
+                    for try await event in stream(request: request.request, compactionMode: request.mode) {
+                        try Task.checkCancellation()
+                        switch event {
+                        case .usage(let usage): continuation.yield(.usage(usage))
+                        case .inputTransformations(let values): continuation.yield(.inputTransformations(values))
+                        case .compactionProgress(let progress): continuation.yield(.progress(progress))
+                        case .responseCompleted(let response):
+                            guard response.toolCalls.isEmpty, response.content.allSatisfy({
+                                if case .providerContinuation = $0 { true } else { false }
+                            }) else { throw ProviderJSON.invalid() }
+                            let state = response.content.compactMap { if case .providerContinuation(let state) = $0 { state } else { nil } }.first
+                            guard state == nil || response.classification == .maintenance else { throw ProviderJSON.invalid() }
+                            continuation.yield(.completed(.init(info: response.info, continuation: state, usage: response.usage, nativeStopReason: Self.nativeStopReason(response.stopReason), inputTransformations: response.inputTransformations)))
+                        default: break
+                        }
+                    }
+                    try Task.checkCancellation()
+                    continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in worker.cancel() }
+        }
     }
 }

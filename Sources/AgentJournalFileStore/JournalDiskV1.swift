@@ -114,14 +114,18 @@ struct DiskContinuationV1: Codable {
     let format: String
     let payload: Data
     let origin: DiskOriginV1?
+    let contextTransition: ModelNativeContextTransition?
+    let requestBoundary: ModelProviderRequestBoundary?
     init(_ value: ModelProviderContinuation) {
         modelProvider = value.model.provider; modelName = value.model.name
         format = value.format; payload = value.payload
         origin = value.origin.map(DiskOriginV1.init)
+        contextTransition = value.contextTransition
+        requestBoundary = value.requestBoundary
     }
     func value() -> ModelProviderContinuation {
         ModelProviderContinuation(model: .init(provider: modelProvider, name: modelName),
-                                  format: format, payload: payload, origin: origin?.value())
+                                  format: format, payload: payload, origin: origin?.value(), contextTransition: contextTransition, requestBoundary: requestBoundary)
     }
 }
 
@@ -320,14 +324,18 @@ struct DiskHeaderV1: Codable {
     let historyHead: UInt64?
     let messageCount: UInt64
     let pendingIdentity: String?
+    let nativeContext: ModelNativeContextCheckpoint?
+    let conversationControls: ModelConversationControlState?
     init(_ value: JournalSessionHeader) {
         revision = value.revision; created = value.created; lastRunID = value.lastRunID
         steeringIDs = value.steeringIDs; historyHead = value.historyHead
         messageCount = value.messageCount; pendingIdentity = value.pendingIdentity
+        nativeContext = value.nativeContext
+        conversationControls = value.conversationControls
     }
     func value() -> JournalSessionHeader {
         .init(revision: revision, created: created, lastRunID: lastRunID,
               steeringIDs: steeringIDs, historyHead: historyHead,
-              messageCount: messageCount, pendingIdentity: pendingIdentity)
+              messageCount: messageCount, pendingIdentity: pendingIdentity, nativeContext: nativeContext, conversationControls: conversationControls)
     }
 }

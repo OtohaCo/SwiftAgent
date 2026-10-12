@@ -44,6 +44,7 @@ run_stage decision-eval-regressions python3 -m unittest discover Examples/Decisi
 # external-client-tests already compiled this product. Preserve execution/assertions,
 # but avoid another SwiftPM build-plan pass (PR #85 captured a planner SIGSEGV).
 run_stage context-pipeline swift run --skip-build --package-path Examples/ExternalClient ContextPipelineFixture
+run_stage native-context swift run --package-path Examples/ExternalClient NativeContextFixture
 run_stage scoped-capability swift run --package-path Examples/ExternalClient ScopedCapabilityFixture
 run_stage follow-up-queue swift run --package-path Examples/ExternalClient FollowUpQueueFixture
 run_stage durable-run-records swift run --package-path Examples/ExternalClient RunRecordFixture
@@ -68,3 +69,5 @@ bash Scripts/verify-per-call-compatibility.sh
 bash Scripts/verify-run-record-compatibility.sh
 
 bash Scripts/verify-image-content-compatibility.sh
+
+bash Scripts/verify-native-context-compatibility.sh

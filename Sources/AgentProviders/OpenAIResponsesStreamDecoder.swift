@@ -11,6 +11,7 @@ struct ResponsesStreamDecoder {
         case message
         case reasoning
         case functionCall
+        case compaction
     }
 
     private enum PartKind: String {
@@ -109,6 +110,7 @@ struct ResponsesStreamDecoder {
     let model: ModelID
     let responseModelName: String
     let providerLabel: String
+    let nativeRequest: ModelRequest?
     let continuationPolicy: ContinuationPolicy
     private var info: ResponseInfo?
     private var content: [ModelContent] = []
@@ -123,12 +125,13 @@ struct ResponsesStreamDecoder {
         model: ModelID,
         responseModelName: String? = nil,
         providerLabel: String = "OpenAI",
-        continuationPolicy: ContinuationPolicy = .openAI
+        continuationPolicy: ContinuationPolicy = .openAI, nativeRequest: ModelRequest? = nil
     ) {
         self.model = model
         self.responseModelName = responseModelName ?? model.name
         self.providerLabel = providerLabel
         self.continuationPolicy = continuationPolicy
+        self.nativeRequest = nativeRequest
     }
 
     mutating func consume(_ event: ProviderSSEEvent) throws -> [ModelEvent] {
@@ -143,6 +146,10 @@ struct ResponsesStreamDecoder {
         switch type {
         case "response.created", "response.queued", "response.in_progress":
             return try consumeLifecycle(object)
+        case "response.compaction.compacting":
+            guard let info, nativeRequest?.nativeContextSource != nil else { throw ProviderJSON.invalid() }
+            if let id = object["response_id"], id != .string(info.id) { throw ProviderJSON.invalid() }
+            return [.compactionProgress(.init(responseID: info.id, phase: "compacting"))]
         case "error":
             throw try classifyFailure(Self.errorEventPayload(object))
         case "response.failed":
@@ -267,6 +274,13 @@ struct ResponsesStreamDecoder {
             }
             items[index] = state
             return events
+        case "compaction":
+            guard continuationPolicy == .openAI, nativeRequest?.nativeContextSource != nil else {
+                throw ModelProviderError(kind: .unsupportedCapability, message: "Unqualified native automatic compaction output.")
+            }
+            if let status = item["status"], status != .null, status != .string("in_progress") { throw ProviderJSON.invalid() }
+            items[index] = ItemState(outputIndex: index, itemID: itemID, kind: .compaction)
+            return []
         case "function_call":
             try validateItemStatus(item["status"], expected: "in_progress", required: false)
             let callID = ToolCallID(rawValue: try ProviderJSON.string(item["call_id"]))
@@ -307,7 +321,7 @@ struct ResponsesStreamDecoder {
             let text = try announceReasoningPart(&state, index: contentIndex, summary: false, part: part)
             items[index] = state
             return appendReasoning(text)
-        case .functionCall:
+        case .functionCall, .compaction:
             throw ProviderJSON.invalid()
         }
     }
@@ -444,7 +458,7 @@ struct ResponsesStreamDecoder {
             state.reasoningContentParts[contentIndex] = statePart
             items[index] = state
             return appendReasoning(appended)
-        case .functionCall:
+        case .functionCall, .compaction:
             throw ProviderJSON.invalid()
         }
     }
@@ -523,6 +537,9 @@ struct ResponsesStreamDecoder {
                try ProviderJSON.string(encrypted).isEmpty {
                 throw ProviderJSON.invalid()
             }
+        case .compaction:
+            try NativeContextWire.openAICompactionItem(.object(item))
+            if let status = item["status"], status != .null, status != .string("completed") { throw ProviderJSON.invalid() }
         case .functionCall:
             try validateItemStatus(item["status"], expected: "completed", required: false)
             guard try ProviderJSON.string(item["type"]) == "function_call",
@@ -563,7 +580,10 @@ struct ResponsesStreamDecoder {
 
         let usageEvents = try updateUsage(response["usage"])
         let modelCalls = orderedCalls()
-        let stop: StopReason = !modelCalls.isEmpty ? .toolCalls : (refusal ? .refusal : .endTurn)
+        let latestCompaction = finalOutput.lastIndex(where: { $0["type"] == .string("compaction") })
+        let afterCompaction = latestCompaction.map { Array(finalOutput.dropFirst($0 + 1)) } ?? finalOutput
+        let compactionOnly = latestCompaction != nil && !afterCompaction.contains(where: { $0["type"] == .string("message") || $0["type"] == .string("function_call") })
+        let stop: StopReason = !modelCalls.isEmpty ? .toolCalls : (compactionOnly ? .unknown("compaction") : (refusal ? .refusal : .endTurn))
         ended = true
         var events = usageEvents
         let nativeItems = items.keys.sorted().compactMap { items[$0]?.native }
@@ -572,8 +592,16 @@ struct ResponsesStreamDecoder {
            let continuation = try OpenAIResponsesContinuation.make(
                items: nativeItems, content: content, calls: modelCalls, model: model
            ) {
-            content.append(.providerContinuation(continuation))
-            events.append(.providerContinuation(continuation))
+            let state: ModelProviderContinuation
+            if let latestCompaction {
+                guard let request = nativeRequest, let source = request.nativeContextSource, let invocation = request.invocationID,
+                      !nativeItems.prefix(latestCompaction).contains(where: { $0["type"] == .string("function_call") }) else { throw ProviderJSON.invalid() }
+                let transition = ModelNativeContextTransition(mode: .openAIAutomatic, source: source, replayPosition: latestCompaction,
+                    invocationID: invocation, responseID: info.id, itemID: try ProviderJSON.string(ProviderJSON.object(nativeItems[latestCompaction])["id"]))
+                state = .init(model: continuation.model, format: continuation.format, payload: continuation.payload, contextTransition: transition)
+            } else { state = continuation }
+            content.append(.providerContinuation(state))
+            events.append(.providerContinuation(state))
         }
         events.append(.responseCompleted(.init(info: info, content: content,
                                                toolCalls: modelCalls, usage: usage, stopReason: stop)))
@@ -789,6 +817,10 @@ struct ResponsesStreamDecoder {
             } else if !state.reasoningContentParts.isEmpty {
                 throw ProviderJSON.invalid()
             }
+        case .compaction:
+            guard state.done else { throw ProviderJSON.invalid() }
+            try NativeContextWire.openAICompactionItem(.object(item))
+            if let status = item["status"], status != .null, status != .string("completed") { throw ProviderJSON.invalid() }
         case .functionCall:
             try validateItemStatus(
                 item["status"], expected: state.done ? "completed" : "incomplete", required: false

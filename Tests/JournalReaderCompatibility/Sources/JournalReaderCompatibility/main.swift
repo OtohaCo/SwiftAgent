@@ -13,6 +13,10 @@ import Foundation
         do {
             let journal: AgentJournal
             switch mode {
+            #if NATIVE_CONTEXT_RUNTIME
+            case "create-native-context-empty", "create-native-context":
+                journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsNativeContext: true)
+            #endif
             #if IMAGE_CONTENT_RUNTIME
             case "create-image-content", "create-image-content-empty":
                 journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsImageContent: true)
@@ -49,6 +53,24 @@ import Foundation
                 journal = try AgentIncrementalJournal.open(at: directory)
             }
             switch mode {
+            #if NATIVE_CONTEXT_RUNTIME
+            case "create-native-context-empty": break
+            case "create-native-context", "inspect-native-context":
+                if mode == "create-native-context" {
+                    let model = ModelID(provider: "reader-matrix", name: "script")
+                    let provider = MatrixNativeProvider()
+                    let binding = try AgentModelBinding(profileID: "matrix-native", profileRevision: "1", model: model,
+                        provider: provider, deployment: .init(serviceInstanceID: "matrix", endpointScope: "local", apiDialect: "matrix"))
+                    let session = try Agent(binding: binding).makeSession(id: sessionID, journal: journal)
+                    let run = try await session.run("native source"); _ = try await run.wait(); try await run.waitForDrain()
+                    let operation = try await session.compact(mode: .openAIStandalone)
+                    guard try await operation.wait().checkpoint != nil else { throw AgentJournalError.invalidRecord }
+                    try await operation.waitForDrain()
+                }
+                guard journal.supportsNativeContext,
+                      try await journal.nativeContextCheckpoint(sessionID: sessionID)?.generation == 1 else { throw AgentJournalError.invalidRecord }
+                print("nativeCheckpoint=1")
+            #endif
             case "create-default", "append", "create-capable-without-rejection":
                 let agent = try Agent(model: .init(provider: "reader-matrix", name: "script"),
                                       provider: MatrixProvider())
@@ -340,6 +362,30 @@ private struct MatrixImageTool: AgentTool {
     }
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<String> {
         .init(output: "frame", images: [try Self.image()])
+    }
+}
+#endif
+
+#if NATIVE_CONTEXT_RUNTIME
+private struct MatrixNativeProvider: ModelProviderCompaction {
+    let descriptor = ModelProviderDescriptor(id: "reader-matrix", capabilities: [.streaming, .multiTurn])
+    let compactionModes: Set<ModelCompactionMode> = [.openAIStandalone]
+    func validateCompaction(request: ModelCompactionRequest) throws { }
+    func compact(request: ModelCompactionRequest) -> AsyncThrowingStream<ModelCompactionEvent, Error> {
+        AsyncThrowingStream { c in
+            let info = ResponseInfo(id: "matrix-native", model: request.request.model)
+            let transition = ModelNativeContextTransition(mode: request.mode, source: request.request.nativeContextSource!,
+                replayPosition: 0, invocationID: request.invocationID, responseID: info.id)
+            let state = ModelProviderContinuation(model: info.model, format: "matrix-native", payload: Data("opaque".utf8), contextTransition: transition)
+            c.yield(.completed(.init(info: info, continuation: state, usage: .init()))); c.finish()
+        }
+    }
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        AsyncThrowingStream { c in
+            let info = ResponseInfo(id: "matrix-answer", model: request.model)
+            c.yield(.responseStarted(info)); c.yield(.textDelta("answer"))
+            c.yield(.responseCompleted(.init(info: info, content: [.text("answer")], stopReason: .endTurn))); c.finish()
+        }
     }
 }
 #endif

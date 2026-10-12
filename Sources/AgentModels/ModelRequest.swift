@@ -59,6 +59,10 @@ public struct ModelRequest: Hashable, Sendable, Codable {
     /// Optional caller identity used by cross-turn infrastructure such as fallback guards.
     public let sessionID: UUID?
     public let runID: UUID?
+    public let nativeContext: ModelNativeContextCheckpoint?
+    public let nativeContextSource: ModelNativeContextSource?
+    public let invocationID: UUID?
+    public let conversationControls: ModelConversationControlView?
 
     public init(
         model: ModelID,
@@ -68,11 +72,41 @@ public struct ModelRequest: Hashable, Sendable, Codable {
         sessionID: UUID? = nil,
         runID: UUID? = nil
     ) {
+        self.init(model: model, messages: messages, tools: tools, structuredOutput: structuredOutput,
+                  sessionID: sessionID, runID: runID, nativeContext: nil)
+    }
+
+    public init(model: ModelID, messages: [ModelMessage], tools: [ModelToolDefinition] = [],
+                structuredOutput: StructuredOutputSchema? = nil, sessionID: UUID? = nil, runID: UUID? = nil,
+                nativeContext: ModelNativeContextCheckpoint?, nativeContextSource: ModelNativeContextSource? = nil,
+                invocationID: UUID? = nil) {
+        self.init(model: model, messages: messages, tools: tools, structuredOutput: structuredOutput,
+            sessionID: sessionID, runID: runID, nativeContext: nativeContext, nativeContextSource: nativeContextSource,
+            invocationID: invocationID, conversationControls: nil)
+    }
+
+    public init(model: ModelID, messages: [ModelMessage], tools: [ModelToolDefinition] = [],
+                structuredOutput: StructuredOutputSchema? = nil, sessionID: UUID? = nil, runID: UUID? = nil,
+                nativeContext: ModelNativeContextCheckpoint? = nil, nativeContextSource: ModelNativeContextSource? = nil,
+                invocationID: UUID? = nil, conversationControls: ModelConversationControlView?) {
+        self.conversationControls = conversationControls
         self.model = model
         self.messages = messages
         self.tools = tools
         self.structuredOutput = structuredOutput
         self.sessionID = sessionID
         self.runID = runID
+        self.nativeContext = nativeContext
+        self.nativeContextSource = nativeContextSource
+        self.invocationID = invocationID
+    }
+}
+
+public extension ModelRequest {
+    /// Returns the same validated request with Core's frozen invocation/source envelope.
+    func withNativeSource(_ source: ModelNativeContextSource, invocationID: UUID) -> Self {
+        .init(model: model, messages: messages, tools: tools, structuredOutput: structuredOutput,
+              sessionID: sessionID, runID: runID, nativeContext: nativeContext,
+              nativeContextSource: source, invocationID: invocationID, conversationControls: conversationControls)
     }
 }

@@ -16,7 +16,7 @@ func settlingModelEvents(
             do {
                 for try await event in upstream {
                     if case .responseCompleted(let response) = event,
-                       response.stopReason != .toolCalls, response.stopReason != .cancelled,
+                       response.classification == .finalResponse,
                        gate.settle() {
                         // The answer is in. A source that then keeps its stream open past the deadline
                         // cannot keep the Run waiting for a close that adds nothing to the answer.

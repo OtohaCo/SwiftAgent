@@ -70,13 +70,19 @@ public struct Agent: Sendable {
         tools: [any AgentTool] = [],
         configuration: AgentConfiguration = .init()
     ) throws {
+        try self.init(binding: .legacy(model: model, provider: provider), tools: tools, configuration: configuration)
+    }
+
+    /// Uses an explicit deployment scope as the frozen default for every Run and
+    /// native context operation. Required for native state that survives reopen.
+    public init(binding: AgentModelBinding, tools: [any AgentTool] = [], configuration: AgentConfiguration = .init()) throws {
         guard configuration.runTimeout > .zero else { throw AgentLoopError.invalidBudget }
         _ = try AgentBudget(
             maxModelTurns: configuration.maxModelTurns,
             maxToolCalls: configuration.maxToolCalls,
             deadline: .now
         )
-        defaultBinding = .legacy(model: model, provider: provider)
+        defaultBinding = binding
         self.tools = try ToolRegistry(tools: tools.map { try AnyAgentTool($0) })
         scheduler = configuration.scheduler
         self.configuration = configuration

@@ -1,5 +1,24 @@
 # SwiftAgent Semantic Versioning
 
+## Issue #99 extension (unreleased, no assigned next version)
+
+This work follows the RC6 prepared candidate. It adds opt-in native-context
+Journal schema 11 and optional Provider capability protocols, preserving the
+existing default schema 3 and old conformers. Old initializer precise signatures
+remain callable and usable as function references; new overloads have required
+new labels. Old Codable documents decode newly optional fields as nil. New
+validated types use shared constructor/decode checks.
+
+Public event enums gain `ModelEvent.inputTransformations`,
+`ModelEvent.compactionProgress` and `AgentEvent.compaction`; exhaustive client
+switches must adapt. Updated execution-reporting consumers explicitly ignore
+maintenance/diagnostics as answer/effect content. This is an acknowledged prerelease
+source delta, not a claim of universal source compatibility. New schema 11 stores
+are refused by the pre-feature schema-10 reader without byte changes, including
+empty stores and maintenance. New readers retain old-store read/append behavior
+without silently granting native capability. No migration, version bump, tag or
+Release is performed. See [native-context guide](swift-agent-native-context.md).
+
 ## RC6 closeout (prepared, unreleased)
 
 The closeout adds no public initializer parameter, protocol requirement, enum
@@ -497,3 +516,32 @@ schema 9 before append/maintenance, including an empty schema-9 store. See
 [ADR 0014](../adr/0014-durable-run-association.md) and the public offline
 `RunRecordFixture`. Exhaustive switches over `AgentJournalEvent` must handle
 `runTerminated`; added API parameters also change stored function signatures.
+
+## Native context foundations (issue #99, unversioned development)
+
+`ModelCatalogEntry` preserves its original initializer function signature and
+adds a separate overload requiring `promptPricing:`. Optional `promptPricing`
+and `compaction` decode absent fields as nil, including old manifest/cache data.
+Service support does not grant configured adapter executability.
+
+Prompt rates are exact `Decimal` amounts per million tokens with explicit
+currency/provenance. The new serialized rate contract uses decimal strings;
+nonrepresentable precision, negative values and malformed rates reject rather
+than round. Tier selection applies to the whole sampling, not incremental
+excess tokens. Source numeric mappings must preserve decimal lexical precision;
+they must not route prices through Double or JSONValue.number.
+
+`ModelUsage` preserves both existing five-parameter and TTL-detail six-parameter
+initializers. A separate overload requires `iterationUsage:`; absent old data
+is nil. Detail snapshots replace the whole table (nil preserves, empty clears),
+while aggregate counts retain their cumulative contract. Snapshot ordinals are
+invocation-local; partial coverage does not manufacture a whole-response total.
+No service compaction capability is implied by these foundation types alone.
+
+Native operation request/checkpoint and the optional `ModelProviderCompaction`
+protocol do not add requirements to `ModelProvider`. `ModelRequest` and
+`ModelProviderContinuation` preserve old initializer signatures with separate
+required-new-label overloads. Old optional data remains absent/unknown.
+Response classification is shared by streaming and steering. Compaction,
+pause and unrecognized stop reasons do not settle the final-answer deadline;
+known final responses retain the RC6 slow-publication contract.

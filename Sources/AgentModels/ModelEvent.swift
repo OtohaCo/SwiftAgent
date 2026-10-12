@@ -23,6 +23,7 @@ public struct ModelResponse: Hashable, Sendable, Codable {
     public let toolCalls: [ToolCall]
     public let usage: ModelUsage
     public let stopReason: StopReason
+    public let inputTransformations: [ModelInputTransformation]?
 
     public init(
         info: ResponseInfo,
@@ -31,11 +32,17 @@ public struct ModelResponse: Hashable, Sendable, Codable {
         usage: ModelUsage = .init(),
         stopReason: StopReason
     ) {
+        self.init(info: info, content: content, toolCalls: toolCalls, usage: usage, stopReason: stopReason, inputTransformations: nil)
+    }
+
+    public init(info: ResponseInfo, content: [ModelContent] = [], toolCalls: [ToolCall] = [],
+                usage: ModelUsage = .init(), stopReason: StopReason, inputTransformations: [ModelInputTransformation]?) {
         self.info = info
         self.content = content
         self.toolCalls = toolCalls
         self.usage = usage
         self.stopReason = stopReason
+        self.inputTransformations = inputTransformations
     }
 }
 
@@ -51,5 +58,8 @@ public enum ModelEvent: Hashable, Sendable, Codable {
     case toolCallCompleted(ToolCall)
     /// Cumulative counts; nil leaves the corresponding previously reported count unchanged.
     case usage(ModelUsage)
+    /// Whole replacement snapshot; an empty array clears earlier diagnostics.
+    case inputTransformations([ModelInputTransformation])
+    case compactionProgress(ModelCompactionProgress)
     case responseCompleted(ModelResponse)
 }

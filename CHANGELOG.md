@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased: issue #99 native context, trusted controls and sampling prices
+
+- Implements Anthropic threshold/on-demand and OpenAI Responses automatic/standalone native compaction with explicit deployment qualification, managed deadline/cancellation/drain, canonical-history preservation and atomic effective checkpoint publication.
+- Adds opt-in File Journal schema 11; default schema 3 and old stores remain supported. Older readers explicitly reject schema 11 without mutation.
+- Adds trusted append-only Anthropic tools/instructions/reminders, explicit thinking prefix mismatch policy, observable input transformations, and qualified real-request-boundary thinking-tail compaction. Unsupported combinations fail locally. No live signature qualification is claimed.
+- Adds exact Decimal prompt-price tiers, service-scoped compaction metadata and ordered per-invocation sampling usage. Public Host examples price each sampling separately and preserve cache-write/TTL and unknown-value semantics.
+- Preserves old initializer exact signatures and old optional-capability Provider conformers. New public event cases require exhaustive switch updates. No release/version/tag is assigned. See [integration and support matrix](docs/guides/swift-agent-native-context.md) and [acceptance evidence](docs/releases/issue99-acceptance.md).
+
 ## RC6 prepared candidate: history and request boundaries
 
 Status: unreleased; no tag or release date. The complete RC5 → RC6 scope is

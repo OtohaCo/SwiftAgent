@@ -176,7 +176,7 @@ public struct OpenAIResponsesPromptCaching: Hashable, Sendable, Codable {
 
     func apply(to body: inout [String: JSONValue], request: ModelRequest, images: Bool,
                assistantNativeItems: ResponsesCanonicalRequestEncoder.AssistantNativeItems? = nil,
-               prewarm: Bool = false) throws {
+               prewarm: Bool = false, nativeWindowItemCount: Int = 0) throws {
         switch policy {
         case .legacy(let retention): body["prompt_cache_retention"] = .string(retention.rawValue)
         case .modern(let mode, let ttl, let breakpoints):
@@ -196,10 +196,11 @@ public struct OpenAIResponsesPromptCaching: Hashable, Sendable, Codable {
                 // A temporary empty user item keeps that prefix countable without
                 // weakening the real encoder's history/continuation validation.
                 let sentinel = ModelMessage.user([.text("")])
+                let offset = breakpoint.messageIndex >= request.messages.prefix { $0.role == .system || $0.role == .developer }.count ? nativeWindowItemCount : 0
                 let start = try ResponsesCanonicalRequestEncoder.encodeMessages(
-                    before + [sentinel], images: images, assistantNativeItems: assistantNativeItems).count - 1
+                    before + [sentinel], images: images, assistantNativeItems: assistantNativeItems).count - 1 + offset
                 let end = try ResponsesCanonicalRequestEncoder.encodeMessages(
-                    through + [sentinel], images: images, assistantNativeItems: assistantNativeItems).count - 1
+                    through + [sentinel], images: images, assistantNativeItems: assistantNativeItems).count - 1 + offset
                 var candidates: [(Int, Int)] = []
                 for itemIndex in start..<end {
                     guard case .object(let item) = input[itemIndex] else { continue }

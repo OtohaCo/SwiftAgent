@@ -9,6 +9,15 @@ let package = Package(
         .package(name: "SwiftAgentExecutionReportingSupport", path: "../ExecutionReportingSupport"),
     ],
     targets: [
+        .target(name: "NativeContextFixtureSupport", dependencies: [
+            .product(name: "AgentCatalog", package: "SwiftAgent"),
+            .product(name: "AgentCore", package: "SwiftAgent"),
+            .product(name: "AgentJournalFileStore", package: "SwiftAgent"),
+            .product(name: "AgentModels", package: "SwiftAgent"),
+            .product(name: "AgentProviders", package: "SwiftAgent"),
+            .product(name: "AgentTools", package: "SwiftAgent"),
+        ], exclude: ["README.md"]),
+        .executableTarget(name: "NativeContextFixture", dependencies: ["NativeContextFixtureSupport"]),
         .executableTarget(name: "RunRecordFixture", dependencies: [
             .product(name: "AgentCore", package: "SwiftAgent"),
             .product(name: "AgentJournalFileStore", package: "SwiftAgent"),
@@ -81,6 +90,7 @@ let package = Package(
                 "ConfirmedNoEffectFixture",
                 "JournalReplayFixture",
                 "BoundedReplanningFixture",
+                "NativeContextFixtureSupport",
             ]
         ),
         .testTarget(name: "ReplanningEvalTrialTests", dependencies: [

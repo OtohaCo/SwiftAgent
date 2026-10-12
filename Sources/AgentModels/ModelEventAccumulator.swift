@@ -8,6 +8,7 @@ public struct ModelEventAccumulator: Sendable {
     private var calls: [ToolCallID: ToolCall] = [:]
     private var callOrder: [ToolCallID] = []
     private var terminal: ModelResponse?
+    private var inputTransformations: [ModelInputTransformation]?
     private var failure: ModelStreamError?
 
     public init() {}
@@ -65,6 +66,8 @@ public struct ModelEventAccumulator: Sendable {
             // Arguments are the model's words, not stream structure: a call whose arguments are not
             // one JSON object is kept so the runtime can tell the model instead of ending the Run.
             calls[call.id] = call
+        case .inputTransformations(let snapshot): inputTransformations = snapshot
+        case .compactionProgress: break
         case .usage(let newer):
             let merged = ModelUsage(
                 inputTokens: newer.inputTokens ?? usage.inputTokens,
@@ -75,7 +78,8 @@ public struct ModelEventAccumulator: Sendable {
                 cacheWriteTTL: newer.cacheWriteTTL == nil && usage.cacheWriteTTL == nil ? nil : .init(
                     fiveMinuteTokens: newer.cacheWriteTTL?.fiveMinuteTokens ?? usage.cacheWriteTTL?.fiveMinuteTokens,
                     oneHourTokens: newer.cacheWriteTTL?.oneHourTokens ?? usage.cacheWriteTTL?.oneHourTokens
-                )
+                ),
+                iterationUsage: newer.iterationUsage ?? usage.iterationUsage
             )
             let counts = [(usage.inputTokens, merged.inputTokens), (usage.outputTokens, merged.outputTokens),
                           (usage.cachedInputTokens, merged.cachedInputTokens),
@@ -96,7 +100,7 @@ public struct ModelEventAccumulator: Sendable {
             content.append(.providerContinuation(value))
         case .responseCompleted(let response):
             guard response.info == info, response.content == content, response.usage == usage,
-                  response.toolCalls == callOrder.compactMap({ calls[$0] }) else {
+                  response.toolCalls == callOrder.compactMap({ calls[$0] }), response.inputTransformations == inputTransformations else {
                 throw ModelStreamError.responseMismatch
             }
             // Providers may deliver totals after subsets; seal consistency at the terminal boundary.

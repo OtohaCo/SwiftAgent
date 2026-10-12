@@ -245,6 +245,9 @@ public struct ConversationProjection: Sendable {
             append(.user(.init(text: text)))
         case .runFinished(let termination):
             snapshot.terminal = Self.terminal(for: termination)
+        case .compaction:
+            // Context maintenance is not an assistant answer or a terminal fact.
+            break
         }
     }
 
@@ -256,7 +259,7 @@ public struct ConversationProjection: Sendable {
             updateCurrentAssistant { $0.text += text }
         case .reasoningDelta(let text):
             updateCurrentAssistant { $0.reasoning += text }
-        case .providerContinuation:
+        case .providerContinuation, .inputTransformations, .compactionProgress:
             break
         case .toolCallStarted(let callID, let name):
             updateTool(callID, name: name) { _ in }
