@@ -8,7 +8,10 @@ results belong in the PR acceptance comment after execution.
 
 Isolation started from actual main `4baa5afc8105d36275737a62bf8a20a10db216fb`,
 tree `a07567c07fa428ba5d845352951827338d98f3aa` (PR #100). PR #102's independent
-gates were still running. Only SwiftAgent is changed; OtohaAI remains untouched.
+gates were still running. The final candidate includes PR #102 head
+`723a0db308b70a8eb4cc30b1f602a2c5049e3fc3` as an explicit dependency;
+its SDK fixes and bounded CI budget are preserved. Only SwiftAgent is changed;
+OtohaAI remains untouched.
 
 `ResponsesStreamDecoder.consumeCompleted` examined messages only after the final
 compaction item when selecting maintenance. Thus `[compaction, message,

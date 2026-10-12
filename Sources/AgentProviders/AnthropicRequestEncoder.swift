@@ -121,6 +121,12 @@ enum AnthropicRequestEncoder {
             } else { body["system"] = .string(system.joined(separator: "\n")) }
         }
         switch thinking {
+        case .serviceDefault: break
+        case .betweenTools:
+            guard (resolvedModelName ?? request.model.name).contains("sonnet-5-5") else {
+                throw ModelProviderError(kind: .unsupportedCapability, message: "Between-tools thinking is supported only on Claude Sonnet 5.5.")
+            }
+            body["thinking"] = .object(["type": .string("between_tools")])
         case .disabled: body["thinking"] = .object(["type": .string("disabled")])
         case .adaptive: body["thinking"] = .object(["type": .string("adaptive")])
         case .enabled(let budget): body["thinking"] = .object(["type": .string("enabled"), "budget_tokens": .number(Decimal(budget))])

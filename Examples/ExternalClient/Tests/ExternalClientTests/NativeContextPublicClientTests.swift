@@ -11,6 +11,8 @@ import Testing
 
 struct NativeContextPublicClientTests {
     @Test func legacyFactoriesKeepExactNonthrowingFunctionSignatures() throws {
+        let legacyAnthropic: (String, URL?, Int, AnthropicThinking, any ProviderHTTPTransport) throws -> AnthropicProvider = AnthropicProvider.init
+        _ = legacyAnthropic
         let catalog: (ModelID, String, ModelServiceScope, String?, [String], ModelID?, ModelCatalogCapabilities,
                       [ModelReasoningControlDescriptor], Int?, Int?, Bool, [ModelCatalogSource], [ModelCatalogConflict]) -> ModelCatalogEntry = ModelCatalogEntry.init
         let scope = try ModelServiceScope(provider: "fixture", serviceInstanceID: "fixture", endpointScope: "local", apiDialect: "fixture")

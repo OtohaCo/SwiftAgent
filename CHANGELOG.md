@@ -6,6 +6,14 @@
 - Preserves all native output in the checkpoint and canonical answer in history; the next request still replays the latest compaction window. Compaction-only responses retain their bounded maintenance behavior. No public API, schema, or live qualification changes.
 - Follow-up dispatchers continue to own their paused session. Hosts must finish/close and drain the queue before idle on-demand maintenance; a between-queued-replies maintenance hook remains a separate future design.
 
+## Unreleased: issue #101 Host compaction path
+
+- Adds `ModelProviderError.Diagnostic.Reason.requestBodyTooLarge` for Anthropic local final-body overflow, preserving `.invalidRequest` and preventing Host message-string matching.
+- Adds explicit Anthropic `.serviceDefault` (omit thinking) and Sonnet 5.5 `.betweenTools`; exact old initializer signatures and `.disabled` defaults remain. Exhaustive switches over `AnthropicThinking` must handle the new cases.
+- Allows drained, provably completed reminder turns in idle whole-history Anthropic on-demand compaction, including File Journal reopen and repeated compaction. Canonical/control history remains intact; no schema/reader change.
+- Rejects Run-local pre-generation compaction with a current required reminder before admission/HTTP. Threshold/reminder scheduling remains unsupported; this is a SDK limitation.
+- Rejects new thinking modes with mismatch controls or managed thinking-tail qualification. Public HTTP fixtures and Host examples are not live qualification. See [#101 evidence](docs/releases/issue101-acceptance.md).
+
 ## Unreleased: issue #99 native context, trusted controls and sampling prices
 
 - Implements Anthropic threshold/on-demand and OpenAI Responses automatic/standalone native compaction with explicit deployment qualification, managed deadline/cancellation/drain, canonical-history preservation and atomic effective checkpoint publication.

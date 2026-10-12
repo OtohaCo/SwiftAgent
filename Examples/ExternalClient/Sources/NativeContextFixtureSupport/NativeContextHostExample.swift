@@ -13,7 +13,10 @@ import FoundationNetworking
 /// all signatures/ciphertext are fixture material, not live qualification.
 public enum NativeContextHostExample {
     public static func run() async throws -> String {
-        do { try await anthropicIdleCompactThenReminder() }
+        do {
+            try await anthropicIdleCompactThenReminder(thinking: .serviceDefault)
+            try await anthropicIdleCompactThenReminder(thinking: .betweenTools)
+        }
         catch { throw ExampleFailure.phase("Anthropic", String(describing: error)) }
         do { try await openAIAutomaticToolLoopAndReopen() }
         catch { throw ExampleFailure.phase("OpenAI", String(describing: error)) }
@@ -23,16 +26,26 @@ public enum NativeContextHostExample {
         guard try await run.wait().outcome == .completed else { throw ExampleFailure.invariant }
         try await run.waitForDrain()
     }
-    private static func anthropicIdleCompactThenReminder() async throws {
+    private static func anthropicIdleCompactThenReminder(thinking: AnthropicThinking) async throws {
         let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("native-host-anthropic-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let exchange = FixtureExchange([Fixtures.anthropicAnswer, Fixtures.anthropicCompact,
-            Fixtures.anthropicThinkingDiscovery, Fixtures.anthropicAnswer, Fixtures.anthropicAnswer])
-        let provider = try AnthropicProvider(apiKey: "fixture-never-sent-to-network", thinking: .adaptive,
-            nativeContext: .init(qualification: .init(endpoint: endpoint, resolvedModelNames: ["fixture"], modes: [.anthropicOnDemand]),
+        let modelName = "claude-sonnet-5-5"
+        func wire(_ data: Data, prior: Bool = false) -> Data {
+            Data(String(decoding: data, as: UTF8.self)
+                .replacingOccurrences(of: "\"model\":\"fixture\"", with: "\"model\":\"\(modelName)\"")
+                .replacingOccurrences(of: "discovery-call", with: prior ? "prior-discovery-call" : "discovery-call").utf8)
+        }
+        // Native summary faithfully retains the trusted deferred-tool addition.
+        let compactFixture = Data(String(decoding: Fixtures.anthropicCompact, as: UTF8.self)
+            .replacingOccurrences(of: #""tool_changes":[]"#,
+                with: #""tool_changes":[{"type":"tool_addition","tool":{"type":"tool_reference","name":"extra"}}]"#).utf8)
+        let exchange = FixtureExchange([wire(Fixtures.anthropicThinkingDiscovery, prior: true), wire(Fixtures.anthropicAnswer), wire(compactFixture),
+            wire(Fixtures.anthropicThinkingDiscovery), wire(Fixtures.anthropicAnswer), wire(Fixtures.anthropicAnswer)])
+        let provider = try AnthropicProvider(apiKey: "fixture-never-sent-to-network", thinking: thinking,
+            nativeContext: .init(qualification: .init(endpoint: endpoint, resolvedModelNames: [modelName], modes: [.anthropicOnDemand]),
                                  inlineToolChanges: true, runReminders: true), transport: exchange)
-        let model = ModelID(provider: "anthropic", name: "fixture")
+        let model = ModelID(provider: "anthropic", name: modelName)
         let binding = try AgentModelBinding(profileID: "native-host", profileRevision: "catalog-v1", model: model, provider: provider,
             deployment: .init(serviceInstanceID: "qualified-fixture", endpointScope: endpoint.absoluteString, apiDialect: "anthropic"))
         let agent = try Agent(binding: binding)
@@ -47,7 +60,7 @@ public enum NativeContextHostExample {
         }
         let caps = try await capabilities(session)
         let original = "covered source " + String(repeating: "x", count: 4096)
-        try await finish(try await session.run(original, capabilities: caps))
+        try await finish(try await session.run(original, contextControls: .init(reminder: "上一轮请用中文回答"), capabilities: caps))
         let before = await session.history
         // Prior Run/tool work has physically drained; this is its own invocation.
         let operation = try await session.compact(mode: .anthropicOnDemand)
@@ -57,11 +70,16 @@ public enum NativeContextHostExample {
         let controls = try AgentRunContextControls(reminder: "本轮请用中文回答")
         try await finish(try await session.run("discover", contextControls: controls, capabilities: caps))
         let requests = exchange.requests
-        guard requests.count == 4, await executions.count == 1,
-              !String(decoding: requests[2].httpBody!, as: UTF8.self).contains(original),
-              String(decoding: requests[3].httpBody!, as: UTF8.self).contains("fixture-thinking-signature"),
-              String(decoding: requests[3].httpBody!, as: UTF8.self).contains("tool_addition"),
-              String(decoding: requests[3].httpBody!, as: UTF8.self).contains("next_user_message") else { throw ExampleFailure.invariant }
+        guard requests.count == 5, await executions.count == 2,
+              !String(decoding: requests[3].httpBody!, as: UTF8.self).contains(original),
+              String(decoding: requests[4].httpBody!, as: UTF8.self).contains("fixture-thinking-signature"),
+              String(decoding: requests[4].httpBody!, as: UTF8.self).contains("tool_addition"),
+              String(decoding: requests[4].httpBody!, as: UTF8.self).contains("next_user_message") else { throw ExampleFailure.invariant }
+        for request in requests {
+            guard let fields = try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any] else { throw ExampleFailure.invariant }
+            if thinking == .serviceDefault { guard fields["thinking"] == nil else { throw ExampleFailure.invariant } }
+            else { guard (fields["thinking"] as? [String: String]) == ["type": "between_tools"] else { throw ExampleFailure.invariant } }
+        }
         let canonical = await session.history, id = session.id
         guard canonical.contains(.user([.text(original)])), canonical.contains(where: { if case .tool = $0 { true } else { false } }) else { throw ExampleFailure.invariant }
         try await journal.close()
@@ -69,7 +87,7 @@ public enum NativeContextHostExample {
         let fresh = try agent.makeSession(id: id, journal: reopened)
         guard try await fresh.conversationSnapshot().messages == canonical else { throw ExampleFailure.invariant }
         try await finish(try await fresh.run("after reopen", contextControls: controls, capabilities: capabilities(fresh)))
-        guard exchange.requests.count == 5, await executions.count == 1,
+        guard exchange.requests.count == 6, await executions.count == 2,
               String(decoding: exchange.requests.last!.httpBody!, as: UTF8.self).contains("tool_removal") else { throw ExampleFailure.invariant }
         try await reopened.close()
 

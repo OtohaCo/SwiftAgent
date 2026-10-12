@@ -61,6 +61,8 @@ public struct ModelProviderError: Error, Equatable, Sendable {
             case httpFailure, serverFailure, invalidShape, modelMismatch
             case invalidTerminal, invalidLifecycle, finalSnapshotMismatch, invalidUsage
             case continuationMismatch, missingContinuation
+            /// The final serialized HTTP request exceeded the adapter's local byte ceiling.
+            case requestBodyTooLarge
             case redirect, invalidHTTPResponse, missingHTTPResponse
         }
         public let stage: Stage

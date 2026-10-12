@@ -102,13 +102,21 @@ changes. Actual model, root instructions, endpoint, dialect or binding changes
 remain incompatible. Do not simply ignore all revisions.
 
 ```swift
+guard try await priorRun.wait().outcome == .completed else {
+    // Host handles failed/incomplete turns and reconciliation separately.
+    return
+}
 try await priorRun.waitForDrain()
-let op = try await session.compact(mode: .anthropicOnDemand)
-_ = try await op.wait()
-try await op.waitForDrain()
+if hostWantsCompaction { // Host supplies the policy, including next-input reserve.
+    let op = try await session.compact(mode: .anthropicOnDemand)
+    _ = try await op.wait()
+    try await op.waitForDrain()
+}
 let controls = try AgentRunContextControls(reminder: "本轮请用中文回答")
 let run = try await session.run(newRealUserInput, contextControls: controls,
                                 capabilities: trustedCapabilities)
+_ = try await run.wait()
+try await run.waitForDrain()
 ```
 
 Reminder is a text-only native mid-conversation system control with
@@ -122,14 +130,79 @@ request retains exactly the same controls; Core/Route does not automatically ret
 provenance-qualified requests (a new attempt requires a managed invocation). Historical controls are never rewritten
 or deleted to manufacture expiry. A summary's words do not inherit system authority.
 
-The supported compact/reminder combination is: drained prior Run without active
-reminder → idle whole-history on-demand compact → real new user → reminder → normal
-tool loop. Threshold plus required reminder, compaction covering an active reminder
-without a new legal user boundary, and compaction covering permanent mid-conversation
-instructions fail locally. An unanswered controlled request ending system cannot
+The supported compact/reminder combination is: successfully completed prior Run
+with its reminder → physical drain → idle whole-history on-demand compact → compact
+drain → real new user with a new reminder → normal tool loop. Run completion does
+not expire `clear_at`. The summary-only idle operation may cover the last active
+reminder only with a completed terminal at the same history witness, no pending
+mutation, and the existing drained reservation/lease. File Journal uses its existing
+Run admission/terminal; in-memory same-actor use retains one bounded completed
+revision. A reconstructed in-memory Session without that proof still refuses.
+Repeated compaction and File Journal reopen use the same qualification. Canonical
+messages and control entries remain intact; covered controls exit only the request
+view. Persistent instructions and active-reminder `through:` cuts remain refused.
+Failed/incomplete/unknown turns, pending/quarantined mutations and commitUnknown
+retain their existing restrictions.
+
+Run-local `compactBeforeGeneration: .anthropicOnDemand` plus a required current
+reminder is refused in preflight before input admission or either HTTP request.
+There is no implemented legal continuation boundary that restores that reminder.
+Threshold/pause plus required reminder is also locally unsupported: SwiftAgent
+has not implemented reliable combination scheduling. This is not a claim that
+Anthropic universally forbids both features. The threshold `trigger` is a trigger,
+not a messages cutoff or a promise to compact only earlier turns. Restoring a
+reminder at the next real user cannot repair the current answer already generated
+by the same automatic-compaction HTTP request. Inserting a system reminder after a
+pure compaction assistant is not a legal substitute. The vendor's pause/reinsert
+recent exchange approach requires separate history reconstruction and explicit
+thinking validity/drop policy; it is future work, not implemented here. An unanswered controlled request ending system cannot
 accept a following user (vendor forbids system→user); SDK rejects before admission.
 An explicit resume/handoff API requires future protocol proof. No fake user/assistant
 or mutation replay repairs it automatically.
+
+## Host thinking selection (#101)
+
+Official protocol checked 2026-10-12:
+[thinking](https://platform.claude.com/docs/en/build-with-claude/thinking),
+[troubleshooting](https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting),
+[on-demand](https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand),
+[threshold](https://platform.claude.com/docs/en/build-with-claude/compaction-threshold),
+[system placement](https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages),
+[preserved thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking).
+
+The old initializer defaults remain `.disabled`. Hosts using Sonnet 5.5 should
+explicitly choose `.serviceDefault` to omit the HTTP `thinking` key entirely;
+service defaults vary by model and are not universally adaptive. `.betweenTools`
+encodes only `{"type":"between_tools"}` on resolved Sonnet 5.5, with no dedicated
+beta, budget, display or binding fields. Omitted effort stays omitted; xhigh/max
+are locally refused with betweenTools. Signed progress thinking still persists
+and replays through the normal native continuation path.
+
+Both new modes reject explicit `.error`/`.dropBlock` mismatch settings and
+`preservedThinking: true` locally: omission cannot carry `block_binding`, and
+between_tools accepts only type. They do not qualify managed thinking-tail cuts.
+Whole-history idle on-demand does not require preserved-tail qualification or an
+explicit mismatch policy. Normal unchanged-prefix checks still apply to any
+uncovered signed thinking. Real thinking/effort changes require a new compatible
+continuation binding; they do not get append-only control exemptions.
+
+```swift
+let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
+let provider = try AnthropicProvider(apiKey: apiKey, thinking: .serviceDefault,
+    nativeContext: .init(qualification: .init(endpoint: endpoint,
+        resolvedModelNames: ["claude-sonnet-5-5"], modes: [.anthropicOnDemand]),
+        inlineToolChanges: true, runReminders: true))
+```
+
+The complete public, compiled sequence is in
+[NativeContextHostExample.swift](../../Examples/ExternalClient/Sources/NativeContextFixtureSupport/NativeContextHostExample.swift).
+It covers both selections, reminder/tool/final/drain before compact, native tool
+changes, next real user/reminder, and reopen. Local HTTP fixtures prove wire and
+lifecycle contracts, not real-model language compliance or signature validity.
+OtohaAI/sub2api must qualify endpoint/model/beta forwarding, omission and progress
+thinking, compaction usage, repeat/reopen and reminders against their real service.
+Host chooses window/input reserves/cost thresholds and may use sub2api prices
+without ModelPromptPricing. This patch changes no price or scheduling contracts.
 
 ## Preserved thinking and explicit fallback
 
@@ -162,8 +235,8 @@ checkpoint identity, not guessed canonical indices. Log kind/reason/identity/cou
 never full thinking, signature, ciphertext or credentials.
 
 Fixtures prove local encoding, source correspondence and lifecycle. They cannot
-verify real signatures. No new paid live qualification was run for #99. OtohaAI must
-verify strict `.error` behavior on a supported account/model across tool changes,
+verify real signatures. No new paid live qualification was run for #99 or #101. Only Hosts adopting
+the optional preserved-tail/mismatch mode must verify strict `.error` behavior on a supported account/model across tool changes,
 reminders, multiple compactions and reopen, confirming no unexpected thinking_dropped.
 
 ## Sampling usage and pricing
@@ -231,3 +304,15 @@ types share constructor/decode validation. New `ModelEvent.inputTransformations`
 `ModelEvent.compactionProgress`, `AgentEvent.compaction` and new failure cases require
 clients with exhaustive source switches to add handling. This prerelease API delta
 is explicit; source compatibility is not claimed for exhaustive enum switches.
+
+## Local request-size diagnostics (#101 follow-up)
+
+For a final Anthropic HTTP body above 32,000,000 bytes, inspect
+`ModelProviderError.kind == .invalidRequest` and
+`error.diagnostic == .init(stage: .requestValidation, reason: .requestBodyTooLarge)`.
+The code is stable; the human-readable message is not a matching contract.
+It covers the whole encoded body (base64, text, tools and other fields), so it
+must not be treated as proof that images alone caused the refusal. Host can ask
+for smaller/fewer images or a smaller request as appropriate. Earlier format or
+individual image checks keep their existing errors. This diagnostic authorizes
+no retry or mutation replay and contains no request content or credentials.

@@ -89,7 +89,7 @@ public struct AnthropicModelCatalogProvider: ModelCatalogDetailProvider {
             record.capabilities?.thinking,
             parameter: "thinking.type",
             kind: .thinkingMode,
-            knownValues: ["adaptive", "enabled"]
+            knownValues: ["adaptive", "enabled", "between_tools"]
         )
         var controls = [effort, thinking].compactMap { $0 }
         let thinkingValues = record.capabilities?.thinking?.values ?? record.capabilities?.thinking?.types ?? []
@@ -298,7 +298,7 @@ private struct AnthropicThinkingCapability: Decodable, AnthropicCapabilityMetada
             }
             return key.stringValue
         }
-        types = names.isEmpty ? nil : orderedCatalogNames(names, preferred: ["adaptive", "enabled"])
+        types = names.isEmpty ? nil : orderedCatalogNames(names, preferred: ["adaptive", "enabled", "between_tools"])
     }
 }
 

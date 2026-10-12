@@ -76,7 +76,12 @@ package struct AgentLoop: Sendable {
         conversationRevision: UInt64,
         structuredOutput: StructuredOutputSchema?
     ) async throws -> AgentPreparedModelRequest {
-        try await prepareRequest(
+        if binding.nativeContextPolicy?.compactBeforeGeneration == .anthropicOnDemand,
+           runContextControls?.reminder != nil {
+            throw ModelProviderError(kind: .unsupportedCapability,
+                message: "Run-local on-demand compaction cannot cover the required reminder before continuing generation; compact between completed Runs instead.")
+        }
+        return try await prepareRequest(
             messages: messages,
             sessionID: sessionID,
             runID: runID,

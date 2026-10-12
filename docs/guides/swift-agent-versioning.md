@@ -545,3 +545,15 @@ required-new-label overloads. Old optional data remains absent/unknown.
 Response classification is shared by streaming and steering. Compaction,
 pause and unrecognized stop reasons do not settle the final-answer deadline;
 known final responses retain the RC6 slow-publication contract.
+
+### Issue #101 follow-up (unreleased)
+
+`AnthropicThinking` gains `serviceDefault` and `betweenTools`, and provider
+diagnostic Reason gains `requestBodyTooLarge`; downstream exhaustive
+switches need two cases. All Provider initializer/function-reference signatures
+and their `.disabled` defaults are unchanged. No Journal schema or reader version
+changes: default schema 3 and opt-in native schema 11 retain prior contracts.
+Only provably completed, drained reminder turns gain idle whole-history on-demand
+permission. New thinking modes do not gain preserved-thinking-tail permission.
+Run-local compaction/reminder now fails before admission instead of silently losing
+the required control. No tag or release is created by this patch.
