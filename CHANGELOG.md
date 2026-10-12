@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased: issue #103 automatic compaction final answers
+
+- OpenAI Responses automatic compaction now classifies completed assistant messages across the entire validated response output, including messages before a trailing compaction item. Such answers finish once instead of entering the bounded maintenance loop.
+- Preserves all native output in the checkpoint and canonical answer in history; the next request still replays the latest compaction window. Compaction-only responses retain their bounded maintenance behavior. No public API, schema, or live qualification changes.
+- Follow-up dispatchers continue to own their paused session. Hosts must finish/close and drain the queue before idle on-demand maintenance; a between-queued-replies maintenance hook remains a separate future design.
+
 ## Unreleased: issue #101 Host compaction path
 
 - Adds `ModelProviderError.Diagnostic.Reason.requestBodyTooLarge` for Anthropic local final-body overflow, preserving `.invalidRequest` and preventing Host message-string matching.
