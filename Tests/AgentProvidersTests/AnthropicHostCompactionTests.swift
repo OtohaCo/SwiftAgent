@@ -109,7 +109,7 @@ struct AnthropicHostCompactionTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "host", supportsNativeContext: true)
         let probe = ProviderRequestProbe(), gate = HostSummaryGate()
-        let transport = HostSummaryTransport(probe: probe, bodies: [fixture(anthropicTextFixture), fixture(try summary()), fixture(anthropicTextFixture)], gate: cancel ? gate : nil)
+        let transport = HostSummaryTransport(probe: probe, bodies: [fixture(anthropicTextFixture), fixture(try summary()), fixture(cancel ? try summary() : anthropicTextFixture)], gate: cancel ? gate : nil)
         let adapter = try AnthropicProvider(apiKey: "fixture", thinking: .serviceDefault,
             nativeContext: .init(qualification: .init(endpoint: endpoint, resolvedModelNames: [model.name], modes: [.anthropicOnDemand]), runReminders: true), transport: transport)
         let session = try Agent(binding: binding(adapter)).makeSession(journal: journal)
@@ -120,7 +120,8 @@ struct AnthropicHostCompactionTests {
         let before = try await session.conversationSnapshot()
         let second = try await session.compact(mode: .anthropicOnDemand)
         if cancel { await gate.waitEntered(); await second.cancel(); await gate.release() }
-        await #expect(throws: (any Error).self) { try await second.wait() }
+        if cancel { await #expect(throws: CancellationError.self) { try await second.wait() } }
+        else { await #expect(throws: ModelProviderError.self) { try await second.wait() } }
         try await second.waitForDrain()
         #expect(try await session.conversationSnapshot() == before)
         #expect(try await journal.nativeContextCheckpoint(sessionID: session.id) == checkpoint)

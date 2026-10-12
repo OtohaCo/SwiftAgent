@@ -31,6 +31,8 @@ modes and schema versions are unchanged. The scope includes the small
   File sessions can reopen before first compact and after checkpoint, compact
   repeatedly, then continue with real new user/reminder. Persistent instructions,
   noncompleted/unknown terminals, pending/quarantine and through restrictions stay.
+- Cancellation coverage releases a valid signed summary after cancel and requires
+  CancellationError; malformed summary refusal cannot mask a cancellation failure.
 - serviceDefault omits thinking across generation, controls and on-demand encoding;
   betweenTools has exactly type=between_tools on resolved Sonnet 5.5. Explicit
   mismatch/tail qualification and xhigh/max effort combinations refuse before HTTP.
