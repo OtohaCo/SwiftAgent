@@ -28,6 +28,11 @@ public struct ModelUsageIteration: Hashable, Sendable, Codable {
         }
         try checkDisjoint(cachedInputTokens, cacheWriteInputTokens, total: inputTokens)
         try checkDisjoint(cacheWriteTTL?.fiveMinuteTokens, cacheWriteTTL?.oneHourTokens, total: cacheWriteInputTokens)
+        let knownTTL = (cacheWriteTTL?.fiveMinuteTokens ?? 0).addingReportingOverflow(cacheWriteTTL?.oneHourTokens ?? 0)
+        guard !knownTTL.overflow else { throw ModelStreamError.invalidUsage }
+        // Missing aggregate write remains unknown, but known TTL writes are a
+        // disjoint lower bound and cannot exceed inclusive input with cache reads.
+        try checkDisjoint(cachedInputTokens, knownTTL.partialValue, total: inputTokens)
         self.ordinal = ordinal; self.kind = kind; self.model = model
         self.inputTokens = inputTokens; self.outputTokens = outputTokens
         self.cachedInputTokens = cachedInputTokens; self.cacheWriteInputTokens = cacheWriteInputTokens

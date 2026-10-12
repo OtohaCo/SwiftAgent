@@ -167,6 +167,51 @@ import Testing
         #expect(response?.content.contains { if case .providerContinuation(let state) = $0 { state.contextTransition != nil } else { false } } == false)
     }
 
+    @Test func automaticMaintenanceUsesItsConfiguredBoundBeforeAnotherDispatch() async throws {
+        let probe = ProviderRequestProbe()
+        let body = try fixture(block: .object(["type": .string("compaction"), "content": .string("summary")]), threshold: true)
+        let provider = try AnthropicProvider(apiKey: "fixture", nativeContext: .init(
+            qualification: .init(endpoint: endpoint, resolvedModelNames: ["fixture"], modes: [.anthropicThreshold]),
+            automatic: .init(mode: .anthropicThreshold, triggerInputTokens: 50_000, pauseAfterCompaction: true, maximumMaintenanceRounds: 1)),
+            transport: FixtureHTTPTransport(probe: probe, bodies: [body, body, body, body]))
+        let journal = AgentJournal()
+        let session = try scopedAgent(provider).makeSession(journal: journal)
+        let run = try await session.run("source")
+        do { _ = try await run.wait(); Issue.record("Unbounded maintenance completed") }
+        catch let error as ModelProviderError {
+            #expect(error.kind == .invalidResponse && error.message.contains("bounded continuation budget"))
+        }
+        try await run.waitForDrain()
+        #expect(await probe.requests.count == 2)
+        #expect(try await journal.nativeContextCheckpoint(sessionID: session.id)?.generation == 1)
+    }
+
+    @Test(arguments: ["[]", #"[{"type":"advisor","input_tokens":1,"output_tokens":1}]"#,
+        #"[{"type":"message","input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}]"#])
+    func unqualifiedLateIterationAccountingIsRefusedWithoutFalseTotals(_ table: String) async throws {
+        let frames = [
+            #"{"type":"message_start","message":{"id":"ordinary","type":"message","role":"assistant","model":"fixture","content":[],"usage":{"input_tokens":10,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":1}}}"#,
+            #"{"type":"message_delta","delta":{},"usage":{"iterations":\#(table)}}"#,
+            #"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+            #"{"type":"message_stop"}"#]
+        let probe = ProviderRequestProbe()
+        let provider = try AnthropicProvider(apiKey: "fixture", transport: FixtureHTTPTransport(probe: probe, bodies: [providerSSE(frames)]))
+        var reported: [ModelUsage] = [], completed = false
+        do {
+            for try await event in provider.stream(request: .init(model: model, messages: [.user([.text("ordinary")])])) {
+                if case .usage(let value) = event { reported.append(value) }
+                if case .responseCompleted = event { completed = true }
+            }
+            Issue.record("Usage accounting changed after published parent counters")
+        } catch let error as ModelProviderError {
+            #expect(error.kind == .invalidResponse && error.message.contains("accounting scope"))
+        }
+        #expect(!completed)
+        #expect(reported.count == 1 && reported.first?.inputTokens == 15)
+        #expect(reported.allSatisfy { $0.iterationUsage == nil })
+        #expect(await probe.requests.count == 1)
+    }
+
     @Test(arguments: ["replacement", "empty", "eof", "sparse"])
     func iterationTablesAreWholeSnapshotsAndNeverDoubleCountParent(_ variant: String) async throws {
         let first = #"[{"type":"compaction","model":"actual-compactor","input_tokens":100,"output_tokens":10,"cache_read_input_tokens":5,"cache_creation_input_tokens":7},{"type":"message","input_tokens":200,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}]"#

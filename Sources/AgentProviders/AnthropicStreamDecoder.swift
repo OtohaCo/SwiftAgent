@@ -26,6 +26,7 @@ struct AnthropicStreamDecoder {
     private var reasoningTokens: Int?
     private var cacheWriteTTL: CacheWriteTTLUsage?
     private var iterations: [ModelUsageIteration]?
+    private var publishedParentUsage = false
     private var usage = ModelUsage()
     private var stopReason: StopReason?
     private var inputTransformations: [ModelInputTransformation]?
@@ -314,6 +315,10 @@ struct AnthropicStreamDecoder {
             total = withWrite
         }
         if let value = usage["iterations"], value != .null {
+            guard !publishedParentUsage else {
+                throw ModelProviderError(kind: .invalidResponse,
+                    message: "Anthropic changed usage accounting scope after parent counters were published; qualify native iteration accounting before dispatch.")
+            }
             guard case .array(let values) = value, values.count <= 1_000 else { throw ProviderJSON.invalid() }
             iterations = try values.enumerated().map { ordinal, value in
                 let child = try ProviderJSON.object(value)
@@ -357,6 +362,7 @@ struct AnthropicStreamDecoder {
             self.usage = .init(inputTokens: total, outputTokens: outputTokens, cachedInputTokens: cachedInputTokens,
                 cacheWriteInputTokens: cacheWriteInputTokens, reasoningTokens: reasoningTokens, cacheWriteTTL: cacheWriteTTL)
         }
+        if !nativeIterationUsage { publishedParentUsage = true }
         return [.usage(self.usage)]
     }
     private mutating func iterationUsageEvents(complete: Bool) throws -> [ModelEvent] {

@@ -264,3 +264,20 @@ models/endpoints, and historical control combinations fail locally. Whole-histor
 idle compaction and the separately tested new-user/reminder combination retain
 their existing support. These tests use opaque HTTP fixture signatures and do not
 qualify a live account's preserved-thinking enforcement.
+
+## Final review accounting and maintenance refinements
+
+When both a binding maintenance limit and an automatic-provider maintenance limit
+exist, the stricter limit applies; otherwise the configured limit applies, with
+four only as the unconfigured fallback. The limit bounds maintenance continuations
+rather than resetting deadline or treating summaries as final answers.
+
+An ordinary unqualified Anthropic response preserves the old parent-counter
+behavior. If it later introduces iterations after parent counters have already
+been published, the adapter rejects the changed accounting scope explicitly rather
+than switching to unknown totals and contradicting cumulative snapshots. Qualified
+native modes defer parent totals from the beginning and continue to accept whole
+iteration replacement tables, including sparse and empty snapshots. This refusal
+is a protocol/accounting boundary, never a retry or fabricated usage adjustment.
+Known cache-read plus TTL write lower bounds must fit inclusive input even when the
+aggregate write counter is missing; missing aggregates remain unknown.

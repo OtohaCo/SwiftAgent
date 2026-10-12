@@ -370,7 +370,9 @@ package struct AgentLoop: Sendable {
                     throw ModelProviderError(kind: .invalidResponse, message: "Maintenance cannot publish unaccepted client tool proposals.")
                 }
                 maintenanceRounds += 1
-                guard maintenanceRounds <= (binding.nativeContextPolicy?.maximumMaintenanceRounds ?? 4) else {
+                let configuredLimits = [binding.nativeContextPolicy?.maximumMaintenanceRounds,
+                    (provider as? any ModelProviderCompaction)?.automaticCompaction?.maximumMaintenanceRounds].compactMap { $0 }
+                guard maintenanceRounds <= (configuredLimits.min() ?? 4) else {
                     throw ModelProviderError(kind: .invalidResponse, message: "Native maintenance did not converge within its bounded continuation budget.")
                 }
                 if let state = try nativeCandidate(response, request: request) {

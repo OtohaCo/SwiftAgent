@@ -15,6 +15,18 @@ import Testing
         #expect(try JSONDecoder().decode(ModelIterationUsage.self, from: JSONEncoder().encode(complete)) == complete)
         #expect(throws: (any Error).self) { try ModelIterationUsage(iterations: [first, first], coverage: .complete) }
     }
+    @Test func knownTTLWriteLowerBoundCannotExceedInclusiveInputWhenAggregateMissing() throws {
+        for (input, read, five, hour) in [(10, 0, 20, 0), (10, 9, 2, 0), (Int.max, Int.max, 1, 0)] {
+            #expect(throws: ModelStreamError.invalidUsage) {
+                try ModelUsageIteration(ordinal: 0, kind: "message", inputTokens: input,
+                    cachedInputTokens: read, cacheWriteInputTokens: nil,
+                    cacheWriteTTL: .init(fiveMinuteTokens: five, oneHourTokens: hour))
+            }
+        }
+        let valid = try ModelUsageIteration(ordinal: 0, kind: "message", inputTokens: 10,
+            cachedInputTokens: 5, cacheWriteInputTokens: nil, cacheWriteTTL: .init(fiveMinuteTokens: 2))
+        #expect(valid.cacheWriteInputTokens == nil)
+    }
     @Test func contradictoryCacheSubsetsReject() throws {
         #expect(throws: (any Error).self) { try ModelUsageIteration(ordinal: 0, kind: "message", inputTokens: 100, cachedInputTokens: 80, cacheWriteInputTokens: 80) }
         #expect(throws: (any Error).self) { try ModelUsageIteration(ordinal: 0, kind: "message", cacheWriteInputTokens: 10, cacheWriteTTL: .init(fiveMinuteTokens: 20)) }
