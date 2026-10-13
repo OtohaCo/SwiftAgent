@@ -203,15 +203,30 @@ struct ChatGPTPlanProviderTests {
         }
     }
 
-    @Test func physicalDrainWaitsForLateCredentialSourceAndPreventsDispatch() async throws {
+    @Test(arguments: [false, true])
+    func physicalDrainWaitsForLateCredentialSourceAndPreventsDispatch(deadline: Bool) async throws {
         let started = XCTestExpectation(description: "credential source entered")
         let gate = PlanCredentialGate(started: started), probe = ProviderRequestProbe()
         let provider = OpenAIChatGPTPlanProvider(credentials: .init(accessToken: { await gate.token() }),
             transport: FixtureHTTPTransport(probe: probe, bodies: [openAITextFixture]))
-        let run = try await Agent(model: planRequest.model, provider: provider).makeSession().run("Hi")
+        let sessionID = UUID()
+        let session = try Agent(model: planRequest.model, provider: provider).makeSession(id: sessionID)
+        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 1,
+            deadline: .now.advanced(by: .seconds(deadline ? 1 : 10)))
+        let run = try await session.run("Hi", budget: budget)
         #expect(await XCTWaiter.fulfillment(of: [started], timeout: 2) == .completed)
-        await run.cancel()
-        await #expect(throws: CancellationError.self) { try await run.wait() }
+        if deadline {
+            await #expect(throws: AgentLoopError.deadlineExceeded) { try await run.wait() }
+        } else {
+            await run.cancel()
+            await #expect(throws: CancellationError.self) { try await run.wait() }
+        }
+        let replacementProvider = OpenAIChatGPTPlanProvider(credentials: .init(accessToken: { "fresh-fixture-token" }),
+            transport: FixtureHTTPTransport(probe: probe, bodies: [openAITextFixture]))
+        let replacement = try Agent(model: planRequest.model, provider: replacementProvider).makeSession(id: sessionID)
+        await #expect(throws: AgentSessionError.runInProgress) {
+            _ = try await replacement.run("too early")
+        }
         let premature = XCTestExpectation(description: "physical drain before source returned")
         premature.isInverted = true
         let drain = Task { try await run.waitForDrain(); premature.fulfill() }
@@ -220,6 +235,10 @@ struct ChatGPTPlanProviderTests {
         try await drain.value
         #expect(await gate.finished)
         #expect(await probe.requests.isEmpty)
+        let next = try await replacement.run("after drain")
+        #expect(try await next.wait().outcome == .completed)
+        try await next.waitForDrain()
+        #expect(await probe.requests.count == 1)
     }
 }
 

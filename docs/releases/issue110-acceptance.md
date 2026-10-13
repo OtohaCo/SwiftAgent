@@ -39,7 +39,9 @@ Apple Swift 6.4 (`swiftlang-6.4.0.34.1`) on arm64 macOS; no paid/live service.
   `swift test --disable-sandbox --no-parallel --filter ChatGPTPlan` passed 19
   tests in 3 suites. Request body, image/schema, tool loop and continuation,
   namespace/name tampering, missing/incomplete/failed completion, error privacy,
-  HTTP bounds/status, token rotation/preflight/late cancellation/physical drain,
+  HTTP bounds/status, token rotation/preflight/late cancellation and deadline/
+  physical drain (both cases reject a replacement Session until drain, then
+  permit a fresh Run with the same ID),
   catalog dialect/filter/order/metadata/pagination/bounds all passed.
 - Public-only GREEN:
   `swift test --package-path Examples/ExternalClient --disable-sandbox --no-parallel --filter ChatGPTPlanPublicClientTests`
@@ -58,6 +60,10 @@ no SDK stream/history assertion was weakened. Logs are kept under
 `.ci-logs/issue110/` and summarized in the final source-bound PR/issue report.
 Historical Swift planning crashes and cancelled CI remain in whole-candidate
 provenance; these test-harness failures are not relabeled SDK RED.
+The first local full macOS invocation was deliberately stopped during core
+tests to add the independent review's deadline/reservation test supplement;
+its partial log is retained, not counted as a passing full gate. The supplement
+passed all 19 focused tests, including both cancellation/deadline cases.
 
 ## Support and limits
 
@@ -67,7 +73,8 @@ plan route. New public Provider/catalog/credential types and two diagnostic reas
 cases; old API-key signatures/defaults unchanged, no Journal/schema or Core
 executor/settlement change. Default/native/handoff schema 3/11/12 and reader
 gates remain applicable. SDK cannot force a Host token callback to finish;
-physical drain waits for it, and a late result cannot dispatch after cancellation.
+physical drain waits for it, and a late result cannot dispatch after cancellation
+or deadline expiry.
 
 The allowlisted body uses developer instructions, namespaced function calls,
 stream:true/store:false and full input. SDK does not send max_output_tokens,
