@@ -2,10 +2,18 @@
 
 ## [1.0.0-rc.6]
 
-SDK prerelease; final SDK acceptance completed at `adc14bda5652ef5c61e4e934429c7736249cc1f6`.
+SDK prerelease; earlier SDK acceptance completed at `adc14bda5652ef5c61e4e934429c7736249cc1f6`.
+Publication was paused to include #110; its new source requires separate complete acceptance.
 The [GitHub Pre-release](https://github.com/OtohaCo/SwiftAgent/releases/tag/1.0.0-rc.6)
-records actual publication time, final documentation-only target and release gates
+records actual publication time, final target and release gates
 once published. No ABI stability or production Host qualification is implied.
+
+### issue #110 ChatGPT-plan Responses
+
+- Adds an explicit OAuth plan Provider and model catalog with Host-owned per-dispatch credentials. Ordinary API-key initializers and wire behavior remain unchanged.
+- Uses developer instructions, namespaced function tools, full stateless input, stream:true/store:false and an allowlist omitting unsupported preview fields including max_output_tokens. Native compaction/encrypted continuation and hosted tools are explicitly unsupported; no automatic dropping or replay.
+- Validates namespace identity and completed stream output, classifies plan usage failures with fixed diagnostics, and bounds error/catalog bodies. Token-source cancellation/physical drain prevents late dispatch; SDK never owns OAuth refresh or billing fallback.
+- Adds two public diagnostic reason enum cases; exhaustive switches must adapt. No Journal schema, canonical history, tool identity or protocol requirement change. Offline/public consumer fixtures are not current account/model or OtohaAI qualification.
 
 ### issue #105 explicit context handoff and queued reminders
 

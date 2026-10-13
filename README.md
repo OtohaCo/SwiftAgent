@@ -46,13 +46,15 @@ whether generated code looks plausible.
 Provider-specific contracts:
 [Anthropic Messages](docs/guides/swift-agent-anthropic-provider.md) ·
 [OpenAI Responses](docs/guides/swift-agent-openai-provider.md) ·
+[ChatGPT-plan Responses](docs/guides/swift-agent-chatgpt-plan-provider.md) ·
 [DeepSeek Responses](docs/guides/swift-agent-deepseek-provider.md) ·
 [Local Responses / LM Studio](docs/guides/swift-agent-local-responses-provider.md) ·
 [Apple on-device/PCC](docs/guides/swift-agent-apple-provider.md).
 
 ## Version scope and installation
 
-The accepted RC6 SDK candidate is `1.0.0-rc.6`. The
+The RC6 SDK candidate is `1.0.0-rc.6`; the additional #110 plan adapter requires
+its own [final-source acceptance](docs/releases/issue110-acceptance.md). The
 [GitHub Pre-release](https://github.com/OtohaCo/SwiftAgent/releases/tag/1.0.0-rc.6)
 records actual publication and its exact target/gates; until it is published,
 `1.0.0-rc.5` remains the latest release. Once published, pin RC6 explicitly:
