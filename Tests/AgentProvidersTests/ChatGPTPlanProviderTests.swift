@@ -80,7 +80,7 @@ struct ChatGPTPlanProviderTests {
         let run = try await Agent(model: planRequest.model, provider: provider,
             tools: [ProviderCalculator(probe: execution)], configuration: .init(instructions: "Keep constraint")).makeSession().run("Add")
         #expect(try await run.wait().outcome == .completed)
-        await run.waitForDrain()
+        try await run.waitForDrain()
         #expect(await execution.count == 1)
         #expect(await probe.requests.count == 2)
     }
@@ -196,10 +196,10 @@ struct ChatGPTPlanProviderTests {
         await #expect(throws: CancellationError.self) { try await run.wait() }
         let premature = XCTestExpectation(description: "physical drain before source returned")
         premature.isInverted = true
-        let drain = Task { await run.waitForDrain(); premature.fulfill() }
+        let drain = Task { try await run.waitForDrain(); premature.fulfill() }
         #expect(await XCTWaiter.fulfillment(of: [premature], timeout: 0.1) == .completed)
         await gate.release()
-        await drain.value
+        try await drain.value
         #expect(await gate.finished)
         #expect(await probe.requests.isEmpty)
     }
