@@ -1,6 +1,6 @@
 # ChatGPT-plan Responses adapter (#110)
 
-Status: proposed; awaiting design approval. RC6 publication is paused by Host
+Status: approved by Host on 2026-10-13. RC6 publication is paused by Host
 instruction. No rc.6 tag or Release exists. Starting main is
 `c0085211a176812c4c43723b5ed3851553ebb9e7`, tree
 `98ad2df931c9cc1f095b564456b23a558f7633f0`. Its documentation-only CI and consumer
