@@ -10,6 +10,24 @@ import XCTest
 @testable import AgentProviders
 
 struct ChatGPTPlanProviderTests {
+    @Test func imageAndStructuredOutputUseOnlySupportedFields() async throws {
+        let image = try ModelImage(data: Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!, description: "pixel")
+        let request = ModelRequest(model: planRequest.model,
+            messages: [.system("First"), .developer("Second"), .user([.text("See"), .image(image)])], tools: planRequest.tools,
+            structuredOutput: .init(name: "answer", schema: .object(["type": .string("object")]), strict: true))
+        let probe = ProviderRequestProbe()
+        let provider = OpenAIChatGPTPlanProvider(credentials: .init(accessToken: { "fixture-token" }),
+            transport: FixtureHTTPTransport(probe: probe, bodies: [openAITextFixture]))
+        for try await _ in provider.stream(request: request) {}
+        let body = try ProviderJSON.object(JSONDecoder().decode(JSONValue.self, from: #require(await probe.requests[0].httpBody)))
+        #expect(Set(body.keys) == Set(["model", "input", "tools", "text", "store", "stream"]))
+        guard case .array(let input) = body["input"], case .array(let parts) = input[2]["content"] else { Issue.record("Missing image input"); return }
+        #expect(input[0]["role"] == .string("developer") && input[1]["role"] == .string("developer"))
+        #expect(parts[0]["type"] == .string("input_text") && parts[1]["type"] == .string("input_image"))
+        #expect(parts[1]["image_url"] == .string("data:image/png;base64," + image.data.base64EncodedString()))
+        #expect(body["text"]?["format"]?["type"] == .string("json_schema"))
+    }
+
     @Test func credentialsAreReadOncePerDispatchAndNeverDuringPreflight() async throws {
         let tokens = PlanRotatingTokens(), probe = ProviderRequestProbe()
         let provider = OpenAIChatGPTPlanProvider(credentials: .init(accessToken: { await tokens.next() }),

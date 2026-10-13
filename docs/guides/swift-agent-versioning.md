@@ -1,11 +1,27 @@
 # SwiftAgent Semantic Versioning
 
-RC6 includes the RC5→RC6 changes below, including #99/#101/#103/#105 first scope.
-The final SDK main passed [complete acceptance](../releases/rc6-candidate-acceptance.md);
+RC6 includes the RC5→RC6 changes below, including #99/#101/#103/#105 first scope
+and the newly requested #110 plan adapter. Earlier SDK main passed
+[complete acceptance](../releases/rc6-candidate-acceptance.md); #110 requires its
+own final-source acceptance recorded there and in its focused report;
 publication identity/date/gates belong to the GitHub Pre-release. Historical
 “unreleased” labels describe when individual changes were recorded, not an
 unqualified claim that the accepted SDK scope is still pending. RC6 remains a
 prerelease with source breaks and no ABI stability promise.
+
+## Issue #110 ChatGPT-plan Responses (RC6)
+
+Adds `OpenAIChatGPTPlanCredentials`, `OpenAIChatGPTPlanProvider` and
+`OpenAIChatGPTPlanModelCatalogProvider` in AgentProviders, using the existing
+ModelProvider/validator/drain/catalog protocols. The ordinary API-key initializer
+signatures, defaults and request encoding remain unchanged. Adds public diagnostic
+reason enum cases `subscriptionSharingUsageLimitExceeded` and
+`subscriptionSharingUsageUnavailable`; exhaustive switches must adapt. No new
+ModelProviderError.Kind, ModelMessage/ToolCall field, protocol requirement or
+Journal schema. Plan opaque continuation format is deliberately incompatible
+with ordinary API-key replay; mixed state rejects before token/HTTP dispatch.
+No ABI stability or live plan/account qualification is promised. See the
+[plan guide](swift-agent-chatgpt-plan-provider.md).
 
 ## Issue #105 explicit context handoff (RC6)
 

@@ -43,6 +43,7 @@ enum ChatGPTPlanFailure {
         guard let root = try? JSONDecoder().decode(JSONValue.self, from: body),
               case .object(let fields) = root, case .object(let error) = fields["error"],
               case .string(let code) = error["code"], let mapped = classify(code: code) else { return fallback }
-        return .init(kind: mapped.kind, message: mapped.message, retryAfter: fallback.retryAfter, diagnostic: mapped.diagnostic)
+        return .init(kind: mapped.kind, message: "ChatGPT-plan HTTP request failed (\(status)): \(mapped.message)",
+                     retryAfter: fallback.retryAfter, diagnostic: mapped.diagnostic)
     }
 }

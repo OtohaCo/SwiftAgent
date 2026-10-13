@@ -5,6 +5,10 @@
 `AgentProviders` includes `OpenAIResponsesProvider`, a stateless adapter for
 OpenAI's Responses API.
 
+ChatGPT-plan OAuth inference has a separate request contract. Use the explicit
+[ChatGPT-plan Provider](swift-agent-chatgpt-plan-provider.md); passing an OAuth
+token into this ordinary API-key initializer does not select that contract.
+
 ```swift
 import AgentCore
 import AgentModels

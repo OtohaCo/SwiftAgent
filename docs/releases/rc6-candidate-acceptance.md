@@ -1,7 +1,7 @@
 # RC6 whole-candidate acceptance
 
-Status: **SDK candidate accepted; publication gates recorded separately**.
-Final SDK main `adc14bda5652ef5c61e4e934429c7736249cc1f6` / tree
+Status: **earlier SDK scope accepted; #110 final-source acceptance and renewed publication gates recorded separately**.
+Earlier SDK main `adc14bda5652ef5c61e4e934429c7736249cc1f6` / tree
 `caa703b9ffa539db78b40d9fbf76627071e2ef31` has the same tree as PR #107's reviewed
 head `7e565b5df1c1d9e60177cd2fb7b96539956d7c15`.
 [Actual-main CI 38243487509](https://github.com/OtohaCo/SwiftAgent/actions/runs/38243487509)
@@ -13,8 +13,16 @@ It covers initial RC6/#98 plus #99/#101/#103, diagnostics #106 and approved #105
 first scope. PR #107 was merged at the user's instruction while CI was pending;
 its final head and main successes completed afterward, not before merge.
 
-The release-seal PR adds only documentation, with no SDK/test/build delta.
-Its final publication commit must pass its own CI and anonymous revision consumer;
+The documentation-only release-seal PR #109 merged as
+`c0085211a176812c4c43723b5ed3851553ebb9e7` / tree
+`98ad2df931c9cc1f095b564456b23a558f7633f0`;
+[actual-main CI](https://github.com/OtohaCo/SwiftAgent/actions/runs/38382913379)
+passed all Linux/macOS/Apple jobs on first attempt (60 exact-clean stage records,
+actual reader/reporting/seal checks), and its anonymous cold revision consumer
+passed. Before any tag/Release, the Host paused publication to add #110.
+See [#110 scope/RED/GREEN](issue110-acceptance.md) for the new implementation.
+Its new publication commit must pass independent review, applicable PR/main CI
+and a fresh anonymous revision consumer;
 the immutable annotated tag must pass tag CI and an exact-version public consumer.
 The [GitHub Pre-release](https://github.com/OtohaCo/SwiftAgent/releases/tag/1.0.0-rc.6)
 records the actual tag object/target/tree, publication time and final gate results

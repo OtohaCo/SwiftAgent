@@ -10,6 +10,7 @@ adapters translate vendor transport and stream contracts into `ModelEvent`;
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Anthropic Messages | AgentProviders | macOS, iOS, Linux | Yes | Yes | Yes | Signed thinking continuation | Base64 image blocks in user turns and tool results | Yes | API key | Fixtures; operator live test available |
 | OpenAI Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Encrypted opaque continuation and visible summaries | `input_image` data URLs in user messages and tool outputs | Yes | API key | Fixtures; operator live test available |
+| OpenAI ChatGPT-plan Responses | AgentProviders | macOS, iOS, Linux | Yes | Namespaced functions | JSON Schema | Not advertised; encrypted/native state refused | Existing `input_image` data URLs | Yes when reported | Host-owned per-request OAuth token | Offline fixtures only; current account/model not live-qualified |
 | DeepSeek Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Plaintext opaque continuation | No; refused | Yes | API key | Fixtures; bounded terminal/usage live evidence |
 | Local Responses (LM Studio qualification target) | AgentProviders | macOS, iOS, Linux | Yes | Explicit model opt-in | Explicit model opt-in | Visible normalized content only; no opaque continuation | Explicit `.imageInput` opt-in | Yes when reported | None or bearer | Fixtures; operator live qualification available |
 | Apple on-device | AgentAppleProvider | macOS/iOS 26+ | No; one validated plan per request | Yes | No | Not advertised | No; refused | SDK 27 where available | None | Compile and fixtures; operator live test available |
@@ -32,6 +33,7 @@ Detailed guides:
 
 - [Anthropic](guides/swift-agent-anthropic-provider.md)
 - [OpenAI Responses](guides/swift-agent-openai-provider.md)
+- [ChatGPT-plan Responses / Sign in with ChatGPT](guides/swift-agent-chatgpt-plan-provider.md)
 - [DeepSeek Responses](guides/swift-agent-deepseek-provider.md)
 - [Local Responses and LM Studio](guides/swift-agent-local-responses-provider.md)
 - [Apple on-device and PCC](guides/swift-agent-apple-provider.md)
