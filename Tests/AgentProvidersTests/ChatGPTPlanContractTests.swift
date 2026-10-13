@@ -7,7 +7,7 @@ import Testing
 struct ChatGPTPlanContractTests {
     @Test func planBodyUsesDeveloperInstructionsNamespacedToolsAndNoOutputLimit() async throws {
         let probe = ProviderRequestProbe()
-        let provider = try OpenAIResponsesProvider(apiKey: "fixture-token",
+        let provider = OpenAIChatGPTPlanProvider(credentials: .init(accessToken: { "fixture-token" }),
             transport: FixtureHTTPTransport(probe: probe, bodies: [openAITextFixture]))
         let request = ModelRequest(model: .init(provider: "openai", name: "fixture"),
             messages: [.system("Keep the constraint"), .developer("Keep ordering"), .user([.text("Hi")])],
@@ -32,7 +32,7 @@ struct ChatGPTPlanContractTests {
                              ("subscription_sharing_usage_unavailable", .unavailable)] {
             let body = providerNamedSSE([("response.failed",
                 "{\"type\":\"response.failed\",\"response\":{\"id\":\"failed\",\"model\":\"fixture\",\"status\":\"failed\",\"error\":{\"code\":\"\(code)\",\"message\":\"private secret\"}}}")])
-            let provider = try OpenAIResponsesProvider(apiKey: "fixture-token",
+            let provider = OpenAIChatGPTPlanProvider(credentials: .init(accessToken: { "fixture-token" }),
                 transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [body]))
             do {
                 for try await _ in provider.stream(request: .init(model: .init(provider: "openai", name: "fixture"), messages: [.user([.text("Hi")])])) {}
@@ -46,7 +46,8 @@ struct ChatGPTPlanContractTests {
 
     @Test func planCatalogFiltersVisibilityInServerOrder() async throws {
         let body = Data(#"{"models":[{"slug":"second","display_name":"Second","visibility":"list"},{"slug":"hidden","display_name":"Hidden","visibility":"hide"},{"slug":"first","display_name":"First","visibility":"list"}]}"#.utf8)
-        let provider = try OpenAIModelCatalogProvider(apiKey: "fixture-token", serviceInstanceID: "account-fixture",
+        let provider = try OpenAIChatGPTPlanModelCatalogProvider(credentials: .init(accessToken: { "fixture-token" }),
+            serviceInstanceID: "account-fixture", authorizationScopeID: "selected-account",
             transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [body]))
         let page = try await provider.listModels(.init())
         #expect(page.models.map(\.model.name) == ["second", "first"])

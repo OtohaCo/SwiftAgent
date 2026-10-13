@@ -112,6 +112,8 @@ struct ResponsesStreamDecoder {
     let providerLabel: String
     let nativeRequest: ModelRequest?
     let continuationPolicy: ContinuationPolicy
+    /// nil preserves ordinary Responses behavior; non-nil selects the explicit plan contract.
+    let chatGPTPlanToolNames: [String]?
     private var info: ResponseInfo?
     private var content: [ModelContent] = []
     private var items: [Int: ItemState] = [:]
@@ -125,18 +127,26 @@ struct ResponsesStreamDecoder {
         model: ModelID,
         responseModelName: String? = nil,
         providerLabel: String = "OpenAI",
-        continuationPolicy: ContinuationPolicy = .openAI, nativeRequest: ModelRequest? = nil
+        continuationPolicy: ContinuationPolicy = .openAI, nativeRequest: ModelRequest? = nil,
+        chatGPTPlanToolNames: [String]? = nil
     ) {
         self.model = model
         self.responseModelName = responseModelName ?? model.name
         self.providerLabel = providerLabel
         self.continuationPolicy = continuationPolicy
         self.nativeRequest = nativeRequest
+        self.chatGPTPlanToolNames = chatGPTPlanToolNames
     }
 
     mutating func consume(_ event: ProviderSSEEvent) throws -> [ModelEvent] {
         let object = try ProviderJSON.decode(event.data)
         let type = try ProviderJSON.string(object["type"])
+        if chatGPTPlanToolNames != nil {
+            if let item = object["item"] { try validatePlanItem(item) }
+            if case .object(let response) = object["response"], case .array(let output) = response["output"] {
+                for item in output { try validatePlanItem(item) }
+            }
+        }
         if let name = event.name, !name.isEmpty, name != "message", !name.utf8.elementsEqual(type.utf8) {
             throw ProviderJSON.invalid()
         }
@@ -600,6 +610,9 @@ struct ResponsesStreamDecoder {
                 let transition = ModelNativeContextTransition(mode: .openAIAutomatic, source: source, replayPosition: latestCompaction,
                     invocationID: invocation, responseID: info.id, itemID: try ProviderJSON.string(ProviderJSON.object(nativeItems[latestCompaction])["id"]))
                 state = .init(model: continuation.model, format: continuation.format, payload: continuation.payload, contextTransition: transition)
+            } else if chatGPTPlanToolNames != nil {
+                state = .init(model: continuation.model, format: ChatGPTPlanRequestEncoder.continuationFormat,
+                              payload: continuation.payload)
             } else { state = continuation }
             content.append(.providerContinuation(state))
             events.append(.providerContinuation(state))
@@ -610,6 +623,10 @@ struct ResponsesStreamDecoder {
     }
 
     private mutating func consumeIncomplete(_ object: [String: JSONValue]) throws -> [ModelEvent] {
+        if chatGPTPlanToolNames != nil {
+            throw ModelProviderError(kind: .invalidResponse, message: "ChatGPT-plan response was incomplete.",
+                                     diagnostic: .init(stage: .responseValidation, reason: .invalidTerminal))
+        }
         let response = try ProviderJSON.object(object["response"])
         guard let info,
               try ProviderJSON.string(response["id"]) == info.id,
@@ -944,6 +961,7 @@ struct ResponsesStreamDecoder {
 
     private func classifyFailure(code: String?) -> ModelProviderError {
         let code = code ?? ""
+        if chatGPTPlanToolNames != nil, let mapped = ChatGPTPlanFailure.classify(code: code) { return mapped }
         let kind: ModelProviderError.Kind
         switch code {
         case "rate_limit_exceeded": kind = .rateLimited
@@ -954,12 +972,27 @@ struct ResponsesStreamDecoder {
         case "insufficient_quota": kind = .permissionDenied
         default: kind = .invalidResponse
         }
+        if chatGPTPlanToolNames != nil {
+            return .init(kind: kind, message: "ChatGPT-plan generation failed.",
+                         diagnostic: .init(stage: .server, reason: .serverFailure))
+        }
         return .init(kind: kind, message: "\(providerLabel) generation failed with code '\(diagnostic(code))'.")
     }
 
     private func optionalString(_ value: JSONValue?) throws -> String? {
         guard let value, value != .null else { return nil }
         return try ProviderJSON.string(value)
+    }
+
+    private func validatePlanItem(_ value: JSONValue) throws {
+        try ChatGPTPlanRequestEncoder.validateItems([value])
+        let item = try ProviderJSON.object(value)
+        if item["type"] == .string("function_call") {
+            let name = try ProviderJSON.string(item["name"])
+            guard chatGPTPlanToolNames?.contains(where: { $0.utf8.elementsEqual(name.utf8) }) == true else {
+                throw ModelProviderError(kind: .invalidResponse, message: "ChatGPT-plan returned an undeclared function.")
+            }
+        }
     }
 
     private func diagnostic(_ value: String) -> String {
