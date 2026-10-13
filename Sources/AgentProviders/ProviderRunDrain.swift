@@ -3,7 +3,7 @@ import Foundation
 
 /// Synchronous registration closes the cancellation/producer-start race. A Host
 /// credential callback which ignores cancellation remains physical work until it returns.
-final class ChatGPTPlanRunDrain: @unchecked Sendable {
+final class ProviderRunDrain: @unchecked Sendable {
     struct Key: Hashable { let session: UUID; let run: UUID }
     private let lock = NSLock()
     private var active: [Key: Int] = [:]

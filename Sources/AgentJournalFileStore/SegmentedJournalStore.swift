@@ -255,12 +255,14 @@ public enum AgentIncrementalJournal {
                               supportsRunRecords: Bool = false, supportsImageContent: Bool = false,
                               supportsNativeContext: Bool = false, supportsContextHandoff: Bool = false,
                               supportsFileContent: Bool) throws -> AgentJournal {
-        AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy,
+        do {
+            return AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy,
             supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit,
             supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps,
             supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent,
             supportsNativeContext: supportsNativeContext, supportsContextHandoff: supportsContextHandoff,
             supportsFileContent: supportsFileContent))
+        } catch { throw normalized(error) }
     }
 
     public static func createAsync(at directory: URL, operationDomain: String,
