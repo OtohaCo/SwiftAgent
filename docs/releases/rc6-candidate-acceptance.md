@@ -1,6 +1,6 @@
 # RC6 whole-candidate acceptance
 
-Status: **earlier SDK and #110 scopes accepted; #112 implementation and renewed final-source/publication acceptance pending**.
+Status: **earlier SDK and #110 scopes accepted; #112 code/local gates and three scoped reviews passed; final hosted/publication acceptance pending**.
 Earlier SDK main `adc14bda5652ef5c61e4e934429c7736249cc1f6` / tree
 `caa703b9ffa539db78b40d9fbf76627071e2ef31` has the same tree as PR #107's reviewed
 head `7e565b5df1c1d9e60177cd2fb7b96539956d7c15`.
@@ -41,6 +41,11 @@ remaining blockers. Earlier first failures are retained in #110 provenance.
 The Host then approved [#112 native Gemini](issue112-acceptance.md) and schema13,
 pausing publication again. Its source requires new full gates, independent
 reviews, PR/main CI and cold consumers; no #110 green result substitutes for them.
+Its fixed code `781d5addf480fd70037d54e86bb5ccae83bad3e7`, tree
+`92bcc3045a0213046cbfe1d774a85e50622db8e2`, passed complete local macOS CI
+(20 clean-source stage records) and concurrency seal. Its three code-scoped
+reviews passed; final documentation head, hosted/main/tag gates and anonymous
+consumers are separately recorded in PR #113 and the actual Pre-release.
 
 The initial closeout provenance below is historical. Subsequent merged native
 context, #101 and #103 changes are covered by their linked acceptance records;

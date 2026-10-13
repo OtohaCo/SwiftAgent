@@ -1,8 +1,9 @@
 # Issue #112 — native Gemini SDK candidate
 
-Status: implemented; focused Swift / HTTP / public-client verification passed.
-Final independent reviews, complete local/hosted PR/main CI and renewed release
-consumer/tag gates are still required. This page does not declare publication,
+Status: implementation, focused Swift / HTTP / public-client verification and
+complete local macOS / concurrency-seal gates passed. Three independent scoped
+source reviews found no remaining blocker. Final hosted PR/main CI and renewed
+release consumer/tag gates are still required. This page does not declare publication,
 live Google/gateway/account qualification or OtohaAI integration.
 
 Approved [design](../superpowers/specs/2026-10-13-gemini-native-provider-design.md)
@@ -69,7 +70,8 @@ retained, not counted as a passing gate. The added HTTP regression (original RED
 `badaf767e6730f3543abce6d2e9bd1e8ce2cf135`, 1 test / 2 cases / 2 failed
 assertions) requires mismatched IDs to fail without completed calls and matching or absent IDs to
 retain the normal path. Validation now precedes the post-terminal usage branch;
-new complete gates must qualify the fixed final source.
+the complete local gates below qualify the fixed code source. Hosted gates must
+qualify the final PR/documentation head.
 
 The mixed body fixture encodes text/escapes/system/tool schema/image using actual
 Swift JSON. Exactly its final byte count is accepted and sent unchanged; lowering
@@ -84,6 +86,29 @@ public JSON pattern matching/local helpers, without `@testable`, relaxed SDK
 assertions or deleted gates. The native decoder/client build and original file
 reader check passed on their first complete attempts. The real stream-error
 finding was fixed rather than deferred.
+
+## Complete local code-source seal
+
+Tested code commit: `781d5addf480fd70037d54e86bb5ccae83bad3e7`.
+Tree: `92bcc3045a0213046cbfe1d774a85e50622db8e2`.
+Clean tracked workspace, Apple Swift `6.4.0.34.1`, arm64 macOS 27.2:
+
+- `bash Scripts/ci-macos.sh`: exit0, 833.279 seconds, all 20 source-bound stage
+  records pass; complete existing reader/audit/qualification/external-client and
+  new file compatibility gates passed. Schema12 reader rejects schema13 12 times
+  with byte-preserving refusal; new reader reads/appends schema3/12 and retains
+  file refs through maintenance/reopen.
+- `bash Scripts/ci-concurrency-seal.sh`: exit0, 28.369 seconds; both existing
+  11-test and 5-test suites pass. No timeout relaxation or new paid live call.
+
+Independent Session/Journal, Provider and runtime/public-API reviewers examined
+this exact code/tree and executed RED/GREEN evidence. Their source-scoped verdicts
+are PASS, including both corrected Provider P2s. Final gate attestation remains
+separate from this source review. The final documentation-only seal updates this
+page, README and Provider matrix; it changes no Sources/tests/build behavior.
+Local tested code, final documentation/PR head and actual merge/main are recorded
+separately in the closure/publication evidence. A passing old source is never
+reported as a new commit's executed CI.
 
 ## Contracts and limits
 
