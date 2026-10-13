@@ -37,7 +37,7 @@ PR/issue/publication evidence. Whole-candidate historical failures remain intact
   `invalidResponse`; bounded structured allowlist classification now preserves
   request/auth/permission/rate-limit/unavailable kinds with sanitized text.
   Incremental text can arrive first; calls/completion remain withheld on failure.
-- Focused Gemini plus affected existing ChatGPT-plan tests pass 32 tests / 4
+- Focused Gemini plus affected existing ChatGPT-plan tests pass 33 tests / 4
   suites before the final documentation seal. Includes streaming/nonstreaming,
   signed/unsigned profiles, empty signed parts, parallel/sequential batches,
   deferred expansion/next Run, exact body limit, sparse usage, safety/truncation/
@@ -50,18 +50,31 @@ PR/issue/publication evidence. Whole-candidate historical failures remain intact
   every refusal byte preserving. New reader reads/appends schema3 and schema12;
   schema13 files survive maintenance and separate-process reopen. The new gate
   is added to both CI scripts without removing existing gates.
-- Public-only fixture initially passed 3 tests; an additional exact old binding /
-  store function-type check supplements it. Full CI records the final count.
+- Public-only fixture initially passed 4 tests, including exact old binding /
+  store function-type references. Full CI records the final-source results.
   Same projector and fixed binding project only once per new model request;
   two-model-step Run retains file/image, signed native parts and two tool results,
   executes each parallel call once, preserves Run terminal and canonical prefix
   through reopen/next Run. Late cancellation produces HTTP0 and drain waits for
   credentials. Explicit cache creation/use/delete is outside a Run.
 
+The first complete local macOS invocation was stopped with SIGTERM (exit143)
+during core-tests after independent review confirmed a new P2: a post-terminal
+usage-only frame bypassed responseId validation and could authorize an ended
+function batch with another response's totals. Its initial source was
+`89690deb28c8c412dc9bca35a4014f2a81e23df9`, tree
+`fcdb5e1ce6bcfd0de03589efef415e117b1ddd17`; partial stage/log/stop reason are
+retained, not counted as a passing gate. The added HTTP regression (original RED at
+`d73ef616fb18b5c980e4ce89c2e409d8a2870814`, tree
+`badaf767e6730f3543abce6d2e9bd1e8ce2cf135`, 1 test / 2 cases / 2 failed
+assertions) requires mismatched IDs to fail without completed calls and matching or absent IDs to
+retain the normal path. Validation now precedes the post-terminal usage branch;
+new complete gates must qualify the fixed final source.
+
 The mixed body fixture encodes text/escapes/system/tool schema/image using actual
 Swift JSON. Exactly its final byte count is accepted and sent unchanged; lowering
-the configured limit by one byte rejects before credentials/HTTP. The precise
-byte count is printed in the final test log. Default ceiling is conservative
+the configured limit by one byte rejects before credentials/HTTP. The measured mixed body is 4,909 bytes: limit4,909 sends once, limit4,908
+rejects without a new dispatch; final test logs retain the count. Default ceiling is conservative
 100,000,000 bytes; no image constant substitutes for the final body check.
 
 Initial test-harness failures are preserved, not labeled SDK RED: actor-isolated

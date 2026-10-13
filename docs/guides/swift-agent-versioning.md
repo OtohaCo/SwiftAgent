@@ -2,8 +2,8 @@
 
 RC6 includes the RC5→RC6 changes below, including #99/#101/#103/#105 first scope
 and #110 plan adapter plus the approved #112 native Gemini increment. Earlier SDK main passed
-[complete acceptance](../releases/rc6-candidate-acceptance.md); #110 requires its
-own final-source acceptance recorded there and in its focused report;
+[complete acceptance](../releases/rc6-candidate-acceptance.md); #110 is accepted
+separately and #112 requires its own final-source acceptance;
 publication identity/date/gates belong to the GitHub Pre-release. Historical
 “unreleased” labels describe when individual changes were recorded, not an
 unqualified claim that the accepted SDK scope is still pending. RC6 remains a

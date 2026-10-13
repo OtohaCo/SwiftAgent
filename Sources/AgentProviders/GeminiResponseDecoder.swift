@@ -18,14 +18,15 @@ struct GeminiResponseDecoder {
     @discardableResult
     mutating func consume(_ object: [String: JSONValue]) throws -> [ModelEvent] {
         if let error = object["error"] { throw GeminiFailure.stream(error) }
+        if let id = object["responseId"] {
+            let id = try ProviderJSON.string(id); guard !id.isEmpty, responseID.map({ GeminiBoundary.exact($0, id) }) ?? true else { throw ProviderJSON.invalid() }; responseID = id
+        }
         guard finishReason == nil && !blocked else {
             guard object["candidates"] == nil, object["promptFeedback"] == nil, let metadata = object["usageMetadata"] else { throw ProviderJSON.invalid() }
             try updateUsage(ProviderJSON.object(metadata)); return []
         }
         var events: [ModelEvent] = []
-        if let id = object["responseId"] {
-            let id = try ProviderJSON.string(id); guard !id.isEmpty, responseID.map({ GeminiBoundary.exact($0, id) }) ?? true else { throw ProviderJSON.invalid() }; responseID = id
-        }
+
         if info == nil {
             info = .init(id: responseID ?? UUID().uuidString, model: request.model)
             events.append(.responseStarted(info!))

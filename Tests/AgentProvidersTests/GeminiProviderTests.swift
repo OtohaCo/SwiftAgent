@@ -64,9 +64,12 @@ struct GeminiProviderTests {
         #expect(try await geminiResponse(legacy, geminiToolRequest).toolCalls.count == 2)
     }
 
-    @Test(arguments: [false, true]) func postTerminalUsageMustRemainInSameResponseScope(mismatched: Bool) async throws {
+    @Test(arguments: ["r", "", "other-response"]) func postTerminalUsageMustRemainInSameResponseScope(scope: String) async throws {
         let ending = try geminiFixture(parts: geminiParallelParts)
-        let usage = "data: {\"responseId\":\"\(mismatched ? "other-response" : "r")\",\"usageMetadata\":{\"promptTokenCount\":12,\"candidatesTokenCount\":2}}\n\n"
+        let mismatched = scope == "other-response"
+        var fields: [String: JSONValue] = ["usageMetadata": .object(["promptTokenCount": .number(12), "candidatesTokenCount": .number(2)])]
+        if !scope.isEmpty { fields["responseId"] = .string(scope) }
+        let usage = "data: " + (try ProviderJSON.text(JSONValue.object(fields))) + "\n\n"
         let provider = try GeminiProvider(credentials: .init(apiKey: { "key" }),
             transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [ending + Data(usage.utf8)]))
         var calls = 0, completed = false
