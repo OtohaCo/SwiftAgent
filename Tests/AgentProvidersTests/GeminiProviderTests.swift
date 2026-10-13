@@ -165,6 +165,22 @@ struct GeminiProviderTests {
         #expect(await probe.requests.isEmpty)
     }
 
+    @Test(arguments: [400, 401, 403, 429, 503]) func streamErrorAfterPartialContentKeepsClassificationWithoutAuthorizingCalls(status: Int) async throws {
+        let partial = try geminiFixture(parts: geminiParallelParts, reason: nil)
+        let error = "data: {\"error\":{\"code\":\(status),\"message\":\"private key/URI/signature\"}}\n\n"
+        let provider = try GeminiProvider(credentials: .init(apiKey: { "key" }),
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [partial + Data(error.utf8)]))
+        var completed = false, calls = 0
+        do { for try await event in provider.stream(request: geminiToolRequest) {
+            if case .toolCallCompleted = event { calls += 1 }; if case .responseCompleted = event { completed = true }
+        }; Issue.record("Expected stream error") }
+        catch let error as ModelProviderError {
+            #expect(error.kind == ProviderHTTPFailure.classify(status, headers: [:]).kind)
+            #expect(!String(reflecting: error).contains("private key/URI/signature"))
+        }
+        #expect(!completed && calls == 0)
+    }
+
     @Test(arguments: [401, 403, 404, 429, 503]) func failuresSanitized(status: Int) async throws {
         let probe = ProviderRequestProbe(), provider = try GeminiProvider(credentials: .init(apiKey: { "fixture-secret" }),
             transport: FixtureHTTPTransport(probe: probe, bodies: [Data("fixture-secret".utf8)], status: status, headers: ["Retry-After": "7"]))
