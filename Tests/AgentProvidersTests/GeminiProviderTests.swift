@@ -64,6 +64,20 @@ struct GeminiProviderTests {
         #expect(try await geminiResponse(legacy, geminiToolRequest).toolCalls.count == 2)
     }
 
+    @Test(arguments: [false, true]) func postTerminalUsageMustRemainInSameResponseScope(mismatched: Bool) async throws {
+        let ending = try geminiFixture(parts: geminiParallelParts)
+        let usage = "data: {\"responseId\":\"\(mismatched ? "other-response" : "r")\",\"usageMetadata\":{\"promptTokenCount\":12,\"candidatesTokenCount\":2}}\n\n"
+        let provider = try GeminiProvider(credentials: .init(apiKey: { "key" }),
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [ending + Data(usage.utf8)]))
+        var calls = 0, completed = false
+        do { for try await event in provider.stream(request: geminiToolRequest) {
+            if case .toolCallCompleted = event { calls += 1 }; if case .responseCompleted = event { completed = true }
+        }
+        if mismatched { Issue.record("Foreign post-terminal usage accepted") }
+        } catch let error as ModelProviderError { #expect(mismatched && error.kind == .invalidResponse) }
+        #expect(mismatched ? (calls == 0 && !completed) : (calls == 2 && completed))
+    }
+
     @Test func sequentialFunctionStepsRequireEveryCurrentTurnSignatureAndKeepToolResultsOnce() async throws {
         let probe = ProviderRequestProbe()
         let provider = try GeminiProvider(credentials: .init(apiKey: { "key" }), preservedThinking: .requireCurrentTurnFunctionSignatures,
