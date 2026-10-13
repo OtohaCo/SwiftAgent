@@ -13,8 +13,8 @@ a Chinese guide. The Chinese and Japanese READMEs provide navigation and scope.
 
 | What you are doing | Read first | Continue with |
 | --- | --- | --- |
-| Host-owned tool decisions, exact action binding, durable audit and archive sinks | [Audited Authorization (RC6 candidate, unreleased)](docs/guides/swift-agent-authorization-audit.md) |
-| Correct opted-in mutations only after trusted whole-operation no-effect confirmation | [Confirmed no-effect (implemented on main, unreleased)](docs/guides/swift-agent-confirmed-no-effect.md) |
+| Host-owned tool decisions, exact action binding, durable audit and archive sinks | [Audited Authorization (RC6)](docs/guides/swift-agent-authorization-audit.md) |
+| Correct opted-in mutations only after trusted whole-operation no-effect confirmation | [Confirmed no-effect (RC6)](docs/guides/swift-agent-confirmed-no-effect.md) |
 | Integrating SwiftAgent into an app | [App integration entry](INTEGRATION.md) | [Consumer recipes](docs/ai/consumer-recipes.md) |
 | Asking Codex, Claude or another coding agent to build the integration | [AI integration guide](docs/ai/start-here.md) | [Acceptance checklist](docs/ai/acceptance-checklist.md) |
 | Changing the SDK itself | [Contributing](CONTRIBUTING.md) | [Testing](docs/testing.md) and [security model](docs/security-model.md) |
@@ -52,23 +52,27 @@ Provider-specific contracts:
 
 ## Version scope and installation
 
-last-verified: 2026-09-29
-
-The RC5 prerelease candidate is `1.0.0-rc.5`. Pin the released tag explicitly:
+The accepted RC6 SDK candidate is `1.0.0-rc.6`. The
+[GitHub Pre-release](https://github.com/OtohaCo/SwiftAgent/releases/tag/1.0.0-rc.6)
+records actual publication and its exact target/gates; until it is published,
+`1.0.0-rc.5` remains the latest release. Once published, pin RC6 explicitly:
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/OtohaCo/SwiftAgent.git",
-        exact: "1.0.0-rc.5"
+        exact: "1.0.0-rc.6"
     )
 ]
 ```
 
-See the [RC5 release notes](docs/releases/1.0.0-rc.5.md). RC5 is an SDK
-prerelease, not a stable `1.0.0` release or production Host approval. It adds
-new public enum cases and an opt-in schema-4 store; default stores remain
-schema 3. It does not migrate, upgrade or downgrade stores. Always read
+See the [RC6 release notes](docs/releases/1.0.0-rc.6.md). RC6 is an SDK
+prerelease, not stable `1.0.0` or production Host approval. Public enum cases
+and some initializer function references require source updates; no ABI
+stability is promised. Default stores remain schema 3; native context opts into
+11, and durable handoff explicitly opts into 12. Only explicit offline
+writer-exclusive 11→12 upgrade is supported; no automatic user-store migration.
+Always read
 documentation from the same revision as the dependency installed in your app.
 Add only the products your target uses. See
 [versioning](docs/guides/swift-agent-versioning.md).
