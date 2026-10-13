@@ -47,14 +47,17 @@ Provider-specific contracts:
 [Anthropic Messages](docs/guides/swift-agent-anthropic-provider.md) ·
 [OpenAI Responses](docs/guides/swift-agent-openai-provider.md) ·
 [ChatGPT-plan Responses](docs/guides/swift-agent-chatgpt-plan-provider.md) ·
+[Native Gemini](docs/guides/swift-agent-gemini-provider.md) ·
 [DeepSeek Responses](docs/guides/swift-agent-deepseek-provider.md) ·
 [Local Responses / LM Studio](docs/guides/swift-agent-local-responses-provider.md) ·
 [Apple on-device/PCC](docs/guides/swift-agent-apple-provider.md).
 
 ## Version scope and installation
 
-The RC6 SDK candidate is `1.0.0-rc.6`; the additional #110 plan adapter requires
-its own [final-source acceptance](docs/releases/issue110-acceptance.md). The
+The RC6 SDK candidate is `1.0.0-rc.6`. Separate exact-source records cover
+[ChatGPT-plan](docs/releases/issue110-acceptance.md) and
+[native Gemini / typed files](docs/releases/issue112-acceptance.md); the latter
+passed complete local gates and still requires final PR/main/publication gates. The
 [GitHub Pre-release](https://github.com/OtohaCo/SwiftAgent/releases/tag/1.0.0-rc.6)
 records actual publication and its exact target/gates; until it is published,
 `1.0.0-rc.5` remains the latest release. Once published, pin RC6 explicitly:
@@ -72,8 +75,9 @@ See the [RC6 release notes](docs/releases/1.0.0-rc.6.md). RC6 is an SDK
 prerelease, not stable `1.0.0` or production Host approval. Public enum cases
 and some initializer function references require source updates; no ABI
 stability is promised. Default stores remain schema 3; native context opts into
-11, and durable handoff explicitly opts into 12. Only explicit offline
-writer-exclusive 11→12 upgrade is supported; no automatic user-store migration.
+11, durable handoff explicitly opts into 12, and typed file references require
+explicit schema 13. Only explicit offline writer-exclusive 11→12 upgrade is
+supported; no 3–12→13 upgrade or automatic user-store migration.
 Always read
 documentation from the same revision as the dependency installed in your app.
 Add only the products your target uses. See
@@ -224,7 +228,7 @@ create a trusted Receipt or settle the Journal.
 | AgentCore | AgentModels, AgentTools | The single agent loop, sessions and runs |
 | AgentJournalFileStore | AgentCore, AgentModels, AgentTools, Crypto | Optional segmented durable Journal, indexed recovery and automatic maintenance |
 | AgentCatalog | AgentModels | Open model/deployment metadata, tri-state capabilities, discovery protocols and bounded cache |
-| AgentProviders | AgentModels, AgentCatalog | Anthropic, OpenAI Responses, DeepSeek Responses, Local Responses and provider contracts |
+| AgentProviders | AgentModels, AgentCatalog | Anthropic, OpenAI API/plan Responses, native Gemini, DeepSeek, Local and provider contracts |
 | AgentAppleProvider | AgentModels | Apple on-device/PCC planning and platform SDK isolation |
 | AgentDecisions | AgentModels | Typed, vendor-neutral decision requests and responses |
 | AgentJevProvider | AgentModels, AgentDecisions | TypeSafe Jev adapter; no execution authority |

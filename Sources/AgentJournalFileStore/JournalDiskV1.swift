@@ -66,8 +66,11 @@ struct DiskContentV1: Codable {
     let continuation: DiskContinuationV1?
     /// Schema 10 only. Never the bytes: those are kept once under `images/` by digest.
     let image: DiskImageV1?
+    /// Schema 13 only: bounded immutable URI metadata, never remote bytes.
+    let file: ModelFileReference?
 
     init(_ content: ModelContent) {
+        if case .file(let value) = content { file = value } else { file = nil }
         switch content {
         case .text(let value): kind = "text"; text = value; json = nil; continuation = nil; image = nil
         case .reasoning(let value): kind = "reasoning"; text = value; json = nil; continuation = nil; image = nil
@@ -76,10 +79,16 @@ struct DiskContentV1: Codable {
             continuation = DiskContinuationV1(value)
         case .image(let value): kind = "image"; text = nil; json = nil; continuation = nil
             image = DiskImageV1(value)
+        case .file: kind = "file"; text = nil; json = nil; continuation = nil; image = nil
         }
     }
 
     func value(images: ImageLoader) throws -> ModelContent {
+        if kind == "file" {
+            guard text == nil, json == nil, continuation == nil, image == nil, let file else { throw AgentJournalError.invalidRecord }
+            return .file(file)
+        }
+        guard file == nil else { throw AgentJournalError.invalidRecord }
         switch kind {
         case "text" where json == nil && continuation == nil && image == nil:
             guard let text else { break }; return .text(text)

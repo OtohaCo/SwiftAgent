@@ -131,6 +131,7 @@ enum ResponsesCanonicalRequestEncoder {
                 return try ProviderJSON.text(value)
             case .reasoning, .providerContinuation:
                 return nil
+            case .file: throw ImageEncoding.unsupportedFile()
             case .image:
                 throw ImageEncoding.assistantImage()
             }
@@ -146,6 +147,7 @@ enum ResponsesCanonicalRequestEncoder {
                 return .object(["type": .string("input_text"),
                                 "text": .string(try ProviderJSON.text(value))])
             case .reasoning, .providerContinuation: return nil
+            case .file: throw ImageEncoding.unsupportedFile()
             case .image(let image):
                 guard images else { throw ImageEncoding.unsupported() }
                 return .object(["type": .string("input_image"), "image_url": .string(ImageEncoding.dataURL(image))])
@@ -156,6 +158,9 @@ enum ResponsesCanonicalRequestEncoder {
 
 /// Shared image rules of the adapters (ADR 0012).
 enum ImageEncoding {
+    static func unsupportedFile() -> ModelProviderError {
+        .init(kind: .unsupportedCapability, message: "This adapter does not support native file references.")
+    }
     static func unsupported() -> ModelProviderError {
         ModelProviderError(kind: .unsupportedCapability, message: "This adapter is not configured to send images to the model.")
     }

@@ -9,6 +9,8 @@ public enum ModelContent: Hashable, Sendable, Codable {
     case providerContinuation(ModelProviderContinuation)
     /// An image in a user message or tool result. Assistant content never carries images.
     case image(ModelImage)
+    /// Host-managed file input. Adapters decide eligible roles; currently Gemini accepts user files.
+    case file(ModelFileReference)
 }
 
 /// Canonical message data. Tool results have their own role and call identity.

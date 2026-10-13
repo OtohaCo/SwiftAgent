@@ -89,6 +89,7 @@ public struct AgentModelBinding: Sendable {
     /// How this Run's requests carry images. Defaults to `.reject`: an image is sent, or replaced by
     /// text, only by the Host's explicit choice.
     public let imageInput: AgentImageInputPolicy
+    public let fileInput: AgentFileInputPolicy
     public let nativeContextPolicy: AgentNativeContextPolicy?
     public let continuationBindingRevision: String
     let isLegacyBinding: Bool
@@ -138,6 +139,22 @@ public struct AgentModelBinding: Sendable {
                 tokenBudget: AgentContextTokenBudget? = nil, contextReports: AgentContextReportBuffer? = nil,
                 legacyContinuationPolicy: AgentLegacyContinuationPolicy = .reject, imageInput: AgentImageInputPolicy = .reject,
                 nativeContextPolicy: AgentNativeContextPolicy? = nil, continuationBindingRevision: String) throws {
+        try self.init(profileID: profileID, profileRevision: profileRevision, model: model, provider: provider,
+            deployment: deployment, configurationSummary: configurationSummary, projector: projector,
+            tokenBudget: tokenBudget, contextReports: contextReports, legacyContinuationPolicy: legacyContinuationPolicy,
+            imageInput: imageInput, nativeContextPolicy: nativeContextPolicy,
+            continuationBindingRevision: continuationBindingRevision, fileInput: .reject)
+    }
+
+    /// Explicit file policy overload; existing initializer function signatures remain intact.
+    public init(profileID: String, profileRevision: String, model: ModelID, provider: any ModelProvider,
+                deployment: AgentModelDeployment, configurationSummary: [String: JSONValue] = [:],
+                projector: any AgentContextProjector = AgentIdentityContextProjector(),
+                tokenBudget: AgentContextTokenBudget? = nil, contextReports: AgentContextReportBuffer? = nil,
+                legacyContinuationPolicy: AgentLegacyContinuationPolicy = .reject, imageInput: AgentImageInputPolicy = .reject,
+                nativeContextPolicy: AgentNativeContextPolicy? = nil, continuationBindingRevision: String? = nil,
+                fileInput: AgentFileInputPolicy) throws {
+        let continuationBindingRevision = continuationBindingRevision ?? profileRevision
         guard Self.valid(continuationBindingRevision) else { throw AgentModelBindingError.invalidIdentity("continuationBindingRevision") }
         self.continuationBindingRevision = continuationBindingRevision
         guard Self.valid(profileID) else { throw AgentModelBindingError.invalidIdentity("profileID") }
@@ -158,6 +175,7 @@ public struct AgentModelBinding: Sendable {
         self.contextReports = contextReports
         self.legacyContinuationPolicy = legacyContinuationPolicy
         self.imageInput = imageInput
+        self.fileInput = fileInput
         self.nativeContextPolicy = nativeContextPolicy
         isLegacyBinding = false
     }
@@ -177,6 +195,7 @@ public struct AgentModelBinding: Sendable {
         self.contextReports = contextReports
         self.legacyContinuationPolicy = legacyContinuationPolicy
         imageInput = .reject
+        fileInput = .reject
         nativeContextPolicy = nil
         continuationBindingRevision = info.profileRevision
         isLegacyBinding = true

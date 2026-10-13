@@ -1,6 +1,6 @@
 # SwiftAgent Providers
 
-> last-verified: 2026-10-04
+> last-verified: 2026-10-13
 
 `ModelProvider` is the vendor-neutral request and event boundary. Provider
 adapters translate vendor transport and stream contracts into `ModelEvent`;
@@ -11,6 +11,7 @@ adapters translate vendor transport and stream contracts into `ModelEvent`;
 | Anthropic Messages | AgentProviders | macOS, iOS, Linux | Yes | Yes | Yes | Signed thinking continuation | Base64 image blocks in user turns and tool results | Yes | API key | Fixtures; operator live test available |
 | OpenAI Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Encrypted opaque continuation and visible summaries | `input_image` data URLs in user messages and tool outputs | Yes | API key | Fixtures; operator live test available |
 | OpenAI ChatGPT-plan Responses | AgentProviders | macOS, iOS, Linux | Yes | Namespaced functions | JSON Schema | Not advertised; encrypted/native state refused | Existing `input_image` data URLs | Yes when reported | Host-owned per-request OAuth token | Offline fixtures only; current account/model not live-qualified |
+| Native Gemini generateContent | AgentProviders | macOS, iOS, Linux | Yes; optional nonstreaming | Parallel/sequential native functions | JSON Schema | Ordered opaque thought signatures; optional explicit strict profile | Native `inlineData` | Sparse cached/thought counts | Host-owned per-request API key or bearer | Offline fixtures only; no new Google/gateway/model live qualification |
 | DeepSeek Responses | AgentProviders | macOS, iOS, Linux | Yes | Yes | JSON Schema | Plaintext opaque continuation | No; refused | Yes | API key | Fixtures; bounded terminal/usage live evidence |
 | Local Responses (LM Studio qualification target) | AgentProviders | macOS, iOS, Linux | Yes | Explicit model opt-in | Explicit model opt-in | Visible normalized content only; no opaque continuation | Explicit `.imageInput` opt-in | Yes when reported | None or bearer | Fixtures; operator live qualification available |
 | Apple on-device | AgentAppleProvider | macOS/iOS 26+ | No; one validated plan per request | Yes | No | Not advertised | No; refused | SDK 27 where available | None | Compile and fixtures; operator live test available |
@@ -19,7 +20,15 @@ adapters translate vendor transport and stream contracts into `ModelEvent`;
 Provider capabilities describe the adapter's declared contract, not every
 feature offered by the vendor. `.imageInput` means the adapter can send images;
 whether the bound model takes them is the Host's choice per Run
-(`AgentImageInputPolicy`). OpenAI and DeepSeek provider-hosted tools such as
+(`AgentImageInputPolicy`). Native Gemini additionally supports typed PDF/plain-text
+URI references through explicit `AgentFileInputPolicy`, immutable `AgentRunInput`
+and file-capable storage (schema13 on disk). Other adapters reject canonical file
+content unless an explicit request-view description policy removes it; URI file
+tool results remain unsupported. The Host owns URI access/expiry/content and
+estimated tokens. Gemini cache and model-list clients are optional; explicit
+caches require matching local prefix/system/tools/model/endpoint/account/expiry
+and never bypass full Core context budgets. See the native guide for refusal and
+unqualified paths. OpenAI and DeepSeek provider-hosted tools such as
 web search, file search, computer use, MCP, and custom tools are not SwiftAgent
 `AgentTool` values. The current adapters reject those output item types rather
 than routing them into the Host executor.
@@ -34,6 +43,7 @@ Detailed guides:
 - [Anthropic](guides/swift-agent-anthropic-provider.md)
 - [OpenAI Responses](guides/swift-agent-openai-provider.md)
 - [ChatGPT-plan Responses / Sign in with ChatGPT](guides/swift-agent-chatgpt-plan-provider.md)
+- [Native Gemini / typed files / caching](guides/swift-agent-gemini-provider.md)
 - [DeepSeek Responses](guides/swift-agent-deepseek-provider.md)
 - [Local Responses and LM Studio](guides/swift-agent-local-responses-provider.md)
 - [Apple on-device and PCC](guides/swift-agent-apple-provider.md)

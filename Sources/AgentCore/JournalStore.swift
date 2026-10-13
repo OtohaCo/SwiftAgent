@@ -38,6 +38,7 @@ package protocol JournalStore: Sendable {
     var supportsPerCallFollowUps: Bool { get }
     var supportsRunRecords: Bool { get }
     var supportsImageContent: Bool { get }
+    var supportsFileContent: Bool { get }
     var supportsNativeContext: Bool { get }
     var supportsContextHandoff: Bool { get }
     func auditDigest(_ bytes: Data) -> String

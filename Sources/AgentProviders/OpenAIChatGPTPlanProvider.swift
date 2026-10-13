@@ -12,7 +12,7 @@ public struct OpenAIChatGPTPlanProvider: ModelProvider, ModelProviderRequestVali
     CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     private let credentials: OpenAIChatGPTPlanCredentials
     private let transport: any ProviderHTTPTransport
-    private let drain = ChatGPTPlanRunDrain()
+    private let drain = ProviderRunDrain()
     public var descriptor: ModelProviderDescriptor {
         .init(id: "openai", capabilities: [.streaming, .multiTurn, .tools, .structuredOutput, .imageInput])
     }

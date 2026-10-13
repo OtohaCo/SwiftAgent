@@ -107,6 +107,7 @@ enum DeepSeekResponsesRequestEncoder {
             case .text(let value): return value
             case .json(let value): return try ProviderJSON.text(value)
             case .reasoning, .providerContinuation: return nil
+            case .file: throw ImageEncoding.unsupportedFile()
             case .image: throw ImageEncoding.unsupported()
             }
         }.joined(separator: "\n")

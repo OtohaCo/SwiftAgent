@@ -1,6 +1,6 @@
 # RC6 whole-candidate acceptance
 
-Status: **earlier SDK scope accepted; #110 final-source acceptance and renewed publication gates recorded separately**.
+Status: **earlier SDK and #110 scopes accepted; #112 code/local gates and three scoped reviews passed; final hosted/publication acceptance pending**.
 Earlier SDK main `adc14bda5652ef5c61e4e934429c7736249cc1f6` / tree
 `caa703b9ffa539db78b40d9fbf76627071e2ef31` has the same tree as PR #107's reviewed
 head `7e565b5df1c1d9e60177cd2fb7b96539956d7c15`.
@@ -27,6 +27,25 @@ the immutable annotated tag must pass tag CI and an exact-version public consume
 The [GitHub Pre-release](https://github.com/OtohaCo/SwiftAgent/releases/tag/1.0.0-rc.6)
 records the actual tag object/target/tree, publication time and final gate results
 once published. No source page predeclares those results or a release date.
+
+#110 merged through [PR #111](https://github.com/OtohaCo/SwiftAgent/pull/111):
+head `0a6f6d5e09502347c0545d42d896e4027f5a1222`, merge/main
+`7085740f92498a2cbe6aad0423074e8cf41d2e12`, identical tree
+`6aa33ed8a95bedb58cf012a2f69a8e1c94ee800b`. Its own
+[push CI](https://github.com/OtohaCo/SwiftAgent/actions/runs/38390958794),
+[PR CI](https://github.com/OtohaCo/SwiftAgent/actions/runs/38390965877) and
+[main CI](https://github.com/OtohaCo/SwiftAgent/actions/runs/38395997590) passed
+all Linux/macOS/Apple jobs on the first attempt for this final source, each with
+60 verified clean-source stage records; three independent reviews found no
+remaining blockers. Earlier first failures are retained in #110 provenance.
+The Host then approved [#112 native Gemini](issue112-acceptance.md) and schema13,
+pausing publication again. Its source requires new full gates, independent
+reviews, PR/main CI and cold consumers; no #110 green result substitutes for them.
+Its fixed code `781d5addf480fd70037d54e86bb5ccae83bad3e7`, tree
+`92bcc3045a0213046cbfe1d774a85e50622db8e2`, passed complete local macOS CI
+(20 clean-source stage records) and concurrency seal. Its three code-scoped
+reviews passed; final documentation head, hosted/main/tag gates and anonymous
+consumers are separately recorded in PR #113 and the actual Pre-release.
 
 The initial closeout provenance below is historical. Subsequent merged native
 context, #101 and #103 changes are covered by their linked acceptance records;

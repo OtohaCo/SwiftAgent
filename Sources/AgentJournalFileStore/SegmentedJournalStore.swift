@@ -247,6 +247,45 @@ public enum AgentIncrementalJournal {
         } catch { throw normalized(error) }
     }
 
+    /// Explicit schema-13 file references. Does not upgrade an existing store or enable Host features.
+    public static func create(at directory: URL, operationDomain: String,
+                              policy: JournalMaintenancePolicy = .default,
+                              supportsAdmissionRejections: Bool = false, supportsAuthorizationAudit: Bool = false,
+                              supportsConfirmedNoEffect: Bool = false, supportsPerCallFollowUps: Bool = false,
+                              supportsRunRecords: Bool = false, supportsImageContent: Bool = false,
+                              supportsNativeContext: Bool = false, supportsContextHandoff: Bool = false,
+                              supportsFileContent: Bool) throws -> AgentJournal {
+        do {
+            return AgentJournal(store: try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy,
+            supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit,
+            supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps,
+            supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent,
+            supportsNativeContext: supportsNativeContext, supportsContextHandoff: supportsContextHandoff,
+            supportsFileContent: supportsFileContent))
+        } catch { throw normalized(error) }
+    }
+
+    public static func createAsync(at directory: URL, operationDomain: String,
+                                   policy: JournalMaintenancePolicy = .default,
+                                   supportsAdmissionRejections: Bool = false, supportsAuthorizationAudit: Bool = false,
+                                   supportsConfirmedNoEffect: Bool = false, supportsPerCallFollowUps: Bool = false,
+                                   supportsRunRecords: Bool = false, supportsImageContent: Bool = false,
+                                   supportsNativeContext: Bool = false, supportsContextHandoff: Bool = false,
+                                   supportsFileContent: Bool, deadline: ContinuousClock.Instant? = nil) async throws -> AgentJournal {
+        try Task.checkCancellation()
+        if let deadline, ContinuousClock.now >= deadline { throw AgentJournalError.deadlineExceeded }
+        let journal = try await openOwned(deadline: deadline) { _ in
+            try SegmentedJournalStore.create(at: directory, domain: operationDomain, policy: policy,
+                supportsAdmissionRejections: supportsAdmissionRejections, supportsAuthorizationAudit: supportsAuthorizationAudit,
+                supportsConfirmedNoEffect: supportsConfirmedNoEffect, supportsPerCallFollowUps: supportsPerCallFollowUps,
+                supportsRunRecords: supportsRunRecords, supportsImageContent: supportsImageContent,
+                supportsNativeContext: supportsNativeContext, supportsContextHandoff: supportsContextHandoff,
+                supportsFileContent: supportsFileContent)
+        }
+        try Task.checkCancellation()
+        return journal
+    }
+
     /// Explicit offline schema-11 to schema-12 upgrade. Drain all work and close
     /// every owner of the shared Journal first; this operation acquires the whole
     /// store writer lock and returns a new handle. No Session history is rewritten.
@@ -635,6 +674,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     let supportsRunRecords: Bool
     /// Format schema 10: messages may carry images, kept once each by digest under `images/`.
     let supportsImageContent: Bool
+    let supportsFileContent: Bool
     let supportsNativeContext: Bool
     let supportsContextHandoff: Bool
     private var callsIndex: IndexKind<UInt64> { .init("calls", witnessed: supportsConfirmedNoEffect) }
@@ -668,6 +708,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         supportsAuthorizationAudit = format.schema >= 5
         supportsConfirmedNoEffect = format.schema >= 6
         supportsRunRecords = format.schema >= 9
+        supportsFileContent = format.schema >= 13
         supportsImageContent = format.schema >= 10
         supportsNativeContext = format.schema >= 11
         supportsContextHandoff = format.schema >= 12
@@ -690,7 +731,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                        supportsImageContent: Bool = false,
                        supportsNativeContext: Bool = false,
                        supportsContextHandoff: Bool = false,
+                       supportsFileContent: Bool = false,
                        fault: (@Sendable (JournalFileFaultStage) throws -> Void)? = nil) throws -> SegmentedJournalStore {
+        let supportsContextHandoff = supportsContextHandoff || supportsFileContent
         let supportsNativeContext = supportsNativeContext || supportsContextHandoff
         let supportsImageContent = supportsImageContent || supportsNativeContext
         let supportsRunRecords = supportsRunRecords || supportsImageContent
@@ -709,7 +752,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             try FileManager.default.createDirectory(at: directory.appendingPathComponent(name), withIntermediateDirectories: false)
         }
         let descriptor = try lockStore(directory)
-        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsContextHandoff ? 12 : supportsNativeContext ? 11 : supportsImageContent ? 10 : supportsRunRecords ? 9 : supportsPerCallFollowUps ? 8 : supportsConfirmedNoEffect ? 7 : supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
+        let format = Format(magic: "SWIFTAGENT-SEGMENTED-JOURNAL", schema: supportsFileContent ? 13 : supportsContextHandoff ? 12 : supportsNativeContext ? 11 : supportsImageContent ? 10 : supportsRunRecords ? 9 : supportsPerCallFollowUps ? 8 : supportsConfirmedNoEffect ? 7 : supportsAuthorizationAudit ? 5 : (supportsAdmissionRejections ? 4 : 3),
                             storeID: UUID(), domain: domain)
         let formatBytes = try JSONEncoder().encode(format)
         let store = SegmentedJournalStore(directoryURL: directory, format: format,
@@ -778,7 +821,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         guard format.magic == "SWIFTAGENT-SEGMENTED-JOURNAL", !format.domain.isEmpty else {
             throw AgentJournalError.invalidHeader
         }
-        guard format.schema == 3 || format.schema == 4 || format.schema == 5 || format.schema == 6 || format.schema == 7 || format.schema == 8 || format.schema == 9 || format.schema == 10 || format.schema == 11 || format.schema == 12 else { throw AgentJournalError.unsupportedFormat }
+        guard format.schema == 3 || format.schema == 4 || format.schema == 5 || format.schema == 6 || format.schema == 7 || format.schema == 8 || format.schema == 9 || format.schema == 10 || format.schema == 11 || format.schema == 12 || format.schema == 13 else { throw AgentJournalError.unsupportedFormat }
         guard format.upgrade == nil || format.schema == 12 else { throw AgentJournalError.invalidHeader }
         observer?(.formatValidated)
         let descriptor = try lockStore(directory, retry: lockRetry, observer: observer)
@@ -2342,7 +2385,9 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                       cached.messages.indices.contains(pointer.offset) else {
                     throw AgentJournalError.invalidRecord
                 }
-                result.append(try cached.messages[pointer.offset].value(images: store.loadImage))
+                let message = try cached.messages[pointer.offset].value(images: store.loadImage)
+                guard store.supportsFileContent || message.value.files.isEmpty else { throw AgentJournalError.unsupportedFormat }
+                result.append(message)
             }
             return result
         }
@@ -2448,6 +2493,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
 
         func publish(_ change: JournalStoreChange) throws {
+            guard store.supportsFileContent || change.messages.allSatisfy({ $0.value.files.isEmpty }) else { throw AgentJournalError.unsupportedFormat }
             guard writable, !didPublish else { throw AgentJournalError.invalidRecord }
             if change.records.contains(where: { if case .pendingMutation = $0.event { return true }; return false }) {
                 let unreclaimed = try store.layout(root).sealed.reduce(UInt64(0)) { $0 + $1.end }
