@@ -64,6 +64,10 @@ The first local full macOS invocation was deliberately stopped during core
 tests to add the independent review's deadline/reservation test supplement;
 its partial log is retained, not counted as a passing full gate. The supplement
 passed all 19 focused tests, including both cancellation/deadline cases.
+The first complete local core-test stage then failed the existing ExternalClient
+architecture guard: the new public fixture omitted four required public module
+imports. Those imports were added without changing the guard or its assertions;
+the failed source/log remains separate from final-source full acceptance.
 
 ## Support and limits
 
