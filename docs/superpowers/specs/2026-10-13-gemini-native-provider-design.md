@@ -1,6 +1,6 @@
 # Native Gemini generateContent provider — issue #112
 
-Status: proposed design, awaiting user review. RC6 publication remains paused.
+Status: approved by the user on 2026-10-13; implementation and renewed acceptance required. RC6 publication remains paused.
 
 ## Goal and baseline
 
