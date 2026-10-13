@@ -196,6 +196,21 @@ public actor AgentSession {
             operationID: operationID, correlation: correlation, contextControls: contextControls)
     }
 
+    /// Starts one Run with immutable attachments. Queued inputs and steering remain text-only.
+    public func run(_ input: AgentRunInput, budget: AgentBudget? = nil,
+                    operationID: String? = nil, correlation: AgentRunCorrelation? = nil) async throws -> AgentRun {
+        try await run(input, using: defaultBinding, budget: budget, operationID: operationID, correlation: correlation)
+    }
+
+    public func run(_ input: AgentRunInput, using binding: AgentModelBinding,
+                    capabilities: AgentCapabilityBinding? = nil, expectedConversationRevision: UInt64? = nil,
+                    budget: AgentBudget? = nil, operationID: String? = nil,
+                    correlation: AgentRunCorrelation? = nil) async throws -> AgentRun {
+        try await runInternal(input.text, using: binding, capabilities: capabilities,
+            expectedConversationRevision: expectedConversationRevision, budget: budget,
+            operationID: operationID, correlation: correlation, inputContent: input.content)
+    }
+
     private func runInternal(
         _ text: String,
         using binding: AgentModelBinding,
@@ -205,11 +220,17 @@ public actor AgentSession {
         operationID: String?,
         correlation: AgentRunCorrelation? = nil,
         dispatchOwnerID: UUID? = nil,
-        followUpInputID: String? = nil, contextControls: AgentRunContextControls? = nil
+        followUpInputID: String? = nil, contextControls: AgentRunContextControls? = nil,
+        inputContent: [ModelContent]? = nil
     ) async throws -> AgentRun {
         try Task.checkCancellation()
+        let inputContent = inputContent ?? [.text(text)]
+        if let journal {
+            if inputContent.contains(where: { if case .file = $0 { true } else { false } }), !journal.supportsFileContent { throw AgentJournalError.unsupportedFormat }
+            if inputContent.contains(where: { if case .image = $0 { true } else { false } }), !journal.supportsImageContent { throw AgentJournalError.unsupportedFormat }
+        }
         if correlation != nil, journal == nil { throw AgentJournalError.unsupportedFormat }
-        let runAdmission = try await journal?.prepareRunAdmission(sessionID: id, text: text, operationID: operationID, correlation: correlation)
+        let runAdmission = try await journal?.prepareRunAdmission(sessionID: id, text: text, operationID: operationID, correlation: correlation, inputContent: inputContent)
         try authorization.validate(journal: journal)
         if authorization.mode == .requiredAudit {
             try await journal?.checkAuditAvailability(backlog: authorization.backlog)
@@ -270,7 +291,7 @@ public actor AgentSession {
                         budget: runBudget,
                         operationID: operationID,
                         startupID: startupID,
-                        followUpInputID: followUpInputID, runAdmission: runAdmission, contextControls: contextControls
+                        followUpInputID: followUpInputID, runAdmission: runAdmission, contextControls: contextControls, inputContent: inputContent
                     )
                     startupReservations.removeValue(forKey: startupID)
                     startupFinished()
@@ -494,7 +515,8 @@ public actor AgentSession {
         operationID: String?,
         startupID: UUID,
         followUpInputID: String? = nil,
-        runAdmission: JournalRunAdmission? = nil, contextControls: AgentRunContextControls? = nil
+        runAdmission: JournalRunAdmission? = nil, contextControls: AgentRunContextControls? = nil,
+        inputContent: [ModelContent]
     ) async throws -> AgentRun {
         try budget.checkActive()
         if !restoredJournalState {
@@ -579,7 +601,7 @@ public actor AgentSession {
                              allowedResources: capabilities?.allowedResources,
                              preAdmissionReplanning: preAdmissionReplanning, audit: audit)
         let owed = owedSteering
-        let candidateMessages = prepared + owed.map { .user([.text($0.text)]) } + [.user([.text(text)])]
+        let candidateMessages = prepared + owed.map { .user([.text($0.text)]) } + [.user(inputContent)]
         let preparedRequest: AgentPreparedModelRequest
         preparedRequest = try await withStartupDeadline(budget.deadline, startupID: startupID,
                                                          control: control) { [weak self] in
@@ -656,7 +678,7 @@ public actor AgentSession {
         let emitter = AgentEventEmitter(channel.continuation, requiresConsumer: false)
         if history != prepared { history = prepared }
         history.append(contentsOf: owed.map { .user([.text($0.text)]) })
-        history.append(.user([.text(text)]))
+        history.append(.user(inputContent))
         owedSteering.removeAll()
         conversationRevision = candidateRevision
         activeRunID = runID

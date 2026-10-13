@@ -360,6 +360,7 @@ enum OpenAIResponsesContinuation {
                 append(value, as: .reasoning)
             case .providerContinuation:
                 break
+            case .file: throw ImageEncoding.unsupportedFile()
             case .image:
                 throw ImageEncoding.assistantImage()
             }

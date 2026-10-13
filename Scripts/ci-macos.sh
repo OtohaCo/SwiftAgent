@@ -42,3 +42,4 @@ bash Scripts/verify-run-record-compatibility.sh
 bash Scripts/verify-image-content-compatibility.sh
 
 bash Scripts/verify-native-context-compatibility.sh
+bash Scripts/verify-file-content-compatibility.sh

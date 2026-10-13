@@ -13,6 +13,10 @@ import Foundation
         do {
             let journal: AgentJournal
             switch mode {
+            #if FILE_CONTENT_RUNTIME
+            case "create-file-content-empty", "create-file-content":
+                journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsFileContent: true)
+            #endif
             #if CONTEXT_HANDOFF_RUNTIME
             case "create-handoff-empty", "create-handoff":
                 journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsContextHandoff: true)
@@ -59,6 +63,26 @@ import Foundation
                 journal = try AgentIncrementalJournal.open(at: directory)
             }
             switch mode {
+            #if FILE_CONTENT_RUNTIME
+            case "create-file-content-empty":
+                guard journal.supportsFileContent else { throw AgentJournalError.invalidRecord }
+            case "create-file-content", "inspect-file-content":
+                guard journal.supportsFileContent else { throw AgentJournalError.invalidRecord }
+                if mode == "create-file-content" {
+                    let provider = MatrixProvider()
+                    let binding = try AgentModelBinding(profileID: "matrix-files", profileRevision: "1",
+                        model: .init(provider: "reader-matrix", name: "script"), provider: provider,
+                        deployment: .init(serviceInstanceID: "matrix", endpointScope: "local", apiDialect: "matrix"), fileInput: .describe)
+                    let file = try ModelFileReference(uri: URL(string: "https://example.com/files/immutable")!,
+                        mediaType: .pdf, description: "immutable report", estimatedInputTokens: 1000)
+                    let run = try await Agent(binding: binding).makeSession(id: sessionID, journal: journal)
+                        .run(AgentRunInput(text: "read report", attachments: [.file(file)]))
+                    _ = try await run.wait(); try await run.waitForDrain()
+                }
+                let files = try await journal.readMessages(sessionID: sessionID).flatMap(\.message.files)
+                guard files.count == 1, files[0].description == "immutable report" else { throw AgentJournalError.invalidRecord }
+                print("files=1 canonical=preserved")
+            #endif
             #if CONTEXT_HANDOFF_RUNTIME
             case "create-handoff-empty", "upgrade-handoff":
                 guard journal.supportsContextHandoff else { throw AgentJournalError.invalidRecord }

@@ -808,8 +808,11 @@ package struct AgentLoop: Sendable {
         try await nativeContextState.rejectRetiredReinjection(projection.messages, canonical: originalCanonicalMessages)
         try validateContinuations(projection.messages)
         // Images reach the model, become text or stop the request here, per the Run's explicit choice.
-        let (modelMessages, described) = try binding.imageInput.apply(
+        let (imageMessages, imagesDescribed) = try binding.imageInput.apply(
             to: projection.messages, adapterSendsImages: provider.descriptor.capabilities.contains(.imageInput))
+        let (modelMessages, filesDescribed) = try binding.fileInput.apply(
+            to: imageMessages, adapterSendsFiles: provider.descriptor.capabilities.contains(.fileInput))
+        let described = imagesDescribed || filesDescribed
         if let checkpoint = nativeContext, let lineage = checkpoint.preservedThinkingLineage {
             let leading = canonicalMessages.prefix { $0.role == .system || $0.role == .developer }.count
             let expected = Array(canonicalMessages.dropFirst(leading + checkpoint.canonicalTailStart).prefix(lineage.tailMessageCount))
@@ -825,7 +828,7 @@ package struct AgentLoop: Sendable {
             plan: .init(projectionID: projection.plan.projectionID, version: projection.plan.version,
                         sourceRevision: projection.plan.sourceRevision, sourceDigest: projection.plan.sourceDigest,
                         contextEpoch: projection.plan.contextEpoch, lossy: true,
-                        reason: projection.plan.reason ?? "Images were sent as their text substitutes."),
+                        reason: projection.plan.reason ?? "Attachments were sent as their text substitutes."),
             report: projection.report
         ) : projection
         let retiredPrefix = await nativeContextState.currentHandoff()?.canonicalMessageCount
@@ -869,6 +872,10 @@ package struct AgentLoop: Sendable {
                 throw error
             }
             guard estimate.inputTokens >= 0 else { throw AgentModelBindingError.invalidTokenEstimate }
+            // A custom estimator must include the explicit Host file estimates. This is a
+            // lower-bound consistency check, not verification of remote document tokenization.
+            let fileTokens = modelMessages.flatMap(\.files).reduce(0) { $0 + $1.estimatedInputTokens }
+            guard estimate.inputTokens >= fileTokens else { throw AgentModelBindingError.invalidTokenEstimate }
             tokenEstimate = estimate
             guard estimate.inputTokens <= budget.availableInputTokens else {
                 if let report = projection.report, let sink = binding.contextReports {

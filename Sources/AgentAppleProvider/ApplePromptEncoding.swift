@@ -49,6 +49,8 @@ enum ApplePromptEncoding {
                 case .text(let text), .reasoning(let text): return text
                 case .json(let value): return String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
                 case .providerContinuation: return nil
+                case .file:
+                    throw ModelProviderError(kind: .unsupportedCapability, message: "Apple provider does not support file references.")
                 case .image:
                     throw ModelProviderError(kind: .unsupportedCapability,
                                              message: "This adapter cannot send images to the model.")

@@ -13,6 +13,8 @@ public struct ModelCapabilities: OptionSet, Hashable, Sendable, Codable {
     /// The adapter can send `ModelContent.image` in user messages and tool results. Whether the bound
     /// model accepts images is the Host's knowledge, declared by the Run's image policy.
     public static let imageInput = Self(rawValue: 1 << 5)
+    /// Adapter can send typed user file references; actual model/endpoint support is Host-qualified.
+    public static let fileInput = Self(rawValue: 1 << 6)
 }
 
 /// Reported cache writes by retention category. Nil means unreported, including

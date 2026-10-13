@@ -291,6 +291,7 @@ public actor AgentJournal {
     /// Whether this store can persist explicit context-authority retirement.
     /// Durable stores require opt-in schema 12; older formats are never upgraded automatically.
     public nonisolated let supportsContextHandoff: Bool
+    public nonisolated let supportsFileContent: Bool
     public nonisolated let supportsImageContent: Bool
     /// 0: unsupported; 1: schema 6; 2: schema 7+. Existing stores are never migrated.
     public nonisolated let noEffectProofVersion: Int
@@ -326,6 +327,7 @@ public actor AgentJournal {
         noEffectProofVersion = 0
         supportsRunRecords = false
         supportsPerCallFollowUps = false
+        supportsFileContent = true
         supportsImageContent = true
         supportsNativeContext = true
         supportsContextHandoff = true
@@ -344,6 +346,7 @@ public actor AgentJournal {
         noEffectProofVersion = store.noEffectProofVersion
         supportsRunRecords = store.supportsRunRecords
         supportsPerCallFollowUps = store.supportsPerCallFollowUps
+        supportsFileContent = store.supportsFileContent
         supportsImageContent = store.supportsImageContent
         supportsNativeContext = store.supportsNativeContext
         supportsContextHandoff = store.supportsContextHandoff

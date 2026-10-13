@@ -173,6 +173,7 @@ enum DeepSeekResponsesContinuation {
                 append(try ProviderJSON.text(value), as: .text)
             case .reasoning(let value): append(value, as: .reasoning)
             case .providerContinuation: break
+            case .file: throw ImageEncoding.unsupportedFile()
             case .image: throw ImageEncoding.assistantImage()
             }
         }

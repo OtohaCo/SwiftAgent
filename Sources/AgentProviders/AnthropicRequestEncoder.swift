@@ -82,6 +82,7 @@ enum AnthropicRequestEncoder {
                     switch part {
                     case .text(let value): return value
                     case .json(let value): return try ProviderJSON.text(value)
+                    case .file: throw ImageEncoding.unsupportedFile()
                     case .reasoning, .providerContinuation, .image: return nil
                     }
                 }.joined(separator: "\n")
@@ -223,6 +224,7 @@ enum AnthropicRequestEncoder {
             case .text(let value): text = value
             case .json(let value): text = try ProviderJSON.text(value)
             case .reasoning, .providerContinuation: return nil
+            case .file: throw ImageEncoding.unsupportedFile()
             case .image(let image):
                 return .object(["type": .string("image"), "source": .object([
                     "type": .string("base64"), "media_type": .string(image.mediaType.rawValue),

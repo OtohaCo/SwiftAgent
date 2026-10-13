@@ -141,7 +141,7 @@ extension AgentJournal {
         }
     }
 
-    package func prepareRunAdmission(sessionID: UUID, text: String, operationID: String?, correlation: AgentRunCorrelation?) throws -> JournalRunAdmission? {
+    package func prepareRunAdmission(sessionID: UUID, text: String, operationID: String?, correlation: AgentRunCorrelation?, inputContent: [ModelContent]? = nil) throws -> JournalRunAdmission? {
         guard supportsRunRecords else {
             if correlation != nil { throw AgentJournalError.unsupportedFormat }
             return nil
@@ -149,7 +149,11 @@ extension AgentJournal {
         let store = try runRecordStore()
         // JSON is unambiguous and binds the actual exact formal text independently of Host assertions.
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        let payload: [String: String] = ["text": text, "operation": operationID ?? "", "hasOperation": operationID == nil ? "false" : "true", "hostDigest": correlation?.payloadDigest ?? ""]
+        var payload: [String: String] = ["text": text, "operation": operationID ?? "", "hasOperation": operationID == nil ? "false" : "true", "hostDigest": correlation?.payloadDigest ?? ""]
+        if let attachments = inputContent.map({ Array($0.dropFirst()) }), !attachments.isEmpty {
+            encoder.userInfo[ModelImage.referenceOnlyEncoding] = true
+            payload["attachments"] = try encoder.encode(attachments).base64EncodedString()
+        }
         let fingerprint = store.auditDigest(try encoder.encode(payload))
         if let correlation {
             try store.read { view in
