@@ -137,6 +137,18 @@ struct GeminiProviderTests {
         #expect(calls == 0)
     }
 
+    @Test func blockedPromptWithCandidateCannotAuthorizeCallsAndResponseAccumulationIsBounded() async throws {
+        var object = try ProviderJSON.decode(String(decoding: try geminiFixture(parts: geminiParallelParts, streaming: false), as: UTF8.self))
+        object["promptFeedback"] = .object(["blockReason": .string("SAFETY")])
+        let blocked = Data("data: ".utf8) + (try ProviderJSON.encode(JSONValue.object(object))) + Data("\n\n".utf8)
+        let provider = try GeminiProvider(credentials: .init(apiKey: { "key" }), transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [blocked]))
+        let response = try await geminiResponse(provider, geminiToolRequest)
+        #expect(response.stopReason == .refusal && response.toolCalls.isEmpty)
+        let bounded = try GeminiProvider(credentials: .init(apiKey: { "key" }), maximumResponseBytes: geminiTextFixture.count - 1,
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [geminiTextFixture], chunkBytes: 3))
+        await #expect(throws: ModelProviderError.self) { _ = try await geminiResponse(bounded, geminiRequest) }
+    }
+
     @Test func unsupportedRequestsAndMalformedConfigurationNeverAcquireCredentials() async throws {
         let probe = ProviderRequestProbe(), tokens = PlanRotatingTokens()
         let provider = try GeminiProvider(credentials: .init(apiKey: { await tokens.next() }), transport: FixtureHTTPTransport(probe: probe, bodies: [geminiTextFixture]))

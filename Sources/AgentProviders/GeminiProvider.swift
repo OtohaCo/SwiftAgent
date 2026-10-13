@@ -43,7 +43,9 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
                         if case .terminated = continuation.yield(event) { throw CancellationError() }
                     }
                     try Task.checkCancellation(); continuation.finish()
-                } catch { continuation.finish(throwing: error) }
+                } catch is CancellationError { continuation.finish(throwing: CancellationError()) }
+                catch let error as ModelProviderError { continuation.finish(throwing: error) }
+                catch { continuation.finish(throwing: ModelProviderError(kind: .transport, message: "Gemini transport failed.")) }
             }
             continuation.onTermination = { @Sendable _ in producer.cancel() }
         }

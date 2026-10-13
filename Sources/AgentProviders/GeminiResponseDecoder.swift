@@ -61,7 +61,7 @@ struct GeminiResponseDecoder {
     func finish() throws -> [ModelEvent] {
         guard blocked || finishReason != nil else { throw ProviderJSON.invalid() }
         let stop: StopReason
-        switch finishReason {
+        switch blocked ? "SAFETY" : finishReason {
         case "STOP": stop = .endTurn
         case "MAX_TOKENS": stop = .maxOutputTokens
         case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII": stop = .refusal
@@ -116,7 +116,7 @@ struct GeminiResponseDecoder {
                 guard Set(fields.keys).isSubset(of: ["name", "args", "id"]), part["thought"] != .bool(true) else { throw GeminiBoundary.unsupported() }
                 let name = try ProviderJSON.string(fields["name"])
                 guard GeminiBoundary.functionName(name), allowedNames.map({ $0.contains { GeminiBoundary.exact($0, name) } }) ?? true,
-                      case .object(let arguments) = fields["args"] else { throw ProviderJSON.invalid() }
+                      case .object(let arguments) = fields["args"] ?? .object([:]) else { throw ProviderJSON.invalid() }
                 if let native = fields["id"] { let id = try ProviderJSON.string(native); guard !id.isEmpty, nativeIDs.insert(Array(id.utf8)).inserted else { throw ProviderJSON.invalid() } }
                 let id: ToolCallID
                 if let mappings {

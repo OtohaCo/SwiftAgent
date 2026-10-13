@@ -34,7 +34,7 @@ public struct GeminiModelCatalogProvider: ModelCatalogProvider, CustomStringConv
         if let cursor = request.cursor {
             guard cursor.utf8.count <= 16_384, let data = Data(base64Encoded: cursor),
                   let decoded = try? JSONDecoder().decode(GeminiCatalogCursor.self, from: data),
-                  decoded.scope == scope, decoded.pageSize == request.pageSize, Self.token(decoded.token) else { throw ModelCatalogError(kind: .scopeMismatch) }
+                  try ProviderJSON.encode(decoded.scope) == ProviderJSON.encode(scope), decoded.pageSize == request.pageSize, Self.token(decoded.token) else { throw ModelCatalogError(kind: .scopeMismatch) }
             items.append(.init(name: "pageToken", value: decoded.token))
         }
         components.queryItems = items.isEmpty ? nil : items

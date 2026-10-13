@@ -131,6 +131,6 @@ enum GeminiRequestEncoder {
     static func validate(state: GeminiNativeState, content: [ModelContent], calls: [ToolCall]) throws {
         let parsed = try GeminiResponseDecoder.parseParts(state.parts, allowedNames: nil, mappings: state.calls)
         let expected = content.filter { if case .providerContinuation = $0 { return false }; return true }
-        guard parsed.content == expected, parsed.calls == calls, state.calls.count == calls.count else { throw GeminiBoundary.unsupported() }
+        guard try ProviderJSON.encode(parsed.content) == ProviderJSON.encode(expected), parsed.calls == calls, state.calls.count == calls.count else { throw GeminiBoundary.unsupported() }
     }
 }
