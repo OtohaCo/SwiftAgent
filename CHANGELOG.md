@@ -2,6 +2,17 @@
 
 ## [1.0.0-rc.6]
 
+- Adds opt-in native Gemini generateContent streaming/nonstreaming Provider,
+  per-dispatch API-key/bearer credentials, exact signed-part continuation,
+  parallel/sequential function batches, sparse thought/cache usage, sanitized
+  errors, scoped models.list and Host-created explicit/implicit caching.
+- Adds immutable typed Run attachments and bounded PDF/plain-text HTTPS references,
+  explicit file policies and opt-in schema13. Default schema3 and old initializer /
+  String Run signatures remain unchanged; `.file` is an exhaustive-switch source
+  delta. Older schema12 readers refuse schema13 before writes. No 3–12→13 upgrade,
+  file-result/queued attachment expansion or live Google/gateway/Host qualification.
+
+
 SDK prerelease; earlier SDK acceptance completed at `adc14bda5652ef5c61e4e934429c7736249cc1f6`.
 Publication was paused to include #110; its new source requires separate complete acceptance.
 The [GitHub Pre-release](https://github.com/OtohaCo/SwiftAgent/releases/tag/1.0.0-rc.6)

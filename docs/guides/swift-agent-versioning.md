@@ -1,13 +1,34 @@
 # SwiftAgent Semantic Versioning
 
 RC6 includes the RC5→RC6 changes below, including #99/#101/#103/#105 first scope
-and the newly requested #110 plan adapter. Earlier SDK main passed
+and #110 plan adapter plus the approved #112 native Gemini increment. Earlier SDK main passed
 [complete acceptance](../releases/rc6-candidate-acceptance.md); #110 requires its
 own final-source acceptance recorded there and in its focused report;
 publication identity/date/gates belong to the GitHub Pre-release. Historical
 “unreleased” labels describe when individual changes were recorded, not an
 unqualified claim that the accepted SDK scope is still pending. RC6 remains a
 prerelease with source breaks and no ABI stability promise.
+
+## Issue #112 native Gemini and typed file input (RC6)
+
+Adds Gemini Provider/credentials/thinking/profile/cache/client/catalog types in
+AgentProviders through existing protocols. AgentModels gains `ModelContent.file`,
+validated `ModelFileReference`, and capability bit `.fileInput`; exhaustive content
+switches must adapt. AgentCore gains immutable `AgentRunInput`, file policy,
+required-label binding overloads and typed Session.run overloads. All old String
+run / binding / store creation signatures and defaults remain exact; no public
+protocol requirement is added. Text-only correlation fingerprints are unchanged;
+attachments bind ordered metadata/image identity and changed attachments conflict.
+
+File storage is explicit schema13 via new `create`/`createAsync(...,
+supportsFileContent:)` overloads and `AgentJournal.supportsFileContent`. Default
+schema3, existing opt-ins and exact schema11→12 upgrade remain unchanged. No
+3–12→13 migration or rollback downgrade is offered. Actual schema12 readers reject
+schema13 before inspect/append/maintenance; new readers retain old formats.
+Canonical data remains complete, native response/cache witnesses are request-only,
+and schema13 does not grant Host runtime permission. See the
+[Gemini guide](swift-agent-gemini-provider.md). SDK fixture acceptance is separate
+from live model/account/gateway qualification and OtohaAI integration.
 
 ## Issue #110 ChatGPT-plan Responses (RC6)
 

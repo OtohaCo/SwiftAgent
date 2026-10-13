@@ -87,3 +87,16 @@ explicit operation APIs, effective checkpoint/source protection, native-aware
 estimation, schema 11 recovery, supported combinations and public HTTP fixtures.
 The original Host summary/excerpt contracts remain request-only; a native opaque
 window does not authorize arbitrary covered-source rewriting.
+
+## Native Gemini and typed attachments
+
+The [Gemini guide](swift-agent-gemini-provider.md) adds a public-only real-Journal
+fixture for immutable user image/file attachments, exact signed native replay,
+parallel tools, reopen and cache preparation. `AgentRunInput` and file policy do
+not expand Composite summaries/excerpts to arbitrary current-Run output. Default
+identity remains complete and does not auto-summarize. A file digest binds the URI
+reference/metadata, not remote bytes; Host token estimates must be included in a
+configured estimator and are checked against the Core floor. Cache billing/wire
+savings do not reduce the full effective-context model-window budget. Changing
+explicit cached prefixes/tools/system/account rejects before transport; recover
+through Host policy and fresh bindings without replaying completed tools.

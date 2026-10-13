@@ -16,6 +16,24 @@ import XCTest
 
 /// Public-only native Gemini Host fixture. Opaque fixture signatures are not vendor validation.
 struct GeminiPublicClientTests {
+    @Test func preFileBindingAndStoreFactoriesKeepExactFunctionTypes() {
+        let binding: (String, String, ModelID, any ModelProvider, AgentModelDeployment,
+                      [String: JSONValue], any AgentContextProjector, AgentContextTokenBudget?,
+                      AgentContextReportBuffer?, AgentLegacyContinuationPolicy, AgentImageInputPolicy) throws -> AgentModelBinding = AgentModelBinding.init
+        let native: (String, String, ModelID, any ModelProvider, AgentModelDeployment,
+                     [String: JSONValue], any AgentContextProjector, AgentContextTokenBudget?,
+                     AgentContextReportBuffer?, AgentLegacyContinuationPolicy, AgentImageInputPolicy,
+                     AgentNativeContextPolicy?) throws -> AgentModelBinding = AgentModelBinding.init
+        let scoped: (String, String, ModelID, any ModelProvider, AgentModelDeployment,
+                     [String: JSONValue], any AgentContextProjector, AgentContextTokenBudget?,
+                     AgentContextReportBuffer?, AgentLegacyContinuationPolicy, AgentImageInputPolicy,
+                     AgentNativeContextPolicy?, String) throws -> AgentModelBinding = AgentModelBinding.init
+        let oldCreate: (URL, String, JournalMaintenancePolicy, Bool, Bool, Bool, Bool, Bool, Bool) throws -> AgentJournal = AgentIncrementalJournal.create
+        let nativeCreate: (URL, String, JournalMaintenancePolicy, Bool, Bool, Bool, Bool, Bool, Bool, Bool) throws -> AgentJournal = AgentIncrementalJournal.create
+        let handoff: (URL, String, JournalMaintenancePolicy, Bool) throws -> AgentJournal = AgentIncrementalJournal.create
+        _ = (binding, native, scoped, oldCreate, nativeCreate, handoff)
+    }
+
     @Test func attachmentsSignedParallelToolsAndReopenPreserveCanonicalFacts() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gemini-client-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
