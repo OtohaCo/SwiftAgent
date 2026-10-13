@@ -1,6 +1,6 @@
 import AgentCatalog
 import AgentModels
-import AgentProviders
+@testable import AgentProviders
 import Foundation
 import Testing
 
