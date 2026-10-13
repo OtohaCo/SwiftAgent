@@ -8,17 +8,27 @@ struct GeminiResponseDecoder {
     let configuration: GeminiConfiguration
     var parts: [JSONValue] = []
     var responseID: String?
+    var info: ResponseInfo?
     var finishReason: String?
     var usage = ModelUsage()
     var candidateTokens: Int?
     var thoughtsTokens: Int?
     var blocked = false
 
-    mutating func consume(_ object: [String: JSONValue]) throws {
-        guard finishReason == nil && !blocked else { throw ProviderJSON.invalid() }
-        if object["error"] != nil { throw ModelProviderError(kind: .invalidResponse, message: "Gemini stream failed.") }
+    @discardableResult
+    mutating func consume(_ object: [String: JSONValue]) throws -> [ModelEvent] {
+        if let error = object["error"] { throw GeminiFailure.stream(error) }
+        guard finishReason == nil && !blocked else {
+            guard object["candidates"] == nil, object["promptFeedback"] == nil, let metadata = object["usageMetadata"] else { throw ProviderJSON.invalid() }
+            try updateUsage(ProviderJSON.object(metadata)); return []
+        }
+        var events: [ModelEvent] = []
         if let id = object["responseId"] {
             let id = try ProviderJSON.string(id); guard !id.isEmpty, responseID.map({ GeminiBoundary.exact($0, id) }) ?? true else { throw ProviderJSON.invalid() }; responseID = id
+        }
+        if info == nil {
+            info = .init(id: responseID ?? UUID().uuidString, model: request.model)
+            events.append(.responseStarted(info!))
         }
         if let metadata = object["usageMetadata"] { try updateUsage(try ProviderJSON.object(metadata)) }
         if let feedback = object["promptFeedback"] {
@@ -37,11 +47,17 @@ struct GeminiResponseDecoder {
                     guard fields["role"] == .string("model"), case .array(let newer) = fields["parts"] else { throw ProviderJSON.invalid() }
                     // Validate shapes before retaining them. Native names checked against the declared set at seal.
                     _ = try Self.parseParts(newer, allowedNames: nil, mappings: nil)
+                    for part in newer {
+                        if case .string(let text) = part["text"], !text.isEmpty {
+                            events.append(part["thought"] == .bool(true) ? .reasoningDelta(text) : .textDelta(text))
+                        }
+                    }
                     parts.append(contentsOf: newer)
                 }
                 if let reason = candidate["finishReason"] { finishReason = try ProviderJSON.string(reason) }
             }
         }
+        return events
     }
     mutating func updateUsage(_ fields: [String: JSONValue]) throws {
         func merge(_ previous: Int?, _ current: Int?) throws -> Int? {
@@ -68,7 +84,7 @@ struct GeminiResponseDecoder {
         case nil where blocked: stop = .refusal
         default: throw ProviderJSON.invalid()
         }
-        let info = ResponseInfo(id: responseID ?? UUID().uuidString, model: request.model)
+        guard let info else { throw ProviderJSON.invalid() }
         // No executable partial calls after safety/truncation. Retain visible words and usage only.
         let retainedParts = stop == .endTurn ? parts : parts.filter { $0["functionCall"] == nil }
         let parsed = try Self.parseParts(retainedParts, allowedNames: request.tools.map(\.name), mappings: nil)
@@ -78,8 +94,7 @@ struct GeminiResponseDecoder {
            let first = retainedParts.first(where: { $0["functionCall"] != nil }) {
             guard case .string(let signature) = first["thoughtSignature"], !signature.isEmpty else { throw GeminiBoundary.unsupported() }
         }
-        var events: [ModelEvent] = [.responseStarted(info)]
-        for part in content { switch part { case .text(let text): events.append(.textDelta(text)); case .reasoning(let text): events.append(.reasoningDelta(text)); default: throw ProviderJSON.invalid() } }
+        var events: [ModelEvent] = []
         for call in calls {
             events.append(.toolCallStarted(call.id, name: call.name)); events.append(.toolCallArgumentsDelta(call.id, call.argumentsJSON)); events.append(.toolCallCompleted(call))
         }

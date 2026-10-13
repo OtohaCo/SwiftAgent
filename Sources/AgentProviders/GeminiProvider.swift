@@ -29,7 +29,12 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
             maximumOutputTokens: maximumOutputTokens, maximumRequestBytes: maximumRequestBytes,
             maximumResponseBytes: maximumResponseBytes, authorizationScopeID: authorizationScopeID, caching: promptCaching)
     }
-    public func validate(request: ModelRequest) throws { _ = try GeminiRequestEncoder.encode(request, configuration: configuration) }
+    public func validate(request: ModelRequest) throws { _ = try encodedRequest(request) }
+    private func encodedRequest(_ request: ModelRequest) throws -> Data {
+        do { return try GeminiRequestEncoder.encode(request, configuration: configuration) }
+        catch let error as ModelProviderError { throw error }
+        catch { throw GeminiBoundary.invalidRequest() }
+    }
     public func waitForRunToDrain(sessionID: UUID, runID: UUID) async { await drain.wait(sessionID: sessionID, runID: runID) }
     public func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -52,7 +57,7 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
     }
     private func produce(_ request: ModelRequest, emit: ModelEventStream.Emit) async throws {
         try Task.checkCancellation()
-        let body = try GeminiRequestEncoder.encode(request, configuration: configuration)
+        let body = try encodedRequest(request)
         var http = URLRequest(url: try configuration.endpoint(model: request.model)); http.httpMethod = "POST"; http.httpBody = body
         http.setValue("application/json", forHTTPHeaderField: "Content-Type")
         http.setValue(configuration.streaming ? "text/event-stream" : "application/json", forHTTPHeaderField: "Accept")
@@ -61,6 +66,7 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
         try Task.checkCancellation()
         var header = false, receivedBytes = 0, json = Data()
         var sse = try ProviderSSEDecoder(), decoder = GeminiResponseDecoder(request: request, configuration: configuration)
+        var validation = ModelEventAccumulator()
         var iterator = transport.stream(http).makeAsyncIterator()
         while let event = try await iterator.next() {
             try Task.checkCancellation()
@@ -74,7 +80,7 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
                 if configuration.streaming {
                     for frame in try sse.consume(data) {
                         guard frame.name == nil || frame.name == "message" else { throw ProviderJSON.invalid() }
-                        try decoder.consume(ProviderJSON.decode(frame.data))
+                        for event in try decoder.consume(ProviderJSON.decode(frame.data)) { do { try validation.append(event) } catch { throw ProviderJSON.invalid() }; try emit(event) }
                     }
                 } else { json.append(data) }
             }
@@ -84,10 +90,9 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
         if configuration.streaming { try sse.finish() }
         else {
             guard let value = try? JSONDecoder().decode(JSONValue.self, from: json) else { throw ProviderJSON.invalid() }
-            try decoder.consume(ProviderJSON.object(value))
+            for event in try decoder.consume(ProviderJSON.object(value)) { do { try validation.append(event) } catch { throw ProviderJSON.invalid() }; try emit(event) }
         }
-        var validation = ModelEventAccumulator()
-        for event in try decoder.finish() { try validation.append(event); try emit(event) }
-        _ = try validation.finish()
+        for event in try decoder.finish() { do { try validation.append(event) } catch { throw ProviderJSON.invalid() }; try emit(event) }
+        do { _ = try validation.finish() } catch { throw ProviderJSON.invalid() }
     }
 }

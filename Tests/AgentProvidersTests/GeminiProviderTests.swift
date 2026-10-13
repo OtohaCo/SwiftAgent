@@ -64,6 +64,27 @@ struct GeminiProviderTests {
         #expect(try await geminiResponse(legacy, geminiToolRequest).toolCalls.count == 2)
     }
 
+    @Test func sequentialFunctionStepsRequireEveryCurrentTurnSignatureAndKeepToolResultsOnce() async throws {
+        let probe = ProviderRequestProbe()
+        let provider = try GeminiProvider(credentials: .init(apiKey: { "key" }), preservedThinking: .requireCurrentTurnFunctionSignatures,
+            transport: FixtureHTTPTransport(probe: probe, bodies: [try geminiFixture(parts: geminiParallelParts), try geminiFixture(parts: [geminiParallelParts[1]]), geminiTextFixture]))
+        var messages = geminiToolRequest.messages
+        for _ in 0..<2 {
+            let response = try await geminiResponse(provider, .init(model: geminiRequest.model, messages: messages, tools: geminiToolRequest.tools))
+            messages.append(.assistant(content: response.content, toolCalls: response.toolCalls))
+            messages.append(contentsOf: response.toolCalls.map { .tool(.init(callID: $0.id, content: [.text("done")], isError: false)) })
+        }
+        _ = try await geminiResponse(provider, .init(model: geminiRequest.model, messages: messages, tools: geminiToolRequest.tools))
+        let body = try geminiHTTPBody(await probe.requests.last!)
+        #expect(body["contents"].array?.count == 5)
+        var changed = messages
+        if case .assistant(let content, let calls) = changed[1] {
+            changed[1] = .assistant(content: content.filter { if case .providerContinuation = $0 { return false }; return true }, toolCalls: calls)
+        }
+        #expect(throws: ModelProviderError.self) { try provider.validate(request: .init(model: geminiRequest.model, messages: changed, tools: geminiToolRequest.tools)) }
+        #expect(await probe.requests.count == 3)
+    }
+
     @Test func canonicalUnicodeTamperingIsNotAcceptedAsExactNativeReplay() async throws {
         let probe = ProviderRequestProbe(), provider = try GeminiProvider(credentials: .init(apiKey: { "key" }),
             transport: FixtureHTTPTransport(probe: probe, bodies: [try geminiFixture(parts: [.object(["text": .string("é"), "thoughtSignature": .string("c2ln")])])]))
@@ -100,6 +121,7 @@ struct GeminiProviderTests {
         let request = ModelRequest(model: geminiRequest.model, messages: [.system("escape\n\""), .user([.text(String(repeating: "bounded\n", count: 500)), .image(image)])], tools: geminiToolRequest.tools)
         let config = try geminiConfiguration()
         let bytes = try GeminiRequestEncoder.encode(request, configuration: config)
+        print("Gemini mixed encoded body: \(bytes.count) bytes; equal-limit HTTP 1, one-byte-lower HTTP 0.")
         for limit in [bytes.count, bytes.count - 1] {
             let provider = try GeminiProvider(credentials: .init(apiKey: { await tokens.next() }), maximumRequestBytes: limit,
                 transport: FixtureHTTPTransport(probe: probe, bodies: [geminiTextFixture]))
@@ -120,10 +142,11 @@ struct GeminiProviderTests {
         #expect(response.usage == .init(inputTokens: 100, outputTokens: 10, cachedInputTokens: 70, reasoningTokens: 6))
         #expect(await probe.requests.first?.url?.lastPathComponent == "fixture:generateContent")
         var decoder = GeminiResponseDecoder(request: geminiRequest, configuration: try geminiConfiguration())
-        try decoder.consume(["usageMetadata": .object(["promptTokenCount": .number(100), "candidatesTokenCount": .number(4)])])
-        try decoder.consume(["usageMetadata": .object(["cachedContentTokenCount": .number(70), "thoughtsTokenCount": .number(6)]),
-            "candidates": .array([.object(["content": .object(["role": .string("model"), "parts": .array([.object(["text": .string("ok")])])]), "finishReason": .string("STOP")])])])
-        var accumulator = ModelEventAccumulator(); for event in try decoder.finish() { try accumulator.append(event) }
+        var accumulator = ModelEventAccumulator()
+        for event in try decoder.consume(["usageMetadata": .object(["promptTokenCount": .number(100), "candidatesTokenCount": .number(4)])]) { try accumulator.append(event) }
+        for event in try decoder.consume(["usageMetadata": .object(["cachedContentTokenCount": .number(70), "thoughtsTokenCount": .number(6)]),
+            "candidates": .array([.object(["content": .object(["role": .string("model"), "parts": .array([.object(["text": .string("ok")])])]), "finishReason": .string("STOP")])])]) { try accumulator.append(event) }
+        for event in try decoder.finish() { try accumulator.append(event) }
         #expect(try accumulator.finish().usage.outputTokens == 10)
     }
 
@@ -170,15 +193,15 @@ struct GeminiProviderTests {
         let error = "data: {\"error\":{\"code\":\(status),\"message\":\"private key/URI/signature\"}}\n\n"
         let provider = try GeminiProvider(credentials: .init(apiKey: { "key" }),
             transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [partial + Data(error.utf8)]))
-        var completed = false, calls = 0
+        var completed = false, calls = 0, textSeen = false
         do { for try await event in provider.stream(request: geminiToolRequest) {
-            if case .toolCallCompleted = event { calls += 1 }; if case .responseCompleted = event { completed = true }
+            if case .toolCallCompleted = event { calls += 1 }; if case .responseCompleted = event { completed = true }; if case .reasoningDelta = event { textSeen = true }
         }; Issue.record("Expected stream error") }
         catch let error as ModelProviderError {
             #expect(error.kind == ProviderHTTPFailure.classify(status, headers: [:]).kind)
             #expect(!String(reflecting: error).contains("private key/URI/signature"))
         }
-        #expect(!completed && calls == 0)
+        #expect(!completed && calls == 0 && textSeen)
     }
 
     @Test(arguments: [401, 403, 404, 429, 503]) func failuresSanitized(status: Int) async throws {
