@@ -1,6 +1,25 @@
 # RC6 whole-candidate acceptance
 
-Status: **prepared, unreleased; final current-main acceptance is still required**.
+Status: **SDK candidate accepted; publication gates recorded separately**.
+Final SDK main `adc14bda5652ef5c61e4e934429c7736249cc1f6` / tree
+`caa703b9ffa539db78b40d9fbf76627071e2ef31` has the same tree as PR #107's reviewed
+head `7e565b5df1c1d9e60177cd2fb7b96539956d7c15`.
+[Actual-main CI 38243487509](https://github.com/OtohaCo/SwiftAgent/actions/runs/38243487509)
+passed Linux/macOS/Apple on the first attempt. Downloaded 60 clean exact-source
+stage records (Linux 35, macOS 25), actual reader/reporting/seal logs and final
+tree equality were independently reviewed:
+[whole-candidate final report](https://github.com/OtohaCo/SwiftAgent/pull/107#issuecomment-6124095848).
+It covers initial RC6/#98 plus #99/#101/#103, diagnostics #106 and approved #105
+first scope. PR #107 was merged at the user's instruction while CI was pending;
+its final head and main successes completed afterward, not before merge.
+
+The release-seal PR adds only documentation, with no SDK/test/build delta.
+Its final publication commit must pass its own CI and anonymous revision consumer;
+the immutable annotated tag must pass tag CI and an exact-version public consumer.
+The [GitHub Pre-release](https://github.com/OtohaCo/SwiftAgent/releases/tag/1.0.0-rc.6)
+records the actual tag object/target/tree, publication time and final gate results
+once published. No source page predeclares those results or a release date.
+
 The initial closeout provenance below is historical. Subsequent merged native
 context, #101 and #103 changes are covered by their linked acceptance records;
 #105 first scope is in [PR #107](https://github.com/OtohaCo/SwiftAgent/pull/107),
@@ -9,16 +28,15 @@ with [its complete scope/evidence](issue105-acceptance.md). Actual main
 `3c34571d48d65e6020434bc0e60d0bc794fed149` had macOS/Apple success but failed Linux
 build CI [38229615849](https://github.com/OtohaCo/SwiftAgent/actions/runs/38229615849).
 Diagnostic PR #106 merged as `d1834ebb686dbcd467e7b07641867f3ca904750e` / tree
-`2d23d68b20ca7137a8f0d1f788b1f1dae3cce9a2`; its source PR/push checks passed, while
+`2d23d68b20ca7137a8f0d1f788b1f1dae3cce9a2`; its source PR/push checks passed, and
 that new main's [CI](https://github.com/OtohaCo/SwiftAgent/actions/runs/38235773977)
 passed all three jobs (exact clean-source Linux/macOS artifacts checked). This
-is diagnostic-main acceptance, not the still-required #105 merge acceptance. Do not infer release
+is diagnostic-main acceptance; #105 final-main acceptance is linked above. Do not infer release
 readiness from a historical green run. Final PR/main identities and outcomes
 are recorded in the corresponding acceptance comments.
 
- This page covers the
-whole RC5 → RC6 delta; the existing audited-authorization acceptance page
-qualifies only its own historical scope. No tag or GitHub Release is created.
+This page covers the whole RC5 → RC6 delta; the existing audited-authorization acceptance page
+qualifies only its own historical scope. Publication is a separate release step.
 
 ## Provenance
 
@@ -34,7 +52,7 @@ qualifies only its own historical scope. No tag or GitHub Release is created.
 | Acceptance documentation / PR head | This later documentation-only commit; exact head is recorded by [PR #98](https://github.com/OtohaCo/SwiftAgent/pull/98) checks |
 | Source PR CI | [38148095076](https://github.com/OtohaCo/SwiftAgent/actions/runs/38148095076), launched for tested source; complete result must be checked |
 | Source push CI | [38148091538](https://github.com/OtohaCo/SwiftAgent/actions/runs/38148091538), same source; complete result must be checked |
-| Actual merged main / tree / CI | Pending; will be recorded in the post-merge acceptance comment on PR #98 after merge and its independent CI; not inferred from PR success |
+| Initial #98 merged main / CI | `34103af09baf0ecadfb27389803126ad0dd8f4ac`; [38153566812](https://github.com/OtohaCo/SwiftAgent/actions/runs/38153566812), passed; [historical attestation](https://github.com/OtohaCo/SwiftAgent/pull/98) |
 
 Local environment: macOS 27.2 arm64, Xcode 27.0 (27A266a), SDK 27.0,
 Apple Swift 6.4 (`swiftlang-6.4.0.34.1`, clang `2100.3.34.1`). Linux and
@@ -196,9 +214,9 @@ tests). [Local stage identities/results](rc6-evidence/local-stage-results.json)
 record commands, compiler and source SHA/tree. Existing large no-effect and
 capacity/disk suites passed; no new service qualification was run.
 
-Release conclusion at this documentation commit: **implementation, focused
-regressions, local complete acceptance and independent review complete**.
-Final PR head complete CI and actual-main CI are mandatory before the
-ready-to-release attestation on PR #98. That attestation records full head,
-merge SHA/tree, CI URLs and issue outcomes; it does not create a tag/Release. Merging main,
-completing candidate acceptance and creating tag/Release are distinct steps.
+Release conclusion: **SDK implementation, focused regressions, complete
+actual-main acceptance and independent review are complete** at the final SDK
+main identified above. The historical provenance remains intact. The subsequent
+documentation-only publication commit, tag CI and anonymous consumers require
+separate exact identities and results, recorded in the release-seal PR and GitHub
+Pre-release. SDK acceptance, publication and OtohaAI integration are distinct.

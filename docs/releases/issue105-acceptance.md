@@ -1,7 +1,14 @@
 # Issue #105 first-scope candidate acceptance
 
-Status: prepared, unreleased. This is an SDK candidate, not OtohaAI integration
-or product end-to-end qualification. No tag/Release or paid live calls.
+Status: **approved first scope merged and accepted**. Main
+`adc14bda5652ef5c61e4e934429c7736249cc1f6` / tree
+`caa703b9ffa539db78b40d9fbf76627071e2ef31` passed all three jobs in
+[38243487509](https://github.com/OtohaCo/SwiftAgent/actions/runs/38243487509), first attempt;
+[final scope report](https://github.com/OtohaCo/SwiftAgent/issues/105#issuecomment-6124096248)
+and [PR #107 final acceptance](https://github.com/OtohaCo/SwiftAgent/pull/107#issuecomment-6124095848).
+#105 stays OPEN for long tool-loop and between-queued-replies maintenance.
+This is SDK acceptance, not OtohaAI/product/live qualification. Publication
+status and gates are recorded separately in the RC6 GitHub Pre-release.
 
 ## Identity and scope
 
@@ -116,8 +123,8 @@ P0/P1/blocking P2. The archived [evidence](issue105-evidence/raw-evidence-manife
 distinguishes focused failures from corrected passes. The later acceptance/test
 commit additionally checks imported closed history without completed Run proof
 and persistent-instruction refusal (nine operation tests GREEN, 0.661s); it changes no SDK implementation. Remote
-exact-head and actual merge/main CI remain separately required, with results
-recorded in PR #107 acceptance comments.
+exact-head and actual merge/main CI passed separately; their exact identities
+and results are recorded in the final PR #107 acceptance report linked above.
 
 ## Signed-source retirement regression
 
@@ -134,4 +141,5 @@ implementation passed (one test, 0.223s). The affected entire public native suit
 then passed five tests (including both queue cases), 0.965s. Raw RED/GREEN logs are
 archived alongside their SHA-256 hashes. This closes a test gap in the new bridge;
 it does not establish a new defect in the prior release. Exact final-head remote
-CI remains required after this fixture/documentation-only change.
+CI subsequently passed, as did actual-main CI; the linked final report preserves
+the complete sequence without turning earlier failures or cancellations into passes.

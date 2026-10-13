@@ -1,6 +1,13 @@
 # SwiftAgent Semantic Versioning
 
-## Issue #105 explicit context handoff (unreleased)
+RC6 includes the RC5→RC6 changes below, including #99/#101/#103/#105 first scope.
+The final SDK main passed [complete acceptance](../releases/rc6-candidate-acceptance.md);
+publication identity/date/gates belong to the GitHub Pre-release. Historical
+“unreleased” labels describe when individual changes were recorded, not an
+unqualified claim that the accepted SDK scope is still pending. RC6 remains a
+prerelease with source breaks and no ABI stability promise.
+
+## Issue #105 explicit context handoff (RC6)
 
 Adds the required-label `AgentIncrementalJournal.create(...,
 supportsContextHandoff:)` overload, explicit offline
@@ -20,9 +27,9 @@ as nil in compatible new readers; old readers are protected by schema 12, not
 by assuming unknown-field rejection.
 See [storage preparation and recovery](swift-agent-context-handoff.md).
 
-## Issue #99 extension (unreleased, no assigned next version)
+## Issue #99 extension (RC6)
 
-This work follows the RC6 prepared candidate. It adds opt-in native-context
+This work extends the initial RC6 closeout. It adds opt-in native-context
 Journal schema 11 and optional Provider capability protocols, preserving the
 existing default schema 3 and old conformers. Old initializer precise signatures
 remain callable and usable as function references; new overloads have required
@@ -39,7 +46,7 @@ empty stores and maintenance. New readers retain old-store read/append behavior
 without silently granting native capability. No migration, version bump, tag or
 Release is performed. See [native-context guide](swift-agent-native-context.md).
 
-## RC6 closeout (prepared, unreleased)
+## RC6 closeout (accepted)
 
 The closeout adds no public initializer parameter, protocol requirement, enum
 case or Journal format. Existing `AgentJournalError.concurrentWriter` and
@@ -290,7 +297,7 @@ the event stream as `unclassified`; exhaustive switches must add the cases.
 largest segment rotation can seal. Such a policy previously initialized, then
 stalled maintenance permanently.
 
-## RC6 candidate, unreleased
+## RC6 candidate contracts
 
 Projection `conversationRevision` now follows the exact committed live Session
 snapshot after multi-result tool commits; startup preflight still uses a reserved
@@ -502,7 +509,7 @@ executor entry; new readers preserve valid v1 data. ToolNoEffectProof
 canonicalArguments/receipt are optional for compact v2; argumentBinding,
 originalArgumentsUTF8Bytes and receiptSummary explicitly bind the original intent. No automatic migration or
 new ledger for existing operations. See [contract, limits and format](swift-agent-confirmed-no-effect.md).
-PR #62 implemented this capability on main; RC6 remains unreleased. Storage
+PR #62 implemented this capability on main; it is included in RC6. Storage
 audit capability does not enable the Host-configured `requiredAudit` mode.
 
 ## Durable Run association and logical terminal (unreleased, Issue #75)
@@ -566,7 +573,7 @@ Response classification is shared by streaming and steering. Compaction,
 pause and unrecognized stop reasons do not settle the final-answer deadline;
 known final responses retain the RC6 slow-publication contract.
 
-### Issue #101 follow-up (unreleased)
+### Issue #101 follow-up (RC6)
 
 `AnthropicThinking` gains `serviceDefault` and `betweenTools`, and provider
 diagnostic Reason gains `requestBodyTooLarge`; downstream exhaustive

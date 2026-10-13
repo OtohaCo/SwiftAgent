@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased: issue #105 explicit context handoff and queued reminders
+## [1.0.0-rc.6]
+
+SDK prerelease; final SDK acceptance completed at `adc14bda5652ef5c61e4e934429c7736249cc1f6`.
+The [GitHub Pre-release](https://github.com/OtohaCo/SwiftAgent/releases/tag/1.0.0-rc.6)
+records actual publication time, final documentation-only target and release gates
+once published. No ABI stability or production Host qualification is implied.
+
+### issue #105 explicit context handoff and queued reminders
 
 - Adds explicit opt-in context-handoff schema 12 and a closed-store schema-11 upgrade with a durable reader gate, exact recovery witness and unchanged canonical/native/execution facts.
 - Keeps existing creation signatures, default schema 3 and native schema 11 unchanged. Old schema-11 readers reject schema 12 before inspect/append/maintenance can alter bytes.
@@ -8,13 +15,13 @@
 - Adds a required-label queued `contextControls` initializer overload while retaining the old exact signature. Existing Run-local reminder/compaction refusal remains; long-tool-loop and between-replies maintenance are deferred.
 - Adds public `AgentJournalEvent.contextHandoff` (exhaustive switches must adapt). Storage and retirement-aware runtime ship together. See [handoff and recovery guide](docs/guides/swift-agent-context-handoff.md).
 
-## Unreleased: issue #103 automatic compaction final answers
+### issue #103 automatic compaction final answers
 
 - OpenAI Responses automatic compaction now classifies completed assistant messages across the entire validated response output, including messages before a trailing compaction item. Such answers finish once instead of entering the bounded maintenance loop.
 - Preserves all native output in the checkpoint and canonical answer in history; the next request still replays the latest compaction window. Compaction-only responses retain their bounded maintenance behavior. No public API, schema, or live qualification changes.
 - Follow-up dispatchers continue to own their paused session. Hosts must finish/close and drain the queue before idle on-demand maintenance; a between-queued-replies maintenance hook remains a separate future design.
 
-## Unreleased: issue #101 Host compaction path
+### issue #101 Host compaction path
 
 - Adds `ModelProviderError.Diagnostic.Reason.requestBodyTooLarge` for Anthropic local final-body overflow, preserving `.invalidRequest` and preventing Host message-string matching.
 - Adds explicit Anthropic `.serviceDefault` (omit thinking) and Sonnet 5.5 `.betweenTools`; exact old initializer signatures and `.disabled` defaults remain. Exhaustive switches over `AnthropicThinking` must handle the new cases.
@@ -22,20 +29,20 @@
 - Rejects Run-local pre-generation compaction with a current required reminder before admission/HTTP. Threshold/reminder scheduling remains unsupported; this is a SDK limitation.
 - Rejects new thinking modes with mismatch controls or managed thinking-tail qualification. Public HTTP fixtures and Host examples are not live qualification. See [#101 evidence](docs/releases/issue101-acceptance.md).
 
-## Unreleased: issue #99 native context, trusted controls and sampling prices
+### issue #99 native context, trusted controls and sampling prices
 
 - Implements Anthropic threshold/on-demand and OpenAI Responses automatic/standalone native compaction with explicit deployment qualification, managed deadline/cancellation/drain, canonical-history preservation and atomic effective checkpoint publication.
 - Adds opt-in File Journal schema 11; default schema 3 and old stores remain supported. Older readers explicitly reject schema 11 without mutation.
 - Adds trusted append-only Anthropic tools/instructions/reminders, explicit thinking prefix mismatch policy, observable input transformations, and qualified real-request-boundary thinking-tail compaction. Unsupported combinations fail locally. No live signature qualification is claimed.
 - Adds exact Decimal prompt-price tiers, service-scoped compaction metadata and ordered per-invocation sampling usage. Public Host examples price each sampling separately and preserve cache-write/TTL and unknown-value semantics.
-- Preserves old initializer exact signatures and old optional-capability Provider conformers. New public event cases require exhaustive switch updates. No release/version/tag is assigned. See [integration and support matrix](docs/guides/swift-agent-native-context.md) and [acceptance evidence](docs/releases/issue99-acceptance.md).
+- Preserves old initializer exact signatures and old optional-capability Provider conformers. New public event cases require exhaustive switch updates. See [integration and support matrix](docs/guides/swift-agent-native-context.md) and [acceptance evidence](docs/releases/issue99-acceptance.md).
 
-## RC6 prepared candidate: history and request boundaries
+### history and request boundaries
 
-Status: unreleased; no tag or release date. The complete RC5 → RC6 scope is
+The complete RC5 → RC6 scope is
 collected in [release notes](docs/releases/1.0.0-rc.6.md) and
 [whole-candidate acceptance](docs/releases/rc6-candidate-acceptance.md);
-historical unreleased sections below are included, not replaced.
+all sections below are included in RC6.
 
 - Stale persistent Session histories fail with `concurrentWriter` before
   input admission and Provider dispatch. Restoration and startup publication
@@ -55,7 +62,7 @@ historical unreleased sections below are included, not replaced.
   No new context public interface or Journal schema is introduced by closeout.
 
 
-## Unreleased: a final answer received in time is not turned into a timeout
+### a final answer received in time is not turned into a timeout
 
 - A Run whose model source handed over the whole final answer (a response that
   does not ask for tools and is not cancelled) before the Run deadline now ends
@@ -72,7 +79,7 @@ historical unreleased sections below are included, not replaced.
   that has no whole final answer at the deadline ends with `deadlineExceeded`
   as before.
 
-## Unreleased: safety refusals classified as refused requests
+### safety refusals classified as refused requests
 
 - OpenAI Responses stream failures with code `cyber_policy` (a safety refusal,
   which can arrive in the middle of a tool call) are now classified as
@@ -80,7 +87,7 @@ historical unreleased sections below are included, not replaced.
   instead of `.invalidResponse`. Hosts that retry unreadable answers no longer
   resend a request the service will refuse again. The partial tool call never runs.
 
-## Unreleased: read-only invalid-output recovery
+### read-only invalid-output recovery
 
 - A read-only tool already configured with `.modelVisible` now returns a
   structured `invalid_output` tool error when its output fails schema validation
@@ -97,7 +104,7 @@ historical unreleased sections below are included, not replaced.
   versioning guide and release checklist record this compatibility boundary;
   Hosts requiring the previous terminal behavior must use `.failClosed`.
 
-## Unreleased: retry budgets and compiler diagnostics
+### retry budgets and compiler diagnostics
 
 - Provider routes honor `Retry-After` only when another same-provider attempt
   is allowed by both the per-provider retry limit and the route-wide attempt
@@ -112,7 +119,7 @@ historical unreleased sections below are included, not replaced.
   change `CURRENT`. It does not assume dropping a reference drains background
   ownership or replace the ownership barrier with a readiness delay.
 
-## Unreleased: qualified cache controls and TTL accounting
+### qualified cache controls and TTL accounting
 
 - Anthropic Messages supports opt-in automatic caching and explicit tool,
   system and message breakpoints with 5-minute/1-hour TTLs. OpenAI and Local
@@ -140,7 +147,7 @@ historical unreleased sections below are included, not replaced.
   [#89](https://github.com/OtohaCo/SwiftAgent/issues/89); fixture tests alone
   establish neither billing completeness nor a cache-hit improvement.
 
-## Unreleased: execution-reporting CI uses the prebuilt Host CLI
+### execution-reporting CI uses the prebuilt Host CLI
 
 - Linux reporting acceptance and its five finite repetitions select Swift
   6.4's available, deprecated native build backend for
@@ -155,7 +162,7 @@ historical unreleased sections below are included, not replaced.
   The compiler/planner root cause remains unknown; see
   [the retained CI evidence](https://github.com/OtohaCo/SwiftAgent/issues/46#issuecomment-6035891119).
 
-## Unreleased: prompt cache key and cache usage
+### prompt cache key and cache usage
 
 This records PR #85's scope. The qualified cache-controls and TTL-accounting
 section above supersedes its single-write pricing limit and follow-up status:
@@ -195,7 +202,7 @@ tracked in #89; it must be assessed separately from SDK fixture results.
   Protocol references were verified 2026-10-07; fixtures do not establish a
   real cache-hit improvement or a 97–99% hit rate.
 
-## Unreleased: tool authorization before the resource lease
+### tool authorization before the resource lease
 
 A tool's own required `authorize` (without audited authorization) now runs
 before the call waits for its `ToolScheduler` resource lease, as audited
@@ -213,7 +220,7 @@ sequential call finished. `ToolScheduler(authorization: .whileHoldingResourceLea
 keeps the previous order, where decision and effect see the same state but
 every conflicting call waits for the answer.
 
-## Unreleased: invalid tool arguments go back to the model
+### invalid tool arguments go back to the model
 
 A tool call whose arguments are not one JSON object (malformed, truncated,
 duplicate keys, not an object) or do not match the tool's input schema no
@@ -241,7 +248,7 @@ treatment. Unknown or undeclared tools,
 reused call IDs, identity and stream protocol violations, and calls cut off
 by the output limit keep their behaviour.
 
-## Unreleased: provider replay and diagnostics
+### provider replay and diagnostics
 
 DeepSeek now retains native state for every accepted complete tool turn, including
 thinking-off turns. Restore binds raw argument bytes and explicit completion
@@ -251,7 +258,7 @@ failure without executing the completed mutation again. Optional fixed provider
 diagnostics replace qualification's parsing of display messages. Strict origin
 and configuration preflight, error kinds and retry rules remain unchanged.
 
-## Unreleased: DeepSeek tool calls without reasoning
+### DeepSeek tool calls without reasoning
 
 With thinking on and tools offered, DeepSeek can answer a tool step with
 function calls and no reasoning item (seen live with `deepseek-v4-pro`,
@@ -266,7 +273,7 @@ models, stripped continuations) are still refused before the request; empty
 reasoning items, mismatched calls and wrong response models are still
 rejected. Thinking-off turns are unchanged. No public API change.
 
-## Image content (unreleased, ADR 0012)
+### Image content (ADR 0012)
 
 `ModelContent.image(ModelImage)` carries PNG, JPEG, GIF or WebP bytes (at most
 3.75 MiB, whose base64 fits Anthropic's 5 MiB, and 8,000 pixels a side) with a
@@ -300,7 +307,7 @@ readers reject schema 10 before writing
 `AgentModelBindingError` (new `invalidImageLimit`) must handle the new cases;
 added parameters change stored function signatures.
 
-## Durable Run association and logical terminal (unreleased, Issue #75)
+### Durable Run association and logical terminal (Issue #75)
 
 `AgentRunCorrelation` supplies a Host correlation key and declared payload
 identity to `session.run(..., correlation:)`. Run IDs are generated by the SDK;
@@ -332,14 +339,14 @@ schema 9 before append/maintenance, including an empty schema-9 store. See
 `RunRecordFixture`. Exhaustive switches over `AgentJournalEvent` must handle
 `runTerminated`; added API parameters also change stored function signatures.
 
-## Unreleased: fallback policy decoding (#70 follow-up)
+### fallback policy decoding (#70 follow-up)
 
 `ModelProviderFallbackPolicy` decoding now uses the same limits and retry-kind
 validation as its initializer. Invalid persisted policies throw; valid existing
 JSON still round-trips. Context overflow/authentication cannot become retryable
 through JSON. Route continuation and mutation ownership are unchanged.
 
-## Queued mutation identity (unreleased, Issue #74)
+### Queued mutation identity (Issue #74)
 
 Queued inputs now explicitly select `AgentOperationIdentity.perCall` or
 `.operation(String)`. The existing `operationID:` initializer keeps its
@@ -372,7 +379,7 @@ contracts remain unchanged; uncertain effects are inspected, never retried.
 
 All notable changes to SwiftAgent are recorded here.
 
-## [Unreleased]
+### Other RC5 → RC6 changes
 
 - Add `ModelProviderError.Kind.contextWindowExceeded` for requests the provider
   rejects as larger than the model's context window: OpenAI
@@ -399,13 +406,15 @@ All notable changes to SwiftAgent are recorded here.
   journaled. Defaults keep every tool declared; no Journal format change. See
   the tools guide.
 
-- Implement ADR 0010 on main (unreleased): explicit
+- Implement ADR 0010 on main: explicit
   confirmed-no-effect mutation feedback, atomic proof/abort/checkpoint/audit,
   Host per-call queries and public controlled fixture. Default behavior remains
   closed. New public policy/failure enum cases and optional archival proof affect
-  exhaustive switches/Codable consumers; explicit new-store schema 6 is required,
-  with no migration and actual older-reader rejection. See the confirmed-no-effect
-  guide. PR #62 is merged into main; RC6 remains unreleased.
+  exhaustive switches/Codable consumers. PR #62 originally introduced opt-in
+  schema 6/v1; the later compact-proof implementation selects schema 7/v2 for
+  new confirmed-no-effect stores and still reads legacy schema 6. Neither is
+  silently migrated. Actual older-reader rejection is verified. See the
+  confirmed-no-effect guide; both stages are included in RC6.
 
 Changes after the RC5 candidate are not part of `1.0.0-rc.5`.
 
