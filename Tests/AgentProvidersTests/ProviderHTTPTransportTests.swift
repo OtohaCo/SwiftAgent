@@ -7,7 +7,15 @@ import Testing
 @testable import AgentProviders
 
 struct ProviderHTTPTransportTests {
-    @Test func sanitizesTransportFailureWithoutRetrying() async throws {
+    @Test(arguments: [
+        (NSURLErrorDomain, URLError.networkConnectionLost.rawValue,
+         ModelProviderError.Diagnostic.Reason.connectionLost),
+        ("FixtureNetworkError", 7, .networkFailure)
+    ])
+    func sanitizesTransportFailureWithoutRetrying(
+        _ failure: (String, Int, ModelProviderError.Diagnostic.Reason)
+    ) async throws {
+        let (domain, code, reason) = failure
         let fixture = ProviderHTTPFixture()
         defer { fixture.remove() }
         let received = ProviderHTTPReceived()
@@ -16,14 +24,14 @@ struct ProviderHTTPTransportTests {
         try await fixture.waitForStart()
         fixture.perform { instance in
             instance.client?.urlProtocol(instance, didFailWithError: NSError(
-                domain: NSURLErrorDomain, code: URLError.networkConnectionLost.rawValue,
+                domain: domain, code: code,
                 userInfo: [NSLocalizedDescriptionKey: "sensitive fixture payload",
                            NSURLErrorFailingURLErrorKey: URL(string: "https://private.invalid/secret")!]))
         }
         try await eventually { await received.completed }
         #expect(await received.error as? ModelProviderError == ModelProviderError(
             kind: .transport, message: "HTTP transport failed.",
-            diagnostic: .init(stage: .transport, reason: .connectionLost)))
+            diagnostic: .init(stage: .transport, reason: reason)))
         #expect(fixture.startCount == 1)
     }
 
