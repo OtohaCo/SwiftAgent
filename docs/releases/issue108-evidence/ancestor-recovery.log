@@ -1,0 +1,32 @@
+CI STAGE issue108-ancestor-recovery: PID=43077 evidence=/Users/lilong/Works/SwiftAgent-issue108/.ci-logs/stages/issue108-ancestor-recovery-z_zotojz
+◇ Test run started.
+◇ Suite IncompleteHandoffFormatTests started.
+◇ Test exclusiveUpgradePreservesFactsAndFiles(_:) started.
+◇ Test case passing 1 argument schema → 12 to exclusiveUpgradePreservesFactsAndFiles(_:) started.
+◇ Test case passing 1 argument schema → 13 to exclusiveUpgradePreservesFactsAndFiles(_:) started.
+✔ Test exclusiveUpgradePreservesFactsAndFiles(_:) with 2 test cases passed after 0.122 seconds.
+◇ Test priorElevenToTwelveBridgeDoesNotRequireAncestralFiles() started.
+✔ Test priorElevenToTwelveBridgeDoesNotRequireAncestralFiles() passed after 0.044 seconds.
+◇ Test publicationFailureRecoversOnlyActualFormat(_:_:) started.
+◇ Test case passing 2 arguments schema → 12, boundary → .beforeFormatReplace to publicationFailureRecoversOnlyActualFormat(_:_:) started.
+◇ Test case passing 2 arguments schema → 12, boundary → .afterFormatReplace to publicationFailureRecoversOnlyActualFormat(_:_:) started.
+◇ Test case passing 2 arguments schema → 12, boundary → .beforeCurrentReplace to publicationFailureRecoversOnlyActualFormat(_:_:) started.
+◇ Test case passing 2 arguments schema → 12, boundary → .afterCurrentReplace to publicationFailureRecoversOnlyActualFormat(_:_:) started.
+◇ Test case passing 2 arguments schema → 13, boundary → .beforeFormatReplace to publicationFailureRecoversOnlyActualFormat(_:_:) started.
+◇ Test case passing 2 arguments schema → 13, boundary → .afterFormatReplace to publicationFailureRecoversOnlyActualFormat(_:_:) started.
+◇ Test case passing 2 arguments schema → 13, boundary → .beforeCurrentReplace to publicationFailureRecoversOnlyActualFormat(_:_:) started.
+◇ Test case passing 2 arguments schema → 13, boundary → .afterCurrentReplace to publicationFailureRecoversOnlyActualFormat(_:_:) started.
+✔ Test publicationFailureRecoversOnlyActualFormat(_:_:) with 8 test cases passed after 0.121 seconds.
+◇ Test missingOrAlteredRecoveryTargetRefusesWithoutWrites(_:) started.
+◇ Test case passing 1 argument altered → false to missingOrAlteredRecoveryTargetRefusesWithoutWrites(_:) started.
+◇ Test case passing 1 argument altered → true to missingOrAlteredRecoveryTargetRefusesWithoutWrites(_:) started.
+✔ Test missingOrAlteredRecoveryTargetRefusesWithoutWrites(_:) with 2 test cases passed after 0.044 seconds.
+◇ Test processCrashRecoversPublishedUpgrade(_:_:) started.
+◇ Test case passing 2 arguments schema → 12, mode → "incomplete-upgrade-gate" to processCrashRecoversPublishedUpgrade(_:_:) started.
+◇ Test case passing 2 arguments schema → 12, mode → "incomplete-upgrade-current" to processCrashRecoversPublishedUpgrade(_:_:) started.
+◇ Test case passing 2 arguments schema → 13, mode → "incomplete-upgrade-gate" to processCrashRecoversPublishedUpgrade(_:_:) started.
+◇ Test case passing 2 arguments schema → 13, mode → "incomplete-upgrade-current" to processCrashRecoversPublishedUpgrade(_:_:) started.
+✔ Test processCrashRecoversPublishedUpgrade(_:_:) with 4 test cases passed after 0.773 seconds.
+✔ Suite IncompleteHandoffFormatTests passed after 1.108 seconds.
+✔ Test run with 5 tests in 1 suite passed after 1.108 seconds.
+CI STAGE END issue108-ancestor-recovery: result=pass exit=0 seconds=8.051

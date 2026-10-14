@@ -75,3 +75,17 @@ These are HTTP fixtures, not live or cryptographic qualification.
 See [Host handoff guide](../../../../docs/guides/swift-agent-context-handoff.md)
 for offline schema-11 upgrade and failure/drain contracts. Long tool-loop and
 between-queued-replies maintenance are not implemented.
+
+## Incomplete-turn handoff (#108, after RC6)
+
+`incompleteOrdinaryHandoff()` uses only public SDK APIs and real Anthropic Swift
+HTTP encoding with local fragmented SSE. It preserves signed canonical history
+and a max-tokens terminal, upgrades the closed schema-12 store to schema 14,
+explicitly retires authority without HTTP/tool execution, then runs a new target
+with a changed registry and normal deferred expansion. Discovery executes once;
+reopen retains history/terminal and does not replay it. Fixtures are neither
+vendor signature verification nor current model/account qualification.
+
+Schema 14 factories and explicit 12/13 upgrade are required for incomplete exit.
+Old completed-only handoff and idle compaction restrictions above remain applicable
+to their original APIs. No Run-local compaction or queued maintenance is enabled.

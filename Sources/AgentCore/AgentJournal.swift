@@ -291,6 +291,8 @@ public actor AgentJournal {
     /// Whether this store can persist explicit context-authority retirement.
     /// Durable stores require opt-in schema 12; older formats are never upgraded automatically.
     public nonisolated let supportsContextHandoff: Bool
+    /// Durable closed-turn retirement proof requires explicit schema 14.
+    public nonisolated let supportsIncompleteContextHandoff: Bool
     public nonisolated let supportsFileContent: Bool
     public nonisolated let supportsImageContent: Bool
     /// 0: unsupported; 1: schema 6; 2: schema 7+. Existing stores are never migrated.
@@ -331,6 +333,7 @@ public actor AgentJournal {
         supportsImageContent = true
         supportsNativeContext = true
         supportsContextHandoff = true
+        supportsIncompleteContextHandoff = false
     }
 
     package init(store: any JournalStore) {
@@ -350,6 +353,7 @@ public actor AgentJournal {
         supportsImageContent = store.supportsImageContent
         supportsNativeContext = store.supportsNativeContext
         supportsContextHandoff = store.supportsContextHandoff
+        supportsIncompleteContextHandoff = store.supportsIncompleteContextHandoff
     }
 
     package func acquireSessionLease(sessionID: UUID, dispatcherID: UUID? = nil) throws {
@@ -566,6 +570,7 @@ public actor AgentJournal {
             throw AgentJournalError.persistenceUnavailable("mutation lifecycle events require durable persistence")
         }
         if let value = handoffs.first {
+            guard value.closedTurnProof == nil else { throw AgentJournalError.unsupportedFormat }
             guard supportsContextHandoff, let history = events.compactMap({ event -> [ModelMessage]? in
                 if case .checkpoint(let history, _) = event { return history }; return nil
             }).last else { throw AgentJournalError.unsupportedFormat }
@@ -1403,10 +1408,18 @@ extension AgentJournal {
             if case .contextHandoff(let value) = event { return value }; return nil
         }
         if let value = handoffs.first {
-            guard supportsContextHandoff, runID == nil, let lastRunID = initialHeader.lastRunID,
+            if let proof = value.closedTurnProof {
+                guard supportsIncompleteContextHandoff, runID == nil,
+                      try Self.isClosedHandoffTurn(proof, sessionID: sessionID, header: initialHeader, view: view),
+                      let history = events.compactMap({ if case .checkpoint(let history, _) = $0 { return history }; return nil }).last,
+                      Self.formalMessages(history).count == Int(initialHeader.messageCount) else { throw AgentJournalError.invalidRecord }
+                try AgentConversationControlState.requireClosed(Self.formalMessages(history))
+            } else {
+                guard supportsContextHandoff, runID == nil, let lastRunID = initialHeader.lastRunID,
                   value.completedRunID == lastRunID,
                   try view.runTerminal(sessionID: sessionID, runID: lastRunID) == .completed,
                   initialHeader.pendingIdentity == nil, try view.pending(sessionID: sessionID).isEmpty else { throw AgentJournalError.invalidRecord }
+            }
             try Self.validateHandoff(value, previous: initialHeader.contextHandoff, native: initialHeader.nativeContext,
                 controls: initialHeader.conversationControls, messageCount: Int(initialHeader.messageCount))
             let anchor = try view.messages(sessionID: sessionID, after: initialHeader.messageCount - 1, limit: 1)

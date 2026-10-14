@@ -1170,6 +1170,25 @@ public actor AgentSession {
     public func handoffToOrdinary(using binding: AgentModelBinding, capabilities: AgentCapabilityBinding? = nil,
                                   discardingRetiredProviderContinuations: Bool,
                                   deadline: ContinuousClock.Instant? = nil) async throws -> AgentContextHandoffOperation {
+        try await startOrdinaryHandoff(using: binding, capabilities: capabilities,
+            discardingRetiredProviderContinuations: discardingRetiredProviderContinuations, allowingIncompleteTurn: false, deadline: deadline)
+    }
+
+    /// Explicitly closes a durably terminal, physically drained incomplete turn's
+    /// request authority. Does not complete that Run or settle any mutation.
+    /// Requires schema 14, closed tool pairing and no unresolved mutation. Reconcile
+    /// verified effects first, then use a fresh same-ID Session on the same handle.
+    public func handoffToOrdinary(using binding: AgentModelBinding, capabilities: AgentCapabilityBinding? = nil,
+                                  discardingRetiredProviderContinuations: Bool, allowingIncompleteTurn: Bool,
+                                  deadline: ContinuousClock.Instant? = nil) async throws -> AgentContextHandoffOperation {
+        try await startOrdinaryHandoff(using: binding, capabilities: capabilities,
+            discardingRetiredProviderContinuations: discardingRetiredProviderContinuations,
+            allowingIncompleteTurn: allowingIncompleteTurn, deadline: deadline)
+    }
+
+    private func startOrdinaryHandoff(using binding: AgentModelBinding, capabilities: AgentCapabilityBinding?,
+                                      discardingRetiredProviderContinuations: Bool, allowingIncompleteTurn: Bool,
+                                      deadline: ContinuousClock.Instant?) async throws -> AgentContextHandoffOperation {
         guard discardingRetiredProviderContinuations, !binding.isLegacyBinding else {
             throw ModelProviderError(kind: .unsupportedCapability, message: "Ordinary handoff requires explicit deployment binding and retired-continuation omission consent.")
         }
@@ -1177,6 +1196,7 @@ public actor AgentSession {
         guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
         guard !dispatchStarting, dispatcherID == nil else { throw AgentFollowUpError.dispatchOwned }
         if let journal, !journal.supportsContextHandoff { throw AgentJournalError.unsupportedFormat }
+        if allowingIncompleteTurn, journal?.supportsIncompleteContextHandoff != true { throw AgentJournalError.unsupportedFormat }
         let deadline = deadline ?? .now.advanced(by: runTimeout)
         let operationID = UUID(), control = AgentContextHandoffControl(), drain = AgentRunDrain()
         startingRun = true
@@ -1195,19 +1215,20 @@ public actor AgentSession {
         } catch { startupFinished(); throw error }
         let handle = AgentContextHandoffOperation(id: operationID, sessionID: id, control: control, drain: drain)
         await control.start { [self] in
-            await performOrdinaryHandoff(binding: binding, capabilities: capabilities, deadline: deadline,
+            await performOrdinaryHandoff(binding: binding, capabilities: capabilities, allowingIncompleteTurn: allowingIncompleteTurn, deadline: deadline,
                 operationID: operationID, control: control, drain: drain)
         }
         return handle
     }
 
     private func performOrdinaryHandoff(binding: AgentModelBinding, capabilities: AgentCapabilityBinding?,
+                                        allowingIncompleteTurn: Bool,
                                         deadline: ContinuousClock.Instant, operationID: UUID,
                                         control: AgentContextHandoffControl, drain: AgentRunDrain) async -> Result<AgentContextHandoff, Error> {
         let result: Result<AgentContextHandoff, Error>
         do {
             let value = try await withStartupDeadline(deadline, startupID: operationID) { [self] in
-                try await prepareOrdinaryHandoff(binding: binding, capabilities: capabilities, operationID: operationID, control: control)
+                try await prepareOrdinaryHandoff(binding: binding, capabilities: capabilities, allowingIncompleteTurn: allowingIncompleteTurn, operationID: operationID, control: control)
             }
             // This is the capability authorization point for publishing a wire baseline,
             // not tool/executor admission. A later revoke cannot erase committed history.
@@ -1238,7 +1259,7 @@ public actor AgentSession {
         return result
     }
 
-    private func prepareOrdinaryHandoff(binding: AgentModelBinding, capabilities: AgentCapabilityBinding?, operationID: UUID, control: AgentContextHandoffControl) async throws -> AgentContextHandoff {
+    private func prepareOrdinaryHandoff(binding: AgentModelBinding, capabilities: AgentCapabilityBinding?, allowingIncompleteTurn: Bool, operationID: UUID, control: AgentContextHandoffControl) async throws -> AgentContextHandoff {
         try await restoreJournalStateIfNeeded()
         let snapshot = try await journal?.historySnapshot(sessionID: id)
         let previous = await nativeContextState.currentHandoff(), native = await nativeContextState.current()
@@ -1251,15 +1272,19 @@ public actor AgentSession {
             throw ModelProviderError(kind: .unsupportedCapability, message: "Persistent trusted instructions cannot be retired by ordinary handoff.")
         }
         let formal = history.dropFirst(history.prefix { $0.role == .system || $0.role == .developer }.count)
-        guard !formal.isEmpty, formal.last?.role == .assistant else {
+        guard !formal.isEmpty, allowingIncompleteTurn || formal.last?.role == .assistant else {
             throw ModelProviderError(kind: .unsupportedCapability, message: "Ordinary handoff requires a completed closed conversation.")
         }
         try AgentConversationControlState.requireClosed(Array(formal))
         var proof: CompletedReminderTurnProof?
+        var closedProof: AgentContextHandoffTurnProof?
         var anchor: UUID?
         if let journal, journal.storage == .durable, let witness = persistentHistoryWitness {
-            proof = try await journal.completedReminderTurn(sessionID: id, boundary: formal.count, expectedHistory: witness)
-            guard proof != nil else { throw ModelProviderError(kind: .unsupportedCapability, message: "Ordinary handoff requires a persisted completed Run and no pending mutation.") }
+            if allowingIncompleteTurn { closedProof = try await journal.closedHandoffTurn(sessionID: id, expectedHistory: witness) }
+            else {
+                proof = try await journal.completedReminderTurn(sessionID: id, boundary: formal.count, expectedHistory: witness)
+                guard proof != nil else { throw ModelProviderError(kind: .unsupportedCapability, message: "Ordinary handoff requires a persisted completed Run and no pending mutation.") }
+            }
             let page = try await journal.readMessages(sessionID: id, after: UInt64(formal.count - 1), limit: 1)
             guard page.count == 1, page[0].message == formal.last else { throw AgentJournalError.concurrentWriter }
             anchor = page[0].id
@@ -1285,7 +1310,9 @@ public actor AgentSession {
         let value = try AgentContextHandoff(generation: (previous?.generation ?? 0) + 1, previousHandoffID: previous?.id,
             canonicalMessageCount: formal.count, lastMessageID: anchor, retiredNativeCheckpointID: native?.id,
             retiredControlsDigest: AgentJournal.controlsDigest(controls), completedRunID: proof?.runID,
-            targetOrigin: binding.continuationOrigin, targetRootDigest: root, targetControls: targetControls)
+            targetOrigin: binding.continuationOrigin, targetRootDigest: root, targetControls: targetControls,
+            closedTurnProof: closedProof, targetModel: closedProof == nil ? nil : binding.model,
+            targetRegistryDigest: closedProof == nil ? nil : AgentJournal.handoffRegistryDigest(selectedTools))
         let candidateNative = AgentNativeContextState(); await candidateNative.installHandoff(value)
         let candidateControls = AgentConversationControlState(); await candidateControls.installHandoff(targetControls)
         let validator = AgentLoop(binding: binding, tools: selectedTools, scheduler: scheduler,
@@ -1518,7 +1545,7 @@ public actor AgentSession {
         // This is proof validation, not a dispatched request. Budget only the
         // actual compact input above and the replacement view before publication.
         let oldView = try await nativeContextState.effectiveMessages(history, binding: binding, sessionID: id,
-            journal: journal, structuredOutput: structuredOutput)
+            journal: journal, structuredOutput: structuredOutput, tools: tools)
         try preserved.validatePreservedThinkingTail(request: .init(model: prepared.request.model, messages: oldView,
             tools: prepared.request.tools, structuredOutput: structuredOutput, sessionID: id, runID: operationID,
             nativeContext: current, conversationControls: prepared.request.conversationControls))

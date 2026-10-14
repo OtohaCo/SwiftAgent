@@ -35,6 +35,19 @@ struct NativeContextPublicClientTests {
         _ = (oldCreate, nativeCreate, newCreate, upgrade, oldQueue, controlledQueue)
     }
 
+    @Test func incompleteNativeHandoffUsesOnlyPublicAPI() async throws {
+        try await NativeContextHostExample.incompleteOrdinaryHandoff()
+    }
+
+    @Test func exactHandoffSignaturesRemainUsable() throws {
+        let model = ModelID(provider: "fixture", name: "model")
+        let session = try Agent(model: model, provider: LegacyProvider()).makeSession()
+        let old: (AgentModelBinding, AgentCapabilityBinding?, Bool, ContinuousClock.Instant?) async throws -> AgentContextHandoffOperation = session.handoffToOrdinary
+        let new: (AgentModelBinding, AgentCapabilityBinding?, Bool, Bool, ContinuousClock.Instant?) async throws -> AgentContextHandoffOperation = session.handoffToOrdinary
+        let factory: (URL, String, JournalMaintenancePolicy) throws -> AgentJournal = AgentIncrementalJournal.createForIncompleteContextHandoff
+        _ = (old, new, factory)
+    }
+
     @Test func thinkingContinuesOnlyInTheNewAuthorityEpoch() async throws {
         try await NativeContextHostExample.thinkingAcrossOrdinaryHandoff()
     }

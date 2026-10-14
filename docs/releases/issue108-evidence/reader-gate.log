@@ -1,0 +1,14 @@
+CI STAGE issue108-reader-gate: PID=37627 evidence=/Users/lilong/Works/SwiftAgent-issue108/.ci-logs/stages/issue108-reader-gate-2999elgy
+open=pass storeID=C7D76ED3-18CF-4B90-B139-B11DD30D0E27 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=C7D76ED3-18CF-4B90-B139-B11DD30D0E27 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=C7D76ED3-18CF-4B90-B139-B11DD30D0E27 checkpoint=4 messages=4 pending=0 rejectedMutation=none maintenance=readable paired=false
+schema14 reader create-default: readable, appendable
+open=pass storeID=54534E52-7C37-468D-9BCF-3FFE451A7300 checkpoint=0 messages=0 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=54534E52-7C37-468D-9BCF-3FFE451A7300 checkpoint=0 messages=0 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=54534E52-7C37-468D-9BCF-3FFE451A7300 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+schema14 reader create-handoff-empty: readable, appendable
+files=1 canonical=preserved
+open=pass storeID=9F717B41-3D31-4B7B-818D-5D0A64B0CD89 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=9F717B41-3D31-4B7B-818D-5D0A64B0CD89 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+open/operation=fail AgentCore.AgentLoopError.unsupportedCapabilities(AgentModels.ModelCapabilities(rawValue: 64))
+CI STAGE END issue108-reader-gate: result=fail exit=1 seconds=64.378

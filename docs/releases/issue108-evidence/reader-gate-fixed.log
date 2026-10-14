@@ -1,0 +1,61 @@
+CI STAGE issue108-reader-gate-fixed: PID=41652 evidence=/Users/lilong/Works/SwiftAgent-issue108/.ci-logs/stages/issue108-reader-gate-fixed-mwjfa61o
+open=pass storeID=3B783432-0B26-4D4F-96DE-67CDBF73FA7D checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=3B783432-0B26-4D4F-96DE-67CDBF73FA7D checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=3B783432-0B26-4D4F-96DE-67CDBF73FA7D checkpoint=4 messages=4 pending=0 rejectedMutation=none maintenance=readable paired=false
+schema14 reader create-default: readable, appendable
+open=pass storeID=2D87F6E5-67BF-44C4-B06F-090EAAEF069B checkpoint=0 messages=0 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=2D87F6E5-67BF-44C4-B06F-090EAAEF069B checkpoint=0 messages=0 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=2D87F6E5-67BF-44C4-B06F-090EAAEF069B checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+schema14 reader create-handoff-empty: readable, appendable
+files=1 canonical=preserved
+open=pass storeID=8196AFA6-92E0-4738-B03C-ABE369044C9A checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=8196AFA6-92E0-4738-B03C-ABE369044C9A checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=8196AFA6-92E0-4738-B03C-ABE369044C9A checkpoint=4 messages=4 pending=0 rejectedMutation=none maintenance=readable paired=false
+files=1 canonical=preserved
+open=pass storeID=8196AFA6-92E0-4738-B03C-ABE369044C9A checkpoint=4 messages=4 pending=0 rejectedMutation=none maintenance=readable paired=false
+schema14 reader create-file-content: readable, appendable
+open=pass storeID=DB30765E-1085-4650-A3DE-03AE5607D860 checkpoint=0 messages=0 pending=0 rejectedMutation=none maintenance=readable paired=false
+RC6 schema13 reader inspect create-incomplete-handoff-empty before: unsupportedFormat, bytes unchanged
+RC6 schema13 reader append create-incomplete-handoff-empty before: unsupportedFormat, bytes unchanged
+RC6 schema13 reader maintain create-incomplete-handoff-empty before: unsupportedFormat, bytes unchanged
+open=pass storeID=DB30765E-1085-4650-A3DE-03AE5607D860 checkpoint=0 messages=0 pending=0 rejectedMutation=none maintenance=readable paired=false
+RC6 schema13 reader inspect create-incomplete-handoff-empty after: unsupportedFormat, bytes unchanged
+RC6 schema13 reader append create-incomplete-handoff-empty after: unsupportedFormat, bytes unchanged
+RC6 schema13 reader maintain create-incomplete-handoff-empty after: unsupportedFormat, bytes unchanged
+open=pass storeID=DB30765E-1085-4650-A3DE-03AE5607D860 checkpoint=0 messages=0 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=DF17F20D-44AA-4919-A11D-15F9BBEB63E2 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=DF17F20D-44AA-4919-A11D-15F9BBEB63E2 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+RC6 schema13 reader inspect create-incomplete-handoff before: unsupportedFormat, bytes unchanged
+RC6 schema13 reader append create-incomplete-handoff before: unsupportedFormat, bytes unchanged
+RC6 schema13 reader maintain create-incomplete-handoff before: unsupportedFormat, bytes unchanged
+open=pass storeID=DF17F20D-44AA-4919-A11D-15F9BBEB63E2 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+incomplete retirement=1 terminal=maxOutputTokens canonical=preserved
+open=pass storeID=DF17F20D-44AA-4919-A11D-15F9BBEB63E2 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+RC6 schema13 reader inspect create-incomplete-handoff after: unsupportedFormat, bytes unchanged
+RC6 schema13 reader append create-incomplete-handoff after: unsupportedFormat, bytes unchanged
+RC6 schema13 reader maintain create-incomplete-handoff after: unsupportedFormat, bytes unchanged
+open=pass storeID=DF17F20D-44AA-4919-A11D-15F9BBEB63E2 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+incomplete retirement=1 terminal=maxOutputTokens canonical=preserved
+open=pass storeID=DF17F20D-44AA-4919-A11D-15F9BBEB63E2 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=9D714AFE-EA3B-4F53-B757-23CFB5DA6921 checkpoint=0 messages=0 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=9D714AFE-EA3B-4F53-B757-23CFB5DA6921 checkpoint=0 messages=0 pending=0 rejectedMutation=none maintenance=readable paired=false
+RC6 schema13 reader inspect upgrade12 before: unsupportedFormat, bytes unchanged
+RC6 schema13 reader append upgrade12 before: unsupportedFormat, bytes unchanged
+RC6 schema13 reader maintain upgrade12 before: unsupportedFormat, bytes unchanged
+open=pass storeID=9D714AFE-EA3B-4F53-B757-23CFB5DA6921 checkpoint=0 messages=0 pending=0 rejectedMutation=none maintenance=readable paired=false
+RC6 schema13 reader inspect upgrade12 after: unsupportedFormat, bytes unchanged
+RC6 schema13 reader append upgrade12 after: unsupportedFormat, bytes unchanged
+RC6 schema13 reader maintain upgrade12 after: unsupportedFormat, bytes unchanged
+open=pass storeID=9D714AFE-EA3B-4F53-B757-23CFB5DA6921 checkpoint=0 messages=0 pending=0 rejectedMutation=none maintenance=readable paired=false
+files=1 canonical=preserved
+open=pass storeID=68F4F86A-FD73-440B-AFCC-6118DD019D48 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+open=pass storeID=68F4F86A-FD73-440B-AFCC-6118DD019D48 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+RC6 schema13 reader inspect upgrade13 before: unsupportedFormat, bytes unchanged
+RC6 schema13 reader append upgrade13 before: unsupportedFormat, bytes unchanged
+RC6 schema13 reader maintain upgrade13 before: unsupportedFormat, bytes unchanged
+open=pass storeID=68F4F86A-FD73-440B-AFCC-6118DD019D48 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+RC6 schema13 reader inspect upgrade13 after: unsupportedFormat, bytes unchanged
+RC6 schema13 reader append upgrade13 after: unsupportedFormat, bytes unchanged
+RC6 schema13 reader maintain upgrade13 after: unsupportedFormat, bytes unchanged
+open=pass storeID=68F4F86A-FD73-440B-AFCC-6118DD019D48 checkpoint=2 messages=2 pending=0 rejectedMutation=none maintenance=readable paired=false
+CI STAGE END issue108-reader-gate-fixed: result=pass exit=0 seconds=48.914

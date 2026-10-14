@@ -13,6 +13,12 @@ import Foundation
         do {
             let journal: AgentJournal
             switch mode {
+            #if INCOMPLETE_CONTEXT_HANDOFF_RUNTIME
+            case "create-incomplete-handoff-empty", "create-incomplete-handoff":
+                journal = try AgentIncrementalJournal.createForIncompleteContextHandoff(at: directory, operationDomain: "reader-matrix")
+            case "upgrade-incomplete-handoff":
+                journal = try AgentIncrementalJournal.upgradeForIncompleteContextHandoff(at: directory)
+            #endif
             #if FILE_CONTENT_RUNTIME
             case "create-file-content-empty", "create-file-content":
                 journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "reader-matrix", supportsFileContent: true)
@@ -63,9 +69,33 @@ import Foundation
                 journal = try AgentIncrementalJournal.open(at: directory)
             }
             switch mode {
+            #if INCOMPLETE_CONTEXT_HANDOFF_RUNTIME
+            case "create-incomplete-handoff-empty", "upgrade-incomplete-handoff":
+                guard journal.supportsIncompleteContextHandoff else { throw AgentJournalError.invalidRecord }
+            case "create-incomplete-handoff":
+                let binding = try AgentModelBinding(profileID: "matrix", profileRevision: "1", model: .init(provider: "reader-matrix", name: "script"),
+                    provider: MatrixIncompleteProvider(), deployment: .init(serviceInstanceID: "matrix", endpointScope: "local", apiDialect: "matrix"))
+                let run = try await Agent(binding: binding).makeSession(id: sessionID, journal: journal).run("incomplete real user")
+                guard try await run.wait().outcome == .incomplete(.maxOutputTokens) else { throw AgentJournalError.invalidRecord }
+                try await run.waitForDrain()
+            case "retire-incomplete-handoff":
+                let binding = try AgentModelBinding(profileID: "matrix", profileRevision: "1", model: .init(provider: "reader-matrix", name: "script"),
+                    provider: MatrixIncompleteProvider(), deployment: .init(serviceInstanceID: "matrix", endpointScope: "local", apiDialect: "matrix"))
+                let session = try Agent(binding: binding).makeSession(id: sessionID, journal: journal)
+                let operation = try await session.handoffToOrdinary(using: binding, discardingRetiredProviderContinuations: true, allowingIncompleteTurn: true)
+                _ = try await operation.wait(); try await operation.waitForDrain()
+            case "inspect-incomplete-handoff":
+                guard try await journal.contextHandoff(sessionID: sessionID)?.closedTurnProof?.terminal == .incomplete(.maxOutputTokens) else { throw AgentJournalError.invalidRecord }
+                print("incomplete retirement=1 terminal=maxOutputTokens canonical=preserved")
+            #endif
             #if FILE_CONTENT_RUNTIME
             case "create-file-content-empty":
                 guard journal.supportsFileContent else { throw AgentJournalError.invalidRecord }
+            case "append-file-content":
+                let binding = try AgentModelBinding(profileID: "matrix-files", profileRevision: "1", model: .init(provider: "reader-matrix", name: "script"),
+                    provider: MatrixProvider(), deployment: .init(serviceInstanceID: "matrix", endpointScope: "local", apiDialect: "matrix"), fileInput: .describe)
+                let run = try await Agent(binding: binding).makeSession(id: sessionID, journal: journal).run("ordinary append with file description")
+                _ = try await run.wait(); try await run.waitForDrain()
             case "create-file-content", "inspect-file-content":
                 guard journal.supportsFileContent else { throw AgentJournalError.invalidRecord }
                 if mode == "create-file-content" {
@@ -440,6 +470,20 @@ private struct MatrixNativeProvider: ModelProviderCompaction {
             let info = ResponseInfo(id: "matrix-answer", model: request.model)
             c.yield(.responseStarted(info)); c.yield(.textDelta("answer"))
             c.yield(.responseCompleted(.init(info: info, content: [.text("answer")], stopReason: .endTurn))); c.finish()
+        }
+    }
+}
+#endif
+
+#if INCOMPLETE_CONTEXT_HANDOFF_RUNTIME
+private struct MatrixIncompleteProvider: ModelProvider {
+    let descriptor = ModelProviderDescriptor(id: "reader-matrix", capabilities: [.multiTurn])
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        ModelEventStream.make { emit in
+            let info = ResponseInfo(id: "incomplete-matrix", model: request.model)
+            try emit(.responseStarted(info))
+            try emit(.textDelta("partial"))
+            try emit(.responseCompleted(.init(info: info, content: [.text("partial")], stopReason: .maxOutputTokens)))
         }
     }
 }

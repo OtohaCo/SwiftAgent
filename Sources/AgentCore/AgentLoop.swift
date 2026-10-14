@@ -302,7 +302,7 @@ package struct AgentLoop: Sendable {
                preserved.supportsPreservedThinkingCompaction, !binding.isLegacyBinding,
                let source = request.nativeContextSource, let invocationID = request.invocationID,
                preparedRequest.request.messages == (try await nativeContextState.effectiveMessages(history, binding: binding,
-                    sessionID: sessionID, journal: journal, structuredOutput: structuredOutput)) {
+                    sessionID: sessionID, journal: journal, structuredOutput: structuredOutput, tools: tools)) {
                 requestBoundary = try .init(id: UUID(), source: source, invocationID: invocationID,
                     origin: binding.continuationOrigin,
                     rootConfigurationDigest: try AgentNativeContextState.rootDigest(history, binding: binding, structuredOutput: structuredOutput),
@@ -704,7 +704,7 @@ package struct AgentLoop: Sendable {
         let originalCanonicalMessages = messages
         let canonicalMessages = try await nativeContextState.ordinaryMessages(messages)
         let messages = try await nativeContextState.effectiveMessages(originalCanonicalMessages, binding: binding, sessionID: sessionID,
-                                                                      journal: journal, structuredOutput: structuredOutput)
+                                                                      journal: journal, structuredOutput: structuredOutput, tools: tools)
         let nativeContext = await nativeContextState.current()
         let nativePending = await nativeContextState.pendingCalls(in: canonicalMessages)
         if nativeContext != nil,

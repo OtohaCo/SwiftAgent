@@ -1,7 +1,8 @@
 # Explicit native-to-ordinary context handoff
 
-Status: prepared, unreleased issue #105 first scope. Storage and retirement-aware
-runtime must ship together. No automatic fallback, live qualification or Host
+Issue #105 completed-turn handoff shipped in RC6. The explicit incomplete-turn
+extension (#108) is a subsequent SDK increment. Storage and retirement-aware
+runtime ship together; no automatic fallback, live qualification or Host
 integration is implied.
 
 ## Host call order
@@ -48,7 +49,7 @@ tool-result excerpts or recover historical read-only proof from today's registry
 
 ## Refusal and recovery
 
-This first scope requires an idle, physically drained, provably completed closed
+The original overload requires an idle, physically drained, provably completed closed
 turn, no pending/quarantined mutation and matching durable history/native/control
 witnesses. It refuses persistent trusted instructions, unanswered/incomplete turns,
 unsupported stores, stale actors, queue ownership, invalid sources and incompatible
@@ -67,6 +68,78 @@ A definite publication failure keeps old authority. `commitUnknown` blocks use o
 the old actor: drain, inspect through a fresh Session/reopen and follow the actual
 durable record. Do not assume completion or retry a mutation. Reconciliation still
 uses verified receipt/output and a fresh same-ID Session on the same handle.
+
+## Explicit incomplete-turn exit (#108)
+
+A terminal Run can be incomplete without being unsafe to retire. After physical
+`waitForDrain()`, explicitly choose this path for output truncation, cancellation,
+refusal or a failed admitted Run:
+
+```swift
+let operation = try await freshSession.handoffToOrdinary(
+    using: targetBinding, capabilities: targetScope,
+    discardingRetiredProviderContinuations: true,
+    allowingIncompleteTurn: true)
+let retirement = try await operation.wait()
+try await operation.waitForDrain()
+// retirement.closedTurnProof records the real old terminal, not success.
+let next = try await freshSession.run("new real input", using: targetBinding,
+                                      capabilities: targetScope)
+```
+
+This requires a durable schema 14 store. Create one explicitly with
+`AgentIncrementalJournal.createForIncompleteContextHandoff(at:operationDomain:)`
+(or its `Async` variant). Default schema 3, the exact old creation function
+references and the original completed-only handoff overload remain unchanged.
+`journal.supportsIncompleteContextHandoff` reports format capability; it is false
+for memory Journals and existing schema 12/13 stores.
+
+To upgrade an existing schema 12/13 store, stop/drain **all** Runs, maintenance
+operations and dispatchers, close every shared Journal owner, then call:
+
+```swift
+let upgraded = try AgentIncrementalJournal.upgradeForIncompleteContextHandoff(
+    at: directory)
+// Reconstruct same-ID Sessions on the returned handle; discard old actors.
+```
+
+The upgrade preserves store/session identity and all existing state, including
+schema 13 file references. It uses the durable reader gate and bounded recovery
+bridge. An uncertain format publication throws `commitUnknown`; reopen to recover
+and inspect the actual format. Schema 11 needs the existing 11→12 upgrade first.
+There is no automatic upgrade, downgrade, or schema 3–10→14 migration. Actual RC6
+schema 13 readers reject schema 14 before inspect, append or maintenance writes.
+
+The independent closed-turn proof binds the real user admission, original terminal,
+store/session/Run identity and canonical history head/anchor. Publication rechecks
+it, empty pending state and native/control/handoff identities in the same store
+transaction. Ownership excludes physically active work. User-only, partial
+assistant and fully settled tool-result tails are supported. Unmatched tool calls,
+missing durable terminal (including crash-after-admission), pending/quarantined
+mutations, persistent trusted instructions and stale actors remain refused.
+
+Drain does not settle mutations. If effects are uncertain, use Host-verified
+receipt/output or supported no-effect reconciliation, then create a **fresh same-ID
+Session on the same handle**. Reconciliation may change history; the old actor
+must remain stale. Handoff never reexecutes a tool or completes the earlier Run.
+The explicit exit retires an unanswered reminder's authority, not a claim that the
+reminder was fulfilled. The next real user supplies its own controls.
+
+For this new path, future requests and reopened Sessions must match the frozen
+target model, origin, root and registry (definitions, policies and initial/deferred
+configuration). Normal same-Run deferred declaration expansion remains supported.
+A different target requires another explicit handoff. Core still checks projector
+source evidence, legal pairing, Provider continuation rules and final budgets.
+Some target adapters may reject a user/tool tail or an empty assistant ordinary
+view; that local preflight failure preserves the original authority.
+
+`try await journal.conversationControlState(sessionID:)` reads current persisted
+controls without relying on a Session cache. It is advisory and does not prove
+physical drain, eligibility, semantic fulfillment or settlement. Combine it with
+existing Run lookup for Host presentation; Core repeats its own checks when acting.
+See the exported-API `NativeContextHostExample.incompleteOrdinaryHandoff()` fixture
+for native signed history, truncation, schema 12→14, changed target/deferred tools,
+exact canonical/terminal preservation and reopen.
 
 ## Queued reminders
 

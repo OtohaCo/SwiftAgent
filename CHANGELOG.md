@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — issue #108
+
+- Adds explicit ordinary handoff from a durably terminal, physically drained
+  incomplete native/control turn, with independent admission/terminal/boundary
+  proof and transaction-time settlement checks. Preserves original history,
+  signed bytes, terminal and mutation facts; no model dispatch or tool replay.
+- Adds read-only Journal conversation-control state and frozen target model/
+  registry validation, including normal deferred declaration expansion.
+- Adds opt-in schema 14 named factories and explicit offline schema 12/13 upgrade
+  with durable reader gate/crash recovery. Existing function references and formats
+  remain unchanged; RC6 readers refuse new authority before writes. Published
+  RC6 remains immutable. Missing terminal, unresolved mutations, unmatched tools,
+  persistent instructions and Run-local required-reminder compaction stay refused.
+
+
 ## [1.0.0-rc.6]
 
 - Adds opt-in native Gemini generateContent streaming/nonstreaming Provider,

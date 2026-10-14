@@ -1,0 +1,18 @@
+Baseline a7940ae0286c7accef4aef8647919c57c042b8b9; design-only HEAD 8c58a3522d8ff396660fb89d49912285eccb3819.
+Uncommitted public File Journal test; no implementation changes.
+Command: swift test --disable-sandbox --no-parallel --filter IncompleteContextHandoffTests
+Apple Swift 6.4 (swiftlang-6.4.0.34.1), Xcode27.0 27A266a, macOS27.2 arm64.
+Exit 1; compilation succeeded; actual runtime refusal (not compile absence).
+
+Build complete! (49.49秒)
+◇ Test run started.
+↳ Testing Library Version: 2084
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite IncompleteContextHandoffTests started.
+◇ Test drainedTruncatedTurnCanExplicitlyRetireWithoutInventingCompletion() started.
+✘ Test drainedTruncatedTurnCanExplicitlyRetireWithoutInventingCompletion() recorded an issue at IncompleteContextHandoffTests.swift:8:6: Caught error: ModelProviderError(kind: AgentModels.ModelProviderError.Kind.unsupportedCapability, message: "Ordinary handoff requires a persisted completed Run and no pending mutation.", retryAfter: nil, diagnostic: nil)
+✘ Test drainedTruncatedTurnCanExplicitlyRetireWithoutInventingCompletion() failed after 0.122 seconds with 1 issue.
+✘ Suite IncompleteContextHandoffTests failed after 0.122 seconds with 1 issue.
+✘ Test run with 1 test in 1 suite failed after 0.122 seconds with 1 issue.
+Note: Some test targets reported failures:
+  - AgentCoreTests (Swift Testing)

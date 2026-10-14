@@ -50,6 +50,9 @@ package struct ToolRegistry: Sendable {
         tools.values.map(\.tool.definition).sorted { $0.name < $1.name }
     }
 
+    /// Trusted registry configuration, separate from this Run's active declarations.
+    package var policyDefinitions: [String: ToolPolicy] { tools.mapValues { $0.tool.policy } }
+
     /// What a model request carries: the definitions of the declared tools only.
     package func definitions(declared: Set<String>) -> [ModelToolDefinition] {
         tools.values.map(\.tool.definition).filter { declared.contains($0.name) }.sorted { $0.name < $1.name }

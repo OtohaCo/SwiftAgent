@@ -15,6 +15,16 @@ import Glibc
         let mode = CommandLine.arguments[1]
         let directory = URL(fileURLWithPath: CommandLine.arguments[2])
         do {
+            if mode.hasPrefix("incomplete-upgrade-") {
+                let boundary: JournalFileFaultStage = mode == "incomplete-upgrade-gate" ? .afterFormatReplace : .afterCurrentReplace
+                _ = try AgentIncrementalJournal.upgradeForIncompleteContextHandoffForTesting(at: directory, fault: { stage in
+                    if stage == boundary {
+                        FileHandle.standardOutput.write(Data("UPGRADE-PUBLISHED\n".utf8))
+                        Thread.sleep(forTimeInterval: 120)
+                    }
+                })
+                exit(1)
+            }
             if mode.hasPrefix("handoff-upgrade-") {
                 let boundary: JournalFileFaultStage = mode == "handoff-upgrade-gate" ? .afterFormatReplace : .afterCurrentReplace
                 _ = try AgentIncrementalJournal.upgradeForContextHandoffForTesting(at: directory, fault: { stage in
