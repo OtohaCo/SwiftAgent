@@ -69,8 +69,23 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
         public init(
             baseURL: URL, model: String, authentication: LocalResponsesAuthentication = .none,
             maximumOutputTokens: Int = 4_096, capabilities: ModelCapabilities = [],
+            promptCacheKey: String? = nil, promptCaching: OpenAIResponsesPromptCaching?
+        ) {
+            self.init(
+                baseURL: baseURL, model: model, authentication: authentication,
+                maximumOutputTokens: maximumOutputTokens, capabilities: capabilities,
+                promptCacheKey: promptCacheKey, promptCaching: promptCaching,
+                allowsBearerOverPrivateNetworkHTTP: false
+            )
+        }
+
+        /// Explicitly permits an unencrypted bearer token to a private IPv4 or `.local` host.
+        /// HTTPS and loopback remain accepted without this opt-in.
+        public init(
+            baseURL: URL, model: String, authentication: LocalResponsesAuthentication = .none,
+            maximumOutputTokens: Int = 4_096, capabilities: ModelCapabilities = [],
             promptCacheKey: String? = nil, promptCaching: OpenAIResponsesPromptCaching?,
-            allowsBearerOverPrivateNetworkHTTP: Bool = false
+            allowsBearerOverPrivateNetworkHTTP: Bool
         ) {
             self.baseURL = baseURL
             self.model = model

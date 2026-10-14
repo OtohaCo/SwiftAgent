@@ -1,6 +1,6 @@
 # Local Responses Provider
 
-> last-verified: 2026-10-02
+> last-verified: 2026-10-14
 
 For model/backend selection, capability rollout, context and performance tradeoffs,
 device/network topology, debugging, and production re-qualification, see
@@ -28,9 +28,49 @@ let agent = try Agent(model: provider.model, provider: provider)
 ```
 
 The base URL stops before `/responses`; the provider appends that path while
-normalizing a trailing slash. A bearer token is optional. Bearer credentials
-require HTTPS except for loopback development endpoints, so a token is not sent
-in clear text to an arbitrary LAN host.
+normalizing a trailing slash. A bearer token is optional. By default, bearer
+credentials require HTTPS or a loopback endpoint. Unauthenticated HTTP is
+unchanged; the bearer opt-in below does not restrict `.none` authentication.
+
+## Explicit private-network HTTP
+
+A Host can explicitly accept sending a bearer token over HTTP to another
+computer on its network:
+
+```swift
+let provider = try LocalResponsesProvider(configuration: .init(
+    baseURL: URL(string: "http://192.168.1.10:1234/v1")!,
+    model: "<your-model>",
+    authentication: .bearer(token),
+    promptCaching: nil,
+    allowsBearerOverPrivateNetworkHTTP: true
+))
+
+let catalog = try OpenAIModelCatalogProvider(
+    apiKey: token,
+    endpoint: URL(string: "http://192.168.1.10:1234/v1/models")!,
+    serviceInstanceID: "host-configured-server",
+    allowsPrivateNetworkHTTP: true
+)
+```
+
+The catalog endpoint is the complete `/models` URL; its HTTP default is
+loopback-only. Both opt-ins allow loopback, full four-component private IPv4
+addresses (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), and `.local` names
+such as `mac-mini.local`. Public addresses, arbitrary names such as
+`models.example.com`, and address-prefix names such as `10.example.com` remain
+refused for HTTP credentials. Private IPv6 ranges are not included.
+
+An HTTP token is unencrypted on the network. Host-name validation does not
+authenticate the server or prove ownership of the network; the Host chooses
+the endpoint and whether this exposure is acceptable. HTTPS remains available
+without either opt-in. The default HTTP transport rejects redirects. These
+options do not discover servers or alter iOS Local Network / transport policy.
+
+Existing initializer signatures, including stored function references, remain
+available with the original defaults. The new overloads require the explicit
+Bool label; omitting it selects the old behavior. See
+[versioning](swift-agent-versioning.md#private-network-model-servers-after-rc6).
 
 ## Canonical replay
 

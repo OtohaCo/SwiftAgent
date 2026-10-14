@@ -6,8 +6,11 @@
   `OpenAIModelCatalogProvider(allowsPrivateNetworkHTTP:)` and
   `LocalResponsesProvider.Configuration(allowsBearerOverPrivateNetworkHTTP:)` accept plain HTTP, and a bearer
   token over it, for a private IPv4 address (10/8, 172.16/12, 192.168/16) or a `.local` name. Names that only
-  start like an address (`10.example.com`) stay on the internet side. Defaults are unchanged: plain HTTP stays
-  loopback-only, and a bearer token still needs HTTPS or loopback.
+  start like an address (`10.example.com`) stay on the internet side. Defaults are unchanged: catalog HTTP stays
+  loopback-only, and Local Responses bearer authentication still needs HTTPS or loopback.
+- Restores the exact pre-option catalog and Local Responses `promptCaching` initializer signatures, including
+  stored function references. Explicit private-network choices use separate overloads; existing calls keep
+  the option disabled. Documents supported hosts, unencrypted credentials and unchanged reader/schema behavior.
 
 ## Unreleased — issue #108
 
