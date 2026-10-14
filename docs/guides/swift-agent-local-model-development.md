@@ -250,10 +250,16 @@ entitlements.
 Treat a self-hosted endpoint as a network service, even when it runs inside
 your organization.
 
-`LocalResponsesProvider` refuses bearer authentication over clear-text HTTP
-unless the destination is loopback. Use HTTPS for authenticated non-loopback
-endpoints. Keep credentials out of source, prompts, logs, and shipped client
-binaries.
+`LocalResponsesProvider` defaults to refusing bearer authentication over HTTP
+unless the destination is loopback. A Host can explicitly set
+`allowsBearerOverPrivateNetworkHTTP: true` for full private IPv4 addresses or
+`.local` names; the bearer token then crosses that network unencrypted.
+`OpenAIModelCatalogProvider` has a separate `allowsPrivateNetworkHTTP: true`
+opt-in for its complete `/models` endpoint. Public-address and arbitrary-name
+HTTP credentials remain refused. See the
+[configuration example and supported host forms](swift-agent-local-responses-provider.md#explicit-private-network-http).
+Use HTTPS when this exposure is unacceptable. Keep credentials out of source,
+prompts, logs, and shipped client binaries.
 
 Local inference does not make model output trusted. All normal SwiftAgent trust
 boundaries still apply.
@@ -356,7 +362,8 @@ Before depending on a local model in an application, verify all items that apply
 - Durable restart succeeds without backend conversation state.
 - Context growth has been measured on realistic Sessions.
 - Usage is treated as reported/unknown rather than synthesized.
-- Non-loopback bearer authentication uses HTTPS.
+- Non-loopback bearer authentication uses HTTPS, or the Host explicitly accepts
+  unencrypted private-network credentials using the documented opt-in.
 - iOS Local Network / transport configuration is owned by the Host app.
 - Model output remains untrusted; mutation safety still uses SwiftAgent's
   Evidence, authorization, Receipt, and Journal contracts.

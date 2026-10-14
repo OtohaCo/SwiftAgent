@@ -16,8 +16,24 @@ public struct OpenAIModelCatalogProvider: ModelCatalogDetailProvider {
         endpoint: URL? = nil,
         serviceInstanceID: String,
         authorizationScopeID: String? = nil,
+        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+    ) throws {
+        try self.init(
+            apiKey: apiKey, endpoint: endpoint, serviceInstanceID: serviceInstanceID,
+            authorizationScopeID: authorizationScopeID, transport: transport,
+            allowsPrivateNetworkHTTP: false
+        )
+    }
+
+    /// Explicitly permits HTTP to loopback, private IPv4 or `.local` hosts.
+    /// On a non-loopback HTTP endpoint, the API key crosses the network unencrypted.
+    public init(
+        apiKey: String,
+        endpoint: URL? = nil,
+        serviceInstanceID: String,
+        authorizationScopeID: String? = nil,
         transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport(),
-        allowsPrivateNetworkHTTP: Bool = false
+        allowsPrivateNetworkHTTP: Bool
     ) throws {
         try validateCatalogCredential(apiKey)
         guard let endpoint = endpoint ?? URL(string: "https://api.openai.com/v1/models") else {

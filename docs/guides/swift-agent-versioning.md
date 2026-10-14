@@ -1,5 +1,23 @@
 # SwiftAgent Semantic Versioning
 
+## Private-network model servers (after RC6)
+
+The exact existing five-parameter `OpenAIModelCatalogProvider.init` and
+seven-parameter `LocalResponsesProvider.Configuration.init` with `promptCaching`
+remain available, including their argument labels, defaults and stored function
+types. The shorter Local configuration initializer also remains unchanged.
+Separate overloads require `allowsPrivateNetworkHTTP: Bool` or
+`allowsBearerOverPrivateNetworkHTTP: Bool`; omitting that label uses the old
+initializer with the option disabled. The Bool was initially appended with a
+default in PR #115, which broke old initializer function references; compatibility
+overloads restore those signatures without changing explicit opt-in calls.
+
+These are additive overloads and a Local configuration property. No enum case,
+protocol requirement, Journal schema or reader capability changes. No ABI
+stability is promised. The immutable published RC6 tag is unchanged. The
+[Local Responses guide](swift-agent-local-responses-provider.md#explicit-private-network-http)
+defines endpoint forms, default behavior and unencrypted credential semantics.
+
 ## Issue #108 incomplete-turn handoff (after RC6)
 
 Adds an explicit `allowingIncompleteTurn` Session handoff overload while preserving
