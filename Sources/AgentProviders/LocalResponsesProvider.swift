@@ -46,6 +46,10 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
         /// The Host supplies it again on reconstruction; `nil` sends no key.
         public let promptCacheKey: String?
         public let promptCaching: OpenAIResponsesPromptCaching?
+        /// The Host accepts sending a bearer token over plain HTTP to a computer on this network (a private IPv4 address or a
+        /// `.local` name), not only to this computer. The token then crosses that network unencrypted. HTTPS and loopback
+        /// need no choice; any other plain-HTTP endpoint still refuses a token.
+        public let allowsBearerOverPrivateNetworkHTTP: Bool
 
         public init(
             baseURL: URL,
@@ -65,7 +69,8 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
         public init(
             baseURL: URL, model: String, authentication: LocalResponsesAuthentication = .none,
             maximumOutputTokens: Int = 4_096, capabilities: ModelCapabilities = [],
-            promptCacheKey: String? = nil, promptCaching: OpenAIResponsesPromptCaching?
+            promptCacheKey: String? = nil, promptCaching: OpenAIResponsesPromptCaching?,
+            allowsBearerOverPrivateNetworkHTTP: Bool = false
         ) {
             self.baseURL = baseURL
             self.model = model
@@ -74,6 +79,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
             self.capabilities = capabilities
             self.promptCacheKey = promptCacheKey
             self.promptCaching = promptCaching
+            self.allowsBearerOverPrivateNetworkHTTP = allowsBearerOverPrivateNetworkHTTP
         }
     }
 
@@ -116,10 +122,12 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
         let endpoint = try Self.responsesEndpoint(from: configuration.baseURL)
         if case .bearer = configuration.authentication.storage,
            endpoint.scheme?.lowercased() != "https",
-           !Self.isLoopback(endpoint.host) {
+           !(configuration.allowsBearerOverPrivateNetworkHTTP ? PrivateNetworkHost.isPrivate(endpoint.host) : PrivateNetworkHost.isLoopback(endpoint.host)) {
             throw ModelProviderError(
                 kind: .invalidRequest,
-                message: "Bearer authentication requires HTTPS or a loopback endpoint."
+                message: configuration.allowsBearerOverPrivateNetworkHTTP
+                    ? "Bearer authentication requires HTTPS or an endpoint on this computer or its network."
+                    : "Bearer authentication requires HTTPS or a loopback endpoint."
             )
         }
         self.endpoint = endpoint
@@ -253,11 +261,6 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid local Responses base URL.")
         }
         return endpoint
-    }
-
-    private static func isLoopback(_ host: String?) -> Bool {
-        guard let host = host?.lowercased() else { return false }
-        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
     }
 }
 

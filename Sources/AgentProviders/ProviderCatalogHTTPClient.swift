@@ -72,12 +72,14 @@ func validateCatalogCredential(_ value: String) throws {
     }
 }
 
-func validateCatalogEndpoint(_ endpoint: URL) throws {
+/// `allowsPrivateNetworkHTTP`: the Host accepts plain HTTP to a computer on this network, not only to this computer. The
+/// credential is then sent unencrypted across that network, which is the Host's choice to make.
+func validateCatalogEndpoint(_ endpoint: URL, allowsPrivateNetworkHTTP: Bool = false) throws {
     guard let components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
         throw ModelCatalogError(kind: .invalidConfiguration)
     }
     let host = endpoint.host?.lowercased() ?? ""
-    let loopback = ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
+    let loopback = allowsPrivateNetworkHTTP ? PrivateNetworkHost.isPrivate(host) : PrivateNetworkHost.isLoopback(host)
     guard !host.isEmpty,
           endpoint.user == nil,
           endpoint.password == nil,
