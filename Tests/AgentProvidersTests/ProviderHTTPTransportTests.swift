@@ -22,7 +22,49 @@ struct ProviderHTTPTransportTests {
         }
         try await eventually { await received.completed }
         #expect(await received.error as? ModelProviderError == ModelProviderError(
-            kind: .transport, message: "HTTP transport failed."))
+            kind: .transport, message: "HTTP transport failed.",
+            diagnostic: .init(stage: .transport, reason: .connectionLost)))
+        #expect(fixture.startCount == 1)
+    }
+
+    @Test(arguments: [
+        (URLError.Code.timedOut, "requestTimedOut"),
+        (URLError.Code.networkConnectionLost, "connectionLost"),
+        (URLError.Code.notConnectedToInternet, "networkFailure")
+    ], [false, true])
+    func preservesTransportFailureReason(_ failure: (URLError.Code, String),
+                                        _ afterResponse: Bool) async throws {
+        let (code, reason) = failure
+        let fixture = ProviderHTTPFixture()
+        defer { fixture.remove() }
+        let received = ProviderHTTPReceived()
+        let consumer = collect(fixture, into: received)
+        defer { consumer.cancel() }
+        try await fixture.waitForStart()
+        if afterResponse {
+            fixture.respond()
+            fixture.send("partial sensitive body")
+            try await eventually { await received.count == 2 }
+        }
+        fixture.perform { instance in
+            instance.client?.urlProtocol(instance, didFailWithError: URLError(code, userInfo: [
+                NSLocalizedDescriptionKey: "sensitive error body",
+                NSURLErrorFailingURLErrorKey: instance.request.url!,
+                "Authorization": "Bearer sensitive credential"
+            ]))
+        }
+        try await eventually { await received.completed }
+        let error = try #require(await received.error as? ModelProviderError)
+        #expect(error.kind == .transport)
+        #expect(error.message == "HTTP transport failed.")
+        #expect(error.retryAfter == nil)
+        let diagnostic = try #require(error.diagnostic)
+        #expect(diagnostic.stage == .transport)
+        #expect(diagnostic.reason.rawValue == reason)
+        let encoded = try JSONEncoder().encode(diagnostic)
+        #expect(try JSONSerialization.jsonObject(with: encoded) as? [String: String]
+                == ["stage": "transport", "reason": reason])
+        #expect(await received.count == (afterResponse ? 2 : 0))
         #expect(fixture.startCount == 1)
     }
 
@@ -143,13 +185,19 @@ struct ProviderHTTPTransportTests {
         #expect(fixture.startCount == 0)
     }
 
-    @Test func sessionCancellationIsCancellationError() async throws {
+    @Test(arguments: [false, true])
+    func sessionCancellationIsCancellationError(_ afterResponse: Bool) async throws {
         let fixture = ProviderHTTPFixture()
         defer { fixture.remove() }
         let received = ProviderHTTPReceived()
         let consumer = collect(fixture, into: received)
         defer { consumer.cancel() }
         try await fixture.waitForStart()
+        if afterResponse {
+            fixture.respond()
+            fixture.send("partial")
+            try await eventually { await received.count == 2 }
+        }
         fixture.perform { $0.client?.urlProtocol($0, didFailWithError: URLError(.cancelled)) }
         try await eventually { await received.completed }
         #expect(await received.error is CancellationError)

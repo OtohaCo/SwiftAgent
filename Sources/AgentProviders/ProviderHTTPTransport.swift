@@ -197,7 +197,16 @@ private final class ProviderHTTPExchange: @unchecked Sendable {
     func completed(with error: (any Error)?) {
         if let error {
             if (error as? URLError)?.code == .cancelled { finish(throwing: CancellationError()) }
-            else { finish(throwing: ModelProviderError(kind: .transport, message: "HTTP transport failed.")) }
+            else {
+                let reason: ModelProviderError.Diagnostic.Reason
+                switch (error as? URLError)?.code {
+                case .timedOut: reason = .requestTimedOut
+                case .networkConnectionLost: reason = .connectionLost
+                default: reason = .networkFailure
+                }
+                finish(throwing: ModelProviderError(kind: .transport, message: "HTTP transport failed.",
+                    diagnostic: .init(stage: .transport, reason: reason)))
+            }
         } else if !lock.withLock({ receivedResponse }) {
             finish(throwing: ModelProviderError(kind: .invalidResponse, message: "Missing HTTP response.", diagnostic: .init(stage: .transport, reason: .missingHTTPResponse)))
         } else {

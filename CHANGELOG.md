@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — HTTP transport failure reasons
+
+- Preserves fixed transport diagnostics for URLSession failures before a response
+  or during streaming: `requestTimedOut`, `connectionLost`, or `networkFailure`.
+  The `.transport` kind and `HTTP transport failed.` message remain unchanged;
+  cancellation remains `CancellationError`. No error payload or request data is
+  recorded. The three public reason cases require exhaustive switches to adapt,
+  and error equality now includes these diagnostics.
+
 ## Unreleased — private-network model servers
 
 - Adds an opt-in for model servers on the Host's own network (for example LM Studio on another computer):
