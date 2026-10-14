@@ -70,6 +70,18 @@ input admission or Provider dispatch. Rebuilding the Session restores the
 reconciled history; it does not replay the original mutation, revive its Run,
 or rewrite that Run's logical terminal.
 
+When an incomplete native/control Run needs a different deployment or registry,
+the schema-14 opt-in handoff can retire its old request authority after this same
+verified reconciliation and fresh-Session sequence. Call
+`handoffToOrdinary(..., discardingRetiredProviderContinuations: true,
+allowingIncompleteTurn: true)`, wait and physically drain it, then start a **new**
+Run with the explicit target binding/capabilities. The closed-turn proof records
+the original cancelled/incomplete/failed terminal without rewriting it. Handoff
+refuses remaining pending state or unmatched calls and never retries the mutation.
+An old schema 12/13 store needs a separate offline upgrade after all shared owners
+close; ordinary reconciliation itself still requires no whole-Journal close.
+See [explicit incomplete exit](swift-agent-context-handoff.md).
+
 An `intent` is an uncertain candidate after process death. `needsReconciliation`
 blocks another mutation in that Session and blocks replay of the same identity
 across the operation domain. The ledger retains terminal identity, receipt

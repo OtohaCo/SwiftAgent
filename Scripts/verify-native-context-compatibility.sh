@@ -67,3 +67,6 @@ for mode in create-handoff-empty create-handoff upgrade-handoff; do
     if [[ "$mode" != create-handoff-empty ]]; then "$new_bin" inspect-handoff "$directory" "$session"; fi
   done
 done
+
+# Incomplete-turn authority has a separate explicit reader gate (schema 14).
+bash "$root/Scripts/verify-incomplete-handoff-compatibility.sh"

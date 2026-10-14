@@ -1,4 +1,5 @@
 import AgentModels
+import AgentTools
 import Foundation
 
 /// One Session's effective view. Canonical history remains owned by AgentSession.
@@ -22,14 +23,21 @@ package actor AgentNativeContextState {
     func install(_ value: ModelNativeContextCheckpoint) { checkpoint = value; restored = true; validatedID = value.id }
 
     func effectiveMessages(_ canonical: [ModelMessage], binding: AgentModelBinding,
-                           sessionID: UUID, journal: AgentJournal?, structuredOutput: StructuredOutputSchema?) async throws -> [ModelMessage] {
+                           sessionID: UUID, journal: AgentJournal?, structuredOutput: StructuredOutputSchema?, tools: ToolRegistry) async throws -> [ModelMessage] {
         let original = canonical
         if let handoff {
+            if handoff.closedTurnProof != nil {
+                guard handoff.targetModel == binding.model,
+                      handoff.targetRegistryDigest == (try AgentJournal.handoffRegistryDigest(tools)) else {
+                    throw AgentModelBindingError.incompatibleContinuation
+                }
+            }
             guard handoff.targetOrigin == binding.continuationOrigin,
                   handoff.targetRootDigest == (try Self.rootDigest(original, binding: binding, structuredOutput: structuredOutput)) else {
                 throw AgentModelBindingError.incompatibleContinuation
             }
             if validatedHandoffID != handoff.id, let journal, journal.storage == .durable {
+                try await journal.validateStoredHandoff(handoff, sessionID: sessionID)
                 let anchor = try await journal.readMessages(sessionID: sessionID, after: UInt64(handoff.canonicalMessageCount - 1), limit: 1)
                 let leading = original.prefix { $0.role == .system || $0.role == .developer }.count
                 guard anchor.count == 1, anchor[0].id == handoff.lastMessageID,

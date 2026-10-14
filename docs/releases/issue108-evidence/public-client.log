@@ -1,0 +1,22 @@
+CI STAGE issue108-public-client: PID=31717 evidence=/Users/lilong/Works/SwiftAgent-issue108/.ci-logs/stages/issue108-public-client-e2m_sj4d
+◇ Test run started.
+◇ Suite NativeContextPublicClientTests started.
+◇ Test legacyFactoriesKeepExactNonthrowingFunctionSignatures() started.
+✔ Test legacyFactoriesKeepExactNonthrowingFunctionSignatures() passed after 0.001 seconds.
+◇ Test incompleteNativeHandoffUsesOnlyPublicAPI() started.
+✔ Test incompleteNativeHandoffUsesOnlyPublicAPI() passed after 1.803 seconds.
+◇ Test exactHandoffSignaturesRemainUsable() started.
+✔ Test exactHandoffSignaturesRemainUsable() passed after 0.001 seconds.
+◇ Test thinkingContinuesOnlyInTheNewAuthorityEpoch() started.
+✔ Test thinkingContinuesOnlyInTheNewAuthorityEpoch() passed after 3.839 seconds.
+◇ Test durableOrdinaryHandoffUsesOnlyPublicAPI() started.
+✔ Test durableOrdinaryHandoffUsesOnlyPublicAPI() passed after 4.812 seconds.
+◇ Test queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) started.
+◇ Test case passing 1 argument cancel → false to queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) started.
+◇ Test case passing 1 argument cancel → true to queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) started.
+✔ Test queuedRemindersUsePublicResolverAndRealHTTPEncoding(_:) with 2 test cases passed after 3.896 seconds.
+◇ Test nativeHostFlowUsesOnlyPublicSDKAndRealHTTPFixtures() started.
+✔ Test nativeHostFlowUsesOnlyPublicSDKAndRealHTTPFixtures() passed after 4.492 seconds.
+✔ Suite NativeContextPublicClientTests passed after 18.846 seconds.
+✔ Test run with 7 tests in 1 suite passed after 18.846 seconds.
+CI STAGE END issue108-public-client: result=pass exit=0 seconds=63.223

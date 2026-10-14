@@ -1,0 +1,43 @@
+CI STAGE issue108-final-proof-guards-fixed: PID=36389 evidence=/Users/lilong/Works/SwiftAgent-issue108/.ci-logs/stages/issue108-final-proof-guards-fixed-rjs4fat0
+◇ Test run started.
+◇ Suite IncompleteContextHandoffTests started.
+◇ Test drainedTruncatedTurnCanExplicitlyRetireWithoutInventingCompletion() started.
+✔ Test drainedTruncatedTurnCanExplicitlyRetireWithoutInventingCompletion() passed after 0.697 seconds.
+◇ Test userOnlyFailedOrCancelledTurnCanHandoffAfterDrainAndReopen(_:) started.
+◇ Test case passing 1 argument cancel → false to userOnlyFailedOrCancelledTurnCanHandoffAfterDrainAndReopen(_:) started.
+◇ Test case passing 1 argument cancel → true to userOnlyFailedOrCancelledTurnCanHandoffAfterDrainAndReopen(_:) started.
+✔ Test userOnlyFailedOrCancelledTurnCanHandoffAfterDrainAndReopen(_:) with 2 test cases passed after 0.966 seconds.
+◇ Test incompleteConsentRequiresNewFormatAndExplicitOmission() started.
+✔ Test incompleteConsentRequiresNewFormatAndExplicitOmission() passed after 0.006 seconds.
+◇ Test verifiedReconciliationAllowsToolTailExitWithoutReexecutingMutation() started.
+✔ Test verifiedReconciliationAllowsToolTailExitWithoutReexecutingMutation() passed after 0.905 seconds.
+◇ Test metadataRaceAtUnchangedHistoryHeadCannotPublish(_:) started.
+◇ Test case passing 1 argument pending → false to metadataRaceAtUnchangedHistoryHeadCannotPublish(_:) started.
+◇ Test case passing 1 argument pending → true to metadataRaceAtUnchangedHistoryHeadCannotPublish(_:) started.
+✔ Test metadataRaceAtUnchangedHistoryHeadCannotPublish(_:) with 2 test cases passed after 1.245 seconds.
+◇ Test incompletePublicationFailurePreservesActualDurableOutcome(_:) started.
+◇ Test case passing 1 argument unknown → false to incompletePublicationFailurePreservesActualDurableOutcome(_:) started.
+◇ Test case passing 1 argument unknown → true to incompletePublicationFailurePreservesActualDurableOutcome(_:) started.
+✔ Test incompletePublicationFailurePreservesActualDurableOutcome(_:) with 2 test cases passed after 0.525 seconds.
+◇ Test cancelledOrExpiredProjectionCannotRetireAndOwnsDrain(_:) started.
+◇ Test case passing 1 argument action → "cancel" to cancelledOrExpiredProjectionCannotRetireAndOwnsDrain(_:) started.
+◇ Test case passing 1 argument action → "deadline" to cancelledOrExpiredProjectionCannotRetireAndOwnsDrain(_:) started.
+◇ Test case passing 1 argument action → "revoke" to cancelledOrExpiredProjectionCannotRetireAndOwnsDrain(_:) started.
+✔ Test cancelledOrExpiredProjectionCannotRetireAndOwnsDrain(_:) with 3 test cases passed after 2.536 seconds.
+◇ Test incompleteConsentCannotReplaceMissingProofOrDiscardUnclosedAuthority(_:) started.
+◇ Test case passing 1 argument kind → "imported" to incompleteConsentCannotReplaceMissingProofOrDiscardUnclosedAuthority(_:) started.
+◇ Test case passing 1 argument kind → "missing-terminal" to incompleteConsentCannotReplaceMissingProofOrDiscardUnclosedAuthority(_:) started.
+◇ Test case passing 1 argument kind → "unmatched" to incompleteConsentCannotReplaceMissingProofOrDiscardUnclosedAuthority(_:) started.
+◇ Test case passing 1 argument kind → "persistent" to incompleteConsentCannotReplaceMissingProofOrDiscardUnclosedAuthority(_:) started.
+✔ Test incompleteConsentCannotReplaceMissingProofOrDiscardUnclosedAuthority(_:) with 4 test cases passed after 0.506 seconds.
+◇ Test unrelatedSessionAndMaintenanceDoNotInvalidateProof() started.
+✔ Test unrelatedSessionAndMaintenanceDoNotInvalidateProof() passed after 0.246 seconds.
+◇ Test reopenedTargetMismatchRefusesBeforeAdmission(_:) started.
+◇ Test case passing 1 argument changed → "model" to reopenedTargetMismatchRefusesBeforeAdmission(_:) started.
+◇ Test case passing 1 argument changed → "origin" to reopenedTargetMismatchRefusesBeforeAdmission(_:) started.
+◇ Test case passing 1 argument changed → "registry" to reopenedTargetMismatchRefusesBeforeAdmission(_:) started.
+◇ Test case passing 1 argument changed → "root" to reopenedTargetMismatchRefusesBeforeAdmission(_:) started.
+✔ Test reopenedTargetMismatchRefusesBeforeAdmission(_:) with 4 test cases passed after 1.595 seconds.
+✔ Suite IncompleteContextHandoffTests passed after 9.232 seconds.
+✔ Test run with 10 tests in 1 suite passed after 9.232 seconds.
+CI STAGE END issue108-final-proof-guards-fixed: result=pass exit=0 seconds=17.880

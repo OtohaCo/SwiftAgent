@@ -1,5 +1,18 @@
 # SwiftAgent Public API Inventory
 
+## Post-RC6 issue #108 addition
+
+The incomplete-turn increment adds `AgentContextHandoffTurnProof`, optional
+`AgentContextHandoff.closedTurnProof/targetModel/targetRegistryDigest`, a required
+`allowingIncompleteTurn` Session overload, `AgentJournal.conversationControlState`
+and `supportsIncompleteContextHandoff`, plus named schema-14 creation/async/upgrade
+factories. No public protocol requirement, enum case or removed symbol is involved.
+Existing exact handoff and creation function references are compiled by the
+external client. Historical symbol counts below remain release-specific; see
+[versioning](swift-agent-versioning.md) and the issue-108 acceptance record for
+this increment's source and validation.
+
+
 last-verified: 2026-09-20
 
 This is the stable API-freeze record for RC.2. It is generated from Swift 6.4

@@ -1,6 +1,6 @@
 # Issue #108: explicit ordinary handoff from an incomplete native turn
 
-Status: **design prepared for user review; not implemented or accepted**.
+Status: **design approved by the user on 2026-10-14; implementation and acceptance in progress**.
 
 Baseline main: `a7940ae0286c7accef4aef8647919c57c042b8b9`, tree
 `e29e6bce80098cd3c49ea61a6a2c55d26a2ef2e8`. Published RC6 is immutable.
@@ -129,7 +129,8 @@ Use explicit opt-in schema 14 for incomplete-turn retirement authority. Schema
 12/13 readers have only the completed-turn contract and must refuse the new
 store before inspect/append/maintenance, rather than ignore new proof fields.
 Default schema 3 and existing create signatures/formats are unchanged. New
-creation overloads have a required capability label; schema 14 retains schema
+named creation factories explicitly opt in (a single-Bool overload would make
+existing function references ambiguous); schema 14 retains schema
 13 capabilities, including typed files, rather than downgrade an existing store.
 
 Provide explicit offline schema 12/13 to 14 upgrade. All owners of the shared

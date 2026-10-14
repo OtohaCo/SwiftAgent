@@ -82,6 +82,63 @@ public enum NativeContextHostExample {
         } catch { throw ExampleFailure.phase(phase, String(describing: error)) }
     }
 
+    /// A prepared deterministic view, never a live summary service. Uses only exported SDK APIs.
+    public static func incompleteOrdinaryHandoff() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("public-incomplete-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
+        let truncated = Data(String(decoding: Fixtures.anthropicThinkingAnswer, as: UTF8.self).replacingOccurrences(of: "end_turn", with: "max_tokens").utf8)
+        let oldHTTP = FixtureExchange([Fixtures.anthropicThinkingAnswer, Fixtures.anthropicCompact, truncated])
+        let oldProvider = try AnthropicProvider(apiKey: "fixture", nativeContext: .init(qualification: .init(
+            endpoint: endpoint, resolvedModelNames: ["fixture"], modes: [.anthropicOnDemand]), runReminders: true), transport: oldHTTP)
+        let oldBinding = try AgentModelBinding(profileID: "old", profileRevision: "1", model: .init(provider: "anthropic", name: "fixture"), provider: oldProvider,
+            deployment: .init(serviceInstanceID: "old", endpointScope: endpoint.absoluteString, apiDialect: "anthropic"))
+        var journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "public-incomplete", supportsContextHandoff: true)
+        let session = try Agent(binding: oldBinding).makeSession(journal: journal), id = session.id
+        try await finish(try await session.run("keep original constraint", contextControls: .init(reminder: "first reminder")))
+        let compact = try await session.compact(mode: .anthropicOnDemand)
+        _ = try await compact.wait(); try await compact.waitForDrain()
+        let partial = try await session.run("unfinished input", contextControls: .init(reminder: "unfinished reminder"))
+        guard try await partial.wait().outcome == .incomplete(.maxOutputTokens) else { throw ExampleFailure.invariant }
+        try await partial.waitForDrain()
+        let canonical = try await journal.readMessages(sessionID: id), terminal = try await journal.runRecord(sessionID: id, runID: partial.id)
+        let controls = try await journal.conversationControlState(sessionID: id)
+        try await journal.close()
+        journal = try AgentIncrementalJournal.upgradeForIncompleteContextHandoff(at: directory)
+        guard try await journal.conversationControlState(sessionID: id) == controls else { throw ExampleFailure.invariant }
+        let fresh = try Agent(binding: oldBinding).makeSession(id: id, journal: journal)
+        let executions = ExecutionCounter()
+        let caps = try await fresh.bindCapabilities(identity: "target", version: "1", backendInstanceID: "fixture", backendVersion: "1", allowedResources: [.global],
+            tools: [.init(id: "discover", version: "1", tool: DiscoveryTool(counter: executions)), .init(id: "extra", version: "1", tool: ExtraTool(), exposure: .deferred)])
+        let newHTTP = FixtureExchange([Fixtures.anthropicThinkingDiscovery, Fixtures.anthropicAnswer, Fixtures.anthropicAnswer])
+        let newProvider = try AnthropicProvider(apiKey: "fixture", nativeContext: .init(qualification: .init(
+            endpoint: endpoint, resolvedModelNames: ["fixture"], modes: [.anthropicOnDemand]), inlineToolChanges: true, runReminders: true), transport: newHTTP)
+        let target = try AgentModelBinding(profileID: "new", profileRevision: "1", model: oldBinding.model, provider: newProvider,
+            deployment: .init(serviceInstanceID: "new", endpointScope: endpoint.absoluteString, apiDialect: "anthropic"))
+        let operation = try await fresh.handoffToOrdinary(using: target, capabilities: caps, discardingRetiredProviderContinuations: true, allowingIncompleteTurn: true)
+        let retirement = try await operation.wait(); try await operation.waitForDrain()
+        guard retirement.completedRunID == nil, retirement.closedTurnProof?.terminal == .incomplete(.maxOutputTokens),
+              try await journal.readMessages(sessionID: id) == canonical,
+              try await journal.runRecord(sessionID: id, runID: partial.id) == terminal,
+              newHTTP.requests.isEmpty, oldHTTP.requests.count == 3, await executions.count == 0 else { throw ExampleFailure.invariant }
+        try await finish(try await fresh.run("real new user", contextControls: .init(reminder: "target reminder"), using: target, capabilities: caps))
+        guard newHTTP.requests.count == 2, await executions.count == 1 else { throw ExampleFailure.invariant }
+        for request in newHTTP.requests {
+            let body = String(decoding: request.httpBody!, as: UTF8.self)
+            guard !body.contains("unfinished reminder"), !body.contains("compaction"), body.contains("target reminder") else { throw ExampleFailure.invariant }
+        }
+        let final = try await journal.readMessages(sessionID: id)
+        try await journal.close(); journal = try AgentIncrementalJournal.open(at: directory)
+        let reopened = try Agent(binding: target).makeSession(id: id, journal: journal)
+        let reopenedCaps = try await reopened.bindCapabilities(identity: "target", version: "1", backendInstanceID: "fixture", backendVersion: "1", allowedResources: [.global],
+            tools: [.init(id: "discover", version: "1", tool: DiscoveryTool(counter: executions)), .init(id: "extra", version: "1", tool: ExtraTool(), exposure: .deferred)])
+        guard try await journal.readMessages(sessionID: id) == final,
+              try await journal.runRecord(sessionID: id, runID: partial.id) == terminal else { throw ExampleFailure.invariant }
+        try await finish(try await reopened.run("reopened input", contextControls: .init(reminder: "reopened reminder"), capabilities: reopenedCaps))
+        guard await executions.count == 1, newHTTP.requests.count == 3 else { throw ExampleFailure.invariant }
+        try await journal.close()
+    }
+
     public static func thinkingAcrossOrdinaryHandoff() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("thinking-handoff-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -1,5 +1,25 @@
 # SwiftAgent Semantic Versioning
 
+## Issue #108 incomplete-turn handoff (after RC6)
+
+Adds an explicit `allowingIncompleteTurn` Session handoff overload while preserving
+its exact old signature and completed-only behavior. Adds read-only Journal control
+state, schema capability and `AgentContextHandoffTurnProof`. `AgentContextHandoff`
+gains optional proof/target model/registry fields; old completed handoffs decode
+with nil fields and retain their meaning. No public enum case or public protocol
+requirement is added, and no ABI stability is promised.
+
+New **named** `createForIncompleteContextHandoff` / `...Async` factories opt into
+schema 14 without making existing Bool-based creation function references
+ambiguous. Explicit `upgradeForIncompleteContextHandoff` supports closed-store
+schema 12/13→14, including a previously upgraded 11→12 source. Default schema 3
+and all existing opt-ins/signatures remain unchanged. Actual RC6 schema 13 readers
+must reject schema 14 before writes. New readers preserve old-format behavior;
+new incomplete authority cannot be persisted into old supported formats. See
+[handoff storage and recovery](swift-agent-context-handoff.md). This does not
+move the immutable published RC6 tag or declare an OtohaAI upgrade.
+
+
 RC6 includes the RC5→RC6 changes below, including #99/#101/#103/#105 first scope
 and #110 plan adapter plus the approved #112 native Gemini increment. Earlier SDK main passed
 [complete acceptance](../releases/rc6-candidate-acceptance.md); #110 is accepted

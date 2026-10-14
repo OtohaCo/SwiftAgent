@@ -1,6 +1,18 @@
 import AgentModels
 import Foundation
 
+/// A closed execution boundary, not a successful answer or mutation receipt.
+/// Only Core can create a proof; decoding does not authorize publication.
+public struct AgentContextHandoffTurnProof: Codable, Equatable, Sendable {
+    public let storeID: UUID
+    public let sessionID: UUID
+    public let runID: UUID
+    public let terminal: AgentRunTerminal
+    public let formalMessageID: UUID
+    public let formalMessageOrdinal: UInt64
+    public let historyHead: UInt64
+}
+
 /// Durable request-authority retirement. Canonical messages and execution facts
 /// remain unchanged. This is neither a model answer nor a mutation receipt.
 public struct AgentContextHandoff: Codable, Equatable, Sendable {
@@ -15,25 +27,36 @@ public struct AgentContextHandoff: Codable, Equatable, Sendable {
     public let targetOrigin: ModelProviderContinuationOrigin
     public let targetRootDigest: String
     public let targetControls: ModelConversationControlState?
+    public let closedTurnProof: AgentContextHandoffTurnProof?
+    public let targetModel: ModelID?
+    public let targetRegistryDigest: String?
 
     init(id: UUID = UUID(), generation: UInt64, previousHandoffID: UUID?, canonicalMessageCount: Int,
          lastMessageID: UUID?, retiredNativeCheckpointID: UUID?, retiredControlsDigest: String,
          completedRunID: UUID?, targetOrigin: ModelProviderContinuationOrigin, targetRootDigest: String,
-         targetControls: ModelConversationControlState?) throws {
+         targetControls: ModelConversationControlState?, closedTurnProof: AgentContextHandoffTurnProof? = nil,
+         targetModel: ModelID? = nil, targetRegistryDigest: String? = nil) throws {
         guard generation > 0, canonicalMessageCount > 0, !retiredControlsDigest.isEmpty, !targetRootDigest.isEmpty,
               targetControls.map({ $0.generation == 1 && $0.origin == targetOrigin && $0.rootConfigurationDigest == targetRootDigest
                   && $0.entries.isEmpty && $0.lastBoundaryMessageCount == canonicalMessageCount }) ?? true else {
             throw AgentJournalError.invalidRecord
         }
+        if let proof = closedTurnProof {
+            guard completedRunID == nil, lastMessageID != nil,
+                  proof.formalMessageOrdinal < UInt64(canonicalMessageCount),
+                  targetModel != nil, targetRegistryDigest?.isEmpty == false else { throw AgentJournalError.invalidRecord }
+        } else if targetModel != nil || targetRegistryDigest != nil { throw AgentJournalError.invalidRecord }
         self.id = id; self.generation = generation; self.previousHandoffID = previousHandoffID
         self.canonicalMessageCount = canonicalMessageCount; self.lastMessageID = lastMessageID
         self.retiredNativeCheckpointID = retiredNativeCheckpointID; self.retiredControlsDigest = retiredControlsDigest
         self.completedRunID = completedRunID; self.targetOrigin = targetOrigin
         self.targetRootDigest = targetRootDigest; self.targetControls = targetControls
+        self.closedTurnProof = closedTurnProof; self.targetModel = targetModel; self.targetRegistryDigest = targetRegistryDigest
     }
     private enum CodingKeys: String, CodingKey {
         case id, generation, previousHandoffID, canonicalMessageCount, lastMessageID, retiredNativeCheckpointID
         case retiredControlsDigest, completedRunID, targetOrigin, targetRootDigest, targetControls
+        case closedTurnProof, targetModel, targetRegistryDigest
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -42,7 +65,10 @@ public struct AgentContextHandoff: Codable, Equatable, Sendable {
             lastMessageID: c.decodeIfPresent(UUID.self, forKey: .lastMessageID), retiredNativeCheckpointID: c.decodeIfPresent(UUID.self, forKey: .retiredNativeCheckpointID),
             retiredControlsDigest: c.decode(String.self, forKey: .retiredControlsDigest), completedRunID: c.decodeIfPresent(UUID.self, forKey: .completedRunID),
             targetOrigin: c.decode(ModelProviderContinuationOrigin.self, forKey: .targetOrigin), targetRootDigest: c.decode(String.self, forKey: .targetRootDigest),
-            targetControls: c.decodeIfPresent(ModelConversationControlState.self, forKey: .targetControls))
+            targetControls: c.decodeIfPresent(ModelConversationControlState.self, forKey: .targetControls),
+            closedTurnProof: c.decodeIfPresent(AgentContextHandoffTurnProof.self, forKey: .closedTurnProof),
+            targetModel: c.decodeIfPresent(ModelID.self, forKey: .targetModel),
+            targetRegistryDigest: c.decodeIfPresent(String.self, forKey: .targetRegistryDigest))
     }
 
     func ordinaryView(_ canonical: [ModelMessage]) throws -> [ModelMessage] {

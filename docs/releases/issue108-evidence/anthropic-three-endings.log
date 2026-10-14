@@ -1,0 +1,11 @@
+CI STAGE issue108-anthropic-three-endings: PID=38220 evidence=/Users/lilong/Works/SwiftAgent-issue108/.ci-logs/stages/issue108-anthropic-three-endings-cpb9dfbs
+◇ Test run started.
+◇ Suite AnthropicIncompleteHandoffTests started.
+◇ Test nativeReminderTurnRetiresAfterTruncationCancellationOrAdmissionError(_:) started.
+◇ Test case passing 1 argument mode → "truncated" to nativeReminderTurnRetiresAfterTruncationCancellationOrAdmissionError(_:) started.
+◇ Test case passing 1 argument mode → "error" to nativeReminderTurnRetiresAfterTruncationCancellationOrAdmissionError(_:) started.
+◇ Test case passing 1 argument mode → "cancel" to nativeReminderTurnRetiresAfterTruncationCancellationOrAdmissionError(_:) started.
+✔ Test nativeReminderTurnRetiresAfterTruncationCancellationOrAdmissionError(_:) with 3 test cases passed after 13.665 seconds.
+✔ Suite AnthropicIncompleteHandoffTests passed after 13.665 seconds.
+✔ Test run with 1 test in 1 suite passed after 13.665 seconds.
+CI STAGE END issue108-anthropic-three-endings: result=pass exit=0 seconds=21.678

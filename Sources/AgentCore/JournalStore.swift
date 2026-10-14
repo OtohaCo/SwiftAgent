@@ -41,6 +41,7 @@ package protocol JournalStore: Sendable {
     var supportsFileContent: Bool { get }
     var supportsNativeContext: Bool { get }
     var supportsContextHandoff: Bool { get }
+    var supportsIncompleteContextHandoff: Bool { get }
     func auditDigest(_ bytes: Data) -> String
     func read<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
     func write<T>(_ body: (any JournalStoreView) throws -> T) throws -> T
