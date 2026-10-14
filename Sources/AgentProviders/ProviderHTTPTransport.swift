@@ -198,10 +198,13 @@ private final class ProviderHTTPExchange: @unchecked Sendable {
         if let error {
             if (error as? URLError)?.code == .cancelled { finish(throwing: CancellationError()) }
             else {
+                // FoundationNetworking may not bridge a URL-domain NSError to URLError.
+                // Read only its fixed domain/code, never its userInfo or description.
+                let networkError = error as NSError
                 let reason: ModelProviderError.Diagnostic.Reason
-                switch (error as? URLError)?.code {
-                case .timedOut: reason = .requestTimedOut
-                case .networkConnectionLost: reason = .connectionLost
+                switch (networkError.domain, networkError.code) {
+                case (NSURLErrorDomain, URLError.Code.timedOut.rawValue): reason = .requestTimedOut
+                case (NSURLErrorDomain, URLError.Code.networkConnectionLost.rawValue): reason = .connectionLost
                 default: reason = .networkFailure
                 }
                 finish(throwing: ModelProviderError(kind: .transport, message: "HTTP transport failed.",

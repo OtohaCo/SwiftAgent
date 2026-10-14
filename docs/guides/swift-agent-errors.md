@@ -151,6 +151,11 @@ failures before a response and after HTTP 200 while streaming:
 | `URLError.Code.networkConnectionLost` | `connectionLost` |
 | Other non-cancellation errors | `networkFailure` |
 
+Timeout and connection-loss classification reads the standard `NSURLErrorDomain`
+and integer code for both `URLError` and `NSError`, since FoundationNetworking
+may not bridge a URL-domain `NSError` to `URLError`. The same numeric code in a
+different error domain remains `networkFailure`.
+
 The kind remains `transport` and the message remains `HTTP transport failed.`.
 `URLError.Code.cancelled` remains `CancellationError`; consumer cancellation
 keeps its existing behavior. Diagnostics contain only the fixed stage/reason,

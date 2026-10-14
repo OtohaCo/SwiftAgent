@@ -6,7 +6,9 @@
   or during streaming: `requestTimedOut`, `connectionLost`, or `networkFailure`.
   The `.transport` kind and `HTTP transport failed.` message remain unchanged;
   cancellation remains `CancellationError`. No error payload or request data is
-  recorded. The three public reason cases require exhaustive switches to adapt,
+  recorded. Classification handles standard URL-domain `NSError` codes as well
+  as typed `URLError` on FoundationNetworking. The three public reason cases
+  require exhaustive switches to adapt,
   and error equality now includes these diagnostics.
 
 ## Unreleased — private-network model servers

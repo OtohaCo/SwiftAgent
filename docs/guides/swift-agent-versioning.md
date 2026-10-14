@@ -7,7 +7,9 @@ and `networkFailure`. Downstream exhaustive switches must adapt. The shared
 URLSession transport now supplies these reasons at stage `.transport`; whole-error
 equality differs from otherwise identical errors with nil diagnostics. Existing
 kind/message, initializer signatures, cancellation and retry/fallback behavior
-remain unchanged. No protocol requirement or Journal schema changes. See the
+remain unchanged. Standard URL-domain `NSError` codes are classified on
+FoundationNetworking as well as typed `URLError`. No protocol requirement or
+Journal schema changes. See the
 [error guide](swift-agent-errors.md#optional-provider-diagnostics) for the mapping
 and payload exclusions. The published RC6 remains immutable.
 

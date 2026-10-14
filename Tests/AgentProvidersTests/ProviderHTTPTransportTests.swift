@@ -8,12 +8,16 @@ import Testing
 
 struct ProviderHTTPTransportTests {
     @Test(arguments: [
+        (NSURLErrorDomain, URLError.timedOut.rawValue,
+         ModelProviderError.Diagnostic.Reason.requestTimedOut),
         (NSURLErrorDomain, URLError.networkConnectionLost.rawValue,
-         ModelProviderError.Diagnostic.Reason.connectionLost),
-        ("FixtureNetworkError", 7, .networkFailure)
-    ])
+         .connectionLost),
+        ("FixtureNetworkError", 7, .networkFailure),
+        ("FixtureNetworkError", URLError.networkConnectionLost.rawValue, .networkFailure)
+    ], [false, true])
     func sanitizesTransportFailureWithoutRetrying(
-        _ failure: (String, Int, ModelProviderError.Diagnostic.Reason)
+        _ failure: (String, Int, ModelProviderError.Diagnostic.Reason),
+        _ afterResponse: Bool
     ) async throws {
         let (domain, code, reason) = failure
         let fixture = ProviderHTTPFixture()
@@ -22,6 +26,11 @@ struct ProviderHTTPTransportTests {
         let consumer = collect(fixture, into: received)
         defer { consumer.cancel() }
         try await fixture.waitForStart()
+        if afterResponse {
+            fixture.respond()
+            fixture.send("partial sensitive body")
+            try await eventually { await received.count == 2 }
+        }
         fixture.perform { instance in
             instance.client?.urlProtocol(instance, didFailWithError: NSError(
                 domain: domain, code: code,
@@ -32,6 +41,7 @@ struct ProviderHTTPTransportTests {
         #expect(await received.error as? ModelProviderError == ModelProviderError(
             kind: .transport, message: "HTTP transport failed.",
             diagnostic: .init(stage: .transport, reason: reason)))
+        #expect(await received.count == (afterResponse ? 2 : 0))
         #expect(fixture.startCount == 1)
     }
 
