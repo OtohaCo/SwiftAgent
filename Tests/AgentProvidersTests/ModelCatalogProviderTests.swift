@@ -59,6 +59,42 @@ struct ModelCatalogProviderTests {
         }
     }
 
+    @Test func plainHTTPCatalogsAreForThisComputerUnlessTheHostChoosesItsNetwork() async throws {
+        let address = URL(string: "http://192.168.1.10:1234/v1/models")!
+        #expect(throws: ModelCatalogError.self) {
+            _ = try OpenAIModelCatalogProvider(apiKey: "fixture-secret", endpoint: address, serviceInstanceID: "lan")
+        }
+
+        let probe = ProviderRequestProbe()
+        let provider = try OpenAIModelCatalogProvider(
+            apiKey: "fixture-secret",
+            endpoint: address,
+            serviceInstanceID: "lan",
+            transport: FixtureHTTPTransport(
+                probe: probe,
+                bodies: [Data(#"{"object":"list","data":[{"id":"local-model"}]}"#.utf8)],
+                headers: ["Content-Type": "application/json"]
+            ),
+            allowsPrivateNetworkHTTP: true
+        )
+        let page = try await provider.listModels(.init())
+        #expect(page.models.map(\.model.name) == ["local-model"])
+        #expect(await probe.requests.first?.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-secret")
+
+        for host in ["10.0.0.5", "172.16.0.1", "mac-mini.local", "localhost"] {
+            _ = try OpenAIModelCatalogProvider(
+                apiKey: "k", endpoint: URL(string: "http://\(host):1234/v1/models")!, serviceInstanceID: "lan", allowsPrivateNetworkHTTP: true
+            )
+        }
+        for host in ["models.example.test", "10.example.com", "192.168.1.10.example.com", "172.32.0.1", "8.8.8.8"] {
+            #expect(throws: ModelCatalogError.self, "\(host)") {
+                _ = try OpenAIModelCatalogProvider(
+                    apiKey: "k", endpoint: URL(string: "http://\(host):1234/v1/models")!, serviceInstanceID: "lan", allowsPrivateNetworkHTTP: true
+                )
+            }
+        }
+    }
+
     @Test func cancellingCatalogRefreshCancelsTheTransportConsumer() async throws {
         let gate = CatalogCancellationGate()
         let provider = try OpenAIModelCatalogProvider(

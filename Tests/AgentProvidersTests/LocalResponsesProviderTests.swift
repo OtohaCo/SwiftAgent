@@ -241,6 +241,44 @@ struct LocalResponsesProviderTests {
         ))
     }
 
+    @Test func aHostMayChooseToSendABearerTokenOverPlainHTTPOnItsOwnNetwork() async throws {
+        let probe = ProviderRequestProbe()
+        let provider = try LocalResponsesProvider(
+            configuration: .init(
+                baseURL: URL(string: "http://192.168.1.10:1234/v1")!,
+                model: "fixture",
+                authentication: .bearer("lan-secret"),
+                promptCaching: nil,
+                allowsBearerOverPrivateNetworkHTTP: true
+            ),
+            transport: FixtureHTTPTransport(probe: probe, bodies: [openAITextFixture])
+        )
+        for try await _ in provider.stream(request: localRequest()) {}
+        #expect(await probe.requests.first?.value(forHTTPHeaderField: "Authorization") == "Bearer lan-secret")
+        #expect(await probe.requests.first?.url?.absoluteString == "http://192.168.1.10:1234/v1/responses")
+
+        for host in ["10.0.0.5", "172.16.0.1", "172.31.255.255", "mac-mini.local", "localhost", "127.0.0.1"] {
+            _ = try LocalResponsesProvider(configuration: .init(
+                baseURL: URL(string: "http://\(host):1234/v1")!, model: "fixture", authentication: .bearer("secret"),
+                promptCaching: nil, allowsBearerOverPrivateNetworkHTTP: true
+            ))
+        }
+    }
+
+    @Test func theChoiceNeverExtendsToTheInternetOrToNamesThatOnlyLookPrivate() {
+        for host in [
+            "models.example.test", "10.example.com", "192.168.1.10.example.com", "172.32.0.1", "172.15.0.1", "192.168.1", "8.8.8.8",
+            "10.0.0.256", "example.local.com", ".local", "a..local",
+        ] {
+            #expect(throws: ModelProviderError.self, "\(host)") {
+                _ = try LocalResponsesProvider(configuration: .init(
+                    baseURL: URL(string: "http://\(host):1234/v1")!, model: "fixture", authentication: .bearer("secret"),
+                    promptCaching: nil, allowsBearerOverPrivateNetworkHTTP: true
+                ))
+            }
+        }
+    }
+
     @Test func cancellationTerminatesUnderlyingRequestAndDrains() async throws {
         let entered = XCTestExpectation(description: "entered")
         let cancelled = XCTestExpectation(description: "cancelled")

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — private-network model servers
+
+- Adds an opt-in for model servers on the Host's own network (for example LM Studio on another computer):
+  `OpenAIModelCatalogProvider(allowsPrivateNetworkHTTP:)` and
+  `LocalResponsesProvider.Configuration(allowsBearerOverPrivateNetworkHTTP:)` accept plain HTTP, and a bearer
+  token over it, for a private IPv4 address (10/8, 172.16/12, 192.168/16) or a `.local` name. Names that only
+  start like an address (`10.example.com`) stay on the internet side. Defaults are unchanged: plain HTTP stays
+  loopback-only, and a bearer token still needs HTTPS or loopback.
+
 ## Unreleased — issue #108
 
 - Adds explicit ordinary handoff from a durably terminal, physically drained

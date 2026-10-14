@@ -16,13 +16,14 @@ public struct OpenAIModelCatalogProvider: ModelCatalogDetailProvider {
         endpoint: URL? = nil,
         serviceInstanceID: String,
         authorizationScopeID: String? = nil,
-        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport(),
+        allowsPrivateNetworkHTTP: Bool = false
     ) throws {
         try validateCatalogCredential(apiKey)
         guard let endpoint = endpoint ?? URL(string: "https://api.openai.com/v1/models") else {
             throw ModelCatalogError(kind: .invalidConfiguration)
         }
-        try validateCatalogEndpoint(endpoint)
+        try validateCatalogEndpoint(endpoint, allowsPrivateNetworkHTTP: allowsPrivateNetworkHTTP)
         self.scope = try .init(
             provider: "openai",
             serviceInstanceID: serviceInstanceID,
