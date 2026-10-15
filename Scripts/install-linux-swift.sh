@@ -1,10 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-required="${SWIFT_AGENT_REQUIRED_SWIFT:-6.4}"
 root="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$root/toolchain-version.sh"
+
+publish_compiler() {
+  # Swiftly proxies consult the working directory. Reader checkouts must keep
+  # this compiler even when their own .swift-version selects another release.
+  local swift_bin
+  if command -v swiftly >/dev/null 2>&1; then
+    swift_bin="$(swiftly run "+${required}" /bin/sh -c 'command -v swift')"
+  else
+    swift_bin="$(command -v swift)"
+  fi
+  export PATH="$(dirname "$swift_bin"):$PATH"
+  hash -r
+  "$root/require-toolchain.sh"
+  if [[ -n "${GITHUB_PATH:-}" ]]; then
+    dirname "$(command -v swift)" >> "$GITHUB_PATH"
+  fi
+  echo "SWIFT_BIN=$(command -v swift)"
+}
 
 if command -v swift >/dev/null 2>&1 && "$root/require-toolchain.sh"; then
+  publish_compiler
   exit 0
 fi
 
@@ -42,21 +62,5 @@ tar -xzf "$work/swiftly.tar.gz" -C "$work"
 . "${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}/env.sh"
 hash -r
 
-swiftly install "$required" || true
-swiftly use "$required" || true
-if ! "$root/require-toolchain.sh"; then
-  echo "Swift ${required} release toolchain was not usable; trying ${required}.x-snapshot."
-  swiftly install "${required}.x-snapshot" || true
-  swiftly use "${required}.x-snapshot" || true
-fi
-
-if [[ -n "${GITHUB_PATH:-}" ]] && command -v swift >/dev/null 2>&1; then
-  dirname "$(command -v swift)" >> "$GITHUB_PATH"
-fi
-
-# Keep the toolchain on PATH for later scripts in the same shell (local Docker).
-if command -v swift >/dev/null 2>&1; then
-  echo "SWIFT_BIN=$(command -v swift)"
-fi
-
-"$root/require-toolchain.sh"
+swiftly install "$required" --assume-yes
+publish_compiler

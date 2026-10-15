@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — validation toolchain
+
+- Pins CI and `.swift-version` to the official Swift 6.4.1 stable release,
+  without a snapshot fallback. macOS selects a user-installed toolchain for
+  CLI and Xcode tools while retaining the existing Xcode SDKs. Historical reader
+  checkouts use the same real compiler path, independent of their version files.
+- Makes the two subprocess benchmark entry points explicitly macOS/Linux-only;
+  other targets compile with a clear unsupported-platform failure before writes.
+  This preserves the whole-package iOS cross-build without removing targets.
+- Keeps the Swift 6.0 manifest floor, language mode, all acceptance gates and
+  existing bounded Linux reporting workaround. An upgraded-toolchain pass does
+  not by itself establish the cause or fix of intermittent planner crashes.
+
 ## Unreleased — HTTP transport failure reasons
 
 - Preserves fixed transport diagnostics for URLSession failures before a response

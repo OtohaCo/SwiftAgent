@@ -15,7 +15,11 @@ serialization. See [the acceptance record](releases/rc6-audited-authorization-ac
 
 last-verified: 2026-09-27
 
-Primary compiler: Swift 6.4. From the package directory:
+Primary compiler: Swift 6.4.1 (stable release). Select it before running these
+commands; see [the toolchain guide](guides/swift-agent-ci.md#swift-641-toolchain-selection).
+On macOS use a Bash shell with `source Scripts/select-apple-toolchain.sh` so
+CLI, `xcrun` and `xcodebuild` use the same compiler and Xcode SDKs.
+From the package directory:
 
 ```sh
 swift test --disable-sandbox --no-parallel

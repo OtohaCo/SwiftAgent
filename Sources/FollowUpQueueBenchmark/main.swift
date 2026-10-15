@@ -10,6 +10,9 @@ import Glibc
 
 @main struct FollowUpQueueBenchmark {
     static func main() async throws {
+        #if !os(macOS) && !os(Linux)
+        throw AgentJournalError.persistenceUnavailable("FollowUpQueueBenchmark requires macOS or Linux subprocess measurement.")
+        #else
         if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "measure" {
             let directory = URL(fileURLWithPath: CommandLine.arguments[3])
             let id = UUID(uuidString: CommandLine.arguments[2])!
@@ -96,6 +99,7 @@ import Glibc
                     "writeLockMs": Double(metrics.writeLockNanoseconds) / 1_000_000,
                     "peakResidentBytes": peakResidentBytes(),
                     "newProcess": String(decoding: recovered, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)]))
+        #endif
     }
 
     private static func otherSessionID(_ i: Int) -> UUID {

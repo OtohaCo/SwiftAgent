@@ -9,11 +9,11 @@ permissions:
   contents: read
 
 env:
-  SWIFT_AGENT_REQUIRED_SWIFT: "6.4"
+  SWIFT_AGENT_REQUIRED_SWIFT: "6.4.1"
 
 jobs:
   macos:
-    name: macOS Swift 6.4
+    name: macOS Swift 6.4.1
     runs-on: xcode-27
     # PR #102 runs 38216514281/38216563329 hit 30m during old-reader gates,
     # after core tests and audited authorization passed. Keep all coverage and
@@ -29,7 +29,7 @@ jobs:
           uname -a
           xcodebuild -version
           swift --version
-      - name: Select Swift 6.4 Xcode
+      - name: Install and select Swift 6.4.1
         run: bash Scripts/select-apple-toolchain.sh
       - name: Verify compiler, Xcode, and SDK
         run: bash Scripts/require-toolchain.sh --apple
@@ -52,7 +52,7 @@ jobs:
         run: bash Scripts/ci-concurrency-seal.sh
 
   linux:
-    name: Linux Swift 6.4
+    name: Linux Swift 6.4.1
     runs-on: ubuntu-24.04
     # PR #85: check annotations confirm the 30m budget expired during reader builds.
     # Keep all acceptance coverage; cap the expanded cold-build budget at 60m.
@@ -65,7 +65,7 @@ jobs:
         run: |
           cat /etc/os-release
           uname -a
-      - name: Install Swift 6.4
+      - name: Install Swift 6.4.1
         run: bash Scripts/install-linux-swift.sh
       - name: Verify compiler
         run: bash Scripts/require-toolchain.sh
@@ -78,8 +78,10 @@ jobs:
           # Permit same-user attachment only on this disposable CI runner.
           sudo sysctl -w kernel.yama.ptrace_scope=0
           python3 Scripts/verify-linux-debugger.py
-      - name: Watchdog regression
-        run: python3 -m unittest discover Scripts -p 'test_ci_stage.py'
+      - name: Toolchain and watchdog regression
+        run: |
+          python3 -m unittest discover Scripts -p 'test_toolchain.py'
+          python3 -m unittest discover Scripts -p 'test_ci_stage.py'
       - name: Core --target build, tests, external client
         run: bash Scripts/ci-linux.sh
       - name: Finite reporting acceptance reproduction (five attempts, stop on failure)
@@ -112,7 +114,7 @@ jobs:
           uname -a
           xcodebuild -version
           swift --version
-      - name: Select Swift 6.4 Xcode
+      - name: Install and select Swift 6.4.1
         run: bash Scripts/select-apple-toolchain.sh
       - name: Verify compiler, Xcode, and SDK
         run: bash Scripts/require-toolchain.sh --apple
