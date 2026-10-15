@@ -11,6 +11,9 @@ import Glibc
 
 @main struct JournalBenchmark {
     static func main() async throws {
+        #if !os(macOS) && !os(Linux)
+        throw AgentJournalError.persistenceUnavailable("JournalBenchmark requires macOS or Linux subprocess measurement.")
+        #else
         if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "measure" {
             let values = try await reopen(URL(fileURLWithPath: CommandLine.arguments[3]),
                                           sessionID: UUID(uuidString: CommandLine.arguments[2])!)
@@ -124,6 +127,7 @@ import Glibc
         ]
         let bytes = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
         print(String(decoding: bytes, as: UTF8.self))
+        #endif
     }
 
     private static func deterministicUUID(_ value: Int) -> UUID {

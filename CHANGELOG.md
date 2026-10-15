@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — validation toolchain
+
+- Pins CI and `.swift-version` to the official Swift 6.4.1 stable release,
+  without a snapshot fallback. macOS selects a user-installed toolchain for
+  CLI and Xcode tools while retaining the existing Xcode SDKs. Historical reader
+  checkouts use the same real compiler path, independent of their version files.
+- Makes the two subprocess benchmark entry points explicitly macOS/Linux-only;
+  other targets compile with a clear unsupported-platform failure before writes.
+  This preserves the whole-package iOS cross-build without removing targets.
+- Keeps the Swift 6.0 manifest floor, language mode, all acceptance gates and
+  existing bounded Linux reporting workaround. An upgraded-toolchain pass does
+  not by itself establish the cause or fix of intermittent planner crashes.
+
+## Unreleased — HTTP transport failure reasons
+
+- Preserves fixed transport diagnostics for URLSession failures before a response
+  or during streaming: `requestTimedOut`, `connectionLost`, or `networkFailure`.
+  The `.transport` kind and `HTTP transport failed.` message remain unchanged;
+  cancellation remains `CancellationError`. No error payload or request data is
+  recorded. Classification handles standard URL-domain `NSError` codes as well
+  as typed `URLError` on FoundationNetworking. The three public reason cases
+  require exhaustive switches to adapt,
+  and error equality now includes these diagnostics.
+
 ## Unreleased — private-network model servers
 
 - Adds an opt-in for model servers on the Host's own network (for example LM Studio on another computer):

@@ -66,6 +66,8 @@ public struct ModelProviderError: Error, Equatable, Sendable {
             /// ChatGPT-plan usage admission failed; these do not imply a plan reset time.
             case subscriptionSharingUsageLimitExceeded, subscriptionSharingUsageUnavailable
             case redirect, invalidHTTPResponse, missingHTTPResponse
+            /// Fixed URLSession failure categories; no underlying error payload is retained.
+            case requestTimedOut, connectionLost, networkFailure
         }
         public let stage: Stage
         public let reason: Reason

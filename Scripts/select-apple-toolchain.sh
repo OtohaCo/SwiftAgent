@@ -1,63 +1,69 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-required="${SWIFT_AGENT_REQUIRED_SWIFT:-6.4}"
-
-is_required() {
-  echo "$1" | grep -Eq "Swift version ${required}([.-]| |$)"
-}
-
-current="$(swift --version 2>&1 || true)"
-if is_required "$current"; then
-  echo "Current swift already satisfies Swift ${required}."
-  echo "$current"
-  exit 0
-fi
-
-echo "Current swift is not ${required}:"
-echo "$current"
-echo "Searching /Applications for an Xcode that provides Swift ${required}."
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "$root/toolchain-version.sh"
 
 shopt -s nullglob
 found=""
-for app in /Applications/Xcode*.app; do
-  candidate="$app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
-  if [[ ! -x "$candidate" ]]; then
-    continue
+developer="${DEVELOPER_DIR:-$(xcode-select -p)}"
+select_installed() {
+  local toolchain report app
+  for toolchain in "$HOME"/Library/Developer/Toolchains/*.xctoolchain /Library/Developer/Toolchains/*.xctoolchain; do
+    [[ -x "$toolchain/usr/bin/swift" ]] || continue
+    report="$("$toolchain/usr/bin/swift" --version 2>&1 || true)"
+    if is_required "$report"; then
+      found="$toolchain"
+      return
+    fi
+  done
+  for app in /Applications/Xcode*.app; do
+    toolchain="$app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain"
+    [[ -x "$toolchain/usr/bin/swift" ]] || continue
+    report="$("$toolchain/usr/bin/swift" --version 2>&1 || true)"
+    if is_required "$report"; then
+      found="$toolchain"
+      developer="$app/Contents/Developer"
+      return
+    fi
+  done
+}
+
+select_installed
+if [[ -z "$found" ]]; then
+  echo "Installing official Swift ${required} alongside the selected Xcode."
+  swiftly_bin="${SWIFTLY_BIN_DIR:-$HOME/.swiftly/bin}/swiftly"
+  if [[ ! -x "$swiftly_bin" ]]; then
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    curl -fsSL https://download.swift.org/swiftly/darwin/swiftly.pkg -o "$work/swiftly.pkg"
+    pkgutil --check-signature "$work/swiftly.pkg"
+    installer -pkg "$work/swiftly.pkg" -target CurrentUserHomeDirectory
   fi
-  report="$("$candidate" --version 2>&1 || true)"
-  echo "$app => $report"
-  if is_required "$report"; then
-    found="$app"
-    break
-  fi
-done
+  "$swiftly_bin" init --assume-yes --no-modify-profile --skip-install --quiet-shell-followup
+  "$swiftly_bin" install "$required" --assume-yes
+  select_installed
+fi
 
 if [[ -z "$found" ]]; then
-  echo "No installed Xcode provides Swift ${required}." >&2
-  ls /Applications | grep -i xcode || true
+  echo "No installed Apple toolchain provides Swift ${required}." >&2
   exit 1
 fi
 
-developer="$found/Contents/Developer"
-echo "Selecting $developer"
-if [[ "$(id -u)" -eq 0 ]]; then
-  xcode-select -s "$developer"
-elif command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
-  sudo xcode-select -s "$developer"
-else
-  export DEVELOPER_DIR="$developer"
-fi
-
+# Keep Xcode's SDKs; select the same compiler for CLI, xcrun and xcodebuild.
+# Selection is local to this shell/CI job and does not change xcode-select globally.
+identifier="$(plutil -extract CFBundleIdentifier raw "$found/Info.plist")"
+export DEVELOPER_DIR="$developer"
+export TOOLCHAINS="$identifier"
+export PATH="$found/usr/bin:$developer/usr/bin:$PATH"
+hash -r
 if [[ -n "${GITHUB_ENV:-}" ]]; then
   echo "DEVELOPER_DIR=$developer" >> "$GITHUB_ENV"
+  echo "TOOLCHAINS=$identifier" >> "$GITHUB_ENV"
 fi
 if [[ -n "${GITHUB_PATH:-}" ]]; then
   echo "$developer/usr/bin" >> "$GITHUB_PATH"
-  echo "$developer/Toolchains/XcodeDefault.xctoolchain/usr/bin" >> "$GITHUB_PATH"
+  echo "$found/usr/bin" >> "$GITHUB_PATH"
 fi
-
-export DEVELOPER_DIR="${DEVELOPER_DIR:-$developer}"
-export PATH="$developer/Toolchains/XcodeDefault.xctoolchain/usr/bin:$developer/usr/bin:$PATH"
-hash -r
-swift --version
+"$root/require-toolchain.sh" --apple

@@ -37,7 +37,7 @@ evidence paths (`.ci-logs`, legacy `.build/ci-logs`, and the acceptance JSON).
 It does not upload the workspace root or arbitrary hidden credentials.
 
 `ci-linux-reporting-repro.sh` runs the reporting-support acceptance test command at
-most five times in Swift 6.4 Linux, stopping at the first nonzero, timeout or crash.
+most five times with the pinned Linux compiler, stopping at the first nonzero, timeout or crash.
 The reproduction step can run after an unrelated earlier stage failure, but
 does not start after job cancellation. Each attempt has independent evidence; compilation/toolchain, process tree and
 any available core metadata stay separate. This is a bounded reproduction
@@ -129,3 +129,62 @@ in place. Headless CLI scenarios still require the product built by their
 preceding tests; a missing product or a failed assertion is still a failure.
 There is no fallback to a passing backend after a failed command and no increase
 to job or stage time limits.
+
+## Swift 6.4.1 toolchain selection
+
+The active validation configuration pins the official **6.4.1 stable release**
+in `.swift-version` and `SWIFT_AGENT_REQUIRED_SWIFT`. Verification rejects a
+different patch, snapshot suffix, or malformed version; installation errors
+fail the job instead of falling back to a development snapshot. `Package.swift`
+keeps its Swift 6.0 manifest floor and Swift 6 language mode. Published release
+acceptance records retain their original compiler and source identities.
+
+On macOS, install [Swiftly using the official instructions](https://www.swift.org/install/macos/swiftly/)
+then, from the checkout:
+
+```sh
+swiftly install 6.4.1
+swiftly run +6.4.1 swift --version
+bash -c 'source Scripts/select-apple-toolchain.sh; bash Scripts/ci-macos.sh'
+```
+
+The Apple selection script finds an exact installed standalone or Xcode
+toolchain, or installs the official release through Swiftly in the user account.
+It exports the actual compiler directory, `TOOLCHAINS` bundle identifier and
+`DEVELOPER_DIR` for the current Bash shell/CI job. It does not replace Xcode,
+change global `xcode-select`, or edit shell profiles. Verification checks both
+`swift` and `xcrun swift`, and reports the SDK versions. In the Xcode IDE, select
+the installed toolchain under **Xcode > Toolchains**; IDE selection alone does
+not select the terminal compiler. See [official package selection instructions](https://www.swift.org/install/macos/package_installer/).
+
+On Linux:
+
+```sh
+bash Scripts/install-linux-swift.sh
+# For a local shell, invoke commands explicitly through Swiftly:
+. "${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}/env.sh"
+swiftly run +6.4.1 bash Scripts/ci-linux.sh
+```
+
+The CI installer publishes the real 6.4.1 binary directory to `GITHUB_PATH`,
+so immutable old-reader checkouts cannot switch the compiler through their
+own `.swift-version`. Ordinary local use can use `swiftly run`, or
+`swiftly use 6.4.1` with Swiftly's environment sourced. Avoid the floating
+`latest` selector for reproducible acceptance.
+
+[Swift 6.4.1 release notes](https://forums.swift.org/t/announcing-swift-6-4-1/90029)
+include SwiftPM dependency-resolution and Linux backtracer fixes; they do not
+identify a fix for the observed pre-planning `libdispatch` event-loop crash.
+Qualification must use complete new-head CI rather than assume that a version
+bump resolves #46. All reader matrices, watchdogs, fixture assertions and the
+existing Linux-only reporting backend selection remain unchanged. Earlier
+6.4 failures and their bounded retry evidence remain part of the record.
+
+The full-package iOS build retains all targets. `JournalBenchmark` and
+`FollowUpQueueBenchmark` require subprocess measurement, which Foundation does
+not provide on iOS; their entry points now fail explicitly before any store
+operation on unsupported platforms. Their macOS/Linux measurement bodies and
+child-process reopen checks are unchanged. Local cold cross-builds failed at
+`Process` under both 6.4 and 6.4.1 before this platform guard; the subsequent
+6.4.1 whole-package iOS build passed. This source portability fix is independent
+of the Linux planner crash and does not establish its cause.

@@ -142,6 +142,26 @@ error equality now includes the optional diagnostic, so an error with detail
 is unequal to one constructed with the same kind/message but no detail.
 There is no Journal schema change or new error persistence requirement.
 
+The shared `URLSessionProviderHTTPTransport` reports stage `transport` for
+failures before a response and after HTTP 200 while streaming:
+
+| URLSession error | Diagnostic reason |
+| --- | --- |
+| `URLError.Code.timedOut` | `requestTimedOut` |
+| `URLError.Code.networkConnectionLost` | `connectionLost` |
+| Other non-cancellation errors | `networkFailure` |
+
+Timeout and connection-loss classification reads the standard `NSURLErrorDomain`
+and integer code for both `URLError` and `NSError`, since FoundationNetworking
+may not bridge a URL-domain `NSError` to `URLError`. The same numeric code in a
+different error domain remains `networkFailure`.
+
+The kind remains `transport` and the message remains `HTTP transport failed.`.
+`URLError.Code.cancelled` remains `CancellationError`; consumer cancellation
+keeps its existing behavior. Diagnostics contain only the fixed stage/reason,
+never NSError userInfo, URLs, authentication headers or bodies. These reasons
+do not change retry or replay authorization.
+
 DeepSeek distinguishes server failures (`server/httpFailure` or
 `server/serverFailure`), rejected shapes (`responseDecoding/invalidShape`),
 terminal/lifecycle/snapshot/usage rejection (`responseValidation`), missing

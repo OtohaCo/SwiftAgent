@@ -10,18 +10,26 @@ if ! command -v swift >/dev/null 2>&1; then
   fi
 fi
 
-required="${SWIFT_AGENT_REQUIRED_SWIFT:-6.4}"
+# shellcheck disable=SC1091
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/toolchain-version.sh"
 report="$(swift --version 2>&1 || true)"
 echo "swift --version:"
 echo "$report"
 
-if ! echo "$report" | grep -Eq "Swift version ${required}([.-]| |$)"; then
+if ! is_required "$report"; then
   echo "Required Swift ${required}. Refusing to continue with this compiler." >&2
   echo "swift-tools-version in Package.swift is the minimum manifest API, not the CI compiler." >&2
   exit 1
 fi
 
 if [[ "${1:-}" == "--apple" ]]; then
+  apple_report="$(xcrun swift --version 2>&1 || true)"
+  echo "xcrun swift --version:"
+  echo "$apple_report"
+  if ! is_required "$apple_report"; then
+    echo "xcrun must select the same Swift ${required} compiler (set TOOLCHAINS)." >&2
+    exit 1
+  fi
   echo "xcodebuild -version:"
   xcodebuild -version
   echo "macosx SDK: $(xcrun --sdk macosx --show-sdk-version)"
