@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — ChatGPT-plan responses without a final output list
+
+- `OpenAIChatGPTPlanProvider` accepts a `response.completed` whose `output` list is
+  empty, as the ChatGPT-plan service now sends it: the response is the items its
+  `response.output_item.done` events gave, all of which must have finished and be
+  numbered without a gap. Text, tool calls and continuation state are the same as
+  for a response that lists its items. Before, every such response failed as
+  `invalidResponse` (`responseDecoding/invalidShape`) after its text had streamed.
+- The Responses API provider keeps requiring the final list to match what was
+  streamed; a non-empty list that does not match still fails on either provider.
+
 ## Unreleased — validation toolchain
 
 - Pins CI and `.swift-version` to the official Swift 6.4.1 stable release,

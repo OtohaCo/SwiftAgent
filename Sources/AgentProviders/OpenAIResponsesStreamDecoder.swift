@@ -579,13 +579,24 @@ struct ResponsesStreamDecoder {
         try validateResponseModel(try ProviderJSON.string(response["model"]))
         guard items.values.allSatisfy({ $0.done }),
               items.values.allSatisfy({ $0.functionCall?.completed != false }) else { throw ProviderJSON.invalid() }
-        try validateFinalOutput(response["output"], requireCompleted: true)
-
-        guard case .array(let finalOutput) = response["output"] else { throw ProviderJSON.invalid() }
-        for index in finalOutput.indices {
-            guard var state = items[index] else { throw ProviderJSON.invalid() }
-            state.native = finalOutput[index]
-            items[index] = state
+        let finalOutput: [JSONValue]
+        if chatGPTPlanToolNames != nil, case .array(let listed) = response["output"], listed.isEmpty, !items.isEmpty {
+            // The ChatGPT-plan service ends with an empty list: each item is as its `output_item.done` gave it, all of
+            // them finished (checked above) and numbered from the start without a gap.
+            guard items.keys.sorted() == Array(0..<items.count) else { throw ProviderJSON.invalid() }
+            finalOutput = try items.keys.sorted().map { index in
+                guard let native = items[index]?.native else { throw ProviderJSON.invalid() }
+                return native
+            }
+        } else {
+            try validateFinalOutput(response["output"], requireCompleted: true)
+            guard case .array(let listed) = response["output"] else { throw ProviderJSON.invalid() }
+            finalOutput = listed
+            for index in finalOutput.indices {
+                guard var state = items[index] else { throw ProviderJSON.invalid() }
+                state.native = finalOutput[index]
+                items[index] = state
+            }
         }
 
         let usageEvents = try updateUsage(response["usage"])

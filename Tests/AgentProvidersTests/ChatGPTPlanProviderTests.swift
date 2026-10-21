@@ -103,6 +103,40 @@ struct ChatGPTPlanProviderTests {
         #expect(await probe.requests.count == 2)
     }
 
+    /// The ChatGPT-plan service ends a response with an empty `output` list (and a `response.metadata` event before it,
+    /// observed 2026-10-21): what each item was is what its `response.output_item.done` said. Text, tool calls and the
+    /// continuation are those items'; anything not finished, or a list that is not empty yet does not match, still fails.
+    @Test func aPlanResponseEndingWithAnEmptyOutputListUsesTheItemsItStreamed() async throws {
+        func response(_ fixture: Data) async throws -> ModelResponse {
+            let provider = OpenAIChatGPTPlanProvider(credentials: .init(accessToken: { "fixture-token" }),
+                transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [fixture]))
+            var accumulator = ModelEventAccumulator()
+            for try await event in provider.stream(request: planRequest) { try accumulator.append(event) }
+            return try accumulator.finish()
+        }
+        // The same as when the list names what was streamed: text, tool calls and continuation alike.
+        let answer = try await response(try planWithoutFinalOutput(openAITextFixture))
+        #expect(answer.content.contains { if case .text("Hello") = $0 { return true }; return false })
+        #expect(answer.content == (try await response(openAITextFixture)).content)
+        let call = try await response(try planWithoutFinalOutput(try planToolFixture()))
+        let listed = try await response(try planToolFixture())
+        #expect(call.toolCalls.map(\.name) == ["calculator"])
+        #expect(call.toolCalls == listed.toolCalls)
+        #expect(call.content == listed.content)
+
+        let unfinished = OpenAIChatGPTPlanProvider(credentials: .init(accessToken: { "fixture-token" }),
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(),
+                bodies: [try planWithoutFinalOutput(openAITextFixture, dropping: "response.output_item.done")]))
+        await #expect(throws: ModelProviderError.self) { for try await _ in unfinished.stream(request: planRequest) {} }
+    }
+
+    /// The empty list is the ChatGPT-plan service's alone: the API's own responses still have to list what they streamed.
+    @Test func anAPIResponseEndingWithAnEmptyOutputListStillFails() async throws {
+        let ordinary = try OpenAIResponsesProvider(apiKey: "ordinary-fixture",
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [try planWithoutFinalOutput(openAITextFixture)]))
+        await #expect(throws: ModelProviderError.self) { for try await _ in ordinary.stream(request: planRequest) {} }
+    }
+
     @Test func failuresAfterTextNeverProduceCompletedOrExposeVendorText() async throws {
         var decoder = try ProviderSSEDecoder()
         let frames = try decoder.consume(openAITextFixture).filter { $0.name != "response.completed" }
@@ -264,6 +298,26 @@ func planToolFixture(mutationPhase: String? = nil, namespace: JSONValue = .strin
         }
         return (frame.name!, try ProviderJSON.text(JSONValue.object(object)))
     })
+}
+
+/// `fixture` as the ChatGPT-plan service now sends it: a `response.metadata` event before the items end, and
+/// `response.completed` with an empty `output` list. `dropping`: an event left out, to make the stream unfinished.
+func planWithoutFinalOutput(_ fixture: Data, dropping: String? = nil) throws -> Data {
+    var sse = try ProviderSSEDecoder()
+    var frames: [(String, String)] = []
+    for frame in try sse.consume(fixture) where frame.name != dropping {
+        var object = try ProviderJSON.decode(frame.data)
+        object["sequence_number"] = nil
+        if frame.name == "response.output_item.done", !frames.contains(where: { $0.0 == "response.metadata" }) {
+            frames.append(("response.metadata", #"{"type":"response.metadata","response_id":"resp","metadata":{}}"#))
+        }
+        if frame.name == "response.completed", case .object(var response) = object["response"] {
+            response["output"] = .array([])
+            object["response"] = .object(response)
+        }
+        frames.append((frame.name!, try ProviderJSON.text(JSONValue.object(object))))
+    }
+    return providerNamedSSE(frames)
 }
 
 actor PlanRotatingTokens {
