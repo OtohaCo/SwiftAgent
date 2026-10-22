@@ -79,6 +79,8 @@ public actor AgentSession {
     /// they are history, so this Session neither presents nor extends history any more.
     private var steeringCommitUnknown = false
     private var committedWrites: [UUID: Int] = [:]
+    /// Host calls (ADR 0011) whose result history committed, by Run.
+    private var hostResultsCommitted: Set<UUID> = []
     private var committedWriteWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
 
     private struct StartupReservation {
@@ -487,7 +489,7 @@ public actor AgentSession {
                 work.cancel()
                 outcome = .failure(error)
             }
-            let failure = await self.finishHostCall(runID: runID, call: toolCall, outcome: outcome, recordsTerminal: !uncertain,
+            let failure = await self.finishHostCall(runID: runID, call: prepared, outcome: outcome, recordsTerminal: !uncertain,
                                                     work: work, scope: scope)
             if let failure { throw failure }
             return try outcome.get()
@@ -504,6 +506,7 @@ public actor AgentSession {
         await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal?.storeIdentity()?.storeID)
         drainingRunID = nil
         pendingDrainTask = nil
+        hostResultsCommitted.remove(runID)
         await drainHandles.removeValue(forKey: runID)?.complete()
         await scope.releaseRun(runID)
     }
@@ -556,6 +559,7 @@ public actor AgentSession {
                     message: .init(callID: call.call.id, content: [.json(result.output)], isError: true),
                     history: prepared, auditDrafts: [], nativeContext: nil)
                 applyCommittedHistory(prepared, steering: [], runID: runID)
+                hostResultsCommitted.insert(runID)
             } else if call.policy.effect == .mutation, !result.isIdempotentReplay {
                 guard let receipt = result.receipt else { throw ToolReceiptError.missing }
                 _ = try await commitMutation(call.call.id, receipt: receipt, output: result.output, history: proposed, steering: [], runID: runID)
@@ -563,6 +567,7 @@ public actor AgentSession {
                 if call.policy.effect == .mutation, result.receipt == nil { throw ToolReceiptError.missing }
                 _ = try await record(proposed, steering: [], runID: runID, budget: budget)
             }
+            hostResultsCommitted.insert(runID)
         } catch {
             guard call.policy.effect == .mutation, !result.isIdempotentReplay, result.confirmedNoEffect == nil else { throw error }
             let callID = call.call.id
@@ -573,22 +578,14 @@ public actor AgentSession {
         return (message, result.receipt.map { AgentToolReceipt(callID: call.call.id, effect: call.policy.effect, receipt: $0) })
     }
 
-    /// Ends the Host call's Run as `finish` ends a Run: its started writes adopted; a failure said in history, with whether
-    /// anything may have changed; its terminal recorded. Its owner stays until the executor has physically returned, as a
-    /// Run's does; the next Run or Host call waits for that. A failure to record the terminal is reported instead of the
-    /// call's own outcome.
-    private func finishHostCall(runID: UUID, call: ToolCall, outcome: Result<AgentHostInvocationResult, any Error>,
+    /// Ends the Host call's Run as `finish` ends a Run: its started writes adopted and its terminal recorded. Its owner
+    /// stays until the executor has physically returned, as a Run's does; the next Run or Host call waits for that. Only
+    /// then, when no result can still be committed, is a failure said in history. A failure to record the terminal is
+    /// reported instead of the call's own outcome.
+    private func finishHostCall(runID: UUID, call: PreparedToolCall, outcome: Result<AgentHostInvocationResult, any Error>,
                                 recordsTerminal: Bool, work: Task<AgentHostInvocationResult, any Error>,
                                 scope: AgentCapabilityScope) async -> (any Error)? {
         await waitForCommittedWrites(runID)
-        if recordsTerminal, case .failure = outcome, activeRunID == runID {
-            // An intent kept for this call means its executor may have acted: that is left to reconciliation.
-            let mayHaveChanged = (try? await journal?.pendingMutations(sessionID: id).contains { $0.intent.call.id == call.id }) ?? false
-            let notice = ModelMessage.user([.text(AgentHostToolCall.failureText(call: call, mayHaveChanged: mayHaveChanged == true))])
-            if let budget = try? AgentBudget(maxModelTurns: 1, maxToolCalls: 1, deadline: .now.advanced(by: .seconds(30))) {
-                _ = try? await record(history + [notice], steering: [], runID: runID, budget: budget)
-            }
-        }
         var failure: (any Error)?
         if recordsTerminal, let journal, journal.supportsRunRecords {
             let terminal: AgentRunTerminal
@@ -605,12 +602,42 @@ public actor AgentSession {
         drainingRunID = runID
         let scheduler = self.scheduler
         let sessionID = id
+        let failed = recordsTerminal && (try? outcome.get()) == nil
         pendingDrainTask = Task {
             _ = await work.result
             await scheduler.waitForRunToDrain(sessionID: sessionID, runID: runID)
+            if failed { await self.noteHostFailure(runID: runID, call: call) }
             await self.finishHostDraining(runID: runID, scope: scope)
         }
         return failure
+    }
+
+    /// Says in history that a Host call ended without a result, once its executor returned and its writes resolved, so
+    /// no result can still be committed after it. The wording comes from the call's durable state. Best effort: the
+    /// call's facts stand in the Journal whether or not this notice is kept.
+    private func noteHostFailure(runID: UUID, call: PreparedToolCall) async {
+        guard drainingRunID == runID else { return }
+        await waitForCommittedWrites(runID)
+        let committed = hostResultsCommitted.contains(runID)
+        let mutation: Result<AgentMutationState?, any Error>
+        if call.policy.effect == .mutation, let journal {
+            let sessionID = id
+            do { mutation = .success(try await journal.mutationStatus(sessionID: sessionID, runID: runID, callID: call.call.id)?.state) }
+            catch { mutation = .failure(error) }
+        } else { mutation = .success(nil) }
+        guard drainingRunID == runID, committedWrites[runID] == nil,
+              let wording = AgentHostToolCall.failureWording(effect: call.policy.effect, resultCommitted: committed, mutation: mutation),
+              let prepared = try? await prepareCheckpoint(history + [.user([.text(AgentHostToolCall.failureText(call: call.call, wording: wording))])]),
+              drainingRunID == runID, committedWrites[runID] == nil else { return }
+        if let journal {
+            beginCommittedWrite(runID)
+            defer { endCommittedWrite(runID) }
+            do {
+                try await journal.appendCheckpointForCurrentRun([.checkpoint(history: prepared, steeringIDs: [])], sessionID: id,
+                    runID: runID, durability: journal.storage == .durable ? .durable : .memory)
+            } catch { return }
+        }
+        applyCommittedHistory(prepared, steering: [], runID: runID)
     }
 
     public func conversationSnapshot() async throws -> AgentConversationSnapshot {

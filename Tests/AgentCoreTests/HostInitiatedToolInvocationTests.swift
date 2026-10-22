@@ -346,6 +346,42 @@ struct HostInitiatedToolInvocationTests {
         try await journal.close()
     }
 
+    /// Re-review 2026-10-22: what a failed Host call says comes from the call's durable state, read only once its executor
+    /// returned: a committed or settled result says nothing contrary, and what cannot be read is not called unchanged.
+    @Test func aFailureIsWordedFromTheCallsDurableState() {
+        typealias Wording = AgentHostToolCall.FailureWording
+        #expect(AgentHostToolCall.failureWording(effect: .readOnly, resultCommitted: false, mutation: .success(nil)) == .nothingChanged)
+        #expect(AgentHostToolCall.failureWording(effect: .readOnly, resultCommitted: true, mutation: .success(nil)) == nil)
+        #expect(AgentHostToolCall.failureWording(effect: .mutation, resultCommitted: false, mutation: .success(nil)) == .nothingChanged)
+        #expect(AgentHostToolCall.failureWording(effect: .mutation, resultCommitted: false, mutation: .success(.aborted)) == .nothingChanged)
+        #expect(AgentHostToolCall.failureWording(effect: .mutation, resultCommitted: false, mutation: .success(.intent)) == .notKnown)
+        #expect(AgentHostToolCall.failureWording(effect: .mutation, resultCommitted: false, mutation: .success(.needsReconciliation)) == .notKnown)
+        #expect(AgentHostToolCall.failureWording(effect: .mutation, resultCommitted: false, mutation: .success(.settled)) == nil)
+        #expect(AgentHostToolCall.failureWording(effect: .mutation, resultCommitted: true, mutation: .success(.settled)) == nil)
+        #expect(AgentHostToolCall.failureWording(effect: .mutation, resultCommitted: false, mutation: .failure(AgentJournalError.invalidRecord)) == .notKnown)
+    }
+
+    /// Re-review 2026-10-22: a mutation whose outcome is unknown says so in history, never that nothing changed.
+    @Test func aMutationWithAnUnknownOutcomeIsNotCalledUnchanged() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let journal = try makeTestJournal(at: url)
+        let session = try Agent(model: fixtureModel, provider: silentProvider()).makeSession(journal: journal)
+        let capabilities = try await binding(session, [
+            AgentCapabilityTool(id: "move", version: "1", tool: try MoveClipTool(journal: journal, probe: HostMutationProbe(), failsAfterEffect: true)),
+        ])
+        await #expect(throws: (any Error).self) {
+            _ = try await invoke(session, AgentHostToolCall(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#),
+                                 capabilities: capabilities, operationID: "ui-drag-1")
+        }
+        guard case .user(let content)? = try await session.conversationSnapshot().messages.last, case .text(let text)? = content.first else {
+            Issue.record("a Host notice is expected"); return
+        }
+        #expect(text.contains("did not complete") && text.contains("not known") && !text.contains("nothing was changed"))
+        #expect(try await journal.latestCheckpoint(sessionID: session.id)?.history.last == .user([.text(text)]), "the notice is durable")
+        try await journal.close()
+    }
+
     /// Review 2026-10-22: the Host's operation namespace is the Host's, so a Run's call cannot share a Host call's key.
     @Test func aRunCannotUseTheHostsOperationNamespace() async throws {
         let session = try Agent(model: fixtureModel, provider: silentProvider()).makeSession()

@@ -97,8 +97,10 @@ an `AgentRun`. Admission failures throw from the call; execution failures from
   `AgentHostToolCall.historyHeader`: the Host's request (the Run's formal input:
   tool, call identity, the Host's note, arguments as data), then its result as
   tool data, not instructions; a replay says the earlier result was replayed and
-  the tool not run again; a failure says nothing was changed or that the outcome
-  awaits reconciliation; `reconcileMutation` settles a Host call with a user-side
+  the tool not run again; a failure, once the executor returned and no result can
+  still be committed, says from the call's durable state that nothing was changed
+  or that the outcome awaits reconciliation (best effort: the Journal's facts stand
+  either way); `reconcileMutation` settles a Host call with a user-side
   Host notice. No assistant tool call is ever written for a Host call. The next
   Run's model sees all of it.
 - **Host namespace.** Host call identities begin with
@@ -118,6 +120,8 @@ Not covered by this implementation:
   relayed from an embedded panel.
 - Model visibility is not optional, and a large result is kept in history whole:
   the tool-result projection and excerpts do not apply to Host notices.
+- After a startup commit of unknown outcome, the request stays in this Session's
+  history without an outcome notice (as a Run's input does); the call never ran.
 - Follow-up queues are not coordinated beyond refusing while a dispatcher owns
   the Session; no event stream is published for a Host call. `maxToolCalls` does
   not apply (one call).
