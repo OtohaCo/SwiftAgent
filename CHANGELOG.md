@@ -4,13 +4,18 @@
 
 - `AgentSession.invokeHostTool` runs one tool call the Host makes outside a model
   turn, such as a user's change in an embedded panel, on a capability binding of
-  that Session instance. It is admitted, settled and drained as a Run is: the
-  tool's own authorization, durable mutation intent, Receipt validation and
-  reconciliation apply, and a mutation needs the Host's stable `operationID`. No
-  model is asked; the call is committed to history as a labelled Host notice, so
-  the next Run's model sees it. `requiredAudit` authorization is not supported yet.
+  that Session instance, and returns a handle like `AgentRun`. It is admitted as a
+  Run (with a Run record and terminal where the Journal keeps them), settled and
+  drained as one: the tool's own authorization, durable mutation intent, Receipt
+  validation and reconciliation apply, and a mutation needs the Host's stable
+  `operationID`. No model is asked. History records the Host's request and its
+  outcome as labelled user-side notices, never as an assistant proposal, so the
+  next Run's model sees them. `requiredAudit` authorization is not supported yet.
 - A model tool call using the Host's call identity namespace (`host-call-`) now
-  ends its Run before anything is prepared.
+  ends its Run before anything is prepared, and a Run or queued input naming a
+  `host:` operation is refused.
+- `AgentJournal.reconcileMutation` settles a Host call with a Host notice instead
+  of an assistant tool call.
 
 ## Unreleased — ChatGPT-plan responses without a final output list
 

@@ -1,4 +1,5 @@
 @testable import AgentCore
+import AgentJournalFileStore
 import AgentModels
 import AgentTools
 import Foundation
@@ -66,7 +67,9 @@ struct HostInitiatedToolInvocationTests {
         let notice = try #require(history.last)
         guard case .user(let content) = notice, case .text(let text)? = content.first else { Issue.record("a user-side notice is expected"); return }
         #expect(text.hasPrefix(AgentHostToolCall.historyHeader))
-        #expect(text.contains(MoveClipTool.name) && text.contains("The user moved clip 2 in the timeline.") && text.contains(#""moved":true"#))
+        #expect(text.contains(MoveClipTool.name) && text.contains(#""moved":true"#))
+        #expect(history.contains { if case .user(let content) = $0, case .text(let request)? = content.first {
+            request.hasPrefix(AgentHostToolCall.historyHeader) && request.contains("The user moved clip 2 in the timeline.") } else { false } })
         #expect(!history.contains { if case .assistant(_, let calls) = $0 { calls.contains { $0.id == result.call.id } } else { false } })
         #expect(result.conversationRevision == (try await session.conversationSnapshot().revision))
         try await journal.close()
@@ -111,7 +114,7 @@ struct HostInitiatedToolInvocationTests {
 
         #expect(await probe.count == 0)
         #expect(await probe.authorizations == 1, "the tool's own authorization was asked")
-        #expect(try await session.conversationSnapshot() == before)
+        #expect(try await session.conversationSnapshot().messages.dropLast(2) == before.messages[...], "only the Host's request and its outcome were added")
         try await journal.close()
     }
 
@@ -218,7 +221,9 @@ struct HostInitiatedToolInvocationTests {
 
         await #expect(throws: (any Error).self) { _ = try await call.value }
         #expect(await gate.sawCancellation)
-        #expect(try await session.conversationSnapshot().messages.allSatisfy { if case .user = $0 { false } else { true } }, "nothing was committed")
+        #expect(try await session.conversationSnapshot().messages.allSatisfy {
+            if case .user(let content) = $0, case .text(let text)? = content.first { !text.contains("Result") } else { true }
+        }, "no result was committed")
     }
 
     /// A Host call past its deadline ends, but its executor still owns the Session until it returns: the next Run waits.
@@ -239,6 +244,141 @@ struct HostInitiatedToolInvocationTests {
         let run = try await next.value
         _ = try await run.wait()
         #expect(await provider.log.requests.count == 1)
+    }
+
+    /// Review 2026-10-22: journals that keep Run records (schema 9 and later, the newest included) admit the Host call as a
+    /// Run, with a record whose formal input is the Host's request and a terminal.
+    @Test(arguments: [false, true])
+    func aJournalThatKeepsRunRecordsRecordsTheHostCallAsARun(newest: Bool) async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let journal = newest
+            ? try AgentIncrementalJournal.createForIncompleteContextHandoff(at: url, operationDomain: "host-records")
+            : try AgentIncrementalJournal.create(at: url, operationDomain: "host-records", supportsRunRecords: true)
+        let probe = HostMutationProbe()
+        let provider = silentProvider()
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(journal: journal)
+        let capabilities = try await binding(session, [AgentCapabilityTool(id: "move", version: "1", tool: try MoveClipTool(journal: journal, probe: probe))])
+
+        let result = try await invoke(session, AgentHostToolCall(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#),
+                                      capabilities: capabilities, operationID: "ui-drag-1")
+
+        #expect(await probe.count == 1)
+        guard case .terminal(let record, .completed) = try await session.runRecord(runID: result.runID) else {
+            Issue.record("the Host call has no completed Run record"); return
+        }
+        #expect(record.sessionID == session.id)
+        // The next model Run still works on the same Journal.
+        let run = try await session.run("What changed?", capabilities: capabilities)
+        _ = try await run.wait()
+        try await run.waitForDrain()
+        #expect(await provider.log.requests.count == 1)
+        try await journal.close()
+    }
+
+    /// Review 2026-10-22: a Host mutation reconciled later is settled in history as the Host's, never as an assistant call.
+    @Test func reconcilingAHostMutationKeepsItTheHosts() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let journal = try makeTestJournal(at: url)
+        let session = try Agent(model: fixtureModel, provider: silentProvider()).makeSession(journal: journal)
+        let capabilities = try await binding(session, [
+            AgentCapabilityTool(id: "move", version: "1", tool: try MoveClipTool(journal: journal, probe: HostMutationProbe(), failsAfterEffect: true)),
+        ])
+        await #expect(throws: (any Error).self) {
+            _ = try await invoke(session, AgentHostToolCall(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#),
+                                 capabilities: capabilities, operationID: "ui-drag-1")
+        }
+        let pending = try #require(try await journal.pendingMutations(sessionID: session.id).first)
+
+        try await journal.reconcileMutation(pending, receipt: ToolReceipt(operationID: pending.intent.idempotencyKey, status: .succeeded,
+            confirmedTargets: [.init(namespace: "timeline.clip", id: "clip-2")], revision: "r2"), output: .object(["moved": .bool(true)]))
+
+        let history = try #require(try await journal.latestCheckpoint(sessionID: session.id)?.history)
+        #expect(!history.contains { if case .assistant(_, let calls) = $0 { calls.contains { $0.id == pending.intent.call.id } } else { false } })
+        #expect(!history.contains { if case .tool(let result) = $0 { result.callID == pending.intent.call.id } else { false } })
+        guard case .user(let content)? = history.last, case .text(let text)? = content.first else { Issue.record("a Host notice is expected"); return }
+        #expect(text.hasPrefix(AgentHostToolCall.historyHeader) && text.contains("reconciled") && text.contains(#""moved":true"#))
+        try await journal.close()
+    }
+
+    /// Review 2026-10-22: history says what the Host asked, what came of it, and that a retry replayed an earlier result.
+    @Test func historySaysTheRequestTheResultAndAReplay() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let journal = try makeTestJournal(at: url)
+        let session = try Agent(model: fixtureModel, provider: silentProvider()).makeSession(journal: journal)
+        let capabilities = try await binding(session, [AgentCapabilityTool(id: "move", version: "1", tool: try MoveClipTool(journal: journal, probe: HostMutationProbe()))])
+        let call = AgentHostToolCall(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#, note: "The user moved clip 2.")
+
+        _ = try await invoke(session, call, capabilities: capabilities, operationID: "ui-drag-1")
+        _ = try await invoke(session, call, capabilities: capabilities, operationID: "ui-drag-1")
+
+        let notices = try await session.conversationSnapshot().messages.compactMap { message -> String? in
+            if case .user(let content) = message, case .text(let text)? = content.first, text.hasPrefix(AgentHostToolCall.historyHeader) { return text }
+            return nil
+        }
+        #expect(notices.count == 4, "a request and a result for each call")
+        #expect(notices[0].contains("asked to run") && notices[0].contains("The user moved clip 2.") && !notices[0].contains("Result"))
+        #expect(notices[1].contains("Result") && !notices[1].contains("replayed"))
+        #expect(notices[3].contains("replayed") && notices[3].contains("not run again"))
+        try await journal.close()
+    }
+
+    /// Review 2026-10-22: a call that did not run leaves the request and says nothing was changed.
+    @Test func aRefusedCallSaysNothingChanged() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let journal = try makeTestJournal(at: url)
+        let session = try Agent(model: fixtureModel, provider: silentProvider()).makeSession(journal: journal)
+        let capabilities = try await binding(session, [
+            AgentCapabilityTool(id: "move", version: "1", tool: try MoveClipTool(journal: journal, probe: HostMutationProbe(), authorization: .denied)),
+        ])
+        await #expect(throws: (any Error).self) {
+            _ = try await invoke(session, AgentHostToolCall(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#),
+                                 capabilities: capabilities, operationID: "ui-drag-1")
+        }
+        guard case .user(let content)? = try await session.conversationSnapshot().messages.last, case .text(let text)? = content.first else {
+            Issue.record("a Host notice is expected"); return
+        }
+        #expect(text.hasPrefix(AgentHostToolCall.historyHeader) && text.contains("did not complete") && text.contains("nothing was changed"))
+        #expect(try await journal.pendingMutations().isEmpty)
+        try await journal.close()
+    }
+
+    /// Review 2026-10-22: the Host's operation namespace is the Host's, so a Run's call cannot share a Host call's key.
+    @Test func aRunCannotUseTheHostsOperationNamespace() async throws {
+        let session = try Agent(model: fixtureModel, provider: silentProvider()).makeSession()
+        await #expect(throws: AgentHostInvocationError.reservedOperationID) { _ = try await session.run("Go", operationID: "host:ui-drag-1") }
+    }
+
+    /// Review 2026-10-22: a tool the Agent has but the binding does not is out of the Host's reach.
+    @Test func aToolOfTheAgentOutsideTheBindingIsRefused() async throws {
+        let session = try Agent(model: fixtureModel, provider: silentProvider(), tools: [AddTool(log: EffectLog())]).makeSession()
+        let capabilities = try await binding(session, [AgentCapabilityTool(id: "wait", version: "1", tool: try WaitingReadTool(gate: HostGate(), cooperative: true))])
+        await #expect(throws: ToolRegistryError.unknownTool(AddTool.name)) {
+            _ = try await invoke(session, AgentHostToolCall(name: AddTool.name, argumentsJSON: #"{"lhs":1,"rhs":2}"#), capabilities: capabilities, operationID: nil)
+        }
+    }
+
+    /// Review 2026-10-22: a Session released while its Host call runs still releases its owner once the call returns.
+    @Test(.timeLimit(.minutes(1))) func aSessionReleasedMidCallStillReleasesItsOwner() async throws {
+        let gate = HostGate()
+        let agent = try Agent(model: fixtureModel, provider: silentProvider())
+        let sessionID = UUID()
+        var session: AgentSession? = try agent.makeSession(id: sessionID)
+        let capabilities = try await binding(session!, [AgentCapabilityTool(id: "wait", version: "1", tool: try WaitingReadTool(gate: gate, cooperative: false))])
+        let invocation = try await session!.invokeHostTool(AgentHostToolCall(name: WaitingReadTool.name, argumentsJSON: "{}"),
+                                                           capabilities: capabilities, operationID: nil)
+        await gate.waitUntilEntered()
+        session = nil
+        await gate.open()
+        _ = try? await invocation.wait()
+        try await invocation.waitForDrain()
+
+        let again = try agent.makeSession(id: sessionID)
+        let run = try await again.run("Go", budget: try testBudget())
+        _ = try await run.wait()
     }
 
     /// The Host's call namespace is the Host's: a model's proposal using it is refused before anything runs.

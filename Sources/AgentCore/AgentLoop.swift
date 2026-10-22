@@ -981,7 +981,7 @@ package struct AgentLoop: Sendable {
         return pending.isEmpty
     }
 
-    private static func toolError(_ error: any Error) -> any Error {
+    package static func toolError(_ error: any Error) -> any Error {
         guard let error = error as? ToolSchedulerError else { return error }
         switch error {
         case .deadlineExceeded: return AgentLoopError.deadlineExceeded

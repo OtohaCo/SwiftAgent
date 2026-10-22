@@ -65,31 +65,42 @@ path must explicitly accept their own authorization/resource/audit obligations.
 `AgentSession.invokeHostTool(_:capabilities:operationID:budget:)` takes an
 `AgentHostToolCall` (tool name, JSON arguments, optional Host note) and returns an
 `AgentHostInvocation` handle (`wait`, `waitForDrain`, `cancel`), as `run` returns
-an `AgentRun`. Decisions on the open questions:
+an `AgentRun`. Admission failures throw from the call; execution failures from
+`wait`. Decisions on the open questions:
 
 - **It is a Run without a model.** Admission is a Run's: one owner per Session
   (an active Run, a starting Run or an active follow-up dispatcher refuses it with
   the existing errors), the previous Run's physical drain first, the Session
-  identity and Journal lease, a startup checkpoint, pending-mutation recovery
-  before admission, and a Run terminal record where the Journal keeps them. The
-  owner is released only after the executor physically returned
+  identity and Journal lease, the history witness, pending-mutation recovery and a
+  startup frame within the call's deadline. On Journals that keep Run records it
+  has a Run admission record and a terminal like any Run; no Journal schema
+  changes. A startup commit of unknown outcome keeps the owner through drain and
+  never runs the call. The owner (lease, identity, binding Run, drain handle) is
+  released only after the executor physically returned
   (`ToolScheduler.waitForRunToDrain`), even when the outcome came earlier by
-  deadline, cancellation or revocation. No model is asked.
+  deadline, cancellation or revocation, and even if the Host released the Session.
+  No model is asked.
 - **Only the supplied binding.** The call is prepared on the binding's registry
-  (any of its tools, deferred ones included; none outside it), registered with its
-  scope (wrong Session instance, revoked or regenerated bindings are refused) and
-  checked against its allowed resources. Revoking the binding cancels the call.
+  (any of its tools, deferred ones included; none outside it, including tools of
+  the Agent the binding does not hold), registered with its scope (wrong Session
+  instance, revoked or regenerated bindings are refused) and checked against its
+  allowed resources. Revoking the binding cancels the call.
 - **Same guarantees.** The prepared call runs through the shared scheduler with
   the tool's own authorization, Evidence, durable mutation intent, Receipt
   validation, confirmed-no-effect settlement and reconciliation marking; the same
-  Session commit functions settle it. A mutation requires the Host's
-  `operationID`; its idempotency key is `host:<operationID>/<tool>/<arguments>`, so
-  a retry replays a settled result or is refused until an unknown outcome is
-  reconciled.
-- **Formal history.** The call and result are committed as one user-side message
-  beginning with `AgentHostToolCall.historyHeader`, naming the tool and call, the
-  Host's note, the arguments and the result as tool data, not instructions. No
-  assistant tool call is written. The next Run's model sees it.
+  Session commit functions settle it, and tool errors are classified as a Run's.
+  A mutation requires the Host's `operationID`; its idempotency key is
+  `host:<operationID>/<tool>/<arguments>`, and Runs and queued inputs cannot name
+  `host:` operations, so a retry replays a settled result or is refused until an
+  unknown outcome is reconciled, and a model call never shares the key.
+- **Formal history.** User-side messages beginning with
+  `AgentHostToolCall.historyHeader`: the Host's request (the Run's formal input:
+  tool, call identity, the Host's note, arguments as data), then its result as
+  tool data, not instructions; a replay says the earlier result was replayed and
+  the tool not run again; a failure says nothing was changed or that the outcome
+  awaits reconciliation; `reconcileMutation` settles a Host call with a user-side
+  Host notice. No assistant tool call is ever written for a Host call. The next
+  Run's model sees all of it.
 - **Host namespace.** Host call identities begin with
   `AgentHostToolCall.callIDPrefix`. A model proposal using that prefix ends its
   Run with `AgentHostInvocationError.reservedCallIdentity` before preparation, so
@@ -101,8 +112,12 @@ Not covered by this implementation:
 - `requiredAudit` authorization is refused (`requiredAuditUnsupported`): its
   records start from a model proposal, and a Host-origin capture is not designed.
 - No Journal event or audit/summary export field states Host origin. Origin is
-  carried by the call identity namespace and the formal history message only.
-- Model visibility is not optional: every Host call's result enters history.
+  carried by the call identity namespace and the history wording only. The
+  wording is not authenticated: other user-side text (a Run's input, steering or
+  a queued input) could imitate it, and `note` must be written by the Host, never
+  relayed from an embedded panel.
+- Model visibility is not optional, and a large result is kept in history whole:
+  the tool-result projection and excerpts do not apply to Host notices.
 - Follow-up queues are not coordinated beyond refusing while a dispatcher owns
-  the Session; no event stream is published for a Host call.
-
+  the Session; no event stream is published for a Host call. `maxToolCalls` does
+  not apply (one call).

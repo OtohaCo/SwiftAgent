@@ -6,10 +6,13 @@ Adds `AgentSession.invokeHostTool(_:capabilities:operationID:budget:)` and the n
 public types `AgentHostToolCall`, `AgentHostInvocation`, `AgentHostInvocationResult`
 and `AgentHostInvocationError` ([ADR 0011](../adr/0011-host-initiated-tool-invocation.md#implementation-2026-10-22)).
 No existing enum gains a case and no protocol requirement or Journal schema
-changes. Behavior change: a model tool call whose identity begins with
-`AgentHostToolCall.callIDPrefix` (`host-call-`) now ends its Run with
-`AgentHostInvocationError.reservedCallIdentity` before preparation. The immutable
-published RC6 tag is unchanged.
+changes; Host calls work on every supported Journal schema. Behavior changes: a
+model tool call whose identity begins with `AgentHostToolCall.callIDPrefix`
+(`host-call-`) now ends its Run with `AgentHostInvocationError.reservedCallIdentity`
+before preparation; `run` and `enqueueFollowUp` refuse an operation identity
+beginning with `host:` (`reservedOperationID`); and `reconcileMutation` settles a
+Host call with a user-side Host notice. The immutable published RC6 tag is
+unchanged.
 
 ## HTTP transport failure reasons (after RC6)
 

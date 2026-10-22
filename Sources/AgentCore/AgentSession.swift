@@ -224,6 +224,9 @@ public actor AgentSession {
         inputContent: [ModelContent]? = nil
     ) async throws -> AgentRun {
         try Task.checkCancellation()
+        if operationID?.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(AgentHostToolCall.operationPrefix) == true {
+            throw AgentHostInvocationError.reservedOperationID
+        }
         let inputContent = inputContent ?? [.text(text)]
         if let journal {
             if inputContent.contains(where: { if case .file = $0 { true } else { false } }), !journal.supportsFileContent { throw AgentJournalError.unsupportedFormat }
@@ -375,10 +378,8 @@ public actor AgentSession {
             throw AgentSessionError.confirmedNoEffectJournalRequired
         }
         if registry.hasMutation, journal?.storage != .durable { throw AgentSessionError.durableJournalRequired }
-        let operation = operationID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if registry.hasMutation(named: [call.name]), operation?.isEmpty != false {
-            throw AgentHostInvocationError.operationIDRequired
-        }
+        let operation = operationID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        if registry.hasMutation(named: [call.name]), operation == nil { throw AgentHostInvocationError.operationIDRequired }
         let runBudget = try budget?.renewed() ?? AgentBudget(
             maxModelTurns: maxModelTurns, maxToolCalls: maxToolCalls, deadline: .now.advanced(by: runTimeout)
         )
@@ -391,11 +392,17 @@ public actor AgentSession {
         var registeredRunID: UUID?
         let runID = UUID()
         let control = AgentRunControl()
-        let prefix: [ModelMessage]
+        let deadline = runBudget.deadline
+        let toolCall = ToolCall(id: .init(rawValue: AgentHostToolCall.callIDPrefix + UUID().uuidString.lowercased()),
+                                name: call.name, argumentsJSON: call.argumentsJSON, completeness: .complete)
+        let request = AgentHostToolCall.requestText(call: toolCall, note: call.note)
+        let candidate: [ModelMessage]
         let prepared: PreparedToolCall
+        var uncertainStartup = false
         do {
+            try contextPolicy.checkInput(request)
             if let pendingDrainTask {
-                try await withAgentDeadline(runBudget.deadline, operation: { await pendingDrainTask.value })
+                try await withAgentDeadline(deadline, operation: { await pendingDrainTask.value })
                 try runBudget.checkActive()
             }
             try await AgentSessionIdentityRegistry.shared.acquire(id, storeID: await journal?.storeIdentity()?.storeID)
@@ -405,36 +412,49 @@ public actor AgentSession {
                 catch AgentJournalError.sessionLeaseUnavailable { throw AgentSessionError.runInProgress }
                 journalLeaseAcquired = true
             }
-            try await restoreJournalStateIfNeeded()
+            try await withAgentDeadline(deadline, operation: { try await self.restoreJournalStateIfNeeded() })
             if let journal, let persistentHistoryWitness {
-                guard try await journal.historyWitness(sessionID: id) == persistentHistoryWitness else { throw AgentJournalError.concurrentWriter }
+                let current = try await withAgentDeadline(deadline, operation: { try await journal.historyWitness(sessionID: self.id) })
+                guard current == persistentHistoryWitness else { throw AgentJournalError.concurrentWriter }
             }
             try await capabilities.scope.register(runID: runID, sessionID: id, sessionInstanceID: instanceID,
                                                   cancel: { await control.cancel() })
             registeredRunID = runID
-            let toolCall = ToolCall(id: .init(rawValue: AgentHostToolCall.callIDPrefix + UUID().uuidString.lowercased()),
-                                    name: call.name, argumentsJSON: call.argumentsJSON, completeness: .complete)
-            let key = operation.flatMap { $0.isEmpty ? nil : AgentLoop.idempotencyKey(operationID: "host:" + $0, runID: runID, call: toolCall) }
-                ?? AgentLoop.idempotencyKey(operationID: nil, runID: runID, call: toolCall)
+            let key = AgentLoop.idempotencyKey(operationID: operation.map { AgentHostToolCall.operationPrefix + $0 }, runID: runID, call: toolCall)
             // The Host may reach any tool of the binding, deferred or not; none outside it.
             prepared = try registry.prepare(toolCall, context: ToolContext(sessionID: id, runID: runID, callID: toolCall.id,
-                deadline: runBudget.deadline, idempotencyKey: key, argumentsJSON: toolCall.argumentsJSON,
+                deadline: deadline, idempotencyKey: key, argumentsJSON: toolCall.argumentsJSON,
                 evidenceLedger: evidenceLedger, mutationAdmission: journal, executionAdmission: capabilities.scope),
                 declared: Set(registry.policyDefinitions.keys))
             guard Set(prepared.resources).isSubset(of: capabilities.allowedResources) else {
                 throw AgentCapabilityError.resourceOutsideScope
             }
-            prefix = try await prepareCheckpoint(history)
+            // The Host's request is the Run's formal input, on the user's side and labelled as the Host's.
+            candidate = try await prepareCheckpoint(history) + [.user([.text(request)])]
             try runBudget.checkActive()
             try await capabilities.scope.checkRun(runID)
             if let journal {
+                let sessionID = id
                 // As a Run's startup: what an earlier owner left unsettled is quarantined first, then this Run owns the
                 // Session in the Journal, so its mutation intent and settlement belong to it.
-                _ = try await journal.recoverPendingMutations(sessionID: id)
+                _ = try await withAgentDeadline(deadline, operation: { try await journal.recoverPendingMutations(sessionID: sessionID) })
+                let admission = try await journal.prepareRunAdmission(sessionID: id, text: request,
+                    operationID: operation.map { AgentHostToolCall.operationPrefix + $0 }, correlation: nil)
                 var events: [AgentJournalEvent] = try await journal.hasSessionCreated(id) ? [] : [.sessionCreated]
-                events.append(.checkpoint(history: prefix, steeringIDs: Array(appliedSteeringIDs)))
-                try await journal.appendStartupCheckpoint(events, sessionID: id, runID: runID, deadline: runBudget.deadline,
-                    durability: journal.storage == .durable ? .durable : .memory, expectedHistory: persistentHistoryWitness)
+                events.append(.checkpoint(history: candidate, steeringIDs: Array(appliedSteeringIDs)))
+                events.append(.userMessage(request))
+                try runBudget.checkActive()
+                try await capabilities.scope.checkRun(runID)
+                do {
+                    try await journal.appendStartupCheckpoint(events, sessionID: id, runID: runID, deadline: deadline,
+                        durability: journal.storage == .durable ? .durable : .memory, runAdmission: admission,
+                        expectedHistory: persistentHistoryWitness)
+                } catch AgentJournalStartupAdmissionError.deadlineExceeded {
+                    throw AgentLoopError.deadlineExceeded
+                } catch AgentJournalError.commitUnknown {
+                    // The frame may be visible: keep an owner through drain, as a Run does, but never run the call.
+                    uncertainStartup = true
+                }
             }
         } catch {
             if journalLeaseAcquired { await journal?.releaseSessionLease(sessionID: id) }
@@ -443,33 +463,36 @@ public actor AgentSession {
             startupFinished()
             throw error
         }
-        if history != prefix {
-            history = prefix
+        if history != candidate {
+            history = candidate
             advanceConversationRevision()
         }
         activeRunID = runID
-        startupFinished()
-        let work = Task { try await self.executeHostCall(prepared, note: call.note, runID: runID, budget: runBudget,
-                                                         scope: capabilities.scope) }
-        // Revoking the binding cancels the call as it cancels a Run; so do `cancel` and the deadline.
-        _ = await control.registerStartupWorker(cancelStartup: { work.cancel() })
         let drain = AgentRunDrain()
         drainHandles[runID] = drain
+        startupFinished()
         let scope = capabilities.scope
-        let deadline = runBudget.deadline
-        let logical = Task { [weak self] () async throws -> AgentHostInvocationResult in
+        let uncertain = uncertainStartup
+        // Strong references: the Session's owner is released by these tasks even when the Host has let the Session go.
+        let work = Task { () async throws -> AgentHostInvocationResult in
+            if uncertain { throw AgentJournalError.commitUnknown }
+            return try await self.executeHostCall(prepared, note: call.note, runID: runID, budget: runBudget, scope: scope)
+        }
+        // Revoking the binding cancels the call as it cancels a Run; so do `cancel` and the deadline.
+        _ = await control.registerStartupWorker(cancelStartup: { work.cancel() })
+        let logical = Task { () async throws -> AgentHostInvocationResult in
             let outcome: Result<AgentHostInvocationResult, any Error>
             do { outcome = .success(try await withAgentDeadline(deadline, operation: { try await work.value })) }
             catch {
                 work.cancel()
                 outcome = .failure(error)
             }
-            guard let self else { return try outcome.get() }
-            let failure = await self.finishHostCall(runID: runID, outcome: outcome, work: work, scope: scope)
+            let failure = await self.finishHostCall(runID: runID, call: toolCall, outcome: outcome, recordsTerminal: !uncertain,
+                                                    work: work, scope: scope)
             if let failure { throw failure }
             return try outcome.get()
         }
-        return AgentHostInvocation(runID: runID, call: prepared.call, logical: logical, drain: drain, control: control)
+        return AgentHostInvocation(runID: runID, call: toolCall, logical: logical, drain: drain, control: control)
     }
 
     /// Releases a Host call's owner once its executor returned: the Journal head it published, the lease, the identity
@@ -494,30 +517,34 @@ public actor AgentSession {
                 try budget.checkActive()
                 try await scope.check(runID: runID, resources: call.resources)
             }, onCompleted: { _, call, result in
-                await settled.keep(try await self.commitHostResult(call, result: result, note: note, runID: runID, budget: budget))
+                await settled.keep(try await self.commitHostResult(call, result: result, runID: runID, budget: budget))
             }, onFailed: { call, error in
-                if call.policy.effect == .mutation {
-                    let callID = call.call.id
-                    throw await AgentMutationPersistenceError.capturing(settlement: error) {
-                        try await self.journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
-                    }
+                guard call.policy.effect == .mutation else { throw error }
+                let callID = call.call.id
+                throw await AgentMutationPersistenceError.capturing(settlement: AgentLoop.toolError(error)) {
+                    try await self.journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
                 }
-                throw error
             })
-        } catch { throw error }
+        } catch { throw AgentLoop.toolError(error) }
         guard let value = await settled.value else { throw CancellationError() }
         return AgentHostInvocationResult(runID: runID, call: call.call, result: value.message, receipt: value.receipt,
                                          conversationRevision: conversationRevision)
     }
 
     /// Commits a Host call's result as a model's would be (its mutation settlement or checkpoint), with formal history
-    /// saying the Host made it.
-    private func commitHostResult(_ call: PreparedToolCall, result: ToolResult<JSONValue>, note: String?, runID: UUID,
+    /// saying it is the Host's call's result, or an earlier result replayed.
+    private func commitHostResult(_ call: PreparedToolCall, result: ToolResult<JSONValue>, runID: UUID,
                                   budget: AgentBudget) async throws -> (message: ToolResultMessage, receipt: AgentToolReceipt?) {
-        let keepsImages = journal?.supportsImageContent ?? true
-        let images = result.images.map { keepsImages ? ModelContent.image($0) : .text($0.textSubstitute) }
+        var images = result.images.map(ModelContent.image)
+        if !images.isEmpty, journal?.supportsImageContent == false {
+            // As a model's call: a read-only result fails before anything is committed; a mutation's effect already
+            // happened, so its settlement is kept with each image's text substitute.
+            guard call.policy.effect == .mutation, !result.isIdempotentReplay else { throw AgentJournalError.unsupportedFormat }
+            images = result.images.map { .text($0.textSubstitute) }
+        }
         let message = ToolResultMessage(callID: call.call.id, content: [.json(result.output)] + images, isError: result.isModelVisibleError)
-        let notice = ModelMessage.user([.text(AgentHostToolCall.historyText(call: call.call, note: note, result: message))] + images)
+        let notice = ModelMessage.user([.text(AgentHostToolCall.resultText(call: call.call, result: message,
+                                                                           replayed: result.isIdempotentReplay))] + images)
         let proposed = history + [notice]
         do {
             if let proof = result.confirmedNoEffect {
@@ -535,7 +562,6 @@ public actor AgentSession {
             } else {
                 if call.policy.effect == .mutation, result.receipt == nil { throw ToolReceiptError.missing }
                 _ = try await record(proposed, steering: [], runID: runID, budget: budget)
-                if call.policy.effect == .readOnly { await contextEffects.record(call: call.call, result: message) }
             }
         } catch {
             guard call.policy.effect == .mutation, !result.isIdempotentReplay, result.confirmedNoEffect == nil else { throw error }
@@ -547,14 +573,24 @@ public actor AgentSession {
         return (message, result.receipt.map { AgentToolReceipt(callID: call.call.id, effect: call.policy.effect, receipt: $0) })
     }
 
-    /// Ends the Host call's Run as `finish` ends a Run: its started writes adopted and its terminal recorded. Its owner
-    /// stays until the executor has physically returned, as a Run's does; the next Run or Host call waits for that. A
-    /// failure to record the terminal is reported instead of the call's own outcome.
-    private func finishHostCall(runID: UUID, outcome: Result<AgentHostInvocationResult, any Error>,
-                                work: Task<AgentHostInvocationResult, any Error>, scope: AgentCapabilityScope) async -> (any Error)? {
+    /// Ends the Host call's Run as `finish` ends a Run: its started writes adopted; a failure said in history, with whether
+    /// anything may have changed; its terminal recorded. Its owner stays until the executor has physically returned, as a
+    /// Run's does; the next Run or Host call waits for that. A failure to record the terminal is reported instead of the
+    /// call's own outcome.
+    private func finishHostCall(runID: UUID, call: ToolCall, outcome: Result<AgentHostInvocationResult, any Error>,
+                                recordsTerminal: Bool, work: Task<AgentHostInvocationResult, any Error>,
+                                scope: AgentCapabilityScope) async -> (any Error)? {
         await waitForCommittedWrites(runID)
+        if recordsTerminal, case .failure = outcome, activeRunID == runID {
+            // An intent kept for this call means its executor may have acted: that is left to reconciliation.
+            let mayHaveChanged = (try? await journal?.pendingMutations(sessionID: id).contains { $0.intent.call.id == call.id }) ?? false
+            let notice = ModelMessage.user([.text(AgentHostToolCall.failureText(call: call, mayHaveChanged: mayHaveChanged == true))])
+            if let budget = try? AgentBudget(maxModelTurns: 1, maxToolCalls: 1, deadline: .now.advanced(by: .seconds(30))) {
+                _ = try? await record(history + [notice], steering: [], runID: runID, budget: budget)
+            }
+        }
         var failure: (any Error)?
-        if let journal, journal.supportsRunRecords {
+        if recordsTerminal, let journal, journal.supportsRunRecords {
             let terminal: AgentRunTerminal
             switch outcome {
             case .success: terminal = .completed
@@ -569,10 +605,10 @@ public actor AgentSession {
         drainingRunID = runID
         let scheduler = self.scheduler
         let sessionID = id
-        pendingDrainTask = Task { [weak self] in
+        pendingDrainTask = Task {
             _ = await work.result
             await scheduler.waitForRunToDrain(sessionID: sessionID, runID: runID)
-            await self?.finishHostDraining(runID: runID, scope: scope)
+            await self.finishHostDraining(runID: runID, scope: scope)
         }
         return failure
     }
@@ -586,6 +622,9 @@ public actor AgentSession {
     /// Receives a future input without changing the current Run or formal
     /// conversation. The durable store, not this actor's memory, confirms it.
     public func enqueueFollowUp(_ input: AgentFollowUpInput) async throws -> AgentFollowUpRecord {
+        if input.operationID?.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(AgentHostToolCall.operationPrefix) == true {
+            throw AgentHostInvocationError.reservedOperationID
+        }
         try authorization.validate(journal: journal)
         if authorization.mode == .requiredAudit {
             try await journal?.checkAuditAvailability(backlog: authorization.backlog)
@@ -1877,4 +1916,8 @@ extension AgentSession {
         guard let journal else { throw AgentJournalError.unsupportedFormat }
         return try await journal.runRecord(sessionID: id, runID: runID)
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

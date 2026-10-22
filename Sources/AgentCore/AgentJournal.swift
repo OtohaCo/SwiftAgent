@@ -777,10 +777,15 @@ public actor AgentJournal {
         } else {
             hasMatchingOpenCall = false
         }
-        if !hasMatchingOpenCall {
-            history.append(.assistant(content: [], toolCalls: [pending.intent.call]))
+        if pending.intent.call.id.rawValue.hasPrefix(AgentHostToolCall.callIDPrefix) {
+            // A Host call (ADR 0011) is settled as the Host's, never as an assistant proposal.
+            history.append(.user([.text(AgentHostToolCall.reconciledText(call: pending.intent.call, output: output))]))
+        } else {
+            if !hasMatchingOpenCall {
+                history.append(.assistant(content: [], toolCalls: [pending.intent.call]))
+            }
+            history.append(result)
         }
-        history.append(result)
         let accepted = AgentToolReceipt(callID: pending.intent.call.id, effect: .mutation, receipt: receipt)
         _ = try appendCheckpoint([
             .toolReceipt(accepted),
