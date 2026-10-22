@@ -425,6 +425,8 @@ package struct AgentLoop: Sendable {
             var rejectedArguments: [Int: ToolResultMessage] = [:]
             for (index, call) in response.toolCalls.enumerated() {
                 do {
+                // The Host's call namespace is the Host's (ADR 0011): a model never makes a call in its name.
+                guard !call.id.rawValue.hasPrefix(AgentHostToolCall.callIDPrefix) else { throw AgentHostInvocationError.reservedCallIdentity(call.id) }
                 guard usedCallIDs.insert(call.id).inserted else { throw AgentLoopError.reusedToolCallID(call.id) }
                 var prepared: PreparedToolCall
                 do {
@@ -1047,7 +1049,7 @@ package struct AgentLoop: Sendable {
         }
     }
 
-    private static func idempotencyKey(
+    package static func idempotencyKey(
         operationID: String?,
         runID: UUID,
         call: ToolCall

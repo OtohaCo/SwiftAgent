@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — host-initiated tool invocation (ADR 0011)
+
+- `AgentSession.invokeHostTool` runs one tool call the Host makes outside a model
+  turn, such as a user's change in an embedded panel, on a capability binding of
+  that Session instance. It is admitted, settled and drained as a Run is: the
+  tool's own authorization, durable mutation intent, Receipt validation and
+  reconciliation apply, and a mutation needs the Host's stable `operationID`. No
+  model is asked; the call is committed to history as a labelled Host notice, so
+  the next Run's model sees it. `requiredAudit` authorization is not supported yet.
+- A model tool call using the Host's call identity namespace (`host-call-`) now
+  ends its Run before anything is prepared.
+
 ## Unreleased — ChatGPT-plan responses without a final output list
 
 - `OpenAIChatGPTPlanProvider` accepts a `response.completed` whose `output` list is

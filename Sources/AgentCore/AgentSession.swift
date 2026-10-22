@@ -352,6 +352,231 @@ public actor AgentSession {
         if reservation.authorizationRegistered, let runID = reservation.runID { authorization.scope.releaseRun(runID) }
     }
 
+    /// Runs one tool call the Host makes, outside a model turn (ADR 0011): a user's change in an embedded panel, say. No
+    /// model is asked. The call is admitted as a Run is (one at a time per Session, after the previous Run drains), on the
+    /// immutable `capabilities` of this Session instance, which must be current: only its tools and resources are
+    /// reachable. The tool's own authorization, Evidence, durable mutation intent, Receipt validation and reconciliation
+    /// apply as for a model's call. Its history is committed as a Host notice on the user's side, never as an assistant
+    /// proposal, so the next Run's model knows what happened.
+    ///
+    /// A mutation needs `operationID`, the Host's stable identity for the operation: retrying it replays a settled result
+    /// and refuses one whose outcome is unknown until it is reconciled, so it is never executed twice.
+    ///
+    /// Admission failures (no such tool in the binding, a revoked or foreign binding, a Run under way) throw here. The
+    /// returned handle gives the call's outcome (`wait`), its physical drain (`waitForDrain`) and `cancel`.
+    public func invokeHostTool(_ call: AgentHostToolCall, capabilities: AgentCapabilityBinding, operationID: String?,
+                               budget: AgentBudget? = nil) async throws -> AgentHostInvocation {
+        try Task.checkCancellation()
+        try authorization.validate(journal: journal)
+        guard authorization.mode != .requiredAudit else { throw AgentHostInvocationError.requiredAuditUnsupported }
+        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
+        let registry = capabilities.registry
+        if registry.hasConfirmedNoEffectMutation, journal?.supportsConfirmedNoEffect != true {
+            throw AgentSessionError.confirmedNoEffectJournalRequired
+        }
+        if registry.hasMutation, journal?.storage != .durable { throw AgentSessionError.durableJournalRequired }
+        let operation = operationID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if registry.hasMutation(named: [call.name]), operation?.isEmpty != false {
+            throw AgentHostInvocationError.operationIDRequired
+        }
+        let runBudget = try budget?.renewed() ?? AgentBudget(
+            maxModelTurns: maxModelTurns, maxToolCalls: maxToolCalls, deadline: .now.advanced(by: runTimeout)
+        )
+        if dispatchStarting || dispatcherID != nil { throw AgentFollowUpError.dispatchOwned }
+        guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
+        try runBudget.checkActive()
+        startingRun = true
+        var identityAcquired = false
+        var journalLeaseAcquired = false
+        var registeredRunID: UUID?
+        let runID = UUID()
+        let control = AgentRunControl()
+        let prefix: [ModelMessage]
+        let prepared: PreparedToolCall
+        do {
+            if let pendingDrainTask {
+                try await withAgentDeadline(runBudget.deadline, operation: { await pendingDrainTask.value })
+                try runBudget.checkActive()
+            }
+            try await AgentSessionIdentityRegistry.shared.acquire(id, storeID: await journal?.storeIdentity()?.storeID)
+            identityAcquired = true
+            if let journal {
+                do { try await journal.acquireSessionLease(sessionID: id, dispatcherID: nil) }
+                catch AgentJournalError.sessionLeaseUnavailable { throw AgentSessionError.runInProgress }
+                journalLeaseAcquired = true
+            }
+            try await restoreJournalStateIfNeeded()
+            if let journal, let persistentHistoryWitness {
+                guard try await journal.historyWitness(sessionID: id) == persistentHistoryWitness else { throw AgentJournalError.concurrentWriter }
+            }
+            try await capabilities.scope.register(runID: runID, sessionID: id, sessionInstanceID: instanceID,
+                                                  cancel: { await control.cancel() })
+            registeredRunID = runID
+            let toolCall = ToolCall(id: .init(rawValue: AgentHostToolCall.callIDPrefix + UUID().uuidString.lowercased()),
+                                    name: call.name, argumentsJSON: call.argumentsJSON, completeness: .complete)
+            let key = operation.flatMap { $0.isEmpty ? nil : AgentLoop.idempotencyKey(operationID: "host:" + $0, runID: runID, call: toolCall) }
+                ?? AgentLoop.idempotencyKey(operationID: nil, runID: runID, call: toolCall)
+            // The Host may reach any tool of the binding, deferred or not; none outside it.
+            prepared = try registry.prepare(toolCall, context: ToolContext(sessionID: id, runID: runID, callID: toolCall.id,
+                deadline: runBudget.deadline, idempotencyKey: key, argumentsJSON: toolCall.argumentsJSON,
+                evidenceLedger: evidenceLedger, mutationAdmission: journal, executionAdmission: capabilities.scope),
+                declared: Set(registry.policyDefinitions.keys))
+            guard Set(prepared.resources).isSubset(of: capabilities.allowedResources) else {
+                throw AgentCapabilityError.resourceOutsideScope
+            }
+            prefix = try await prepareCheckpoint(history)
+            try runBudget.checkActive()
+            try await capabilities.scope.checkRun(runID)
+            if let journal {
+                // As a Run's startup: what an earlier owner left unsettled is quarantined first, then this Run owns the
+                // Session in the Journal, so its mutation intent and settlement belong to it.
+                _ = try await journal.recoverPendingMutations(sessionID: id)
+                var events: [AgentJournalEvent] = try await journal.hasSessionCreated(id) ? [] : [.sessionCreated]
+                events.append(.checkpoint(history: prefix, steeringIDs: Array(appliedSteeringIDs)))
+                try await journal.appendStartupCheckpoint(events, sessionID: id, runID: runID, deadline: runBudget.deadline,
+                    durability: journal.storage == .durable ? .durable : .memory, expectedHistory: persistentHistoryWitness)
+            }
+        } catch {
+            if journalLeaseAcquired { await journal?.releaseSessionLease(sessionID: id) }
+            if identityAcquired { await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal?.storeIdentity()?.storeID) }
+            if let registeredRunID { await capabilities.scope.releaseRun(registeredRunID) }
+            startupFinished()
+            throw error
+        }
+        if history != prefix {
+            history = prefix
+            advanceConversationRevision()
+        }
+        activeRunID = runID
+        startupFinished()
+        let work = Task { try await self.executeHostCall(prepared, note: call.note, runID: runID, budget: runBudget,
+                                                         scope: capabilities.scope) }
+        // Revoking the binding cancels the call as it cancels a Run; so do `cancel` and the deadline.
+        _ = await control.registerStartupWorker(cancelStartup: { work.cancel() })
+        let drain = AgentRunDrain()
+        drainHandles[runID] = drain
+        let scope = capabilities.scope
+        let deadline = runBudget.deadline
+        let logical = Task { [weak self] () async throws -> AgentHostInvocationResult in
+            let outcome: Result<AgentHostInvocationResult, any Error>
+            do { outcome = .success(try await withAgentDeadline(deadline, operation: { try await work.value })) }
+            catch {
+                work.cancel()
+                outcome = .failure(error)
+            }
+            guard let self else { return try outcome.get() }
+            let failure = await self.finishHostCall(runID: runID, outcome: outcome, work: work, scope: scope)
+            if let failure { throw failure }
+            return try outcome.get()
+        }
+        return AgentHostInvocation(runID: runID, call: prepared.call, logical: logical, drain: drain, control: control)
+    }
+
+    /// Releases a Host call's owner once its executor returned: the Journal head it published, the lease, the identity
+    /// and the binding's Run.
+    private func finishHostDraining(runID: UUID, scope: AgentCapabilityScope) async {
+        guard drainingRunID == runID else { return }
+        if let journal, let witness = try? await journal.historyWitness(sessionID: id) { persistentHistoryWitness = witness }
+        await journal?.releaseSessionLease(sessionID: id)
+        await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal?.storeIdentity()?.storeID)
+        drainingRunID = nil
+        pendingDrainTask = nil
+        await drainHandles.removeValue(forKey: runID)?.complete()
+        await scope.releaseRun(runID)
+    }
+
+    /// The Host call itself, under its lease and the binding's scope, settled as a model's call is.
+    private func executeHostCall(_ call: PreparedToolCall, note: String?, runID: UUID, budget: AgentBudget,
+                                 scope: AgentCapabilityScope) async throws -> AgentHostInvocationResult {
+        let settled = AgentHostCallSettlement()
+        do {
+            try await scheduler.execute([call], deadline: budget.deadline, onStarted: { call in
+                try budget.checkActive()
+                try await scope.check(runID: runID, resources: call.resources)
+            }, onCompleted: { _, call, result in
+                await settled.keep(try await self.commitHostResult(call, result: result, note: note, runID: runID, budget: budget))
+            }, onFailed: { call, error in
+                if call.policy.effect == .mutation {
+                    let callID = call.call.id
+                    throw await AgentMutationPersistenceError.capturing(settlement: error) {
+                        try await self.journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
+                    }
+                }
+                throw error
+            })
+        } catch { throw error }
+        guard let value = await settled.value else { throw CancellationError() }
+        return AgentHostInvocationResult(runID: runID, call: call.call, result: value.message, receipt: value.receipt,
+                                         conversationRevision: conversationRevision)
+    }
+
+    /// Commits a Host call's result as a model's would be (its mutation settlement or checkpoint), with formal history
+    /// saying the Host made it.
+    private func commitHostResult(_ call: PreparedToolCall, result: ToolResult<JSONValue>, note: String?, runID: UUID,
+                                  budget: AgentBudget) async throws -> (message: ToolResultMessage, receipt: AgentToolReceipt?) {
+        let keepsImages = journal?.supportsImageContent ?? true
+        let images = result.images.map { keepsImages ? ModelContent.image($0) : .text($0.textSubstitute) }
+        let message = ToolResultMessage(callID: call.call.id, content: [.json(result.output)] + images, isError: result.isModelVisibleError)
+        let notice = ModelMessage.user([.text(AgentHostToolCall.historyText(call: call.call, note: note, result: message))] + images)
+        let proposed = history + [notice]
+        do {
+            if let proof = result.confirmedNoEffect {
+                guard let journal else { throw AgentJournalError.invalidRecord }
+                let prepared = try await prepareCheckpoint(proposed)
+                beginCommittedWrite(runID)
+                defer { endCommittedWrite(runID) }
+                try await journal.commitExecutorNoEffect(sessionID: id, runID: runID, callID: call.call.id, proof: proof,
+                    message: .init(callID: call.call.id, content: [.json(result.output)], isError: true),
+                    history: prepared, auditDrafts: [], nativeContext: nil)
+                applyCommittedHistory(prepared, steering: [], runID: runID)
+            } else if call.policy.effect == .mutation, !result.isIdempotentReplay {
+                guard let receipt = result.receipt else { throw ToolReceiptError.missing }
+                _ = try await commitMutation(call.call.id, receipt: receipt, output: result.output, history: proposed, steering: [], runID: runID)
+            } else {
+                if call.policy.effect == .mutation, result.receipt == nil { throw ToolReceiptError.missing }
+                _ = try await record(proposed, steering: [], runID: runID, budget: budget)
+                if call.policy.effect == .readOnly { await contextEffects.record(call: call.call, result: message) }
+            }
+        } catch {
+            guard call.policy.effect == .mutation, !result.isIdempotentReplay, result.confirmedNoEffect == nil else { throw error }
+            let callID = call.call.id
+            throw await AgentMutationPersistenceError.capturing(settlement: error) {
+                try await self.journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
+            }
+        }
+        return (message, result.receipt.map { AgentToolReceipt(callID: call.call.id, effect: call.policy.effect, receipt: $0) })
+    }
+
+    /// Ends the Host call's Run as `finish` ends a Run: its started writes adopted and its terminal recorded. Its owner
+    /// stays until the executor has physically returned, as a Run's does; the next Run or Host call waits for that. A
+    /// failure to record the terminal is reported instead of the call's own outcome.
+    private func finishHostCall(runID: UUID, outcome: Result<AgentHostInvocationResult, any Error>,
+                                work: Task<AgentHostInvocationResult, any Error>, scope: AgentCapabilityScope) async -> (any Error)? {
+        await waitForCommittedWrites(runID)
+        var failure: (any Error)?
+        if let journal, journal.supportsRunRecords {
+            let terminal: AgentRunTerminal
+            switch outcome {
+            case .success: terminal = .completed
+            case .failure(let error): terminal = .from(.failure(error))
+            }
+            do {
+                let prepared = try await prepareCheckpoint(history)
+                try await journal.commitRunTerminal(history: prepared, sessionID: id, runID: runID, terminal: terminal)
+            } catch { failure = error }
+        }
+        activeRunID = nil
+        drainingRunID = runID
+        let scheduler = self.scheduler
+        let sessionID = id
+        pendingDrainTask = Task { [weak self] in
+            _ = await work.result
+            await scheduler.waitForRunToDrain(sessionID: sessionID, runID: runID)
+            await self?.finishHostDraining(runID: runID, scope: scope)
+        }
+        return failure
+    }
+
     public func conversationSnapshot() async throws -> AgentConversationSnapshot {
         guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
         try await restoreJournalStateIfNeeded()

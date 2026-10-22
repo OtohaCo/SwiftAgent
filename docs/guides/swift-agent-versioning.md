@@ -1,5 +1,16 @@
 # SwiftAgent Semantic Versioning
 
+## Host-initiated tool invocation (after RC6, unreleased branch)
+
+Adds `AgentSession.invokeHostTool(_:capabilities:operationID:budget:)` and the new
+public types `AgentHostToolCall`, `AgentHostInvocation`, `AgentHostInvocationResult`
+and `AgentHostInvocationError` ([ADR 0011](../adr/0011-host-initiated-tool-invocation.md#implementation-2026-10-22)).
+No existing enum gains a case and no protocol requirement or Journal schema
+changes. Behavior change: a model tool call whose identity begins with
+`AgentHostToolCall.callIDPrefix` (`host-call-`) now ends its Run with
+`AgentHostInvocationError.reservedCallIdentity` before preparation. The immutable
+published RC6 tag is unchanged.
+
 ## HTTP transport failure reasons (after RC6)
 
 Adds `ModelProviderError.Diagnostic.Reason.requestTimedOut`, `connectionLost`

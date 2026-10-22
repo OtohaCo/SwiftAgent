@@ -1,9 +1,11 @@
 # ADR 0011: Host-initiated tool invocation
 
-Status: proposed (2026-10-01); deferred; not implemented
+Status: proposed (2026-10-01); first implementation on branch
+`feat/host-initiated-tool-invocation` (2026-10-22), pending review and acceptance
 
-Document merge records a proposal only. No public entry point or RC6 capability
-is delivered here; future implementation/acceptance requires a separate PR.
+The proposal below is unchanged. The decisions taken by the first implementation,
+and what it does not cover, are under [Implementation](#implementation-2026-10-22).
+It is not part of the immutable RC6.
 
 ## Context
 
@@ -57,3 +59,50 @@ model may propose a subsequent action. That input is not already authorized;
 normal Host authorization and all SDK gates still apply. Do not declare a
 mutation read-only to bypass them. Hosts executing either effect outside that
 path must explicitly accept their own authorization/resource/audit obligations.
+
+## Implementation (2026-10-22)
+
+`AgentSession.invokeHostTool(_:capabilities:operationID:budget:)` takes an
+`AgentHostToolCall` (tool name, JSON arguments, optional Host note) and returns an
+`AgentHostInvocation` handle (`wait`, `waitForDrain`, `cancel`), as `run` returns
+an `AgentRun`. Decisions on the open questions:
+
+- **It is a Run without a model.** Admission is a Run's: one owner per Session
+  (an active Run, a starting Run or an active follow-up dispatcher refuses it with
+  the existing errors), the previous Run's physical drain first, the Session
+  identity and Journal lease, a startup checkpoint, pending-mutation recovery
+  before admission, and a Run terminal record where the Journal keeps them. The
+  owner is released only after the executor physically returned
+  (`ToolScheduler.waitForRunToDrain`), even when the outcome came earlier by
+  deadline, cancellation or revocation. No model is asked.
+- **Only the supplied binding.** The call is prepared on the binding's registry
+  (any of its tools, deferred ones included; none outside it), registered with its
+  scope (wrong Session instance, revoked or regenerated bindings are refused) and
+  checked against its allowed resources. Revoking the binding cancels the call.
+- **Same guarantees.** The prepared call runs through the shared scheduler with
+  the tool's own authorization, Evidence, durable mutation intent, Receipt
+  validation, confirmed-no-effect settlement and reconciliation marking; the same
+  Session commit functions settle it. A mutation requires the Host's
+  `operationID`; its idempotency key is `host:<operationID>/<tool>/<arguments>`, so
+  a retry replays a settled result or is refused until an unknown outcome is
+  reconciled.
+- **Formal history.** The call and result are committed as one user-side message
+  beginning with `AgentHostToolCall.historyHeader`, naming the tool and call, the
+  Host's note, the arguments and the result as tool data, not instructions. No
+  assistant tool call is written. The next Run's model sees it.
+- **Host namespace.** Host call identities begin with
+  `AgentHostToolCall.callIDPrefix`. A model proposal using that prefix ends its
+  Run with `AgentHostInvocationError.reservedCallIdentity` before preparation, so
+  a model never makes a call in the Host's name; Host origin is visible in the
+  pending-mutation intent's call identity.
+
+Not covered by this implementation:
+
+- `requiredAudit` authorization is refused (`requiredAuditUnsupported`): its
+  records start from a model proposal, and a Host-origin capture is not designed.
+- No Journal event or audit/summary export field states Host origin. Origin is
+  carried by the call identity namespace and the formal history message only.
+- Model visibility is not optional: every Host call's result enters history.
+- Follow-up queues are not coordinated beyond refusing while a dispatcher owns
+  the Session; no event stream is published for a Host call.
+
