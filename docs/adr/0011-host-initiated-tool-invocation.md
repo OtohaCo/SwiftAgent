@@ -120,6 +120,9 @@ Not covered by this implementation:
   relayed from an embedded panel.
 - Model visibility is not optional, and a large result is kept in history whole:
   the tool-result projection and excerpts do not apply to Host notices.
+- A failure's notice reaches history at drain, not when `wait` returns. A Host
+  reconciling a Host call must first `waitForDrain()`, as `reconcileMutation`
+  requires; reconciling earlier may lose the failure notice.
 - After a startup commit of unknown outcome, the request stays in this Session's
   history without an outcome notice (as a Run's input does); the call never ran.
 - Follow-up queues are not coordinated beyond refusing while a dispatcher owns
