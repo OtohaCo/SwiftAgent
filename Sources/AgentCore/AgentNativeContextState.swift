@@ -149,7 +149,7 @@ package actor AgentNativeContextState {
               state.model == binding.model, state.origin == nil || state.origin == binding.continuationOrigin,
               !(state.payload.isEmpty), !state.format.isEmpty,
               canonicalTailStart >= source.canonicalMessageCount,
-              canonicalTailStart <= canonical.count - canonical.prefix { $0.role == .system || $0.role == .developer }.count,
+              canonicalTailStart <= canonical.count - canonical.prefix(while: { $0.role == .system || $0.role == .developer }).count,
               checkpoint?.generation != .max else { throw AgentModelBindingError.incompatibleContinuation }
         let scoped = ModelProviderContinuation(model: state.model, format: state.format, payload: state.payload,
                                                origin: binding.continuationOrigin, contextTransition: transition)

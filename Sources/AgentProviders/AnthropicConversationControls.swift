@@ -33,7 +33,7 @@ enum AnthropicConversationControls {
               zip(view.controls, view.controls.dropFirst()).allSatisfy({ $0.afterMessageIndex <= $1.afterMessageIndex }) else { throw invalid }
         var active = Dictionary(uniqueKeysWithValues: view.coveredTools.map { ($0.name, $0) })
         try validateAvailableTools(Array(active.values), baseline: view.toolBaseline, deferred: view.deferredBaselineToolNames)
-        if request.nativeContext == nil, view.coveredTools != view.toolBaseline.filter { !view.deferredBaselineToolNames.contains($0.name) } { throw invalid }
+        if request.nativeContext == nil, view.coveredTools != view.toolBaseline.filter({ !view.deferredBaselineToolNames.contains($0.name) }) { throw invalid }
         var pending = Set<ToolCallID>()
         if let checkpoint = request.nativeContext {
             let blocks = try AnthropicNativeContext.window(checkpoint, model: request.model)
