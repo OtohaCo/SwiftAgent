@@ -121,10 +121,13 @@ private final class ProviderHTTPRouter: NSObject, URLSessionDataDelegate, @unche
         exchange(for: dataTask)?.received(data)
     }
 
+    /// Refused, not followed: the stream ends with the refusal, and the task completes without it. The task is not
+    /// cancelled here: FoundationNetworking aborts when a task is cancelled before the redirect's completion handler is
+    /// called ("Received callback for HTTP redirection, but we're not waiting for it").
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                     completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
-        exchange(for: task)?.finish(throwing: ModelProviderError(kind: .invalidResponse, message: "HTTP redirects are not allowed.", diagnostic: .init(stage: .transport, reason: .redirect)))
+        exchange(for: task)?.finish(throwing: ModelProviderError(kind: .invalidResponse, message: "HTTP redirects are not allowed.", diagnostic: .init(stage: .transport, reason: .redirect)), cancelsTask: false)
         completionHandler(nil)
     }
 
@@ -158,9 +161,9 @@ private final class ProviderHTTPExchange: @unchecked Sendable {
 
     func cancel() { finish(throwing: CancellationError()) }
 
-    /// Ends the stream once: the task is cancelled when it had not ended, and the router forgets the request. The
-    /// shared session is left as it is.
-    func finish(throwing error: (any Error)? = nil) {
+    /// Ends the stream once: the task is cancelled when it had not ended (unless `cancelsTask` is false), and the router
+    /// forgets the request. The shared session is left as it is.
+    func finish(throwing error: (any Error)? = nil, cancelsTask: Bool = true) {
         let state = lock.withLock {
             let state = (continuation, task, onEnd)
             continuation = nil
@@ -168,7 +171,7 @@ private final class ProviderHTTPExchange: @unchecked Sendable {
             onEnd = nil
             return state
         }
-        state.1?.cancel()
+        if cancelsTask { state.1?.cancel() }
         state.2?()
         state.0?.finish(throwing: error)
     }
