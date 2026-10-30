@@ -264,6 +264,7 @@ public actor WorkspaceFileStore {
                 guard let base = buffer.baseAddress else { return }
                 while written < buffer.count {
                     let n = posixWrite(fd, base.advanced(by: written), buffer.count - written)
+                    if n < 0 && errno == EINTR { continue }
                     if n <= 0 {
                         _ = posixUnlink(pointer)
                         throw WorkspaceFileError.rejectedPath(relativePath)
