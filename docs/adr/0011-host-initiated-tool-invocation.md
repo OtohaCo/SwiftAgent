@@ -72,7 +72,9 @@ an `AgentRun`. Admission failures throw from the call; execution failures from
   (an active Run, a starting Run or an active follow-up dispatcher refuses it with
   the existing errors), the previous Run's physical drain first, the Session
   identity and Journal lease, the history witness, pending-mutation recovery and a
-  startup frame within the call's deadline. On Journals that keep Run records it
+  startup frame within the call's deadline. Corrections an earlier Run could not
+  commit are admitted before the Host's request, as a Run admits them (review
+  2026-10-30). On Journals that keep Run records it
   has a Run admission record and a terminal like any Run; no Journal schema
   changes. A startup commit of unknown outcome keeps the owner through drain and
   never runs the call. The owner (lease, identity, binding Run, drain handle) is

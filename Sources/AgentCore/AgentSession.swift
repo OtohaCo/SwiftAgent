@@ -398,6 +398,7 @@ public actor AgentSession {
         let toolCall = ToolCall(id: .init(rawValue: AgentHostToolCall.callIDPrefix + UUID().uuidString.lowercased()),
                                 name: call.name, argumentsJSON: call.argumentsJSON, completeness: .complete)
         let request = AgentHostToolCall.requestText(call: toolCall, note: call.note)
+        let owed = owedSteering
         let candidate: [ModelMessage]
         let prepared: PreparedToolCall
         var uncertainStartup = false
@@ -431,8 +432,9 @@ public actor AgentSession {
             guard Set(prepared.resources).isSubset(of: capabilities.allowedResources) else {
                 throw AgentCapabilityError.resourceOutsideScope
             }
-            // The Host's request is the Run's formal input, on the user's side and labelled as the Host's.
-            candidate = try await prepareCheckpoint(history) + [.user([.text(request)])]
+            // The Host's request is the Run's formal input, on the user's side and labelled as the Host's. Corrections
+            // owed by an earlier Run come first, as a Run admits them, since they were made before this call.
+            candidate = try await prepareCheckpoint(history) + owed.map { .user([.text($0.text)]) } + [.user([.text(request)])]
             try runBudget.checkActive()
             try await capabilities.scope.checkRun(runID)
             if let journal {
@@ -443,7 +445,7 @@ public actor AgentSession {
                 let admission = try await journal.prepareRunAdmission(sessionID: id, text: request,
                     operationID: operation.map { AgentHostToolCall.operationPrefix + $0 }, correlation: nil)
                 var events: [AgentJournalEvent] = try await journal.hasSessionCreated(id) ? [] : [.sessionCreated]
-                events.append(.checkpoint(history: candidate, steeringIDs: Array(appliedSteeringIDs)))
+                events.append(.checkpoint(history: candidate, steeringIDs: Array(appliedSteeringIDs) + owed.map(\.id)))
                 events.append(.userMessage(request))
                 try runBudget.checkActive()
                 try await capabilities.scope.checkRun(runID)
@@ -469,6 +471,7 @@ public actor AgentSession {
             history = candidate
             advanceConversationRevision()
         }
+        owedSteering.removeAll()
         activeRunID = runID
         let drain = AgentRunDrain()
         drainHandles[runID] = drain

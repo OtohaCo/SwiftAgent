@@ -431,6 +431,68 @@ struct HostInitiatedToolInvocationTests {
         await #expect(throws: AgentHostInvocationError.reservedCallIdentity(forged.id)) { _ = try await run.wait() }
         #expect(await log.names.isEmpty)
     }
+
+    /// Review 2026-10-30: a correction a definite Journal failure kept out of history is owed to the next Run. A Host
+    /// call is a Run: it admits the correction before its own request, so history keeps the order things were said in,
+    /// and the next Run's model sees the correction once.
+    @Test func aHostCallAdmitsAnOwedCorrectionBeforeItsRequest() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let fault = HostJournalFault()
+        let journal = try AgentIncrementalJournal.createForTesting(at: url, operationDomain: "host", fault: { try fault.check($0) })
+        let (stalled, signal) = AsyncStream<Void>.makeStream()
+        let provider = ScriptedProvider { request, turn in
+            if turn == 1 {
+                signal.yield()
+                try await Task.sleep(for: .seconds(30))
+            }
+            return textResponse(request, "answer \(turn)")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(journal: journal)
+        let run = try await session.run("original")
+        for await _ in stalled { break }
+        _ = try await run.steer("correction")
+        fault.arm(.beforeAppend)
+        await run.cancel()
+        await #expect(throws: AgentJournalError.self) { try await run.wait() }
+        try await run.waitForDrain()
+        #expect(fault.fired)
+        #expect(try await session.conversationSnapshot().messages == [.user([.text("original")])])
+
+        let capabilities = try await binding(session, [AgentCapabilityTool(id: "move", version: "1", tool: try MoveClipTool(journal: journal, probe: HostMutationProbe()))])
+        _ = try await invoke(session, AgentHostToolCall(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#),
+                             capabilities: capabilities, operationID: "ui-drag-1")
+        let history = try await session.conversationSnapshot().messages
+        #expect(history.count == 4, "the input, the correction, the Host's request and its result")
+        #expect(Array(history.prefix(2)) == [.user([.text("original")]), .user([.text("correction")])])
+        #expect(try await journal.latestCheckpoint(sessionID: session.id)?.history == history)
+
+        let next = try await session.run("next", budget: try testBudget())
+        _ = try await next.wait()
+        try await next.waitForDrain()
+        let messages = try #require(await provider.log.requests.last?.messages)
+        #expect(messages.filter { $0 == .user([.text("correction")]) }.count == 1)
+        #expect(messages.last == .user([.text("next")]))
+        try await journal.close()
+    }
+}
+
+/// Throws once at an armed Journal stage.
+private final class HostJournalFault: @unchecked Sendable {
+    private let lock = NSLock()
+    private var armed: JournalFileFaultStage?
+    private var didFire = false
+    var fired: Bool { lock.withLock { didFire } }
+    func arm(_ stage: JournalFileFaultStage) { lock.withLock { armed = stage } }
+    func check(_ stage: JournalFileFaultStage) throws {
+        let fire = lock.withLock { () -> Bool in
+            guard armed == stage else { return false }
+            armed = nil
+            didFire = true
+            return true
+        }
+        if fire { throw AgentJournalError.persistenceUnavailable("injected \(stage)") }
+    }
 }
 
 private actor HostGate {
