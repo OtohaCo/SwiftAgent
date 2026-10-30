@@ -415,7 +415,15 @@ public actor AgentSession {
                 catch AgentJournalError.sessionLeaseUnavailable { throw AgentSessionError.runInProgress }
                 journalLeaseAcquired = true
             }
-            try await withAgentDeadline(deadline, operation: { try await self.restoreJournalStateIfNeeded() })
+            if !restoredJournalState {
+                // As a Run's startup: only the Journal read is under the deadline. This Session's state is restored
+                // here, never by a read the deadline left running after the call failed and released its owner.
+                let journal = self.journal
+                let sessionID = id
+                let snapshot = try await withAgentDeadline(deadline, operation: { try await journal?.historySnapshot(sessionID: sessionID) })
+                try runBudget.checkActive()
+                try await applyJournalSnapshot(snapshot)
+            }
             if let journal, let persistentHistoryWitness {
                 let current = try await withAgentDeadline(deadline, operation: { try await journal.historyWitness(sessionID: self.id) })
                 guard current == persistentHistoryWitness else { throw AgentJournalError.concurrentWriter }
@@ -820,10 +828,7 @@ public actor AgentSession {
                 try await journal?.historySnapshot(sessionID: sessionID)
             }
             try budget.checkActive()
-            persistentHistoryWitness = snapshot?.witness
-            await nativeContextState.restore(snapshot?.nativeContext, handoff: snapshot?.contextHandoff)
-            try await conversationControlState.restore(snapshot?.conversationControls, history: snapshot?.checkpoint?.history ?? [])
-            applyRestoredJournalState(snapshot?.checkpoint)
+            try await applyJournalSnapshot(snapshot)
         }
         if let journal, let persistentHistoryWitness {
             let current = try await withStartupDeadline(budget.deadline, startupID: startupID) {
@@ -1378,7 +1383,11 @@ public actor AgentSession {
 
     private func restoreJournalStateIfNeeded() async throws {
         guard !restoredJournalState else { return }
-        let snapshot = try await journal?.historySnapshot(sessionID: id)
+        try await applyJournalSnapshot(try await journal?.historySnapshot(sessionID: id))
+    }
+
+    /// Restores this Session from a Journal snapshot: its history witness, native context, conversation controls and history.
+    private func applyJournalSnapshot(_ snapshot: AgentJournalHistorySnapshot?) async throws {
         persistentHistoryWitness = snapshot?.witness
         await nativeContextState.restore(snapshot?.nativeContext, handoff: snapshot?.contextHandoff)
         try await conversationControlState.restore(snapshot?.conversationControls, history: snapshot?.checkpoint?.history ?? [])
