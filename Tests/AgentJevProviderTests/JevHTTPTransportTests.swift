@@ -118,6 +118,7 @@ private final class JevHTTPFixture: @unchecked Sendable {
     private var starts = 0
     private var stops = 0
     private var last: URLRequest?
+    private var active: JevHTTPURLProtocol?
     let url = URL(string: "https://jev-fixture.invalid/\(UUID().uuidString)")!
     let reply: Reply
 
@@ -137,9 +138,12 @@ private final class JevHTTPFixture: @unchecked Sendable {
         lock.withLock {
             starts += 1
             last = instance.request
+            active = instance
         }
         let reply = reply
+        // The protocol instance is not Sendable on Linux: the callback reads it from this fixture, never captures it.
         queue.async {
+            guard let instance = self.lock.withLock({ self.active }) else { return }
             switch reply {
             case .respond(let text):
                 let response = HTTPURLResponse(url: instance.request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
