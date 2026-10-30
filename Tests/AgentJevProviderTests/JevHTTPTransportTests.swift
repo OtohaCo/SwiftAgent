@@ -157,6 +157,8 @@ private final class JevHTTPFixture: @unchecked Sendable {
                 let response = HTTPURLResponse(url: instance.request.url!, statusCode: 302, httpVersion: "HTTP/1.1",
                                                headerFields: ["Location": target.absoluteString])!
                 instance.client?.urlProtocol(instance, wasRedirectedTo: URLRequest(url: target), redirectResponse: response)
+                // A refused redirect completes with the redirect response, as an HTTP exchange does.
+                instance.client?.urlProtocolDidFinishLoading(instance)
             }
         }
     }

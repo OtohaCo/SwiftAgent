@@ -124,10 +124,13 @@ private final class JevHTTPRouter: NSObject, URLSessionDataDelegate, @unchecked 
         exchange(for: dataTask)?.received(data)
     }
 
+    /// Refused, not followed: the task completes with the redirect response and its request then fails. The task is not
+    /// cancelled here: FoundationNetworking aborts when a task is cancelled before the redirect's completion handler is
+    /// called ("Received callback for HTTP redirection, but we're not waiting for it").
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                     completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
-        exchange(for: task)?.finish(.failure(JevTransportFailure.redirect))
+        exchange(for: task)?.refuseRedirect()
         completionHandler(nil)
     }
 
@@ -148,6 +151,7 @@ private final class JevHTTPExchange: @unchecked Sendable {
     private var onEnd: (@Sendable () -> Void)?
     private var response: HTTPURLResponse?
     private var body = Data()
+    private var redirected = false
 
     /// False when the request already ended: the caller is resumed with that outcome and the task is not started.
     func begin(_ continuation: CheckedContinuation<JevHTTPResponse, any Error>) -> Bool {
@@ -207,7 +211,16 @@ private final class JevHTTPExchange: @unchecked Sendable {
         lock.withLock { if !ended { body.append(data) } }
     }
 
+    /// The request fails once its task completes.
+    func refuseRedirect() {
+        lock.withLock { redirected = true }
+    }
+
     func completed(with error: (any Error)?) {
+        if lock.withLock({ redirected }) {
+            finish(.failure(JevTransportFailure.redirect))
+            return
+        }
         if let error {
             finish(.failure(error))
             return
