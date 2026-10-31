@@ -22,10 +22,10 @@ host-specific policy do not belong in the portable modules.
 
 ## Commands
 
-Primary compiler: Swift 6.4.1 (stable release). `swift-tools-version: 6.0` is the manifest floor.
+Primary compiler: Swift 6.4.2 (stable release). `swift-tools-version: 6.0` is the manifest floor.
 
 Install/select the exact toolchain as described in
-[the CI guide](docs/guides/swift-agent-ci.md#swift-641-toolchain-selection).
+[the CI guide](docs/guides/swift-agent-ci.md#swift-642-toolchain-selection).
 The Xcode-bundled compiler is retained alongside the standalone toolchain.
 
 From this directory:

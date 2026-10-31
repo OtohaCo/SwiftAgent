@@ -130,9 +130,9 @@ preceding tests; a missing product or a failed assertion is still a failure.
 There is no fallback to a passing backend after a failed command and no increase
 to job or stage time limits.
 
-## Swift 6.4.1 toolchain selection
+## Swift 6.4.2 toolchain selection
 
-The active validation configuration pins the official **6.4.1 stable release**
+The active validation configuration pins the official **6.4.2 stable release**
 in `.swift-version` and `SWIFT_AGENT_REQUIRED_SWIFT`. Verification rejects a
 different patch, snapshot suffix, or malformed version; installation errors
 fail the job instead of falling back to a development snapshot. `Package.swift`
@@ -143,8 +143,8 @@ On macOS, install [Swiftly using the official instructions](https://www.swift.or
 then, from the checkout:
 
 ```sh
-swiftly install 6.4.1
-swiftly run +6.4.1 swift --version
+swiftly install 6.4.2
+swiftly run +6.4.2 swift --version
 bash -c 'source Scripts/select-apple-toolchain.sh; bash Scripts/ci-macos.sh'
 ```
 
@@ -163,13 +163,13 @@ On Linux:
 bash Scripts/install-linux-swift.sh
 # For a local shell, invoke commands explicitly through Swiftly:
 . "${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}/env.sh"
-swiftly run +6.4.1 bash Scripts/ci-linux.sh
+swiftly run +6.4.2 bash Scripts/ci-linux.sh
 ```
 
-The CI installer publishes the real 6.4.1 binary directory to `GITHUB_PATH`,
+The CI installer publishes the real 6.4.2 binary directory to `GITHUB_PATH`,
 so immutable old-reader checkouts cannot switch the compiler through their
 own `.swift-version`. Ordinary local use can use `swiftly run`, or
-`swiftly use 6.4.1` with Swiftly's environment sourced. Avoid the floating
+`swiftly use 6.4.2` with Swiftly's environment sourced. Avoid the floating
 `latest` selector for reproducible acceptance.
 
 [Swift 6.4.1 release notes](https://forums.swift.org/t/announcing-swift-6-4-1/90029)

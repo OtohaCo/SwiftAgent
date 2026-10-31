@@ -92,7 +92,7 @@ gitlink. Do not silently follow a remote branch or upgrade to make guessed APIs 
 
 | Surface | Requirement |
 | --- | --- |
-| CI compiler / language mode | Swift 6.4.1 stable / Swift 6 |
+| CI compiler / language mode | Swift 6.4.2 stable / Swift 6 |
 | Core products | macOS 13+, iOS 16+, Linux |
 | AgentDecisions / AgentJevProvider | macOS 13+, iOS 16+, Linux |
 | Optional Apple Foundation Models adapter | macOS/iOS 26+; individual APIs, including PCC, have additional availability requirements |

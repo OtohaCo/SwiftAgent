@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — validation toolchain 6.4.2
+
+- Pins CI and `.swift-version` to the official Swift 6.4.2 stable release. On
+  macOS the selection script finds it in Xcode 27.2 or a standalone toolchain.
+- The macOS selection script can now select Xcode's own toolchain: it reads the
+  identifier from `ToolchainInfo.plist` there (a standalone toolchain keeps it in
+  `Info.plist`). Before, selecting it failed under `set -e` with no identifier.
+- Keeps the Swift 6.0 manifest floor, Swift 6 language mode and all acceptance
+  gates.
+
 ## Unreleased — host-initiated tool invocation (ADR 0011)
 
 - `AgentSession.invokeHostTool` runs one tool call the Host makes outside a model

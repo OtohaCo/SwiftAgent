@@ -53,7 +53,7 @@ fi
 
 # Keep Xcode's SDKs; select the same compiler for CLI, xcrun and xcodebuild.
 # Selection is local to this shell/CI job and does not change xcode-select globally.
-identifier="$(plutil -extract CFBundleIdentifier raw "$found/Info.plist")"
+identifier="$(toolchain_identifier "$found")"
 export DEVELOPER_DIR="$developer"
 export TOOLCHAINS="$identifier"
 export PATH="$found/usr/bin:$developer/usr/bin:$PATH"

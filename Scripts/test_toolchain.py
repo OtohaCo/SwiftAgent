@@ -1,7 +1,9 @@
 """Compiler selection is tested through the executable CI script boundary."""
 import os
 from pathlib import Path
+import plistlib
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -66,6 +68,28 @@ class ToolchainTests(unittest.TestCase):
                     result = subprocess.run(['bash', str(SCRIPTS / 'require-toolchain.sh')],
                                             env=env, capture_output=True, text=True, timeout=10)
                     self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'plutil is macOS-only')
+    def test_identifier_reads_standalone_and_xcode_toolchain_layouts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            standalone = Path(directory) / 'swift-6.4.2-RELEASE.xctoolchain'
+            xcode = Path(directory) / 'XcodeDefault.xctoolchain'
+            for path in (standalone, xcode):
+                path.mkdir()
+            with (standalone / 'Info.plist').open('wb') as plist:
+                plistlib.dump({'CFBundleIdentifier': 'org.swift.642'}, plist)
+            # Xcode's own toolchain has no Info.plist.
+            with (xcode / 'ToolchainInfo.plist').open('wb') as plist:
+                plistlib.dump({'Identifier': 'com.apple.dt.toolchain.XcodeDefault'}, plist)
+            for toolchain, expected in [(standalone, 'org.swift.642'),
+                                        (xcode, 'com.apple.dt.toolchain.XcodeDefault')]:
+                with self.subTest(toolchain=toolchain.name):
+                    result = subprocess.run(
+                        ['bash', '-c', '. "$1"; toolchain_identifier "$2"', '_',
+                         str(SCRIPTS / 'toolchain-version.sh'), str(toolchain)],
+                        capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.strip(), expected)
 
 
 if __name__ == '__main__':

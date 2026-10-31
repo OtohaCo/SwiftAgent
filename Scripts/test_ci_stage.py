@@ -229,7 +229,7 @@ long.stdin.close(); long.wait()
             directory = Path(directory)
             executable = directory / "swift"
             ready = directory / "ready"
-            executable.write_text("#!/usr/bin/env python3\nimport os,pathlib,sys\nif '--version' in sys.argv:\n print('Swift version 6.4.1'); sys.exit(0)\nif sys.argv[1:3] == ['package','clean']:sys.exit(0)\npathlib.Path(os.environ['FIXTURE_READY']).write_text('core build entered')\nsys.stdin.read()\n")
+            executable.write_text("#!/usr/bin/env python3\nimport os,pathlib,sys\nif '--version' in sys.argv:\n print('Swift version 6.4.2'); sys.exit(0)\nif sys.argv[1:3] == ['package','clean']:sys.exit(0)\npathlib.Path(os.environ['FIXTURE_READY']).write_text('core build entered')\nsys.stdin.read()\n")
             executable.chmod(0o755)
             env = os.environ.copy()
             env.update(PATH=str(directory) + os.pathsep + env['PATH'], FIXTURE_READY=str(ready),

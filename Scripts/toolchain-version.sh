@@ -6,3 +6,13 @@ is_required() {
   local pattern="${required//./\\.}"
   echo "$1" | grep -Eq "Swift version ${pattern}( |$)"
 }
+
+# The identifier TOOLCHAINS takes: a standalone toolchain keeps it in Info.plist,
+# Xcode's own toolchain in ToolchainInfo.plist.
+toolchain_identifier() {
+  if [[ -f "$1/Info.plist" ]]; then
+    plutil -extract CFBundleIdentifier raw "$1/Info.plist"
+  else
+    plutil -extract Identifier raw "$1/ToolchainInfo.plist"
+  fi
+}
