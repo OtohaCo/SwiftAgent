@@ -1,69 +1,26 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC1091
-. "$root/toolchain-version.sh"
-
-shopt -s nullglob
-found=""
-developer="${DEVELOPER_DIR:-$(xcode-select -p)}"
-select_installed() {
-  local toolchain report app
-  for toolchain in "$HOME"/Library/Developer/Toolchains/*.xctoolchain /Library/Developer/Toolchains/*.xctoolchain; do
-    [[ -x "$toolchain/usr/bin/swift" ]] || continue
-    report="$("$toolchain/usr/bin/swift" --version 2>&1 || true)"
-    if is_required "$report"; then
-      found="$toolchain"
-      return
-    fi
-  done
-  for app in /Applications/Xcode*.app; do
-    toolchain="$app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain"
-    [[ -x "$toolchain/usr/bin/swift" ]] || continue
-    report="$("$toolchain/usr/bin/swift" --version 2>&1 || true)"
-    if is_required "$report"; then
-      found="$toolchain"
-      developer="$app/Contents/Developer"
-      return
-    fi
-  done
-}
-
-select_installed
-if [[ -z "$found" ]]; then
-  echo "Installing official Swift ${required} alongside the selected Xcode."
-  swiftly_bin="${SWIFTLY_BIN_DIR:-$HOME/.swiftly/bin}/swiftly"
-  if [[ ! -x "$swiftly_bin" ]]; then
-    work="$(mktemp -d)"
-    trap 'rm -rf "$work"' EXIT
-    curl -fsSL https://download.swift.org/swiftly/darwin/swiftly.pkg -o "$work/swiftly.pkg"
-    pkgutil --check-signature "$work/swiftly.pkg"
-    installer -pkg "$work/swiftly.pkg" -target CurrentUserHomeDirectory
+# Selects the Apple toolchain with the pinned Swift for the current shell:
+#   source Scripts/select-apple-toolchain.sh
+# Works from bash and zsh (agents may run commands with zsh and a temporary HOME). Exports
+# DEVELOPER_DIR, TOOLCHAINS and PATH; keeps Xcode's SDKs and does not change
+# xcode-select globally. The search runs in find-apple-toolchain.sh as a separate bash process,
+# so the caller's shell options and variables stay as they were. Returns 1 when no toolchain fits.
+if [ -n "${ZSH_VERSION:-}" ]; then
+  # zsh has no BASH_SOURCE; %x is the file being sourced. eval keeps bash from parsing it.
+  eval '_otoha_toolchain_dir="${(%):-%x}"'
+else
+  _otoha_toolchain_dir="${BASH_SOURCE[0]:-$0}"
+fi
+_otoha_toolchain_dir="$(cd "$(dirname "$_otoha_toolchain_dir")" && pwd)"
+_otoha_toolchain_status=1
+if _otoha_toolchain_env="$(/bin/bash "$_otoha_toolchain_dir/find-apple-toolchain.sh")"; then
+  eval "$_otoha_toolchain_env"
+  export DEVELOPER_DIR TOOLCHAINS PATH
+  hash -r
+  if "$_otoha_toolchain_dir/require-toolchain.sh" --apple; then
+    _otoha_toolchain_status=0
   fi
-  "$swiftly_bin" init --assume-yes --no-modify-profile --skip-install --quiet-shell-followup
-  "$swiftly_bin" install "$required" --assume-yes
-  select_installed
 fi
-
-if [[ -z "$found" ]]; then
-  echo "No installed Apple toolchain provides Swift ${required}." >&2
-  exit 1
-fi
-
-# Keep Xcode's SDKs; select the same compiler for CLI, xcrun and xcodebuild.
-# Selection is local to this shell/CI job and does not change xcode-select globally.
-identifier="$(toolchain_identifier "$found")"
-export DEVELOPER_DIR="$developer"
-export TOOLCHAINS="$identifier"
-export PATH="$found/usr/bin:$developer/usr/bin:$PATH"
-hash -r
-if [[ -n "${GITHUB_ENV:-}" ]]; then
-  echo "DEVELOPER_DIR=$developer" >> "$GITHUB_ENV"
-  echo "TOOLCHAINS=$identifier" >> "$GITHUB_ENV"
-fi
-if [[ -n "${GITHUB_PATH:-}" ]]; then
-  echo "$developer/usr/bin" >> "$GITHUB_PATH"
-  echo "$found/usr/bin" >> "$GITHUB_PATH"
-fi
-"$root/require-toolchain.sh" --apple
+unset _otoha_toolchain_dir _otoha_toolchain_env
+# Expand the status before unsetting it; exit when the file was run instead of sourced.
+eval "unset _otoha_toolchain_status; return $_otoha_toolchain_status 2>/dev/null || exit $_otoha_toolchain_status"
