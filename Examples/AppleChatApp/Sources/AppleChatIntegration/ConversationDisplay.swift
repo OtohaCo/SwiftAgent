@@ -259,7 +259,7 @@ public struct ConversationProjection: Sendable {
             updateCurrentAssistant { $0.text += text }
         case .reasoningDelta(let text):
             updateCurrentAssistant { $0.reasoning += text }
-        case .providerContinuation, .inputTransformations, .compactionProgress:
+        case .providerContinuation, .inputTransformations, .compactionProgress, .requestAttempt:
             break
         case .toolCallStarted(let callID, let name):
             updateTool(callID, name: name) { _ in }

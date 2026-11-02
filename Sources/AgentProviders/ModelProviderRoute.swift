@@ -69,6 +69,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
     private let candidates: [Candidate]
     private let policy: ModelProviderFallbackPolicy
     private let boundaryState: MutationBoundaryState
+    private let reportsAttempts: Bool
 
     /// Candidates without declared identities are known only to this Route instance, so their
     /// continuation state is refused after a restart. Declare `Candidate` IDs to keep it usable.
@@ -88,6 +89,20 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
         candidates: [Candidate],
         policy: ModelProviderFallbackPolicy = try! .init()
     ) throws {
+        try self.init(id: id, candidates: candidates, policy: policy, reportsAttempts: false)
+    }
+
+    /// With `reportsAttempts`, the stream reports every request sent to a candidate as
+    /// `ModelEvent.requestAttempt`: a failed one, with the usage and response ID it reported, before the
+    /// retry, fallback or thrown failure that follows it; the one that answered just before its events.
+    /// A request stopped because the consumer cancelled is not reported here; a Run that reports its
+    /// model requests records it. Without it the stream is exactly as before.
+    public init(
+        id: String,
+        candidates: [Candidate],
+        policy: ModelProviderFallbackPolicy = try! .init(),
+        reportsAttempts: Bool
+    ) throws {
         guard !candidates.isEmpty else { throw ModelProviderFallbackPolicyError.emptyCandidates }
         guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ModelProviderFallbackPolicyError.emptyCandidates
@@ -105,6 +120,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
         self.candidates = candidates
         self.policy = policy
         self.boundaryState = MutationBoundaryState()
+        self.reportsAttempts = reportsAttempts
         var capabilities = candidates.dropFirst().reduce(candidates[0].provider.descriptor.capabilities) { current, candidate in
             ModelCapabilities(rawValue: current.rawValue & candidate.provider.descriptor.capabilities.rawValue)
         }
@@ -160,7 +176,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
             if admission.boundaryReached, let pinned = admission.pinnedCandidateIndex, pinned != index {
                 throw OwnedContinuation.unknownOrigin
             }
-            let events = try await validatedEvents(from: candidates[index].provider, request: request)
+            let events = try await sendAttempt(1, to: candidates[index], request: request, emit: emit)
             try emitOwned(events, by: candidates[index], emit: emit)
             await boundaryState.recordValidatedCandidate(sessionID: request.sessionID, runID: request.runID,
                 generation: admission.generation, candidateIndex: index)
@@ -178,7 +194,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
                 try Task.checkCancellation()
                 attempts += 1
                 do {
-                    let events = try await validatedEvents(from: candidate.provider, request: request)
+                    let events = try await sendAttempt(attempts, to: candidate, request: request, emit: emit)
                     try emitOwned(events, by: candidate, emit: emit)
                     await boundaryState.recordValidatedCandidate(
                         sessionID: request.sessionID,
@@ -252,7 +268,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
         var attempt = 0
         while true {
             do {
-                let events = try await validatedEvents(from: candidate.provider, request: request)
+                let events = try await sendAttempt(attempt + 1, to: candidate, request: request, emit: emit)
                 try emitOwned(events, by: candidate, emit: emit)
                 break
             } catch is CancellationError {
@@ -355,8 +371,36 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
                                     nativeContextSource: request.nativeContextSource, invocationID: request.invocationID, conversationControls: request.conversationControls))
     }
 
-    private func validatedEvents(from candidate: any ModelProvider, request: ModelRequest) async throws -> [ModelEvent] {
+    /// Sends one request to `candidate` and returns its validated events. With `reportsAttempts`, reports
+    /// the request: a failed one as it fails, an answered one before its events are emitted.
+    private func sendAttempt(_ ordinal: Int, to candidate: Candidate, request: ModelRequest,
+                             emit: ModelEventStream.Emit) async throws -> [ModelEvent] {
+        let clock = ContinuousClock()
+        let started = clock.now
         var accumulator = ModelEventAccumulator()
+        let events: [ModelEvent], response: ModelResponse
+        do {
+            (events, response) = try await validatedEvents(from: candidate.provider, request: request, into: &accumulator)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if reportsAttempts {
+                try emit(.requestAttempt(.init(ordinal: ordinal, model: request.model, candidate: candidate.id,
+                    responseID: accumulator.startedResponse?.id, usage: accumulator.reportedUsage,
+                    outcome: .failed(.init(classifying: error)), duration: started.duration(to: clock.now))))
+            }
+            throw error
+        }
+        if reportsAttempts {
+            try emit(.requestAttempt(.init(ordinal: ordinal, model: request.model, candidate: candidate.id,
+                responseID: response.info.id, usage: response.usage, outcome: .completed(response.stopReason),
+                duration: started.duration(to: clock.now))))
+        }
+        return events
+    }
+
+    private func validatedEvents(from candidate: any ModelProvider, request: ModelRequest,
+                                 into accumulator: inout ModelEventAccumulator) async throws -> ([ModelEvent], ModelResponse) {
         var events: [ModelEvent] = []
         for try await event in candidate.stream(request: request) {
             try accumulator.append(event)
@@ -366,7 +410,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
         guard response.info.model == request.model else {
             throw ModelProviderError(kind: .invalidResponse, message: "Provider returned a different model identity.")
         }
-        return events
+        return (events, response)
     }
 }
 

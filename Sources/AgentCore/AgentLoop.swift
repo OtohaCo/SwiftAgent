@@ -25,6 +25,7 @@ package struct AgentLoop: Sendable {
     private let capabilityScope: AgentCapabilityScope?
     private let allowedResources: Set<ToolResource>?
     private let preAdmissionReplanning: AgentPreAdmissionReplanning
+    private let reportsModelRequests: Bool
     private let projectionDrain = AgentProjectionDrain()
     private let nativeOperations = AgentNativeOperationIDs()
     private let audit: AgentAuditRuntime?
@@ -45,6 +46,7 @@ package struct AgentLoop: Sendable {
                  allowedResources: Set<ToolResource>? = nil,
                  preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled,
                  audit: AgentAuditRuntime? = nil,
+                 reportsModelRequests: Bool = false,
                  beforeHandlingModelEvent: (@Sendable (ModelEvent) async -> Void)? = nil) {
         self.beforeHandlingModelEvent = beforeHandlingModelEvent
         self.binding = binding
@@ -61,6 +63,7 @@ package struct AgentLoop: Sendable {
         self.allowedResources = allowedResources
         self.preAdmissionReplanning = preAdmissionReplanning
         self.audit = audit
+        self.reportsModelRequests = reportsModelRequests
     }
 
     package init(model: ModelID, provider: any ModelProvider, tools: ToolRegistry, scheduler: ToolScheduler = .init(),
@@ -313,38 +316,61 @@ package struct AgentLoop: Sendable {
             var accumulator = ModelEventAccumulator()
             var receivedThisTurn: [ToolCallID] = []
                 var startedThisTurn: Set<ToolCallID> = []
-            for try await rawEvent in settlingModelEvents(provider.stream(request: request), gate: budget.gate) {
-                await beforeHandlingModelEvent?(rawEvent)
-                try budget.checkActive()
-                let event = try scopeContinuation(rawEvent, requestBoundary: requestBoundary)
-                if let audit, case .toolCallStarted(let id, let name) = event {
-                    if id.rawValue.utf8.count > 512 || name.utf8.count > 512
-                        || id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.isEmpty
-                        || !startedThisTurn.insert(id).inserted {
-                        // Only a bounded identity diagnostic is available; no claim to reconstruct fragments.
-                        try await audit.capture(.init(id: id, name: name, argumentsJSON: "", completeness: .incomplete),
-                            operationID: operationID, mutationIdentity: nil)
-                        try await audit.rejected(id, reason: "invalid_or_duplicate_stream_identity")
+            var requests = AgentModelRequestTracker(model: request.model)
+            if reportsModelRequests { await emitter?.requestInFlight(requests.pending(accumulator)) }
+            let response: ModelResponse
+            do {
+                for try await rawEvent in settlingModelEvents(provider.stream(request: request), gate: budget.gate) {
+                    await beforeHandlingModelEvent?(rawEvent)
+                    if case .requestAttempt(let attempt) = rawEvent {
+                        // A request the provider reports itself (a route's retries and fallbacks), not part of the response.
+                        requests.providerReported(attempt)
+                        await emitter?.requestEnded(attempt, next: reportsModelRequests ? requests.pending(accumulator) : nil)
+                        continue
                     }
+                    requests.observedEvent()
+                    try budget.checkActive()
+                    let event = try scopeContinuation(rawEvent, requestBoundary: requestBoundary)
+                    if let audit, case .toolCallStarted(let id, let name) = event {
+                        if id.rawValue.utf8.count > 512 || name.utf8.count > 512
+                            || id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.isEmpty
+                            || !startedThisTurn.insert(id).inserted {
+                            // Only a bounded identity diagnostic is available; no claim to reconstruct fragments.
+                            try await audit.capture(.init(id: id, name: name, argumentsJSON: "", completeness: .incomplete),
+                                operationID: operationID, mutationIdentity: nil)
+                            try await audit.rejected(id, reason: "invalid_or_duplicate_stream_identity")
+                        }
+                    }
+                    if let audit, case .toolCallCompleted(let call) = event {
+                        let bounded = call.argumentsJSON.utf8.count <= AuditEncoding.maximumRawBytes
+                            && call.id.rawValue.utf8.count <= 512 && call.name.utf8.count <= 512
+                        let key = bounded ? Self.idempotencyKey(operationID: operationID, runID: runID, call: call) : nil
+                        try await audit.capture(call, operationID: operationID, mutationIdentity: key)
+                        receivedThisTurn.append(call.id)
+                    }
+                    do { try accumulator.append(event) }
+                    catch {
+                        for id in receivedThisTurn { try await audit?.rejected(id, reason: "model_stream_rejected") }
+                        throw error
+                    }
+                    switch event {
+                    case .responseStarted, .usage:
+                        if reportsModelRequests { await emitter?.requestInFlight(requests.pending(accumulator)) }
+                    default: break
+                    }
+                    if case .responseStarted(let info) = event { try requireConfiguredModel(info.model) }
+                    if case .responseCompleted = event { continue }
+                    try await emitter?.send(.model(event))
                 }
-                if let audit, case .toolCallCompleted(let call) = event {
-                    let bounded = call.argumentsJSON.utf8.count <= AuditEncoding.maximumRawBytes
-                        && call.id.rawValue.utf8.count <= 512 && call.name.utf8.count <= 512
-                    let key = bounded ? Self.idempotencyKey(operationID: operationID, runID: runID, call: call) : nil
-                    try await audit.capture(call, operationID: operationID, mutationIdentity: key)
-                    receivedThisTurn.append(call.id)
+                try budget.checkActive()
+                response = try accumulator.finish()
+            } catch {
+                if reportsModelRequests {
+                    await emitter?.requestEnded(requests.unreported(after: error, accumulator: accumulator), next: nil)
                 }
-                do { try accumulator.append(event) }
-                catch {
-                    for id in receivedThisTurn { try await audit?.rejected(id, reason: "model_stream_rejected") }
-                    throw error
-                }
-                if case .responseStarted(let info) = event { try requireConfiguredModel(info.model) }
-                if case .responseCompleted = event { continue }
-                try await emitter?.send(.model(event))
+                throw error
             }
-            try budget.checkActive()
-            let response = try accumulator.finish()
+            if reportsModelRequests { await emitter?.requestEnded(requests.unreported(completing: response), next: nil) }
             try requireConfiguredModel(response.info.model)
             try await emitter?.send(.model(.responseCompleted(response)))
             if response.stopReason == .cancelled { throw CancellationError() }

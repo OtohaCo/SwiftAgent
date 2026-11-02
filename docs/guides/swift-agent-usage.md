@@ -1,6 +1,6 @@
 # Usage accounting
 
-last-verified: 2026-10-07
+last-verified: 2026-11-02
 
 `AgentUsage` is an optional, Linux-portable product for aggregating usage that a
 Host can observe through public events. It depends only on `AgentModels`.
@@ -129,6 +129,13 @@ Map `AgentEvent` to observations in the Host's existing single consumer:
 3. `responseStarted` records an empty provisional response.
 4. `usage` records a cumulative provisional snapshot.
 5. `responseCompleted` records the final snapshot exactly once.
+
+With `AgentConfiguration.reportsModelRequests`, `.model(.requestAttempt)` also
+names every physical request, including failed route attempts and requests a
+stop or the deadline ended. A failed or cancelled record is spend that no
+response carries: record it under its own invocation identity, with
+`providerResponseID` = `responseID` and `routeSource` = `candidate`. A completed
+record repeats its response's usage; count it or `responseCompleted`, not both.
 
 Do not open a second `for await` over `AgentRun.events`, and do not add
 `AgentLoopResult.response.usage` again after consuming `responseCompleted`.

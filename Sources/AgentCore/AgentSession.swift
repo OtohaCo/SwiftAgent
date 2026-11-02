@@ -40,6 +40,7 @@ public actor AgentSession {
     private let instructions: String
     private let contextPolicy: AgentContextPolicy
     private let preAdmissionReplanning: AgentPreAdmissionReplanning
+    private let reportsModelRequests: Bool
     private let authorization: AgentAuthorizationConfiguration
     private let journal: AgentJournal?
     private let checkpointDidExit: (@Sendable (UUID) -> Void)?
@@ -95,6 +96,7 @@ public actor AgentSession {
          maxToolCalls: Int, runTimeout: Duration, contextPolicy: AgentContextPolicy, journal: AgentJournal? = nil,
          preAdmissionReplanning: AgentPreAdmissionReplanning = .disabled,
          authorization: AgentAuthorizationConfiguration = .init(),
+         reportsModelRequests: Bool = false,
          checkpointDidExit: (@Sendable (UUID) -> Void)? = nil,
          drainWaitDidBegin: (@Sendable (UUID) -> Void)? = nil,
          drainReleaseDidBegin: (@Sendable (UUID) async -> Void)? = nil,
@@ -112,6 +114,7 @@ public actor AgentSession {
         self.contextPolicy = contextPolicy
         self.preAdmissionReplanning = preAdmissionReplanning
         self.authorization = authorization
+        self.reportsModelRequests = reportsModelRequests
         history = AgentContextWindow.applyingCurrentInstructions([], instructions: instructions)
         self.maxModelTurns = maxModelTurns
         self.maxToolCalls = maxToolCalls
@@ -898,7 +901,8 @@ public actor AgentSession {
                              conversationControlState: conversationControlState, runContextControls: contextControls,
                              capabilityScope: capabilities?.scope,
                              allowedResources: capabilities?.allowedResources,
-                             preAdmissionReplanning: preAdmissionReplanning, audit: audit)
+                             preAdmissionReplanning: preAdmissionReplanning, audit: audit,
+                             reportsModelRequests: reportsModelRequests)
         let owed = owedSteering
         let candidateMessages = prepared + owed.map { .user([.text($0.text)]) } + [.user(inputContent)]
         let preparedRequest: AgentPreparedModelRequest

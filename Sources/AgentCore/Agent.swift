@@ -27,6 +27,9 @@ public struct AgentConfiguration: Sendable {
     public var contextPolicy: AgentContextPolicy
     public var preAdmissionReplanning: AgentPreAdmissionReplanning
     public var authorization: AgentAuthorizationConfiguration
+    /// Each Run's events carry one `.model(.requestAttempt)` for every model request the Run made, failed
+    /// and stopped ones included (`ModelRequestAttempt`). Off by default: the events are as before.
+    public var reportsModelRequests = false
 
     public init(
         instructions: String = "",
@@ -146,6 +149,7 @@ public struct Agent: Sendable {
             contextPolicy: configuration.contextPolicy, journal: journal,
             preAdmissionReplanning: configuration.preAdmissionReplanning,
             authorization: configuration.authorization,
+            reportsModelRequests: configuration.reportsModelRequests,
             checkpointDidExit: checkpointDidExit, drainWaitDidBegin: drainWaitDidBegin,
             drainReleaseDidBegin: drainReleaseDidBegin,
             scopeReleaseDidFinish: scopeReleaseDidFinish,

@@ -13,6 +13,12 @@ public struct ModelEventAccumulator: Sendable {
 
     public init() {}
 
+    /// The response the stream started, also when it ended without its terminal event.
+    public var startedResponse: ResponseInfo? { info }
+
+    /// The cumulative usage reported so far, also when the stream ended without its terminal event.
+    public var reportedUsage: ModelUsage { usage }
+
     public mutating func append(_ event: ModelEvent) throws {
         if let failure { throw failure }
         do { try accept(event) }
@@ -23,6 +29,8 @@ public struct ModelEventAccumulator: Sendable {
     }
 
     private mutating func accept(_ event: ModelEvent) throws {
+        // A report of a request that already ended, not part of this response.
+        if case .requestAttempt = event { return }
         guard terminal == nil else { throw ModelStreamError.eventAfterTerminal }
         if case .responseStarted(let started) = event {
             guard info == nil else { throw ModelStreamError.duplicateStart }
@@ -67,7 +75,7 @@ public struct ModelEventAccumulator: Sendable {
             // one JSON object is kept so the runtime can tell the model instead of ending the Run.
             calls[call.id] = call
         case .inputTransformations(let snapshot): inputTransformations = snapshot
-        case .compactionProgress: break
+        case .compactionProgress, .requestAttempt: break
         case .usage(let newer):
             let merged = ModelUsage(
                 inputTokens: newer.inputTokens ?? usage.inputTokens,

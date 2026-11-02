@@ -1,5 +1,18 @@
 # SwiftAgent Semantic Versioning
 
+## Model request records (after RC6, unreleased branch)
+
+Adds `ModelRequestAttempt`, the case `ModelEvent.requestAttempt`, the opt-in
+`AgentConfiguration.reportsModelRequests` and
+`ModelProviderRoute.init(id:candidates:policy:reportsAttempts:)`; existing
+initializer signatures are unchanged. `ModelEventAccumulator` gains
+`startedResponse` and `reportedUsage`, and `ModelProviderError.Diagnostic`
+becomes `Hashable`. Downstream exhaustive `ModelEvent` switches must add the
+case. Both settings default to off, so no existing stream gains an event. No
+protocol requirement or Journal schema changes: the records are event-stream
+diagnostics, not Journal facts (ADR 0004). See
+[the model event contract](swift-agent-model-events.md#request-reports).
+
 ## Host-initiated tool invocation (after RC6, unreleased branch)
 
 Adds `AgentSession.invokeHostTool(_:capabilities:operationID:budget:)` and the new

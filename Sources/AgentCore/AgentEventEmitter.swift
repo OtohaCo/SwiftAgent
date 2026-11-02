@@ -8,6 +8,7 @@ actor AgentEventEmitter {
     private var reservedCompletions = Set<ToolCallID>()
     private var reservedAdmissionRejections = Set<ToolCallID>()
     private var pendingTermination: AgentRunTermination?
+    private var pendingRequest: AgentPendingModelRequest?
     private var finishStartedWaiters: [CheckedContinuation<Void, Never>] = []
     private var finishWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -30,6 +31,21 @@ actor AgentEventEmitter {
         default: break
         }
         if case .terminated = continuation.yield(event), requiresConsumer { throw CancellationError() }
+    }
+
+    /// The model request in flight. A Run that ends before its turn records the request publishes it as
+    /// stopped, before `runFinished`.
+    func requestInFlight(_ request: AgentPendingModelRequest?) {
+        guard !finished else { return }
+        pendingRequest = request
+    }
+
+    /// A model request ended: its record is a fact, published also after cancellation until the Run's end is.
+    /// No consumer check; the next ordinary event notices a closed consumer. `next` is the request in flight after it.
+    func requestEnded(_ record: ModelRequestAttempt?, next: AgentPendingModelRequest?) {
+        guard !finished else { return }
+        if let record { continuation.yield(.model(.requestAttempt(record))) }
+        pendingRequest = next
     }
 
     func failIfActive(_ id: ToolCallID, failure: AgentFailure) throws {
@@ -107,6 +123,10 @@ actor AgentEventEmitter {
         guard !finished, reservedCompletions.isEmpty, reservedAdmissionRejections.isEmpty,
               let termination = pendingTermination else { return }
         finished = true
+        if let pendingRequest {
+            continuation.yield(.model(.requestAttempt(pendingRequest.stopped(at: .now))))
+            self.pendingRequest = nil
+        }
         for activeTool in activeTools {
             switch termination {
             case .failed(let failure): continuation.yield(.toolFailed(activeTool, failure))

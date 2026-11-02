@@ -62,4 +62,8 @@ public enum ModelEvent: Hashable, Sendable, Codable {
     case inputTransformations([ModelInputTransformation])
     case compactionProgress(ModelCompactionProgress)
     case responseCompleted(ModelResponse)
+    /// One physical request already ended, reported by a provider that sends more than one for a call (a
+    /// route's retries and fallbacks) or by a Run that reports its model requests. Not part of the response:
+    /// it may come before `responseStarted`, and replaying a response skips it.
+    case requestAttempt(ModelRequestAttempt)
 }

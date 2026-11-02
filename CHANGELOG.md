@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased — a record of every model request
+
+- `ModelRequestAttempt` is a bounded record of one physical model request:
+  its position among the requests made for one `stream(request:)` call, the
+  model, the route candidate, the response ID, the usage the service reported
+  (cached, cache-write and reasoning tokens included), how it ended (completed
+  with its stop reason, failed with the provider's error kind and fixed
+  diagnostic, or cancelled) and how long it took. It carries no request,
+  response text, tool call or provider message.
+- `ModelProviderRoute(id:candidates:policy:reportsAttempts:)` with
+  `reportsAttempts: true` reports every request it sends to a candidate as
+  `ModelEvent.requestAttempt`. A failed request is reported with the usage and
+  response ID it reported before failing, before the retry, fallback or thrown
+  failure that follows. The request that answered is reported just before its
+  events. Before, a failed attempt and anything it was billed were invisible.
+- `AgentConfiguration.reportsModelRequests` makes each Run's events carry one
+  `.model(.requestAttempt)` for every model request of the Run: the provider's
+  own reports, forwarded, and one the runtime makes for a request the provider
+  did not report. That covers an ordinary provider's request, and a request
+  stopped by the user or the deadline, which keeps the usage it had reported.
+  A record follows its `turnStarted` and comes before that turn's
+  `responseCompleted`, or before `runFinished`. Native compaction requests stay
+  reported by `AgentEvent.compaction`.
+- The records are diagnostics on the event stream, not Journal facts
+  (ADR 0004): the Journal and its formats are unchanged, and
+  `AgentJournalEvent.modelAttempt`/`modelCompleted` are still not written.
+- Both settings are off by default; without them every stream is as before.
+- `ModelEventAccumulator` skips `requestAttempt` and exposes `startedResponse`
+  and `reportedUsage` for a stream that ends without its terminal event.
+  `ModelProviderError.Diagnostic` is `Hashable`.
+
+### Breaking
+
+- `ModelEvent` adds `requestAttempt(ModelRequestAttempt)`. Exhaustive switches
+  must add it; a consumer that replays a response skips it.
+
 ## Unreleased — validation toolchain 6.4.2
 
 - Pins CI and `.swift-version` to the official Swift 6.4.2 stable release. On

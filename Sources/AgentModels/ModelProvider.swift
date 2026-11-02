@@ -52,7 +52,7 @@ public struct ModelProviderDescriptor: Hashable, Sendable, Codable {
 public struct ModelProviderError: Error, Equatable, Sendable {
     /// Optional machine-readable detail. Fixed codes carry no provider payload,
     /// and never grant permission to retry or replay an external effect.
-    public struct Diagnostic: Equatable, Sendable, Codable {
+    public struct Diagnostic: Hashable, Sendable, Codable {
         public enum Stage: String, Sendable, Codable {
             case server, transport, streamLifecycle, responseDecoding, responseValidation
             case continuation, requestValidation

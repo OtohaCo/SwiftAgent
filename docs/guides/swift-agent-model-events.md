@@ -1,6 +1,6 @@
 # SwiftAgent Model Event Contract
 
-last-verified: 2026-10-05
+last-verified: 2026-11-02
 
 This contract applies to one normalized model response, produced by a provider
 adapter and consumed by the agent loop. The data types live in
@@ -69,6 +69,25 @@ belongs in the existing event consumer; it does not change this protocol.
 If a native provider only sends a final snapshot, its adapter emits the equivalent
 normalized start/delta/completion events before the response terminal. Native
 frames and provider-specific fallback logic do not enter this contract.
+
+## Request reports
+
+`requestAttempt(ModelRequestAttempt)` reports one physical request that already
+ended. It is not part of the response: the accumulator skips it, and it may
+come before `responseStarted`. Only a `ModelProviderRoute` created with
+`reportsAttempts: true` emits it. That Route reports every request it sends to a candidate:
+a failed one, with the usage and response ID it reported, before the retry,
+fallback or thrown failure that follows; the one that answered just before its
+events. A request stopped because the consumer cancelled is not reported by the
+Route.
+
+With `AgentConfiguration.reportsModelRequests`, a Run's events carry exactly one
+`.model(.requestAttempt)` for each model request: the provider's reports,
+forwarded, and one the runtime makes for a request the provider did not report.
+That includes an ordinary provider's request, and a request stopped by the user or the
+deadline, kept with the usage it had reported. Each comes after its
+`turnStarted` and before that turn's `responseCompleted`, or before
+`runFinished`. Native compaction requests are reported by `AgentEvent.compaction`.
 
 ## Completion and Tool Safety
 
