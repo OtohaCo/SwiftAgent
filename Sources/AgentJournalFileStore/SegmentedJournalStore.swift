@@ -7,6 +7,9 @@ import Foundation
 import Darwin
 #elseif canImport(Glibc)
 import Glibc
+#elseif os(Windows)
+import WinSDK
+import struct Foundation.UUID
 #endif
 
 public struct JournalMaintenancePolicy: Sendable {
@@ -719,7 +722,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     let supportsAuthorizationAudit: Bool
     private let policy: JournalMaintenancePolicy
     private let lock = NSLock()
-    private var descriptor: Int32
+    private var descriptor: JournalWriterLock
     private var closed = false
     private var poisoned = false
     private var expectedCurrent: Current?
@@ -735,7 +738,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private var garbageEnumerators: [String: FileManager.DirectoryEnumerator] = [:]
     private var finishedIndexKinds: Set<String> = []
 
-    private init(directoryURL: URL, format: Format, descriptor: Int32,
+    private init(directoryURL: URL, format: Format, descriptor: JournalWriterLock,
                  formatDigest: String,
                  policy: JournalMaintenancePolicy,
                  fault: (@Sendable (JournalFileFaultStage) throws -> Void)? = nil) {
@@ -759,7 +762,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         self.fault = fault
     }
 
-    deinit { if descriptor >= 0 { _ = flock(descriptor, LOCK_UN); _ = DarwinOrGlibcClose(descriptor) } }
+
 
     static func create(at url: URL, domain: String, policy: JournalMaintenancePolicy,
                        supportsAdmissionRejections: Bool = false,
@@ -844,6 +847,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let format: Format
         let formatBytes: Data
         do {
+            #if os(Windows)
+            let handle = try JournalWindowsIO.open(formatURL)
+            defer { try? handle.close() }
+            #else
             let fd = DarwinOrGlibcOpen(formatURL.path, O_RDONLY | O_NOFOLLOW, 0)
             guard fd >= 0 else { throw AgentJournalError.invalidHeader }
             let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
@@ -852,6 +859,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             guard fstat(fd, &info) == 0, (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
                 throw AgentJournalError.invalidHeader
             }
+            #endif
             formatBytes = try handle.readToEnd() ?? Data()
             format = try JSONDecoder().decode(Format.self, from: formatBytes)
         } catch is DecodingError {
@@ -1013,27 +1021,17 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
     }
 
-    /// The lock lives exactly as long as this handle's descriptor. O_CLOEXEC keeps a child the Host
-    /// spawns (posix_spawn, fork/exec) from inheriting it and holding the store after close.
     private static func lockStore(_ directory: URL,
                                   retry: (@Sendable () throws -> Void)? = nil,
-                                  observer: (@Sendable (JournalOpeningStage) -> Void)? = nil) throws -> Int32 {
-        let path = directory.appendingPathComponent(".writer.lock").path
-        let fd = DarwinOrGlibcOpen(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { throw ioError("open writer lock") }
+                                  observer: (@Sendable (JournalOpeningStage) -> Void)? = nil) throws -> JournalWriterLock {
         do {
-            while flock(fd, LOCK_EX | LOCK_NB) != 0 {
-                let code = errno
-                guard code == EWOULDBLOCK || code == EAGAIN else { throw ioError("acquire writer lock") }
-                observer?(.lockContended)
-                guard let retry else { throw AgentJournalError.storeInUse }
-                try retry()
-            }
+            let owner = try JournalWriterLock(file: directory.appendingPathComponent(".writer.lock"),
+                                              retry: retry, contended: { observer?(.lockContended) })
             observer?(.lockAcquired)
-            return fd
-        } catch {
-            _ = DarwinOrGlibcClose(fd)
-            throw error
+            return owner
+        } catch is JournalWriterLock.Contended { throw AgentJournalError.storeInUse }
+        catch let error as JournalWriterLock.Unavailable {
+            throw AgentJournalError.persistenceUnavailable("writer lock: \(error.cause.localizedDescription)")
         }
     }
 
@@ -1045,9 +1043,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         // publish or roll back an uncertain transaction. Keep the handle
         // poisoned until a new owner validates CURRENT on reopen.
         try fault?(.beforeClose)
-        let fd = descriptor
-        guard DarwinOrGlibcClose(fd) == 0 else { throw Self.ioError("close writer lock") }
-        descriptor = -1
+        try descriptor.close()
         closed = true
     }
 
@@ -1167,14 +1163,21 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private func validateManagedDirectory(_ url: URL) throws {
+        #if os(Windows)
+        try JournalWindowsIO.validateDirectory(url)
+        #else
         let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard values.isDirectory == true, values.isSymbolicLink != true else {
             throw AgentJournalError.invalidHeader
         }
+        #endif
     }
 
     private func openRegularFile(_ url: URL) throws -> FileHandle {
         try validateManagedDirectory(url.deletingLastPathComponent())
+        #if os(Windows)
+        return try JournalWindowsIO.open(url)
+        #else
         let fd = DarwinOrGlibcOpen(url.path, O_RDONLY | O_NOFOLLOW, 0)
         guard fd >= 0 else { throw Self.ioError("open managed file") }
         var info = stat()
@@ -1183,6 +1186,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             throw AgentJournalError.invalidFrame
         }
         return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        #endif
     }
 
     private func managedName(_ id: UUID) -> String { "\(storeID.uuidString)_\(id.uuidString)" }
@@ -1376,7 +1380,11 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private static func ioError(_ operation: String) -> AgentJournalError {
+        #if os(Windows)
+        .persistenceUnavailable("\(operation): Win32 \(GetLastError())")
+        #else
         .persistenceUnavailable("\(operation): errno \(errno)")
+        #endif
     }
 
     private static func fileSize(_ url: URL) throws -> UInt64 {
@@ -1386,6 +1394,13 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private static func truncate(_ url: URL, to offset: UInt64) throws {
+        #if os(Windows)
+        let handle = try JournalWindowsIO.open(url, access: DWORD(GENERIC_READ | GENERIC_WRITE))
+        defer { try? handle.close() }
+        guard try handle.seekToEnd() >= offset else { throw AgentJournalError.invalidFrame }
+        try handle.truncate(atOffset: offset)
+        try handle.synchronize()
+        #else
         let fd = DarwinOrGlibcOpen(url.path, O_RDWR | O_NOFOLLOW, 0)
         guard fd >= 0 else { throw ioError("open segment") }
         defer { _ = DarwinOrGlibcClose(fd) }
@@ -1395,10 +1410,20 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             throw AgentJournalError.invalidFrame
         }
         guard ftruncate(fd, off_t(offset)) == 0, fsync(fd) == 0 else { throw ioError("truncate unpublished tail") }
+        #endif
     }
 
     private func writeNew(_ data: Data, at url: URL) throws {
         try validateManagedDirectory(url.deletingLastPathComponent())
+        #if os(Windows)
+        let handle = try JournalWindowsIO.open(url, access: DWORD(GENERIC_READ | GENERIC_WRITE), creation: DWORD(CREATE_NEW))
+        defer { try? handle.close() }
+        try fault?(.beforeManagedWrite)
+        try handle.write(contentsOf: data)
+        counters.add(written: data.count)
+        try fault?(.beforeManagedSync)
+        try handle.synchronize()
+        #else
         let fd = DarwinOrGlibcOpen(url.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { throw Self.ioError("create managed file") }
         defer { _ = DarwinOrGlibcClose(fd) }
@@ -1406,6 +1431,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         try writeAll(data, fd: fd)
         try fault?(.beforeManagedSync)
         guard fsync(fd) == 0 else { throw Self.ioError("sync managed file") }
+        #endif
         try Self.syncDirectory(url.deletingLastPathComponent())
     }
 
@@ -1416,11 +1442,16 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         defer { try? FileManager.default.removeItem(at: temporary) }
         if url.lastPathComponent == "CURRENT" { try fault?(.beforeCurrentReplace) }
         willReplace?()
+        #if os(Windows)
+        try JournalWindowsIO.publish(temporary, at: url)
+        #else
         guard rename(temporary.path, url.path) == 0 else { throw Self.ioError("publish managed file") }
+        #endif
         if url.lastPathComponent == "CURRENT" { try fault?(.afterCurrentReplace) }
         try Self.syncDirectory(url.deletingLastPathComponent())
     }
 
+    #if !os(Windows)
     private func writeAll(_ data: Data, fd: Int32) throws {
         try data.withUnsafeBytes { raw in
             guard let base = raw.baseAddress else { return }
@@ -1435,21 +1466,31 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         counters.add(written: data.count)
     }
 
+    #endif
+
     /// The Host owns the store's parent and may reach it through a symlink, which the path keeps while
     /// the store does not exist yet. Sync the parent's real directory; managed paths keep `O_NOFOLLOW`.
     private static func syncParentDirectory(of directory: URL) throws {
+        #if os(Windows)
+        try JournalWindowsIO.validateDirectory(directory.deletingLastPathComponent(), follow: true)
+        #else
         guard let resolved = realpath(directory.deletingLastPathComponent().path, nil) else {
             throw ioError("resolve store parent directory")
         }
         defer { free(resolved) }
         try syncDirectory(URL(fileURLWithPath: String(cString: resolved)))
+        #endif
     }
 
     private static func syncDirectory(_ url: URL) throws {
+        #if os(Windows)
+        try JournalWindowsIO.validateDirectory(url)
+        #else
         let fd = DarwinOrGlibcOpen(url.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0)
         guard fd >= 0 else { throw ioError("open managed directory") }
         defer { _ = DarwinOrGlibcClose(fd) }
         guard fsync(fd) == 0 else { throw ioError("sync managed directory") }
+        #endif
     }
 
     /// A batch payload up to this size is stored inside its frame; a larger one goes to a blob.
@@ -1666,6 +1707,25 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func append(_ data: Data, to root: Root, commitID: UUID) throws -> Location {
         let url = segmentURL(root.active)
         try validateManagedDirectory(url.deletingLastPathComponent())
+        #if os(Windows)
+        let handle = try JournalWindowsIO.open(url, access: DWORD(GENERIC_READ | GENERIC_WRITE))
+        defer { try? handle.close() }
+        guard try handle.seekToEnd() == root.activeEnd else {
+            throw AgentJournalError.persistenceUnavailable("active segment changed outside the owner")
+        }
+        if let fault {
+            do { try fault(.partialAppend) }
+            catch {
+                try handle.write(contentsOf: Data(data.prefix(max(1, data.count / 3))))
+                throw error
+            }
+        }
+        try handle.write(contentsOf: data)
+        counters.add(written: data.count)
+        try fault?(.beforeAppendSync)
+        try handle.synchronize()
+        try fault?(.afterAppendSync)
+        #else
         let fd = DarwinOrGlibcOpen(url.path, O_WRONLY | O_APPEND | O_NOFOLLOW, 0)
         guard fd >= 0 else { throw Self.ioError("open active segment") }
         defer { _ = DarwinOrGlibcClose(fd) }
@@ -1685,6 +1745,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         try fault?(.beforeAppendSync)
         guard fsync(fd) == 0 else { throw Self.ioError("sync active segment") }
         try fault?(.afterAppendSync)
+        #endif
         return Location(kind: "segment", file: root.active, offset: root.activeEnd,
                         length: UInt32(data.count), generation: root.layoutGeneration,
                         commitID: commitID)
@@ -2893,8 +2954,11 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 }
 
+#if !os(Windows)
 private func DarwinOrGlibcOpen(_ path: String, _ flags: Int32, _ mode: mode_t) -> Int32 {
     path.withCString { open($0, flags, mode) }
 }
 private func DarwinOrGlibcClose(_ fd: Int32) -> Int32 { close(fd) }
 private func DarwinOrGlibcWrite(_ fd: Int32, _ buffer: UnsafeRawPointer, _ count: Int) -> Int { write(fd, buffer, count) }
+
+#endif
