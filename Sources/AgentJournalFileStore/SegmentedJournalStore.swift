@@ -1395,7 +1395,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
     private static func truncate(_ url: URL, to offset: UInt64) throws {
         #if os(Windows)
-        let handle = try JournalWindowsIO.open(url, access: DWORD(GENERIC_READ | GENERIC_WRITE))
+        let handle = try JournalWindowsIO.open(url, access: DWORD(GENERIC_READ) | DWORD(GENERIC_WRITE))
         defer { try? handle.close() }
         guard try handle.seekToEnd() >= offset else { throw AgentJournalError.invalidFrame }
         try handle.truncate(atOffset: offset)
@@ -1416,7 +1416,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func writeNew(_ data: Data, at url: URL) throws {
         try validateManagedDirectory(url.deletingLastPathComponent())
         #if os(Windows)
-        let handle = try JournalWindowsIO.open(url, access: DWORD(GENERIC_READ | GENERIC_WRITE), creation: DWORD(CREATE_NEW))
+        let handle = try JournalWindowsIO.open(url, access: DWORD(GENERIC_READ) | DWORD(GENERIC_WRITE), creation: DWORD(CREATE_NEW))
         defer { try? handle.close() }
         try fault?(.beforeManagedWrite)
         try handle.write(contentsOf: data)
@@ -1708,7 +1708,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let url = segmentURL(root.active)
         try validateManagedDirectory(url.deletingLastPathComponent())
         #if os(Windows)
-        let handle = try JournalWindowsIO.open(url, access: DWORD(GENERIC_READ | GENERIC_WRITE))
+        let handle = try JournalWindowsIO.open(url, access: DWORD(GENERIC_READ) | DWORD(GENERIC_WRITE))
         defer { try? handle.close() }
         guard try handle.seekToEnd() == root.activeEnd else {
             throw AgentJournalError.persistenceUnavailable("active segment changed outside the owner")

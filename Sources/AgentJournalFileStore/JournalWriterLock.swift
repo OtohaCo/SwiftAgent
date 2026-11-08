@@ -21,7 +21,7 @@ final class JournalWriterLock {
     init(file: URL, retry: (() throws -> Void)? = nil, contended: () -> Void = {}) throws {
         #if os(Windows)
         let opened = file.path.withCString(encodedAs: UTF16.self) {
-            CreateFileW($0, DWORD(GENERIC_READ | GENERIC_WRITE), DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE),
+            CreateFileW($0, DWORD(GENERIC_READ) | DWORD(GENERIC_WRITE), DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE),
                         nil, DWORD(OPEN_ALWAYS), DWORD(FILE_FLAG_OPEN_REPARSE_POINT), nil)
         }
         guard let opened, opened != INVALID_HANDLE_VALUE else { throw Self.windowsError() }

@@ -26,7 +26,7 @@ struct JournalWindowsIOTests {
         try powershell("$a=Get-Acl \(quoted(root)); $r=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'),'Read','ContainerInherit,ObjectInherit','None','Allow'); $a.AddAccessRule($r); Set-Acl \(quoted(root)) $a")
         for name in ["segment", "blob", "publication.tmp"] {
             let file = root.appendingPathComponent(name)
-            let handle = try JournalWindowsIO.open(file, access: DWORD(GENERIC_READ | GENERIC_WRITE), creation: DWORD(CREATE_NEW))
+            let handle = try JournalWindowsIO.open(file, access: DWORD(GENERIC_READ) | DWORD(GENERIC_WRITE), creation: DWORD(CREATE_NEW))
             try handle.write(contentsOf: Data("private".utf8))
             try handle.synchronize()
             try handle.close()
@@ -45,7 +45,7 @@ struct JournalWindowsIOTests {
         let current = root.appendingPathComponent("CURRENT")
         let temporary = root.appendingPathComponent("next.tmp")
         try Data("old".utf8).write(to: current)
-        let file = try JournalWindowsIO.open(temporary, access: DWORD(GENERIC_READ | GENERIC_WRITE), creation: DWORD(CREATE_NEW))
+        let file = try JournalWindowsIO.open(temporary, access: DWORD(GENERIC_READ) | DWORD(GENERIC_WRITE), creation: DWORD(CREATE_NEW))
         try file.write(contentsOf: Data("complete new generation".utf8))
         try file.synchronize()
         try file.close()
