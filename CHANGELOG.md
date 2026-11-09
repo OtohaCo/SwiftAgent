@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — provider completion diagnostics
+
+- Gemini completes MALFORMED_FUNCTION_CALL, UNEXPECTED_TOOL_CALL, OTHER and LANGUAGE
+  with an unknown stop reason, preserving text and usage while dropping calls and
+  continuation data. These outcomes no longer fail as invalid responses.
+
 ## Unreleased — a record of every model request
 
 - `ModelRequestAttempt` is a bounded record of one physical model request:

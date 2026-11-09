@@ -83,10 +83,12 @@ struct GeminiResponseDecoder {
         case "MAX_TOKENS": stop = .maxOutputTokens
         case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII": stop = .refusal
         case nil where blocked: stop = .refusal
+        case "MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL", "OTHER", "LANGUAGE":
+            stop = .unknown(finishReason!)
         default: throw ProviderJSON.invalid()
         }
         guard let info else { throw ProviderJSON.invalid() }
-        // No executable partial calls after safety/truncation. Retain visible words and usage only.
+        // No executable calls after safety, truncation, or a diagnostic finish reason. Retain visible words and usage only.
         let retainedParts = stop == .endTurn ? parts : parts.filter { $0["functionCall"] == nil }
         let parsed = try Self.parseParts(retainedParts, allowedNames: request.tools.map(\.name), mappings: nil)
         var content = parsed.content

@@ -167,14 +167,31 @@ struct GeminiProviderTests {
         #expect(try accumulator.finish().usage.outputTokens == 10)
     }
 
-    @Test(arguments: ["MAX_TOKENS", "SAFETY", "MALFORMED_FUNCTION_CALL", "unfinished"])
+    @Test(arguments: ["MAX_TOKENS", "SAFETY", "unfinished"])
     func blockedTruncatedMalformedAndEOFNeverAuthorizeTools(reason: String) async throws {
         let probe = ProviderRequestProbe(), provider = try GeminiProvider(credentials: .init(apiKey: { "key" }),
             transport: FixtureHTTPTransport(probe: probe, bodies: [try geminiFixture(parts: geminiParallelParts, reason: reason == "unfinished" ? nil : reason)]))
         var calls = 0
         do { for try await event in provider.stream(request: geminiToolRequest) { if case .toolCallCompleted = event { calls += 1 } } }
-        catch let error as ModelProviderError { #expect(["MALFORMED_FUNCTION_CALL", "unfinished"].contains(reason) && error.kind == .invalidResponse) }
+        catch let error as ModelProviderError { #expect(reason == "unfinished" && error.kind == .invalidResponse) }
         #expect(calls == 0)
+    }
+
+    @Test(arguments: ["MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL", "OTHER", "LANGUAGE"])
+    func diagnosticFinishReasonsCompleteWithoutAuthorizingTools(reason: String) async throws {
+        let usage: JSONValue = .object(["promptTokenCount": .number(12), "candidatesTokenCount": .number(3)])
+        for streaming in [true, false] {
+            let parts = [.object(["text": .string("partial answer")])] + geminiParallelParts
+            let provider = try GeminiProvider(credentials: .init(apiKey: { "key" }), streaming: streaming,
+                transport: FixtureHTTPTransport(probe: ProviderRequestProbe(),
+                    bodies: [try geminiFixture(parts: parts, reason: reason, usage: usage, streaming: streaming)]))
+            let response = try await geminiResponse(provider, geminiToolRequest)
+            #expect(response.stopReason == .unknown(reason))
+            #expect(response.toolCalls.isEmpty)
+            #expect(response.content.contains(.text("partial answer")))
+            #expect(response.usage.inputTokens == 12 && response.usage.outputTokens == 3)
+            #expect(!response.content.contains { if case .providerContinuation = $0 { return true }; return false })
+        }
     }
 
     @Test func blockedPromptWithCandidateCannotAuthorizeCallsAndResponseAccumulationIsBounded() async throws {
