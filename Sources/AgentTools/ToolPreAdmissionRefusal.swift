@@ -18,6 +18,16 @@ package struct ToolPreAdmissionRefusal: Error, Sendable {
         "Whether this call may run could not be decided, so it did not run and nothing changed. "
             + "Go on another way, or tell the user what you could not do.")
 
+    /// The tool's authorization did not answer within the scheduler's authorization wait limit (OAI-1519).
+    package static let notAnswered = Self(code: "not_answered",
+        "No decision on whether this call may run came in time, so it did not run and nothing changed. "
+            + "Go on another way, or tell the user what you could not do.")
+
+    /// Another call held what this call needs past the scheduler's lease wait limit (OAI-1519).
+    package static let busy = Self(code: "busy",
+        "What this call needs was in use by other work for too long, so it did not run and nothing changed. "
+            + "Try again later, or go on another way.")
+
     /// The model named a tool this Run does not offer, or one not declared to it yet.
     package static let unknownTool = Self(code: "unknown_tool",
         "No tool by that name is available here, so nothing ran. Use one of the tools you were given, or go on without it.")

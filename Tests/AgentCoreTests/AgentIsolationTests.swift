@@ -108,12 +108,16 @@ struct AgentIsolationTests {
             await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await run.wait() }
         }
         let sessionB = try b.makeSession()
-        await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "B"))) { try await sessionB.run("B").wait() }
+        // B waits for the lease A's executor still holds; that wait is not B's execution time (OAI-1519).
+        let waiting = Task { try await sessionB.run("B").wait() }
+        await scheduler.waitUntilPendingWaiterCountEquals(1)
+        try await Task.sleep(for: .milliseconds(200))
         #expect(await probe.labels == ["A"])
         await gate.open()
         #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(try await waiting.value.outcome == .completed)
         #expect(try await sessionB.run("C").wait().outcome == .completed)
-        #expect(await probe.labels == ["A", "C"])
+        #expect(await probe.labels == ["A", "B", "C"])
     }
 
     @Test func unrelatedResourcesCanProgressWhileAnExclusiveExecutorIsStillActive() async throws {

@@ -39,17 +39,31 @@ package actor ToolResourceCoordinator {
         }
     }
 
+    /// A lease wait that reached its `until` instant without being granted.
+    package struct WaitExpired: Error {}
+
+    /// Waits for a lease; with `until`, gives up at that instant with `WaitExpired`. A lease is either
+    /// granted or the wait ends, never both: both happen on this actor.
     package func acquire(resources: [ToolResource], effect: ToolPolicy.Effect,
-                         execution: ToolPolicy.Execution) async throws -> UUID {
+                         execution: ToolPolicy.Execution, until deadline: ContinuousClock.Instant? = nil) async throws -> UUID {
         try ToolResource.validate(resources)
         try Task.checkCancellation()
+        if let deadline, ContinuousClock.now >= deadline { throw WaitExpired() }
         let id = UUID()
         let request = Request(resources: Set(resources), mutation: effect == .mutation,
                               exclusive: execution == .exclusive || effect == .mutation)
+        var timer: Task<Void, Never>?
+        defer { timer?.cancel() }
         let lease = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 waiters.append(Waiter(id: id, request: request, continuation: continuation))
                 grantEligibleWaiters()
+                if let deadline, waiters.contains(where: { $0.id == id }) {
+                    timer = Task { [weak self] in
+                        guard (try? await ContinuousClock().sleep(until: deadline)) != nil else { return }
+                        await self?.expireWaiter(id)
+                    }
+                }
             }
         } onCancel: {
             // A delayed cancellation callback must never release an active lease.
@@ -66,6 +80,13 @@ package actor ToolResourceCoordinator {
 
     package func release(_ lease: UUID) {
         guard active.removeValue(forKey: lease) != nil else { return }
+        grantEligibleWaiters()
+    }
+
+    private func expireWaiter(_ id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = waiters.remove(at: index)
+        waiter.continuation.resume(throwing: WaitExpired())
         grantEligibleWaiters()
     }
 

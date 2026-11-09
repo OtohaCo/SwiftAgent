@@ -37,7 +37,7 @@ switch on them rather than wrapping arbitrary errors themselves.
 | Stale or missing Evidence | `EvidenceError` | `unavailable`, `staleEvidence` |
 | Receipt rejected | `ToolReceiptError` | Binding against the expectation |
 | Mutation blocked / needs host action | `AgentJournalError` | `mutationRequiresReconciliation`, `storeInUse`, `sessionLeaseUnavailable` |
-| Scheduler timeout | `ToolSchedulerError` or `AgentLoopError.toolTimedOut` | Lease wait / tool deadline |
+| Scheduler timeout | `ToolSchedulerError` or `AgentLoopError.toolTimedOut` | Tool timeout, counted from the moment the lease is held. Waits past `authorizationWaitLimit` or `leaseWaitLimit` are `not_answered` / `busy` tool results instead |
 | Run budget / deadline | `AgentLoopError` | `invalidBudget`, `deadlineExceeded`, turn/call limits |
 | Session contract | `AgentSessionError` | `emptyInput`, `runInProgress`, `durableJournalRequired` (nil or memory journal on a mutation Agent) |
 | Future input / dispatch | `AgentFollowUpError` | `inputConflict`, `queueFull`, `dispatchOwned`, `needsInspection`, `durableJournalRequired` |

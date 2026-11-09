@@ -11,7 +11,8 @@ public struct ToolPolicy: Hashable, Codable, Sendable {
     public let effect: Effect
     public let execution: Execution
     public let idempotency: Idempotency
-    /// Scheduling limit; declaring a timeout does not enforce it.
+    /// Execution limit, counted by the scheduler from the moment the call holds its resource lease; waits for
+    /// authorization and for the lease have their own limits on `ToolScheduler`.
     public let timeout: Duration
     public let authorization: Authorization
     public let evidence: EvidencePolicy

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — tool timeouts count execution only (OAI-1519)
+
+- `ToolPolicy.timeout` now starts when the call holds its resource lease, just
+  before the invocation. Before, it started at dispatch, so a slow answer to an
+  approval or a wait behind another conversation's long command used it up and
+  the call timed out (and a mutation timing out mid-execution needed
+  reconciliation).
+- `ToolScheduler(authorizationWaitLimit:leaseWaitLimit:)` bound the two waits.
+  Past either, the call never runs and the model gets a `not_answered` or
+  `busy` result (ADR 0016). Both default to nil: only the Run's deadline bounds
+  them. Under audited authorization a wait past a limit is `toolTimedOut`.
+- Under `whileHoldingResourceLease`, the tool's authorization runs inside the
+  timed invocation, as before.
+
 ## Unreleased — refused tool calls reach the model (ADR 0016)
 
 - A model's call to a tool the Run does not offer (or has not declared yet), a
