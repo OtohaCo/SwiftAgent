@@ -218,7 +218,8 @@ struct AuditBoundaryTests {
         let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "not-dispatched", supportsAuthorizationAudit: true)
         let log = EffectLog(), authorizer = AuditTestAuthorizer()
         let calls = [ToolCall(id: .init(rawValue: "first"), name: "add", argumentsJSON: #"{"lhs":1,"rhs":2}"#, completeness: .complete),
-            .init(id: .init(rawValue: "second"), name: "unknown", argumentsJSON: "{}", completeness: .complete)]
+            // A call in the Host's reserved namespace fails the whole batch's preparation (an unknown tool no longer does, ADR 0016).
+            .init(id: .init(rawValue: AgentHostToolCall.callIDPrefix + "second"), name: "add", argumentsJSON: #"{"lhs":1,"rhs":2}"#, completeness: .complete)]
         let run = try await Agent(model: fixtureModel, provider: ScriptedProvider { request, _ in toolResponse(request, calls) },
             tools: [try AddTool(log: log)], configuration: .init(maxToolCalls: reason == "budget" ? 0 : 8,
                 authorization: auditTestConfiguration(authorizer: authorizer))).makeSession(journal: journal).run("test")

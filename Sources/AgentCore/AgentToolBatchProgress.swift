@@ -56,7 +56,13 @@ actor AgentToolBatchProgress {
             var proposed = results
             proposed[index] = message
             let committedHistory = history(proposed)
-            if result.confirmedNoEffect != nil {
+            if result.notAdmitted {
+                // Refused before admission (ADR 0016): no intent to settle, whatever the tool's effect.
+                if let lifecycle {
+                    let canonical = try await lifecycle.checkpoint(committedHistory, [])
+                    updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+                }
+            } else if result.confirmedNoEffect != nil {
                 guard let commit = lifecycle?.commitNoEffectResult else { throw AgentJournalError.invalidRecord }
                 let canonical = try await commit(call, result, committedHistory)
                 updateCanonicalPrefix(canonical, committedHistory: committedHistory)
@@ -110,7 +116,7 @@ actor AgentToolBatchProgress {
                 }
             } else { settlement = error }
             let exposed: any Error
-            if call.policy.effect == .mutation, !result.isIdempotentReplay {
+            if call.policy.effect == .mutation, !result.isIdempotentReplay, !result.notAdmitted {
                 let mark = lifecycle?.markMutationNeedsReconciliation
                 let callID = call.call.id
                 exposed = await AgentMutationPersistenceError.capturing(settlement: settlement) {

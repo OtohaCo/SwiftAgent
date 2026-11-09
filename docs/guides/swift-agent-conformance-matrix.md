@@ -120,8 +120,9 @@ SwiftAgent now provides an explicit read-only channel matching the applicable Pi
 | Scenario | Pi coverage | SwiftAgent coverage | Existing test | Gap | Applicable | Severity | Action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Declared read-only recoverable error | tool_execution_end isError | Yes | `declaredRecoverableReadOnlyErrorBecomesModelVisibleAndContinues`, restart/parallel tests | — | Yes | P2 | Covered by SAI-039 |
-| Malformed arguments / unknown tool | prepare/validate | Fail closed, no execution | `AgentLoopContractTests.malformedUnknownAndInvalidBatchMembersNeverExecuteAnyTool` | Must stay fail closed | Yes | P0 | Covered |
-| Mutation / authorization / Evidence / receipt / journal | — | Fail closed | `AgentRecoverableToolErrorTests`, mutation recovery and loop failure suites | — | Yes | P0 | Covered |
+| Malformed arguments / unknown tool | prepare/validate | No execution; model-visible error result (ADR 0016) | `AgentLoopContractTests.malformedUnknownAndInvalidBatchMembersNeverExecute` | Must never execute | Yes | P0 | Covered |
+| Tool authorization denied or failed | — | No execution, no intent; model-visible error result (ADR 0016) | `AgentPreAdmissionResultTests` | — | Yes | P0 | Covered |
+| Mutation after intent / Evidence / receipt / journal | — | Fail closed | `AgentRecoverableToolErrorTests`, mutation recovery and loop failure suites | — | Yes | P0 | Covered |
 
 The model-visible envelope is runtime-defined (`code`, `message`, optional
 `details`), carries no Receipt or Evidence, and is encoded by Anthropic and the

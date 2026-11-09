@@ -181,10 +181,11 @@ func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Ou
   and the set never shrinks within the Run, so declare a few tools at a time.
   Each declaration also changes the request's tool list, which a Provider's
   prompt cache treats as a new prefix.
-- A call naming a deferred tool that has not been declared fails exactly as a
-  call naming no bound tool: preparation throws `unknownTool` before any
-  authorization, required audit records the proposal as `preparation_rejected`,
-  and the Run fails. Bound but undeclared is not a weaker way to be callable.
+- A call naming a deferred tool that has not been declared is refused exactly
+  as a call naming no bound tool: before any authorization the model gets an
+  `unknown_tool` error result that does not repeat the name, required audit
+  records the proposal as `unknown_tool`, and the Run goes on (ADR 0016). Bound
+  but undeclared is not a weaker way to be callable.
 - A settled mutation replay returns its stored output and declares nothing. Put
   discovery in a read-only tool.
 - The declared set is request view state of one Run and is not journaled. A Run

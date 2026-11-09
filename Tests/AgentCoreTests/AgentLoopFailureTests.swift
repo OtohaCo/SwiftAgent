@@ -5,9 +5,9 @@ import Foundation
 import Testing
 
 struct AgentLoopFailureTests {
-    @Test func authorizationMutationAndInvalidOutputStayFailClosed() async throws {
+    /// A denial is a result the model hears (ADR 0016, `AgentPreAdmissionResultTests`); these still end the Run.
+    @Test func mutationIntegrityAndInvalidOutputStayFailClosed() async throws {
         let cases: [(ToolPolicy, Double, ToolInvocationError?)] = [
-            (try ToolPolicy(effect: .readOnly, execution: .sequential, idempotency: .safe, timeout: .seconds(1)), 1, .authorizationDenied),
             (try ToolPolicy(effect: .mutation, execution: .exclusive, idempotency: .safe,
                             timeout: .seconds(1), authorization: .notRequired), 1, .mutationIntegrityUnavailable),
             (try ToolPolicy(effect: .readOnly, execution: .sequential, idempotency: .safe,

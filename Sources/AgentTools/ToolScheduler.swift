@@ -126,7 +126,9 @@ public struct ToolScheduler: Sendable {
                             var admitted = call
                             if call.auditAuthorization != nil { try await call.preauthorizeAudit(deadline: toolDeadline) }
                             else if authorization == .beforeResourceLease {
-                                admitted = try await call.authorizedBeforeLease(deadline: toolDeadline)
+                                // Refused before the lease: nothing ran and no intent exists (ADR 0016).
+                                do { admitted = try await call.authorizedBeforeLease(deadline: toolDeadline) }
+                                catch let refusal as ToolPreAdmissionRefusal { return refusal.result }
                             }
                             try Task.checkCancellation()
                             let lease = try await coordinator.acquire(resources: call.resources, effect: call.policy.effect,

@@ -376,16 +376,18 @@ struct AgentCapabilityScopeTests {
         #expect(await log.names.isEmpty)
         #expect(await binding.status().finalAdmissions == 0)
 
-        let guessed = ScriptedProvider { request, _ in
-            toolResponse(request, [.init(id: .init(rawValue: "guess"), name: "unpublished",
-                                         argumentsJSON: "{}", completeness: .complete)])
+        let guessed = ScriptedProvider { request, turn in
+            turn == 1 ? toolResponse(request, [.init(id: .init(rawValue: "guess"), name: "unpublished",
+                                                     argumentsJSON: "{}", completeness: .complete)])
+                : textResponse(request, "No such tool.")
         }
         let guessedAgent = try Agent(model: fixtureModel, provider: guessed)
         let separate = try guessedAgent.makeSession()
         let limited = try await separate.bindCapabilities(identity: "limited", version: "1",
             backendInstanceID: "fixture", backendVersion: "1", allowedResources: [], tools: [])
         let attempt = try await separate.run("guess", capabilities: limited)
-        await #expect(throws: ToolRegistryError.unknownTool("unpublished")) { _ = try await attempt.wait() }
+        // A guessed name is told to the model as unknown (ADR 0016); nothing is admitted.
+        #expect(try await attempt.wait().outcome == .completed)
         try await attempt.waitForDrain()
         #expect(await limited.status().finalAdmissions == 0)
     }

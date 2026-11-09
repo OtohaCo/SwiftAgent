@@ -133,19 +133,20 @@ struct AgentRecoverableToolErrorTests {
         }
     }
 
-    @Test func authorizationFailureStaysFailClosed() async throws {
+    /// ADR 0016: a denial never reaches the executor and is told to the model in fixed words.
+    @Test func aDenialNeverRunsTheToolAndGoesBackToTheModel() async throws {
         let call = recoverableCall(id: "denied", query: "missing")
-        let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
-        let tool = try RecoverableSearchTool(probe: RecoverableProbe(), authorization: .required)
+        let provider = ScriptedProvider { request, turn in turn == 1 ? toolResponse(request, [call]) : textResponse(request, "ok") }
+        let probe = RecoverableProbe()
+        let tool = try RecoverableSearchTool(probe: probe, authorization: .required)
 
-        await #expect(throws: ToolInvocationError.authorizationDenied) {
-            _ = try await Agent(model: fixtureModel, provider: provider, tools: [tool])
-                .makeSession().run("Search").wait()
-        }
-        #expect(await provider.log.requests.count == 1)
+        let result = try await Agent(model: fixtureModel, provider: provider, tools: [tool]).makeSession().run("Search").wait()
+        #expect(result.outcome == .completed)
+        #expect(await probe.executions == 0)
+        #expect(await provider.log.requests.count == 2)
     }
 
-    @Test func malformedArgumentsGoBackToTheModelAndUnknownToolsStayFailClosed() async throws {
+    @Test func malformedArgumentsAndUnknownToolsGoBackToTheModel() async throws {
         let malformed = ToolCall(id: .init(rawValue: "malformed"), name: RecoverableSearchTool.name,
                                  argumentsJSON: #"{"query":1}"#, completeness: .complete)
         let probe = RecoverableProbe()
@@ -160,11 +161,14 @@ struct AgentRecoverableToolErrorTests {
 
         let unknown = ToolCall(id: .init(rawValue: "unknown"), name: "unknown_tool",
                                argumentsJSON: "{}", completeness: .complete)
-        let failing = ScriptedProvider { request, _ in toolResponse(request, [unknown]) }
+        let failing = ScriptedProvider { request, turn in
+            turn == 1 ? toolResponse(request, [unknown]) : textResponse(request, "I will search instead.")
+        }
         let session = try Agent(model: fixtureModel, provider: failing,
                                 tools: [try RecoverableSearchTool(probe: RecoverableProbe())]).makeSession()
-        await #expect(throws: (any Error).self) { _ = try await session.run("Search").wait() }
-        #expect(await failing.log.requests.count == 1)
+        // An unknown tool is told to the model too (ADR 0016).
+        #expect(try await session.run("Search").wait().outcome == .completed)
+        #expect(await failing.log.requests.count == 2)
     }
 
     @Test func parallelSuccessErrorSuccessPreservesProposalOrder() async throws {

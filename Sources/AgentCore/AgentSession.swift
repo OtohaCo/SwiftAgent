@@ -564,7 +564,10 @@ public actor AgentSession {
                                                                            replayed: result.isIdempotentReplay))] + images)
         let proposed = history + [notice]
         do {
-            if let proof = result.confirmedNoEffect {
+            if result.notAdmitted {
+                // Refused before admission (ADR 0016): the Host hears it as an error result; no intent exists.
+                _ = try await record(proposed, steering: [], runID: runID, budget: budget)
+            } else if let proof = result.confirmedNoEffect {
                 guard let journal else { throw AgentJournalError.invalidRecord }
                 let prepared = try await prepareCheckpoint(proposed)
                 beginCommittedWrite(runID)
@@ -583,7 +586,8 @@ public actor AgentSession {
             }
             hostResultsCommitted.insert(runID)
         } catch {
-            guard call.policy.effect == .mutation, !result.isIdempotentReplay, result.confirmedNoEffect == nil else { throw error }
+            guard call.policy.effect == .mutation, !result.isIdempotentReplay, result.confirmedNoEffect == nil,
+                  !result.notAdmitted else { throw error }
             let callID = call.call.id
             throw await AgentMutationPersistenceError.capturing(settlement: error) {
                 try await self.journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)

@@ -22,6 +22,9 @@ public protocol AgentTool: Sendable {
     func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation?
     /// Declare immutable action versions; checked again just before audited dispatch.
     func authorizationBinding(for input: Input) throws -> ToolAuthorizationBinding
+    /// Runs before the executor and before any mutation intent. `.denied`, or a thrown error, is told to
+    /// the model as this call's error result and the Run goes on (ADR 0016): a `RecoverableToolError` with
+    /// its own code and message, anything else in fixed words. Cancel the Run to stop it instead.
     func authorize(_ input: Input, context: ToolContext) async throws -> ToolAuthorization
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output>
 }
@@ -139,6 +142,8 @@ public struct ToolResult<Output: Codable & Sendable>: Sendable {
     package let isIdempotentReplay: Bool
     package let isModelVisibleError: Bool
     package var confirmedNoEffect: ToolNoEffectProof? = nil
+    /// Refused before admission (ADR 0016): no executor entry, no mutation intent, no receipt.
+    package var notAdmitted = false
 
     public init(output: Output, evidence: [Evidence] = [], receipt: ToolReceipt? = nil, declaredTools: [String] = [],
                 images: [ModelImage] = []) {

@@ -104,7 +104,8 @@ struct AuthorizationBeforeLeaseTests {
         await fixture.probe.waitFor("execute:B")
 
         let a = try await fixture.session().run("A", operationID: "A")
-        await #expect(throws: (any Error).self) { try await a.wait() }
+        // The denial goes back to the model while B still holds the lease (ADR 0016).
+        #expect(try await a.wait().outcome == .completed)
         #expect(await fixture.scheduler.pendingWaiterCount() == 0)
         await fixture.executors.open()
         #expect(try await b.wait().outcome == .completed)

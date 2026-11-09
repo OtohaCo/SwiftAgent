@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — refused tool calls reach the model (ADR 0016)
+
+- A model's call to a tool the Run does not offer (or has not declared yet), a
+  tool's own `authorize` returning `.denied`, and a tool's own `authorize`
+  throwing no longer end the Run. The call gets an error tool result
+  (`unknown_tool`, `not_allowed`, `authorization_failed`) in fixed words that
+  never repeat the tool name, arguments or thrown error, and the Run goes on.
+  This holds for mutations too: none of these reaches the executor or writes a
+  mutation intent.
+- A `RecoverableToolError` thrown from `authorize` reaches the model with its
+  own code and message, for every tool. A mutation tool can refuse with a
+  precise reason without writing an intent or returning a receipt.
+- Failures after a mutation intent is written still mark it as needing
+  reconciliation and end the Run. Cancellation, deadlines, Evidence, capability
+  scope, integrity checks and audited authorization (ADR 0009) are unchanged.
+- A Host-initiated call that its tool refuses returns that error result to the
+  Host instead of throwing.
+- Under required audit, an unknown tool's proposal is recorded with the reason
+  `unknown_tool` instead of `preparation_rejected`.
+
 ## Unreleased — a record of every model request
 
 - `ModelRequestAttempt` is a bounded record of one physical model request:
