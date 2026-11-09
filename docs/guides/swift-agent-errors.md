@@ -31,13 +31,13 @@ switch on them rather than wrapping arbitrary errors themselves.
 | Model / provider failure | `ModelProviderError` | Adapter `kind` |
 | Request does not fit the model's context window | `ModelProviderError` with `kind == .contextWindowExceeded` | The provider rejected the request; see below. Never retried |
 | Stream protocol error | `ModelStreamError` | Accumulator / incomplete stream |
-| Tool schema or unknown tool | `ToolRegistryError` | Preparation. Model arguments that are not one JSON object or do not match the input schema (`invalidJSON`, `invalidArguments`) do not end the Run: the call is not run and the model gets an `invalid_arguments` tool error |
-| Tool invocation / authorization | `ToolInvocationError` | `authorizationDenied`. `invalidArguments` during preparation goes back to the model as above |
+| Tool schema or unknown tool | `ToolRegistryError` | Preparation. Model arguments that are not one JSON object or do not match the input schema (`invalidJSON`, `invalidArguments`) do not end the Run: the call is not run and the model gets an `invalid_arguments` tool error. A model call to an unknown or undeclared tool gets an `unknown_tool` error result in fixed words (ADR 0016) |
+| Tool invocation / authorization | `ToolInvocationError` | A tool's own `authorize` that returns `.denied` or throws does not end the Run: the model gets `not_allowed`, `authorization_failed`, or a thrown `RecoverableToolError` as written; nothing ran and no intent was written (ADR 0016). `authorizationDenied` remains for audited authorization. `invalidArguments` during preparation goes back to the model as above |
 | Invalid tool output / JSON encoding | `ToolRegistryError.invalidOutput`, `ToolInvocationError.invalidOutput` | Only opted-in `.readOnly` + `.modelVisible` tools return an `invalid_output` error result and continue; other policies retain terminal failure |
 | Stale or missing Evidence | `EvidenceError` | `unavailable`, `staleEvidence` |
 | Receipt rejected | `ToolReceiptError` | Binding against the expectation |
 | Mutation blocked / needs host action | `AgentJournalError` | `mutationRequiresReconciliation`, `storeInUse`, `sessionLeaseUnavailable` |
-| Scheduler timeout | `ToolSchedulerError` or `AgentLoopError.toolTimedOut` | Lease wait / tool deadline |
+| Scheduler timeout | `ToolSchedulerError` or `AgentLoopError.toolTimedOut` | Tool timeout, counted from the moment the lease is held. Waits past `authorizationWaitLimit` or `leaseWaitLimit` are `not_answered` / `busy` tool results instead |
 | Run budget / deadline | `AgentLoopError` | `invalidBudget`, `deadlineExceeded`, turn/call limits |
 | Session contract | `AgentSessionError` | `emptyInput`, `runInProgress`, `durableJournalRequired` (nil or memory journal on a mutation Agent) |
 | Future input / dispatch | `AgentFollowUpError` | `inputConflict`, `queueFull`, `dispatchOwned`, `needsInspection`, `durableJournalRequired` |
@@ -74,7 +74,7 @@ output failure emitted `toolFailed` and terminated the Run. Default
 The output error contains fixed wording and sanitized schema paths, never
 rejected output values or dynamic property names. The invalid result publishes
 no images, Evidence, receipt or tool declarations. This channel does not catch
-arbitrary executor errors, unknown tools, authorization, persistence,
+arbitrary executor errors, persistence,
 cancellation or deadlines, and cannot change a confirmed mutation settlement.
 See the [tools guide](swift-agent-tools.md#recovering-from-invalid-read-only-output-unreleased)
 and [versioning guide](swift-agent-versioning.md).

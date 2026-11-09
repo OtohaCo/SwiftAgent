@@ -6,16 +6,19 @@ import Testing
 import XCTest
 
 struct AgentEventFailureTests {
-    @Test func rejectedAuthorizationClosesToolBeforeRunFailure() async throws {
+    /// A denial is a result the model hears (ADR 0016): the started tool completes with it and the Run goes on.
+    @Test func rejectedAuthorizationCompletesTheToolWithARefusal() async throws {
         let log = EffectLog()
         let policy = try ToolPolicy(effect: .readOnly, execution: .sequential, idempotency: .safe, timeout: .seconds(1))
         let tool = GuardedTool(log: log, policy: policy, output: 1)
         let call = ToolCall(id: .init(rawValue: "guard"), name: "guarded", argumentsJSON: "{}", completeness: .complete)
-        let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
+        let provider = ScriptedProvider { request, turn in turn == 1 ? toolResponse(request, [call]) : textResponse(request, "ok") }
         let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: [AnyAgentTool(tool)]))
         let events = await collectEvents(loop.events(messages: [], sessionID: UUID(), budget: try testBudget()))
-        let failure = AgentFailure.toolInvocation(.authorizationDenied)
-        #expect(Array(events.suffix(3)) == [.toolStarted(call), .toolFailed(call.id, failure), .runFinished(.failed(failure))])
+        let started = try #require(events.firstIndex(of: .toolStarted(call)))
+        guard case .toolCompleted(let result) = events[started + 1] else { Issue.record("No completion"); return }
+        #expect(result.callID == call.id && result.isError)
+        #expect(!events.contains { if case .toolFailed = $0 { true } else { false } })
         #expect(await log.names.isEmpty)
         #expect(events.filter { if case .runFinished = $0 { true } else { false } }.count == 1)
     }
@@ -30,12 +33,13 @@ struct AgentEventFailureTests {
         #expect(AgentFailure(span) == .contextProjection(span))
     }
 
-    @Test func unknownToolFailsWithoutPublishingToolStart() async throws {
+    @Test func unknownToolIsRejectedWithoutPublishingToolStart() async throws {
         let call = ToolCall(id: .init(rawValue: "unknown"), name: "missing", argumentsJSON: "{}", completeness: .complete)
-        let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
+        let provider = ScriptedProvider { request, turn in turn == 1 ? toolResponse(request, [call]) : textResponse(request, "ok") }
         let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: []))
         let events = await collectEvents(loop.events(messages: [], sessionID: UUID(), budget: try testBudget()))
-        #expect(events.last == .runFinished(.failed(.toolRegistry(.unknownTool("missing")))))
+        #expect(events.contains(.toolAdmissionRejected(call.id)))
+        if case .runFinished(.result(let result)) = events.last { #expect(result.outcome == .completed) } else { Issue.record("The Run did not go on") }
         #expect(!events.contains { if case .toolStarted = $0 { true } else { false } })
     }
 

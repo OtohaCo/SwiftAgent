@@ -112,7 +112,8 @@ struct AgentLoopCancellationTests {
         await gateA.open()
     }
 
-    @Test func lateAuthorizationCannotExecuteAndReceivesTheToolDeadline() async throws {
+    /// OAI-1519: authorization has its own wait limit, given to it as its deadline; an answer after it never executes.
+    @Test func lateAuthorizationCannotExecuteAndReceivesItsWaitDeadline() async throws {
         let gate = ManualGate()
         let entered = XCTestExpectation(description: "Authorization entered")
         let returned = XCTestExpectation(description: "Authorization returned")
@@ -122,9 +123,10 @@ struct AgentLoopCancellationTests {
         let tool = ApprovalTool(gate: gate, log: log, entered: entered, returned: returned, policy: policy)
         let call = ToolCall(id: .init(rawValue: "approve"), name: "approval", argumentsJSON: "{}", completeness: .complete)
         let provider = ScriptedProvider { request, turn in
-            turn == 1 ? toolResponse(request, [call]) : textResponse(request, "Unexpected")
+            turn == 1 ? toolResponse(request, [call]) : textResponse(request, "Not answered")
         }
-        let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: [AnyAgentTool(tool)]))
+        let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: [AnyAgentTool(tool)]),
+                             scheduler: ToolScheduler(authorizationWaitLimit: .milliseconds(100)))
         let budget = try testBudget()
         let task = Task {
             defer { finished.fulfill() }
@@ -137,10 +139,12 @@ struct AgentLoopCancellationTests {
         #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 1) == .completed)
         await gate.open()
         #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
-        guard case .failure(let error) = await task.value else { Issue.record("Late authorization succeeded"); return }
-        #expect(error as? AgentLoopError == .toolTimedOut(call.id))
+        guard case .success(let result) = await task.value else { Issue.record("The Run did not go on"); return }
+        guard case .tool(let refusal)? = result.history.last(where: { if case .tool = $0 { true } else { false } }),
+              case .json(.object(let fields))? = refusal.content.first else { Issue.record("No refusal"); return }
+        #expect(refusal.isError && fields["code"] == .string("not_answered"))
         #expect(await log.names == ["authorize"])
-        #expect(await provider.log.requests.count == 1)
+        #expect(await provider.log.requests.count == 2)
     }
 }
 

@@ -107,6 +107,20 @@ persistence, cancellation and deadlines are not converted by this output
 channel. Input validation remains the separate preparation-time
 `invalid_arguments` result; it does not invoke the executor.
 
+## Result size limit (unreleased)
+
+`AgentTool.maximumResultBytes` (default `AgentToolResultLimit.defaultBytes`,
+1 MiB; at least `AgentToolResultLimit.minimumBytes`, 4 KiB) bounds what one
+result adds to the conversation. A result whose JSON output encodes to more is
+replaced before it is committed by an object with `truncated: true`,
+`original_bytes`, `kept_bytes`, a `notice` for the model and `partial_json`, the
+beginning of the output as JSON text cut short. The replacement fits the limit;
+the Receipt, Evidence, declared tools and images are kept, and a mutation
+settles with the cut output. Images are not counted. Tools that already page or
+cut their own output should set a limit above what they return. The limit bounds
+one result; many results can still exceed the context policy's history limit,
+which projectors handle.
+
 ## Tools Defined at Runtime
 
 A tool whose name, description and schemas are known only at runtime (declared by
@@ -181,10 +195,11 @@ func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Ou
   and the set never shrinks within the Run, so declare a few tools at a time.
   Each declaration also changes the request's tool list, which a Provider's
   prompt cache treats as a new prefix.
-- A call naming a deferred tool that has not been declared fails exactly as a
-  call naming no bound tool: preparation throws `unknownTool` before any
-  authorization, required audit records the proposal as `preparation_rejected`,
-  and the Run fails. Bound but undeclared is not a weaker way to be callable.
+- A call naming a deferred tool that has not been declared is refused exactly
+  as a call naming no bound tool: before any authorization the model gets an
+  `unknown_tool` error result that does not repeat the name, required audit
+  records the proposal as `unknown_tool`, and the Run goes on (ADR 0016). Bound
+  but undeclared is not a weaker way to be callable.
 - A settled mutation replay returns its stored output and declares nothing. Put
   discovery in a read-only tool.
 - The declared set is request view state of one Run and is not journaled. A Run

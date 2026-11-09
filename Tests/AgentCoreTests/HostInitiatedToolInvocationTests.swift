@@ -107,10 +107,10 @@ struct HostInitiatedToolInvocationTests {
         ])
         let before = try await session.conversationSnapshot()
 
-        await #expect(throws: (any Error).self) {
-            _ = try await invoke(session, AgentHostToolCall(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#),
-                                                 capabilities: capabilities, operationID: "ui-drag-1")
-        }
+        // A refusal is the call's error result, returned to the Host (ADR 0016).
+        let result = try await invoke(session, AgentHostToolCall(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#),
+                                      capabilities: capabilities, operationID: "ui-drag-1")
+        #expect(result.result.isError && result.receipt == nil)
 
         #expect(await probe.count == 0)
         #expect(await probe.authorizations == 1, "the tool's own authorization was asked")
@@ -334,14 +334,14 @@ struct HostInitiatedToolInvocationTests {
         let capabilities = try await binding(session, [
             AgentCapabilityTool(id: "move", version: "1", tool: try MoveClipTool(journal: journal, probe: HostMutationProbe(), authorization: .denied)),
         ])
-        await #expect(throws: (any Error).self) {
-            _ = try await invoke(session, AgentHostToolCall(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#),
-                                 capabilities: capabilities, operationID: "ui-drag-1")
-        }
+        let result = try await invoke(session, AgentHostToolCall(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#),
+                                      capabilities: capabilities, operationID: "ui-drag-1")
+        #expect(result.result.isError)
         guard case .user(let content)? = try await session.conversationSnapshot().messages.last, case .text(let text)? = content.first else {
             Issue.record("a Host notice is expected"); return
         }
-        #expect(text.hasPrefix(AgentHostToolCall.historyHeader) && text.contains("did not complete") && text.contains("nothing was changed"))
+        // The refusal is the call's error result (ADR 0016); its fixed words say nothing changed.
+        #expect(text.hasPrefix(AgentHostToolCall.historyHeader) && text.contains("(an error)") && text.contains("nothing changed"))
         #expect(try await journal.pendingMutations().isEmpty)
         try await journal.close()
     }

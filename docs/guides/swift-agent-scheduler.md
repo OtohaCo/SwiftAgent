@@ -44,9 +44,23 @@ for them. Separate scheduler instances are separate coordination domains.
 
 ## Deadlines and Completion
 
-Each tool deadline begins at dispatch and includes waiting for resources,
-authorization, execution and result validation. A timeout or cancellation stops the
-caller waiting and signals the executor. The lease remains held until the actual
+A call's time has three parts, each bounded separately, and all by the Run's
+deadline:
+
+- Authorization before the lease (the default `beforeResourceLease` timing, or
+  audited authorization) waits up to `ToolScheduler(authorizationWaitLimit:)`.
+  Past it the model gets a `not_answered` result and the call never runs.
+- The resource lease wait is bounded by `leaseWaitLimit`. Past it the model gets
+  a `busy` result and the call never runs.
+- `ToolPolicy.timeout` starts once the lease is held, just before the invocation,
+  and covers admission checks, the mutation intent, the executor and result
+  validation. Under `whileHoldingResourceLease` the tool's authorization runs
+  inside that invocation and counts against this timeout.
+
+Both limits default to nil: only the Run's deadline bounds those waits. Under
+audited authorization, a wait past either limit fails the call with
+`toolTimedOut` instead. A timeout or cancellation stops the caller waiting and
+signals the executor. The lease remains held until the actual
 invocation exits, including uncooperative operations. A new conflicting invocation
 cannot enter merely because the earlier Run settled.
 

@@ -35,6 +35,52 @@
   with an unknown stop reason, preserving text and usage while dropping calls and
   continuation data. These outcomes no longer fail as invalid responses.
 
+## Unreleased — tool results have a size limit (OAI-1521)
+
+- `AgentTool.maximumResultBytes` (default 1 MiB of encoded JSON output, at
+  least 4 KiB) is applied before a result is committed. A larger output is
+  replaced by `{"truncated": true, "original_bytes", "kept_bytes", "notice",
+  "partial_json"}`, which fits the limit and keeps the start of the output.
+  Before, any size was committed and the history check on the next request
+  failed that Run and every later Run with `historyTooLarge`.
+- Receipts, Evidence, declared tools and images are kept; a mutation settles
+  with the cut output. Host-initiated calls are cut the same way. Confirmed
+  no-effect payloads, already at most 8 KiB, are not changed.
+
+## Unreleased — tool timeouts count execution only (OAI-1519)
+
+- `ToolPolicy.timeout` now starts when the call holds its resource lease, just
+  before the invocation. Before, it started at dispatch, so a slow answer to an
+  approval or a wait behind another conversation's long command used it up and
+  the call timed out (and a mutation timing out mid-execution needed
+  reconciliation).
+- `ToolScheduler(authorizationWaitLimit:leaseWaitLimit:)` bound the two waits.
+  Past either, the call never runs and the model gets a `not_answered` or
+  `busy` result (ADR 0016). Both default to nil: only the Run's deadline bounds
+  them. Under audited authorization a wait past a limit is `toolTimedOut`.
+- Under `whileHoldingResourceLease`, the tool's authorization runs inside the
+  timed invocation, as before.
+
+## Unreleased — refused tool calls reach the model (ADR 0016)
+
+- A model's call to a tool the Run does not offer (or has not declared yet), a
+  tool's own `authorize` returning `.denied`, and a tool's own `authorize`
+  throwing no longer end the Run. The call gets an error tool result
+  (`unknown_tool`, `not_allowed`, `authorization_failed`) in fixed words that
+  never repeat the tool name, arguments or thrown error, and the Run goes on.
+  This holds for mutations too: none of these reaches the executor or writes a
+  mutation intent.
+- A `RecoverableToolError` thrown from `authorize` reaches the model with its
+  own code and message, for every tool. A mutation tool can refuse with a
+  precise reason without writing an intent or returning a receipt.
+- Failures after a mutation intent is written still mark it as needing
+  reconciliation and end the Run. Cancellation, deadlines, Evidence, capability
+  scope, integrity checks and audited authorization (ADR 0009) are unchanged.
+- A Host-initiated call that its tool refuses returns that error result to the
+  Host instead of throwing.
+- Under required audit, an unknown tool's proposal is recorded with the reason
+  `unknown_tool` instead of `preparation_rejected`.
+
 ## Unreleased — a record of every model request
 
 - `ModelRequestAttempt` is a bounded record of one physical model request:

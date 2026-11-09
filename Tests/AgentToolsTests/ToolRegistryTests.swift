@@ -78,12 +78,12 @@ struct ToolRegistryTests {
         let log = InvocationLog()
         let required = try ToolPolicy(effect: .readOnly, execution: .parallel, idempotency: .safe, timeout: .seconds(1))
         let mutation = try ToolPolicy(effect: .mutation, execution: .exclusive, idempotency: .requiresReceipt, timeout: .seconds(1))
-        for (policy, error) in [(required, ToolInvocationError.authorizationDenied), (mutation, .mutationIntegrityUnavailable)] {
-            let registry = try ToolRegistry(tools: [AnyAgentTool(RecordingTool(policy: policy, log: log))])
-            let call = ToolCall(id: context.callID, name: "recording", argumentsJSON: #"{"value":7}"#, completeness: .complete)
-            let prepared = try registry.prepare(call, context: context)
-            await #expect(throws: error) { try await prepared.invoke() }
-        }
+        let call = ToolCall(id: context.callID, name: "recording", argumentsJSON: #"{"value":7}"#, completeness: .complete)
+        // A denial is a refusal the model hears (ADR 0016); missing mutation integrity still fails.
+        let denied = try ToolRegistry(tools: [AnyAgentTool(RecordingTool(policy: required, log: log))]).prepare(call, context: context)
+        #expect(refusalCode(try await denied.invoke()) == "not_allowed")
+        let unadmitted = try ToolRegistry(tools: [AnyAgentTool(RecordingTool(policy: mutation, log: log))]).prepare(call, context: context)
+        await #expect(throws: ToolInvocationError.mutationIntegrityUnavailable) { try await unadmitted.invoke() }
         #expect(await log.contexts.isEmpty)
     }
 
@@ -127,7 +127,7 @@ struct ToolRegistryTests {
         }
     }
 
-    @Test func preparedInvocationStillPropagatesCancellationAndAuthorizationErrors() async throws {
+    @Test func preparedInvocationPropagatesCancellationAndReportsAuthorizationFailures() async throws {
         let log = InvocationLog()
         let policy = try ToolPolicy(effect: .readOnly, execution: .parallel, idempotency: .safe, timeout: .seconds(1))
         let registry = try ToolRegistry(tools: [AnyAgentTool(ControlledTool(base: RecordingTool(policy: policy, log: log)) { _, _ in
@@ -135,7 +135,7 @@ struct ToolRegistryTests {
         })])
         let call = ToolCall(id: context.callID, name: "controlled", argumentsJSON: #"{"value":7}"#, completeness: .complete)
         let prepared = try registry.prepare(call, context: context)
-        await #expect(throws: AuthorizationFailure.self) { try await prepared.invoke() }
+        #expect(refusalCode(try await prepared.invoke()) == "authorization_failed")
         let gate = AsyncStream<Void>.makeStream()
         defer { gate.continuation.finish() }
         let task = Task {

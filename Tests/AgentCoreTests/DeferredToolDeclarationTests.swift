@@ -44,26 +44,28 @@ struct DeferredToolDeclarationTests {
         #expect(await fetches.entries == ["https://example.com"])
     }
 
-    /// Not declared is not callable: such a call ends the Run exactly as a call naming no bound tool.
-    @Test func aCallToADeferredToolBeforeItIsDeclaredFailsAsAnUnknownToolDoes() async throws {
+    /// Not declared is not callable: the model is told exactly as for a call naming no bound tool (ADR 0016).
+    @Test func aCallToADeferredToolBeforeItIsDeclaredIsRefusedAsAnUnknownToolIs() async throws {
         let call = declarationCall("fetch-early", "web_fetch", #"{"url":"https://example.com"}"#)
-        var terminals: [AgentEvent?] = []
+        var terminals: [ModelMessage?] = []
         for registered in [true, false] {
             let fetches = DeclarationLog()
-            let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
+            let provider = ScriptedProvider { request, turn in turn == 1 ? toolResponse(request, [call]) : textResponse(request, "ok") }
             let session = try Agent(model: fixtureModel, provider: provider).makeSession()
             let tools = try webTools(fetches: fetches)
             let binding = try await session.bindCapabilities(identity: "project", version: "1", backendInstanceID: "fixture",
                 backendVersion: "1", allowedResources: [.global], tools: registered ? tools : [tools[0]])
             let run = try await session.run("go", capabilities: binding, budget: try testBudget())
             let events = await collectEvents(run.events)
-            await #expect(throws: ToolRegistryError.unknownTool("web_fetch")) { _ = try await run.wait() }
+            #expect(try await run.wait().outcome == .completed)
             #expect(!events.contains { if case .toolStarted = $0 { true } else { false } })
             #expect(await fetches.entries.isEmpty)
-            #expect(await provider.log.requests.count == 1)
-            terminals.append(events.last)
+            let feedback = await provider.log.requests.last?.messages.last
+            terminals.append(feedback)
         }
-        #expect(terminals[0] == .runFinished(.failed(.toolRegistry(.unknownTool("web_fetch")))))
+        guard case .tool(let refusal) = terminals[0] else { Issue.record("No refusal"); return }
+        #expect(refusal.isError && refusal.content == [.json(.object(["code": .string("unknown_tool"),
+            "message": .string("No tool by that name is available here, so nothing ran. Use one of the tools you were given, or go on without it.")]))])
         #expect(terminals[0] == terminals[1])
     }
 
@@ -201,7 +203,8 @@ struct DeferredToolDeclarationTests {
                                                              supportsAuthorizationAudit: true)
             let authorizer = AuditTestAuthorizer(), probe = AuditExecutionProbe()
             let call = declarationCall("write-early", name, #"{"id":"A"}"#)
-            let session = try Agent(model: fixtureModel, provider: ScriptedProvider { request, _ in toolResponse(request, [call]) },
+            let session = try Agent(model: fixtureModel, provider: ScriptedProvider { request, turn in
+                    turn == 1 ? toolResponse(request, [call]) : textResponse(request, "ok") },
                 configuration: .init(authorization: auditTestConfiguration(authorizer: authorizer))).makeSession(journal: journal)
             let binding = try await session.bindCapabilities(identity: "project", version: "1", backendInstanceID: "fixture",
                 backendVersion: "1", allowedResources: [.named(.init(namespace: "audit.fixture", id: "A"))], tools: [
@@ -209,7 +212,7 @@ struct DeferredToolDeclarationTests {
                     AgentCapabilityTool(id: "audit_write", version: "1", tool: try AuditExecutionTool(probe: probe), exposure: .deferred),
                 ])
             let run = try await session.run("write", capabilities: binding)
-            await #expect(throws: ToolRegistryError.unknownTool(name)) { _ = try await run.wait() }
+            #expect(try await run.wait().outcome == .completed)
             try await run.waitForDrain()
             let records = try await journal.auditRecords(matching: .init(runID: run.id), includeRestrictedPayload: true).records
             #expect(records.contains { if case .proposal(let p) = $0.fact { p.rawArgumentsJSON == call.argumentsJSON } else { false } })
@@ -218,7 +221,7 @@ struct DeferredToolDeclarationTests {
             #expect(await probe.executorEntered == 0)
             try await journal.close()
         }
-        #expect(reasons[0] == ["preparation_rejected"])
+        #expect(reasons[0] == ["unknown_tool"])
         #expect(reasons[0] == reasons[1])
     }
 

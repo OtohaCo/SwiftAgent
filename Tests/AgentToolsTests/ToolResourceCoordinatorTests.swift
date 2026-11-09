@@ -26,6 +26,25 @@ struct ToolResourceCoordinatorTests {
         #expect(try JSONDecoder().decode([ToolResource].self, from: JSONEncoder().encode(exact)) == exact)
     }
 
+    /// OAI-1519: a lease wait with a limit ends at it without leaving a waiter or a lease behind.
+    @Test func aLimitedWaitEndsWithoutHoldingOrLeavingALease() async throws {
+        let coordinator = ToolResourceCoordinator()
+        let held = try await coordinator.acquire(resources: [.global], effect: .mutation, execution: .exclusive)
+        await #expect(throws: ToolResourceCoordinator.WaitExpired.self) {
+            _ = try await coordinator.acquire(resources: [.global], effect: .mutation, execution: .exclusive,
+                                              until: .now.advanced(by: .milliseconds(80)))
+        }
+        #expect(await coordinator.pendingWaiterCount == 0)
+        await #expect(throws: ToolResourceCoordinator.WaitExpired.self) {
+            _ = try await coordinator.acquire(resources: [.global], effect: .mutation, execution: .exclusive, until: .now)
+        }
+        await coordinator.release(held)
+        let next = try await coordinator.acquire(resources: [.global], effect: .mutation, execution: .exclusive,
+                                                 until: .now.advanced(by: .seconds(5)))
+        await coordinator.release(next)
+        #expect(await coordinator.pendingWaiterCount == 0)
+    }
+
     @Test func sharedReadsOverlapAcrossParallelAndSequential() async throws {
         let coordinator = ToolResourceCoordinator()
         let first = try await coordinator.acquire(resources: [.global], effect: .readOnly, execution: .parallel)

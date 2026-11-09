@@ -550,8 +550,10 @@ public actor AgentSession {
 
     /// Commits a Host call's result as a model's would be (its mutation settlement or checkpoint), with formal history
     /// saying it is the Host's call's result, or an earlier result replayed.
-    private func commitHostResult(_ call: PreparedToolCall, result: ToolResult<JSONValue>, runID: UUID,
+    private func commitHostResult(_ call: PreparedToolCall, result executed: ToolResult<JSONValue>, runID: UUID,
                                   budget: AgentBudget) async throws -> (message: ToolResultMessage, receipt: AgentToolReceipt?) {
+        // As for a model's call: an oversized output is cut before it is committed (OAI-1521).
+        let result = executed.confirmedNoEffect == nil ? try executed.capped(limit: call.maximumResultBytes) : executed
         var images = result.images.map(ModelContent.image)
         if !images.isEmpty, journal?.supportsImageContent == false {
             // As a model's call: a read-only result fails before anything is committed; a mutation's effect already
@@ -564,7 +566,10 @@ public actor AgentSession {
                                                                            replayed: result.isIdempotentReplay))] + images)
         let proposed = history + [notice]
         do {
-            if let proof = result.confirmedNoEffect {
+            if result.notAdmitted {
+                // Refused before admission (ADR 0016): the Host hears it as an error result; no intent exists.
+                _ = try await record(proposed, steering: [], runID: runID, budget: budget)
+            } else if let proof = result.confirmedNoEffect {
                 guard let journal else { throw AgentJournalError.invalidRecord }
                 let prepared = try await prepareCheckpoint(proposed)
                 beginCommittedWrite(runID)
@@ -583,7 +588,8 @@ public actor AgentSession {
             }
             hostResultsCommitted.insert(runID)
         } catch {
-            guard call.policy.effect == .mutation, !result.isIdempotentReplay, result.confirmedNoEffect == nil else { throw error }
+            guard call.policy.effect == .mutation, !result.isIdempotentReplay, result.confirmedNoEffect == nil,
+                  !result.notAdmitted else { throw error }
             let callID = call.call.id
             throw await AgentMutationPersistenceError.capturing(settlement: error) {
                 try await self.journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)

@@ -6,6 +6,8 @@ import Foundation
 package struct AnyAgentTool: Sendable {
     package let definition: ModelToolDefinition
     package let policy: ToolPolicy
+    /// The tool's result limit (OAI-1521), applied before a result is committed.
+    package let maximumResultBytes: Int
     package typealias Invocation = @Sendable (ToolContext) async throws -> ToolResult<JSONValue>
     package struct PreparedInvocation: Sendable {
         let resources: [ToolResource]
@@ -29,6 +31,8 @@ package struct AnyAgentTool: Sendable {
         // A name that comes from the instance, not the type, is one every model API accepts.
         if definition.name != T.name, !Self.portable(definition.name) { throw ToolInvocationError.invalidDefinition }
         self.definition = definition
+        guard tool.maximumResultBytes >= AgentToolResultLimit.minimumBytes else { throw ToolInvocationError.invalidDefinition }
+        maximumResultBytes = tool.maximumResultBytes
         let policy = tool.policy
         self.policy = policy
         decode = { arguments, prepareAuthorizationBinding in
@@ -63,10 +67,24 @@ package struct AnyAgentTool: Sendable {
                     }
                 }
             }
+            /// Nothing has run and no intent exists yet: a denial or a failed decision is the model's to hear
+            /// (ADR 0016). Cancellation, deadline, Evidence and runtime checks still end the call as before.
             @Sendable func authorizeWithoutAudit(_ context: ToolContext) async throws {
-                let authorization = try await tool.authorize(input, context: context)
+                let authorization: ToolAuthorization
+                do { authorization = try await tool.authorize(input, context: context) }
+                catch is CancellationError { throw CancellationError() }
+                catch let error as ToolInvocationError { throw error }
+                catch let error as ToolSchedulerError { throw error }
+                catch let error as EvidenceError { throw error }
+                catch let error as RecoverableToolError {
+                    try context.checkActive()
+                    throw ToolPreAdmissionRefusal(payload: error.payload)
+                } catch {
+                    try context.checkActive()
+                    throw ToolPreAdmissionRefusal.authorizationFailed
+                }
                 try context.checkActive()
-                guard authorization == .allowed else { throw ToolInvocationError.authorizationDenied }
+                guard authorization == .allowed else { throw ToolPreAdmissionRefusal.denied }
             }
             let authorizeBeforeLease: @Sendable (ToolContext) async throws -> Void = { context in
                 guard policy.authorization == .required, context.auditAuthorization == nil else { return }
@@ -103,7 +121,8 @@ package struct AnyAgentTool: Sendable {
                 try await Self.validateEvidence(requirements, context: context)
                 try await context.executionAdmission?.check(runID: context.runID, resources: resources)
                 if policy.authorization == .required, context.auditAuthorization == nil, !authorized {
-                    try await authorizeWithoutAudit(context)
+                    do { try await authorizeWithoutAudit(context) }
+                    catch let refusal as ToolPreAdmissionRefusal { return refusal.result }
                     try await Self.validateEvidence(requirements, context: context)
                 }
                 try await context.executionAdmission?.check(runID: context.runID, resources: resources)

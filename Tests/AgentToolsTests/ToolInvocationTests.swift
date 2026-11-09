@@ -12,7 +12,8 @@ struct ToolInvocationTests {
         let log = InvocationLog()
         let policy = try ToolPolicy(effect: .readOnly, execution: .parallel, idempotency: .safe, timeout: .seconds(1))
         let tool = try AnyAgentTool(RecordingTool(policy: policy, log: log))
-        await #expect(throws: ToolInvocationError.authorizationDenied) { try await tool.invoke(arguments: arguments, context: context) }
+        // Refused before admission: the model hears it; the executor never runs (ADR 0016).
+        #expect(refusalCode(try await tool.invoke(arguments: arguments, context: context)) == "not_allowed")
         #expect(await log.contexts.isEmpty)
     }
 
@@ -36,9 +37,7 @@ struct ToolInvocationTests {
         let tool = try AnyAgentTool(AuthorizedTool(base: RecordingTool(policy: policy, log: log), runID: context.runID))
         let result = try await tool.invoke(arguments: arguments, context: context)
         #expect(result.output == .number(7))
-        await #expect(throws: ToolInvocationError.authorizationDenied) {
-            try await tool.invoke(arguments: .object(["value": .number(8)]), context: context)
-        }
+        #expect(refusalCode(try await tool.invoke(arguments: .object(["value": .number(8)]), context: context)) == "not_allowed")
         #expect(await log.contexts == [context])
     }
 
@@ -130,7 +129,8 @@ struct ToolInvocationTests {
         let tool = try AnyAgentTool(ControlledTool(base: RecordingTool(policy: policy, log: log)) { _, _ in
             throw AuthorizationFailure.unavailable
         })
-        await #expect(throws: AuthorizationFailure.self) { try await tool.invoke(arguments: arguments, context: context) }
+        // The thrown error's own words never reach the model.
+        #expect(refusalCode(try await tool.invoke(arguments: arguments, context: context)) == "authorization_failed")
         #expect(await log.contexts.isEmpty)
     }
 
@@ -254,4 +254,11 @@ struct ExecutionTool: AgentTool {
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
         try await operation(input, context)
     }
+}
+
+/// The code of a result refused before admission (ADR 0016), or nil for any other result.
+func refusalCode(_ result: ToolResult<JSONValue>) -> String? {
+    guard result.notAdmitted, result.isModelVisibleError, result.receipt == nil,
+          case .object(let fields) = result.output, case .string(let code) = fields["code"] else { return nil }
+    return code
 }

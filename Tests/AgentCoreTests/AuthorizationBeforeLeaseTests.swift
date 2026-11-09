@@ -46,11 +46,14 @@ struct AuthorizationBeforeLeaseTests {
         try await fixture.close()
     }
 
-    @Test func anAnswerArrivingAfterTheToolTimeoutNeverExecutes() async throws {
-        let fixture = try LeaseFixture(timeout: .milliseconds(150))
+    /// OAI-1519: the wait for an answer has its own limit; past it the model is told and nothing runs.
+    @Test func anAnswerArrivingAfterTheAuthorizationLimitNeverExecutes() async throws {
+        let fixture = try LeaseFixture(timeout: .seconds(5), authorizationWaitLimit: .milliseconds(150))
         defer { fixture.cleanup() }
         let a = try await fixture.session().run("A", operationID: "A")
-        await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await a.wait() }
+        let answered = try await a.wait()
+        #expect(answered.outcome == .completed)
+        #expect(refusalCode(answered.history) == "not_answered")
         await fixture.answers.open()
         try await a.waitForDrain()
 
@@ -62,20 +65,82 @@ struct AuthorizationBeforeLeaseTests {
         try await fixture.close()
     }
 
-    @Test func anAnswerGivenWhileTheLeaseIsBusyStillEndsAtTheToolTimeout() async throws {
+    /// OAI-1519: a call that waited for a busy lease longer than its own timeout still gets its whole
+    /// execution time once it starts; the call that held the lease still times out on its own.
+    @Test func aCallThatWaitedLongForTheLeaseStillGetsItsExecutionTime() async throws {
         let fixture = try LeaseFixture(timeout: .milliseconds(300), gatedAnswers: [], gatedExecutors: ["B"])
         defer { fixture.cleanup() }
         let b = try await fixture.session().run("B", operationID: "B")
         await fixture.probe.waitFor("execute:B")
 
         let a = try await fixture.session().run("A", operationID: "A")
-        await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await a.wait() }
-        await fixture.executors.open()
+        await fixture.probe.waitFor("authorize:A")
         await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "B"))) { try await b.wait() }
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(await fixture.probe.events == ["authorize:B", "execute:B", "authorize:A"], "A still waits, past its own timeout")
+        await fixture.executors.open()
+        #expect(try await a.wait().outcome == .completed)
         try await b.waitForDrain()
         try await a.waitForDrain()
-        #expect(await fixture.probe.events == ["authorize:B", "execute:B", "authorize:A"])
+        #expect(await fixture.probe.events == ["authorize:B", "execute:B", "authorize:A", "execute:A"])
         #expect(await fixture.scheduler.pendingWaiterCount() == 0)
+        try await fixture.close()
+    }
+
+    /// OAI-1519: a slow answer does not use the call's execution time.
+    @Test func aSlowAnswerDoesNotUseTheExecutionTime() async throws {
+        let fixture = try LeaseFixture(timeout: .milliseconds(200))
+        defer { fixture.cleanup() }
+        let a = try await fixture.session().run("A", operationID: "A")
+        await fixture.probe.waitFor("authorize:A")
+        try await Task.sleep(for: .milliseconds(450))
+        await fixture.answers.open()
+        #expect(try await a.wait().outcome == .completed)
+        try await a.waitForDrain()
+        #expect(await fixture.probe.events == ["authorize:A", "execute:A"])
+        try await fixture.close()
+    }
+
+    /// OAI-1519: an executor that runs past the tool's timeout still times out as before.
+    @Test func anExecutorPastItsTimeoutStillTimesOut() async throws {
+        let fixture = try LeaseFixture(timeout: .milliseconds(150), gatedAnswers: [], gatedExecutors: ["A"])
+        defer { fixture.cleanup() }
+        let a = try await fixture.session().run("A", operationID: "A")
+        await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await a.wait() }
+        await fixture.executors.open()
+        try await a.waitForDrain()
+        #expect(await fixture.probe.events == ["authorize:A", "execute:A"])
+        try await fixture.close()
+    }
+
+    /// OAI-1519: past its own lease wait limit, a call is told the resource is busy and nothing runs.
+    @Test func aCallPastItsLeaseWaitLimitIsToldTheResourceIsBusy() async throws {
+        let fixture = try LeaseFixture(timeout: .seconds(5), gatedAnswers: [], gatedExecutors: ["B"],
+                                       leaseWaitLimit: .milliseconds(150))
+        defer { fixture.cleanup() }
+        let b = try await fixture.session().run("B", operationID: "B")
+        await fixture.probe.waitFor("execute:B")
+        let a = try await fixture.session().run("A", operationID: "A")
+        let refused = try await a.wait()
+        #expect(refused.outcome == .completed && refusalCode(refused.history) == "busy")
+        #expect(await fixture.scheduler.pendingWaiterCount() == 0)
+        await fixture.executors.open()
+        #expect(try await b.wait().outcome == .completed)
+        try await a.waitForDrain()
+        try await b.waitForDrain()
+        #expect(await fixture.probe.events == ["authorize:B", "execute:B", "authorize:A"])
+        try await fixture.close()
+    }
+
+    /// OAI-1519: without a limit of its own, the Run's deadline still ends an unanswered call.
+    @Test func theRunDeadlineStillEndsAnUnansweredCall() async throws {
+        let fixture = try LeaseFixture(timeout: .seconds(5), runTimeout: .milliseconds(200))
+        defer { fixture.cleanup() }
+        let a = try await fixture.session().run("A", operationID: "A")
+        await #expect(throws: AgentLoopError.deadlineExceeded) { try await a.wait() }
+        await fixture.answers.open()
+        try await a.waitForDrain()
+        #expect(await fixture.probe.events == ["authorize:A"])
         try await fixture.close()
     }
 
@@ -104,7 +169,8 @@ struct AuthorizationBeforeLeaseTests {
         await fixture.probe.waitFor("execute:B")
 
         let a = try await fixture.session().run("A", operationID: "A")
-        await #expect(throws: (any Error).self) { try await a.wait() }
+        // The denial goes back to the model while B still holds the lease (ADR 0016).
+        #expect(try await a.wait().outcome == .completed)
         #expect(await fixture.scheduler.pendingWaiterCount() == 0)
         await fixture.executors.open()
         #expect(try await b.wait().outcome == .completed)
@@ -114,14 +180,17 @@ struct AuthorizationBeforeLeaseTests {
         try await fixture.close()
     }
 
+    /// Under the lease, authorization is part of the timed invocation; the waiting call is bounded by its lease wait limit.
     @Test func aSchedulerThatAuthorizesUnderTheLeaseKeepsOtherMutationsWaiting() async throws {
-        let fixture = try LeaseFixture(timeout: .milliseconds(300), authorization: .whileHoldingResourceLease)
+        let fixture = try LeaseFixture(timeout: .milliseconds(300), authorization: .whileHoldingResourceLease,
+                                       leaseWaitLimit: .milliseconds(300))
         defer { fixture.cleanup() }
         let a = try await fixture.session().run("A", operationID: "A")
         await fixture.probe.waitFor("authorize:A")
 
         let b = try await fixture.session().run("B", operationID: "B")
-        await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "B"))) { try await b.wait() }
+        let refused = try await b.wait()
+        #expect(refusalCode(refused.history) == "busy")
         await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await a.wait() }
         await fixture.answers.open()
         try await a.waitForDrain()
@@ -141,10 +210,12 @@ private struct LeaseFixture {
     private let url: URL
 
     init(timeout: Duration, gatedAnswers: Set<String> = ["A"], gatedExecutors: Set<String> = [],
-         denied: Set<String> = [], authorization: ToolAuthorizationTiming = .beforeResourceLease) throws {
+         denied: Set<String> = [], authorization: ToolAuthorizationTiming = .beforeResourceLease,
+         authorizationWaitLimit: Duration? = nil, leaseWaitLimit: Duration? = nil, runTimeout: Duration = .seconds(30)) throws {
         url = FileManager.default.temporaryDirectory
             .appendingPathComponent("swift-agent-authorization-lease-\(UUID().uuidString).log")
-        scheduler = ToolScheduler(authorization: authorization)
+        scheduler = ToolScheduler(authorization: authorization, authorizationWaitLimit: authorizationWaitLimit,
+                                  leaseWaitLimit: leaseWaitLimit)
         journal = try makeTestJournal(at: url)
         let tool = try ApprovedWriteTool(probe: probe, answers: answers, executors: executors, timeout: timeout,
                                          gatedAnswers: gatedAnswers, gatedExecutors: gatedExecutors, denied: denied)
@@ -158,7 +229,7 @@ private struct LeaseFixture {
                                                completeness: .complete)])
         }
         agent = try Agent(model: fixtureModel, provider: provider, tools: [tool],
-                          configuration: AgentConfiguration(scheduler: scheduler))
+                          configuration: AgentConfiguration(runTimeout: runTimeout, scheduler: scheduler))
     }
 
     func session() throws -> AgentSession { try agent.makeSession(journal: journal) }
@@ -234,4 +305,14 @@ private struct ApprovedWriteTool: AgentTool {
                                   revision: input.label)
         return ToolResult(output: input.label, receipt: receipt)
     }
+}
+
+/// The code of the last tool result in `history` when it is an error, such as a refusal (ADR 0016).
+private func refusalCode(_ history: [ModelMessage]) -> String? {
+    guard let result = history.reversed().lazy.compactMap({ message -> ToolResultMessage? in
+              if case .tool(let result) = message { return result }
+              return nil
+          }).first, result.isError,
+          case .json(.object(let fields))? = result.content.first, case .string(let code)? = fields["code"] else { return nil }
+    return code
 }

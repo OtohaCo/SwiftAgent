@@ -404,7 +404,8 @@ struct AgentMutationIdempotencyTests {
             switch turn {
             case 1: return toolResponse(request, [authorizedMutationCall(id: "authorized-first")])
             case 2: return textResponse(request, "first complete")
-            default: return toolResponse(request, [authorizedMutationCall(id: "denied-retry")])
+            case 3: return toolResponse(request, [authorizedMutationCall(id: "denied-retry")])
+            default: return textResponse(request, "not allowed")
             }
         }
         let journal = try makeTestJournal(at: url)
@@ -414,9 +415,9 @@ struct AgentMutationIdempotencyTests {
         let firstRun = try await session.run("Update", operationID: "authorized-operation")
         _ = try await firstRun.wait()
         try await firstRun.waitForDrain()
-        await #expect(throws: ToolInvocationError.authorizationDenied) {
-            _ = try await session.run("Retry", operationID: "authorized-operation").wait()
-        }
+        // The denied retry is told to the model (ADR 0016); the settled result is not replayed to it.
+        let retry = try await session.run("Retry", operationID: "authorized-operation").wait()
+        #expect(retry.outcome == .completed && retry.receipts.isEmpty)
 
         #expect(await probe.authorizationCount == 2)
         #expect(await probe.executorCount == 1)

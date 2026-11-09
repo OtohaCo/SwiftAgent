@@ -8,15 +8,15 @@ struct AgentLoopContractTests {
     @Test func malformedUnknownAndInvalidBatchMembersNeverExecute() async throws {
         let valid = ToolCall(id: .init(rawValue: "a"), name: "add", argumentsJSON: #"{"lhs":2,"rhs":3}"#, completeness: .complete)
         let unknown = ToolCall(id: .init(rawValue: "b"), name: "missing", argumentsJSON: "{}", completeness: .complete)
-        // An unknown tool still rejects the whole batch: nothing runs and the Run ends.
+        // An unknown tool never runs; the model is told and the valid sibling still runs (ADR 0016).
         let log = EffectLog()
         let provider = ScriptedProvider { request, turn in
-            turn == 1 ? toolResponse(request, [valid, unknown]) : textResponse(request, "Unexpected")
+            turn == 1 ? toolResponse(request, [valid, unknown]) : textResponse(request, "Corrected")
         }
         let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: [AnyAgentTool(AddTool(log: log))]))
-        await #expect(throws: (any Error).self) { try await loop.run(messages: [], sessionID: UUID(), budget: testBudget()) }
-        #expect(await log.names.isEmpty)
-        #expect(await provider.log.requests.count == 1)
+        #expect(try await loop.run(messages: [], sessionID: UUID(), budget: testBudget()).outcome == .completed)
+        #expect(await log.names == ["add"])
+        #expect(await provider.log.requests.count == 2)
 
         // Arguments the model must correct never execute; the model is told and a valid sibling still runs.
         let invalid = [

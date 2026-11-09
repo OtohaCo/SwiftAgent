@@ -57,9 +57,7 @@ struct RuntimeAgentToolTests {
     @Test func authorizationStillGuardsARuntimeTool() async throws {
         let log = EchoLog()
         let tool = try AnyAgentTool(EchoTool(name: "app_echo", policy: try policy(authorization: .required), log: log, allow: false))
-        await #expect(throws: ToolInvocationError.authorizationDenied) {
-            try await tool.invoke(arguments: .object(["text": .string("hi")]), context: context)
-        }
+        #expect(refusalCode(try await tool.invoke(arguments: .object(["text": .string("hi")]), context: context)) == "not_allowed")
         #expect(await log.names.isEmpty)
     }
 

@@ -189,12 +189,17 @@ struct AgentInvalidToolArgumentsTests {
         #expect(await provider.log.requests.count == 2)
     }
 
-    @Test func unknownToolStillEndsTheRun() async throws {
+    /// ADR 0016: an unknown tool name is a mistake the model is told about, like bad arguments.
+    @Test func unknownToolGoesBackToTheModelWithItsArgumentsReplaced() async throws {
         let call = ToolCall(id: .init(rawValue: "missing"), name: "does_not_exist", argumentsJSON: "{", completeness: .complete)
-        let provider = ScriptedProvider { request, _ in toolResponse(request, [call]) }
+        let provider = ScriptedProvider { request, turn in turn == 1 ? toolResponse(request, [call]) : textResponse(request, "ok") }
         let session = try Agent(model: fixtureModel, provider: provider, tools: [try AddTool(log: EffectLog())]).makeSession()
-        await #expect(throws: ToolRegistryError.unknownTool("does_not_exist")) { _ = try await session.run("Go").wait() }
-        #expect(await provider.log.requests.count == 1)
+        #expect(try await session.run("Go").wait().outcome == .completed)
+        let second = try #require(await provider.log.requests.last)
+        #expect(second.messages.suffix(2).first == .assistant(content: [], toolCalls: [
+            .init(id: call.id, name: "does_not_exist", argumentsJSON: "{}", completeness: .complete),
+        ]))
+        #expect(feedbackCode(try #require(toolResult(second.messages.last))) == "unknown_tool")
     }
 
     /// Under required audit a mutation with unusable arguments is recorded, never authorized,

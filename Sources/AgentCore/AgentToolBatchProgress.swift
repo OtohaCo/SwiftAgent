@@ -32,11 +32,15 @@ actor AgentToolBatchProgress {
         self.emitter = emitter
     }
 
-    func record(index: Int, call: PreparedToolCall, result: ToolResult<JSONValue>) async throws {
+    func record(index: Int, call: PreparedToolCall, result executed: ToolResult<JSONValue>) async throws {
         var reserved = false
         var reservedRejections: [ToolCallID] = []
+        var result = executed
         do {
             try budget.checkActive()
+            // One oversized result must not make every later request too large (OAI-1521). A no-effect
+            // proof binds its payload, which is already small.
+            if result.confirmedNoEffect == nil { result = try result.capped(limit: call.maximumResultBytes) }
             var images = result.images.map(ModelContent.image)
             if !images.isEmpty, lifecycle?.keepsImages == false {
                 // A journal that cannot keep images (format schema 3-9). A read-only result fails here,
@@ -56,7 +60,13 @@ actor AgentToolBatchProgress {
             var proposed = results
             proposed[index] = message
             let committedHistory = history(proposed)
-            if result.confirmedNoEffect != nil {
+            if result.notAdmitted {
+                // Refused before admission (ADR 0016): no intent to settle, whatever the tool's effect.
+                if let lifecycle {
+                    let canonical = try await lifecycle.checkpoint(committedHistory, [])
+                    updateCanonicalPrefix(canonical, committedHistory: committedHistory)
+                }
+            } else if result.confirmedNoEffect != nil {
                 guard let commit = lifecycle?.commitNoEffectResult else { throw AgentJournalError.invalidRecord }
                 let canonical = try await commit(call, result, committedHistory)
                 updateCanonicalPrefix(canonical, committedHistory: committedHistory)
@@ -110,7 +120,7 @@ actor AgentToolBatchProgress {
                 }
             } else { settlement = error }
             let exposed: any Error
-            if call.policy.effect == .mutation, !result.isIdempotentReplay {
+            if call.policy.effect == .mutation, !result.isIdempotentReplay, !result.notAdmitted {
                 let mark = lifecycle?.markMutationNeedsReconciliation
                 let callID = call.call.id
                 exposed = await AgentMutationPersistenceError.capturing(settlement: settlement) {

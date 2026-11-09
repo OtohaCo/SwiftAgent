@@ -446,9 +446,10 @@ package struct AgentLoop: Sendable {
             }
             var preparedCalls: [PreparedToolCall] = []
             // Response index of each prepared call, and model-visible results for calls whose
-            // arguments the model must correct. Those calls are never authorized, admitted or run.
+            // arguments or tool name the model must correct. Those calls are never authorized, admitted or run.
             var preparedIndices: [Int] = []
             var rejectedArguments: [Int: ToolResultMessage] = [:]
+            var unknownToolIndices: Set<Int> = []
             for (index, call) in response.toolCalls.enumerated() {
                 do {
                 // The Host's call namespace is the Host's (ADR 0011): a model never makes a call in its name.
@@ -466,6 +467,7 @@ package struct AgentLoop: Sendable {
                 } catch {
                     guard let feedback = Self.invalidArgumentsFeedback(error, call: call) else { throw error }
                     rejectedArguments[index] = feedback
+                    if case ToolRegistryError.unknownTool = error { unknownToolIndices.insert(index) }
                     continue
                 }
                 if let allowedResources, !Set(prepared.resources).isSubset(of: allowedResources) {
@@ -536,7 +538,7 @@ package struct AgentLoop: Sendable {
             var replayCalls = response.toolCalls
             for index in rejectedArguments.keys.sorted() {
                 let call = response.toolCalls[index]
-                try await audit?.rejected(call.id, reason: "invalid_arguments")
+                try await audit?.rejected(call.id, reason: unknownToolIndices.contains(index) ? "unknown_tool" : "invalid_arguments")
                 if (try? JSONValue.decodeToolArguments(call.argumentsJSON)) == nil {
                     replayCalls[index] = ToolCall(id: call.id, name: call.name,
                         argumentsJSON: ToolCall.replacedInvalidArgumentsJSON, completeness: .complete)
@@ -1016,7 +1018,8 @@ package struct AgentLoop: Sendable {
     }
 
     /// A model-visible result for a call the model can correct: arguments that are not one JSON
-    /// object, or that do not match the tool's input schema. `nil` for every other preparation failure.
+    /// object, that do not match the tool's input schema, or a tool name the Run does not offer.
+    /// `nil` for every other preparation failure.
     private static func invalidArgumentsFeedback(_ error: any Error, call: ToolCall) -> ToolResultMessage? {
         let name = call.name
         let retry = "so the tool was not run. Call \(name) again with arguments that match its input schema."
@@ -1038,6 +1041,9 @@ package struct AgentLoop: Sendable {
             }
         case ToolInvocationError.invalidArguments:
             message = "The arguments for \(name) did not match its input schema, " + retry
+        case ToolRegistryError.unknownTool:
+            // The name is the model's, not a registered one: it is never repeated back (ADR 0016).
+            return ToolResultMessage(callID: call.id, content: [.json(ToolPreAdmissionRefusal.unknownTool.payload)], isError: true)
         default:
             return nil
         }

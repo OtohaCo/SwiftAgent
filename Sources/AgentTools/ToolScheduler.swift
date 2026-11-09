@@ -10,18 +10,36 @@ public struct ToolScheduler: Sendable {
     private let drain = ToolExecutionDrain()
     private let operationCancellationDidResolve: (@Sendable (UUID, UUID, ToolCallID) async -> Void)?
     private let authorization: ToolAuthorizationTiming
+    private let authorizationWaitLimit: Duration?
+    private let leaseWaitLimit: Duration?
 
-    public init(authorization: ToolAuthorizationTiming = .beforeResourceLease) {
+    /// A call's time is spent in three parts, each with its own limit (OAI-1519):
+    /// - its authorization before the lease (`beforeResourceLease`, or audited authorization) is bounded by
+    ///   `authorizationWaitLimit`, or by the Run's deadline alone when nil. Past the limit the call is told to
+    ///   the model as unanswered (`not_answered`) and never runs;
+    /// - its wait for the resource lease is bounded by `leaseWaitLimit`, or by the Run's deadline alone. Past the
+    ///   limit the model is told the resource is busy (`busy`) and the call never runs;
+    /// - the tool's `ToolPolicy.timeout` starts once the lease is held, just before the invocation, and covers
+    ///   the rest: the admission checks, the mutation intent and the executor. Under `whileHoldingResourceLease`
+    ///   the tool's authorization is part of that invocation and of its timeout.
+    /// Under audited authorization, a wait past either limit fails the call with `toolTimedOut`, as before.
+    public init(authorization: ToolAuthorizationTiming = .beforeResourceLease,
+                authorizationWaitLimit: Duration? = nil, leaseWaitLimit: Duration? = nil) {
         operationCancellationDidResolve = nil
         self.authorization = authorization
+        self.authorizationWaitLimit = authorizationWaitLimit
+        self.leaseWaitLimit = leaseWaitLimit
     }
 
     package init(
         authorization: ToolAuthorizationTiming = .beforeResourceLease,
+        authorizationWaitLimit: Duration? = nil, leaseWaitLimit: Duration? = nil,
         operationCancellationDidResolve: @escaping @Sendable (UUID, UUID, ToolCallID) async -> Void
     ) {
         self.operationCancellationDidResolve = operationCancellationDidResolve
         self.authorization = authorization
+        self.authorizationWaitLimit = authorizationWaitLimit
+        self.leaseWaitLimit = leaseWaitLimit
     }
 
     /// Wait until all work belonging to one run has returned from its host
@@ -111,38 +129,10 @@ public struct ToolScheduler: Sendable {
                 try Task.checkCancellation()
                 guard ContinuousClock.now < deadline else { throw ToolSchedulerError.deadlineExceeded }
                 let call = calls[index]
-                let toolDeadline = min(deadline, ContinuousClock.now.advanced(by: call.policy.timeout))
                 try await onStarted(call)
                 group.addTask {
-                    let drainKey = ToolExecutionDrain.Key(
-                        sessionID: call.contextSessionID,
-                        runID: call.contextRunID
-                    )
-                    await drain.begin(drainKey)
                     do {
-                        let timeoutError: ToolSchedulerError = toolDeadline == deadline ? .deadlineExceeded : .toolTimedOut(call.call.id)
-                        let result = try await withOperationDeadline(toolDeadline, timeoutError: timeoutError) {
-                            // Human/network authorization holds no scheduler resource lease.
-                            var admitted = call
-                            if call.auditAuthorization != nil { try await call.preauthorizeAudit(deadline: toolDeadline) }
-                            else if authorization == .beforeResourceLease {
-                                admitted = try await call.authorizedBeforeLease(deadline: toolDeadline)
-                            }
-                            try Task.checkCancellation()
-                            let lease = try await coordinator.acquire(resources: call.resources, effect: call.policy.effect,
-                                                                      execution: call.policy.execution)
-                            do {
-                                try Task.checkCancellation()
-                                let result = try await admitted.invoke(deadline: toolDeadline)
-                                await coordinator.release(lease)
-                                return result
-                            } catch {
-                                await coordinator.release(lease)
-                                throw error
-                            }
-                        } onOperationFinished: {
-                            await drain.end(drainKey)
-                        }
+                        let result = try await run(call, deadline: deadline)
                         return Completion(index: index, call: call, result: .success(result))
                     } catch {
                         if error is CancellationError {
@@ -178,6 +168,65 @@ public struct ToolScheduler: Sendable {
         try Task.checkCancellation()
         if let firstFailure { throw firstFailure }
     }
+
+    /// One call: authorization, lease wait and invocation, each under its own deadline (see `init`).
+    private func run(_ call: PreparedToolCall, deadline: ContinuousClock.Instant) async throws -> ToolResult<JSONValue> {
+        let drainKey = ToolExecutionDrain.Key(sessionID: call.contextSessionID, runID: call.contextRunID)
+        let audited = call.auditAuthorization != nil
+        func limited(_ limit: Duration?) -> ContinuousClock.Instant {
+            limit.map { min(deadline, ContinuousClock.now.advanced(by: $0)) } ?? deadline
+        }
+        // Human/network authorization holds no scheduler resource lease.
+        var admitted = call
+        if audited || authorization == .beforeResourceLease {
+            let authorizationDeadline = limited(authorizationWaitLimit)
+            await drain.begin(drainKey)
+            do {
+                admitted = try await withOperationDeadline(authorizationDeadline,
+                    timeoutError: authorizationDeadline == deadline ? ToolSchedulerError.deadlineExceeded : WaitExpired()) {
+                    if audited {
+                        try await call.preauthorizeAudit(deadline: authorizationDeadline)
+                        return call
+                    }
+                    return try await call.authorizedBeforeLease(deadline: authorizationDeadline)
+                } onOperationFinished: {
+                    await drain.end(drainKey)
+                }
+            } catch let refusal as ToolPreAdmissionRefusal {
+                // Refused before the lease: nothing ran and no intent exists (ADR 0016).
+                return refusal.result
+            } catch is WaitExpired {
+                if audited { throw ToolSchedulerError.toolTimedOut(call.call.id) }
+                return ToolPreAdmissionRefusal.notAnswered.result
+            }
+        }
+        try Task.checkCancellation()
+        let leaseDeadline = limited(leaseWaitLimit)
+        let lease: UUID
+        do {
+            lease = try await coordinator.acquire(resources: call.resources, effect: call.policy.effect,
+                                                  execution: call.policy.execution, until: leaseDeadline)
+        } catch is ToolResourceCoordinator.WaitExpired {
+            if leaseDeadline == deadline { throw ToolSchedulerError.deadlineExceeded }
+            if audited { throw ToolSchedulerError.toolTimedOut(call.call.id) }
+            return ToolPreAdmissionRefusal.busy.result
+        }
+        // The tool's own timeout starts here, with the lease held.
+        let toolDeadline = min(deadline, ContinuousClock.now.advanced(by: call.policy.timeout))
+        let timeoutError: ToolSchedulerError = toolDeadline == deadline ? .deadlineExceeded : .toolTimedOut(call.call.id)
+        let leased = admitted
+        await drain.begin(drainKey)
+        return try await withOperationDeadline(toolDeadline, timeoutError: timeoutError) {
+            try Task.checkCancellation()
+            return try await leased.invoke(deadline: toolDeadline)
+        } onOperationFinished: {
+            // An executor that outlives its timeout keeps the lease until it physically returns.
+            await coordinator.release(lease)
+            await drain.end(drainKey)
+        }
+    }
+
+    private struct WaitExpired: Error {}
 
     private func isParallel(_ call: PreparedToolCall) -> Bool {
         call.policy.effect == .readOnly && call.policy.execution == .parallel
