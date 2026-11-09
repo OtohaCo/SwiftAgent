@@ -76,7 +76,7 @@ struct GeminiResponseDecoder {
         usage = .init(inputTokens: input, outputTokens: output, cachedInputTokens: cache, reasoningTokens: thoughtsTokens)
     }
     func finish() throws -> [ModelEvent] {
-        guard blocked || finishReason != nil else { throw ProviderJSON.invalid() }
+        guard blocked || finishReason != nil else { throw ProviderHTTPFailure.streamEndedEarly() }
         let stop: StopReason
         switch blocked ? "SAFETY" : finishReason {
         case "STOP": stop = .endTurn

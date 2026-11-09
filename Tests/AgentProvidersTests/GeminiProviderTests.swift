@@ -173,7 +173,7 @@ struct GeminiProviderTests {
             transport: FixtureHTTPTransport(probe: probe, bodies: [try geminiFixture(parts: geminiParallelParts, reason: reason == "unfinished" ? nil : reason)]))
         var calls = 0
         do { for try await event in provider.stream(request: geminiToolRequest) { if case .toolCallCompleted = event { calls += 1 } } }
-        catch let error as ModelProviderError { #expect(reason == "unfinished" && error.kind == .invalidResponse) }
+        catch let error as ModelProviderError { #expect(reason == "unfinished" && error.kind == .transport) }
         #expect(calls == 0)
     }
 

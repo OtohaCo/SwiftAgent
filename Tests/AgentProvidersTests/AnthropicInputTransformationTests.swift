@@ -90,7 +90,7 @@ import Testing
                 if case .inputTransformations(let values) = event { snapshots.append(values) }
                 if case .completed(let value) = event { response = value }
             }
-        } catch let error as ModelProviderError { failed = error.kind == .invalidResponse }
+        } catch let error as ModelProviderError { failed = error.kind == .transport && error.diagnostic?.reason == .streamEndedEarly }
         #expect(failed == eof)
         #expect(snapshots.count == (eof ? 2 : 3))
         #expect(snapshots[0][0].thinkingWasDropped && snapshots[0][0].source != nil)

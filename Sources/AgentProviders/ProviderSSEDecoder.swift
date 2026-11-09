@@ -63,7 +63,7 @@ struct ProviderSSEDecoder {
 
     func finish() throws {
         guard line.isEmpty, dataLines.isEmpty, name == nil else {
-            throw ModelProviderError(kind: .invalidResponse, message: "The event stream ended inside a frame.")
+            throw ProviderHTTPFailure.streamEndedEarly()
         }
     }
 }

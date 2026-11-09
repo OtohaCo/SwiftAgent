@@ -89,7 +89,7 @@ struct AnthropicConversationControlTests {
             do {
                 for try await _ in adapter.stream(request: request) {}
                 #expect(attempt == 1)
-            } catch let error as ModelProviderError { #expect(attempt == 0 && error.kind == .unavailable) }
+            } catch let error as ModelProviderError { #expect(attempt == 0 && error.kind == .overloaded) }
         }
         let requests = await probe.requests
         #expect(requests.count == 2)
@@ -349,7 +349,7 @@ struct AnthropicConversationControlTests {
             deployment: .init(serviceInstanceID: "fixture-account", endpointScope: endpoint.absoluteString, apiDialect: "anthropic")))
         let session = try agent.makeSession(journal: journal)
         let run = try await session.run("one", contextControls: .init(reminder: "Chinese this turn"))
-        do { _ = try await run.wait(); Issue.record("EOF completed") } catch let error as ModelProviderError { #expect(error.kind == .invalidResponse) }
+        do { _ = try await run.wait(); Issue.record("EOF completed") } catch let error as ModelProviderError { #expect(error.kind == .transport && error.diagnostic?.reason == .streamEndedEarly) }
         try await run.waitForDrain()
         let canonical = await session.history
         #expect(canonical == [.user([.text("one")])])

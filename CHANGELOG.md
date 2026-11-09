@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — opt-in provider request policy
+
+- ProviderRequestPolicyProvider wraps any adapter with separate output idle
+  budgets, a total deadline and bounded retries with exponential backoff,
+  jitter and capped Retry-After. Existing adapters keep their timing/retry
+  defaults. Failed pre-output metadata is buffered; no request is replayed
+  after content, reasoning, continuation, tool or terminal output.
+- Clean EOF without the protocol terminal reports transport/streamEndedEarly.
+  Malformed frames and terminal contradictions remain invalidResponse.
+- Bounded HTTP error bodies distinguish quotaExhausted, modelNotFound and
+  overloaded; stream errors use the same kinds. Routes accept overloaded as
+  retryable, while quotaExhausted and modelNotFound remain nonretryable.
+- URLSessionProviderHTTPTransport(requestTimeoutInterval:) lets hosts raise
+  wire-idle limits to match long output budgets.
+
+### Breaking
+
+- ModelProviderError.Kind adds quotaExhausted, modelNotFound and overloaded.
+  Exhaustive switches must handle them. Diagnostic.Reason adds fixed size,
+  stream EOF and request policy timeout codes.
+
 ## Unreleased — configurable provider stream bounds
 
 - All HTTP model providers accept maximumSSEEventBytes (default 16 MiB).

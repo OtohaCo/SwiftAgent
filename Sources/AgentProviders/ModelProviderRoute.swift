@@ -10,12 +10,12 @@ public struct ModelProviderFallbackPolicy: Hashable, Codable, Sendable {
     public init(
         maxAttempts: Int = 2,
         maxRetriesPerProvider: Int = 0,
-        retryableKinds: Set<ModelProviderError.Kind> = [.rateLimited, .unavailable, .transport]
+        retryableKinds: Set<ModelProviderError.Kind> = [.rateLimited, .unavailable, .overloaded, .transport]
     ) throws {
         guard maxAttempts > 0, maxRetriesPerProvider >= 0 else {
             throw ModelProviderFallbackPolicyError.invalidLimits
         }
-        guard retryableKinds.isSubset(of: [.rateLimited, .unavailable, .transport]) else {
+        guard retryableKinds.isSubset(of: [.rateLimited, .unavailable, .overloaded, .transport]) else {
             throw ModelProviderFallbackPolicyError.invalidRetryableKinds
         }
         self.maxAttempts = maxAttempts

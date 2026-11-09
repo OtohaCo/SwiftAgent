@@ -48,14 +48,14 @@ struct AnthropicToolBoundaryTests {
         let missing = Data(normal.replacingOccurrences(of: "data: {\"type\":\"message_stop\"}\n\n", with: "").utf8)
         let trailing = anthropicToolFixture + providerSSE([#"{"type":"content_block_stop","index":0}"#])
         let invalid = [missing, trailing]
-        for body in invalid {
+        for (index, body) in invalid.enumerated() {
             let execution = ProviderExecutionProbe()
             let provider = try AnthropicProvider(apiKey: "fixture-key", transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [body]))
             do {
                 _ = try await Agent(model: .init(provider: "anthropic", name: "fixture"), provider: provider,
                                      tools: [ProviderCalculator(probe: execution)]).makeSession().run("Compute").wait()
                 Issue.record("Invalid stream must not succeed")
-            } catch { #expect((error as? ModelProviderError)?.kind == .invalidResponse) }
+            } catch { #expect((error as? ModelProviderError)?.kind == (index == 0 ? .transport : .invalidResponse)) }
             #expect(await execution.count == 0)
         }
     }

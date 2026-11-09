@@ -21,10 +21,22 @@ public protocol ProviderHTTPTransport: Sendable {
 /// of the shared session; its callbacks are routed to that request by the task's identifier.
 public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport {
     private let shared: ProviderHTTPSharedSession
+    private let requestTimeoutInterval: TimeInterval?
 
     public init() { self.init(configurationFactory: { .ephemeral }) }
 
-    internal init(configurationFactory: @escaping @Sendable () -> URLSessionConfiguration) {
+    /// Set this at least as high as the request policy's idle budgets when models
+    /// may wait longer than URLSession's default wire-idle timeout. It does not
+    /// replace the policy's output-based idle or total deadline.
+    public init(requestTimeoutInterval: TimeInterval) throws {
+        guard requestTimeoutInterval.isFinite, requestTimeoutInterval > 0 else {
+            throw ModelProviderError(kind: .invalidRequest, message: "Invalid HTTP request timeout.")
+        }
+        self.init(requestTimeoutInterval: requestTimeoutInterval, configurationFactory: { .ephemeral })
+    }
+
+    internal init(requestTimeoutInterval: TimeInterval? = nil, configurationFactory: @escaping @Sendable () -> URLSessionConfiguration) {
+        self.requestTimeoutInterval = requestTimeoutInterval
         let configuration = configurationFactory()
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
@@ -45,6 +57,7 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport {
                 return
             }
             var request = request
+            if let requestTimeoutInterval { request.timeoutInterval = max(request.timeoutInterval, requestTimeoutInterval) }
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.httpShouldHandleCookies = false
             let exchange = ProviderHTTPExchange(continuation: continuation)

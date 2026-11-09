@@ -7,6 +7,31 @@ import Testing
 @testable import AgentProviders
 
 struct ProviderHTTPTransportTests {
+    @Test func configuredWireIdleAllowsLongPolicyBudgets() async throws {
+        let fixture = ProviderHTTPFixture()
+        defer { fixture.remove() }
+        let observed = ProviderHTTPReceived()
+        let transport = URLSessionProviderHTTPTransport(requestTimeoutInterval: 600, configurationFactory: {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [ProviderHTTPURLProtocol.self]
+            return configuration
+        })
+        let task = Task {
+            do { for try await _ in transport.stream(fixture.request) {} }
+            catch {}
+        }
+        defer { task.cancel() }
+        try await fixture.waitForStart()
+        fixture.perform { instance in
+            Task { await observed.append(.response(status: Int(instance.request.timeoutInterval), headers: [:])) }
+        }
+        try await eventually { await observed.count == 1 }
+        if case .response(let timeout, _)? = await observed.events.first { #expect(timeout == 600) }
+        else { Issue.record("Missing captured request") }
+        #expect(throws: ModelProviderError.self) { try URLSessionProviderHTTPTransport(requestTimeoutInterval: 0) }
+        #expect(throws: ModelProviderError.self) { try URLSessionProviderHTTPTransport(requestTimeoutInterval: .infinity) }
+    }
+
     @Test(arguments: [
         (NSURLErrorDomain, URLError.timedOut.rawValue,
          ModelProviderError.Diagnostic.Reason.requestTimedOut),

@@ -97,7 +97,7 @@ struct AnthropicFailureTests {
     }
 
     @Test func nativeErrorEventsDoNotBecomeSuccessfulResponses() async throws {
-        for (type, kind) in [("overloaded_error", ModelProviderError.Kind.unavailable),
+        for (type, kind) in [("overloaded_error", ModelProviderError.Kind.overloaded),
                              ("rate_limit_error", .rateLimited), ("authentication_error", .authentication)] {
             let probe = ProviderRequestProbe()
             let body = providerSSE(["{\"type\":\"error\",\"error\":{\"type\":\"\(type)\",\"message\":\"private diagnostic\"}}"])

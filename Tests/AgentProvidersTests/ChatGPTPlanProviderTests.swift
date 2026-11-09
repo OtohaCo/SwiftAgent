@@ -172,7 +172,7 @@ struct ChatGPTPlanProviderTests {
                 transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [providerNamedSSE(frames)]))
             var completed = false
             do { for try await event in provider.stream(request: planRequest) { if case .responseCompleted = event { completed = true } }; Issue.record("Missing completed must fail") }
-            catch let error as ModelProviderError { #expect(error.kind == .invalidResponse) }
+            catch let error as ModelProviderError { #expect(error.kind == (frames.count == 1 ? .transport : .invalidResponse)) }
             #expect(!completed)
         }
     }
