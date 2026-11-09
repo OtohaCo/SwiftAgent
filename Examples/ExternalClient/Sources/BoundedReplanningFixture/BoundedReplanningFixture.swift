@@ -222,6 +222,11 @@ private struct BoundedProvider: ModelProvider {
                 guard requestContainsCall(request, id: "search-again"),
                       String(describing: result.content).contains("A") else { throw ProtocolError.missingSearchResult }
                 call = commit("A", id: "corrected-A")
+            case .tool(let result) where scenario == .authorizationDenied && result.callID.rawValue == "valid-A":
+                guard result.isError, requestContainsCall(request, id: "valid-A"),
+                      case .json(.object(let payload))? = result.content.first,
+                      payload["code"] == .string("not_allowed") else { throw ProtocolError.missingLinkedRejection }
+                call = nil
             case .tool(let result) where !result.isError &&
                 ["valid-A", "corrected-A"].contains(result.callID.rawValue):
                 guard requestContainsCall(request, id: result.callID.rawValue) else {

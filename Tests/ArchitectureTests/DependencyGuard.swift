@@ -28,6 +28,8 @@ enum DependencyGuard {
             allowed.insert("Glibc")
         }
         if module == "AgentJournalFileStore" {
+            allowed.insert("WinSDK")
+            allowed.insert("ucrt")
             allowed.insert("Crypto")
             allowed.insert("Darwin")
             allowed.insert("Glibc")

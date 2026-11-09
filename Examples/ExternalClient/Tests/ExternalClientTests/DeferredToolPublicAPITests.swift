@@ -9,8 +9,8 @@ import Foundation
 import Testing
 
 /// Deferred tools through the published API only: a binding offers the model its declared tools, a
-/// "find tools" result declares a deferred one for the next request, and an undeclared call fails as
-/// an unknown tool does.
+/// "find tools" result declares a deferred one for the next request, and an undeclared call returns
+/// linked error feedback without exposing the deferred tool.
 struct DeferredToolPublicAPITests {
     @Test func aFoundToolIsDeclaredForTheNextRequestOfTheRun() async throws {
         let provider = DeferredProvider(calls: [
@@ -31,7 +31,7 @@ struct DeferredToolPublicAPITests {
         #expect(await provider.offered() == [["find_tools"], ["find_tools", "web_fetch"], ["find_tools", "web_fetch"]])
     }
 
-    @Test func anUndeclaredCallFailsAsAnUnknownTool() async throws {
+    @Test func anUndeclaredCallReturnsUnknownToolFeedbackWithoutExposingIt() async throws {
         let provider = DeferredProvider(calls: [
             ToolCall(id: .init(rawValue: "fetch"), name: "web_fetch", argumentsJSON: #"{"text":"example.com"}"#, completeness: .complete),
         ])
@@ -41,8 +41,20 @@ struct DeferredToolPublicAPITests {
                 AgentCapabilityTool(id: "web_fetch", version: "1", tool: try DeferredEchoTool(name: "web_fetch"), exposure: .deferred),
             ])
         let run = try await session.run("Read example.com", capabilities: binding)
-        await #expect(throws: ToolRegistryError.unknownTool("web_fetch")) { _ = try await run.wait() }
-        #expect(await provider.offered() == [[]])
+        #expect(try await run.wait().outcome == .completed)
+        let requests = await provider.recordedRequests()
+        #expect(await provider.offered() == [[], []])
+        let following = try #require(requests.last)
+        let result = try #require(following.messages.compactMap { message -> ToolResultMessage? in
+            if case .tool(let result) = message { return result }; return nil
+        }.last)
+        #expect(result.callID.rawValue == "fetch" && result.isError)
+        guard case .json(.object(let payload))? = result.content.first else { Issue.record("Missing refusal"); return }
+        #expect(payload["code"] == .string("unknown_tool"))
+        #expect(following.messages.contains {
+            if case .assistant(_, let calls) = $0 { return calls.contains { $0.id == result.callID } }; return false
+        })
+        try await run.waitForDrain()
     }
 }
 
@@ -55,6 +67,8 @@ private actor DeferredProvider: ModelProvider {
     private var requests: [ModelRequest] = []
 
     init(calls: [ToolCall]) { self.calls = calls }
+
+    func recordedRequests() -> [ModelRequest] { requests }
 
     func offered() -> [[String]] { requests.map { $0.tools.map(\.name) } }
 

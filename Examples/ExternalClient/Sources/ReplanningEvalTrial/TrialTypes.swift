@@ -52,6 +52,7 @@ struct TrialFacts: Codable, Sendable {
     let replayOutputA: Bool
     let pendingStates: [String]?
     let pendingQueryError: String?
+    let refusalCodes: [String]
     let rejectionCallIDs: [String]
     let feedbackInLaterRequest: Bool
     let usage: [ResponseUsage]
@@ -112,6 +113,7 @@ actor TrialProbe {
     private(set) var searches = 0
     private(set) var attempts = 0
     private(set) var executorEntered = 0
+    private(set) var refusalCodes: [String] = []
     private(set) var rejectionCallIDs: [String] = []
     private(set) var feedbackInLaterRequest = false
     private(set) var usage: [ResponseUsage] = []
@@ -160,6 +162,9 @@ actor TrialProbe {
         case .toolAdmissionRejected(let id):
             rejectionCallIDs.append(id.rawValue)
             rejected = rejected ?? monotonicNow()
+        case .toolCompleted(let result) where result.isError:
+            if case .json(.object(let payload))? = result.content.first,
+               case .string(let code)? = payload["code"] { refusalCodes.append(code) }
         case .toolReceiptValidated: settlement = settlement ?? monotonicNow()
         case .model(.toolCallCompleted): attempts += 1
         case .model(.responseCompleted(let response)): usage.append(.init(response.usage))

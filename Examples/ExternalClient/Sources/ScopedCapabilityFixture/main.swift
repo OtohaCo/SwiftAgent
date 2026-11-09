@@ -35,8 +35,20 @@ import Foundation
         guard aRequest.tools.map(\.name) == [FixtureReadTool.name] else { fatalError("A tool snapshot drifted") }
 
         let guessed = try await a.run("guess hidden", capabilities: aScope)
-        do { _ = try await guessed.wait(); fatalError("unpublished tool was executable") }
-        catch ToolRegistryError.unknownTool { /* expected */ }
+        let refused = try await guessed.wait()
+        let following = try require(await provider.requests().last)
+        guard refused.outcome == .completed, refused.receipts.isEmpty,
+              let result = following.messages.compactMap({ message -> ToolResultMessage? in
+                  if case .tool(let result) = message { return result }; return nil
+              }).last,
+              result.isError, case .json(.object(let payload))? = result.content.first,
+              payload["code"] == .string("unknown_tool"),
+              following.messages.contains(where: {
+                  if case .assistant(_, let calls) = $0 { return calls.contains { $0.id == result.callID } }; return false
+              }),
+              try String(contentsOf: effect, encoding: .utf8).isEmpty else {
+            fatalError("unpublished tool did not return linked refusal without an effect")
+        }
         try await guessed.waitForDrain()
         let outOfScope = try await a.run("read B", capabilities: aScope)
         do { _ = try await outOfScope.wait(); fatalError("resource escaped A") }

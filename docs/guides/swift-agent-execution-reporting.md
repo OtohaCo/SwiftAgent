@@ -30,7 +30,7 @@ An integration should retain four independently computed layers:
    Receipts, and unknown or conflicting observations. A Host may add a
    separately instrumented executor-entry observation; the public
    `toolCompleted` event does not prove that entry and can also describe a
-   settled replay.
+   settled replay or a pre-admission refusal.
 3. **Domain fulfillment**: whether the Host's already accepted goal is now
    satisfied. This requires Host-owned target and permission state, execution
    facts, and any required current resource state.
@@ -41,6 +41,22 @@ The model's final text is presentation. It cannot create a Receipt, authorize a
 tool, prove that a mutation occurred, or erase an observed mutation. A Receipt
 is historical execution evidence; it does not by itself prove that an external
 resource still has the same current state.
+
+## Refused calls are tool results
+
+Ordinary tool authorization returning denied, an authorization failure, or an
+unknown tool name produces model-visible error feedback and lets the model
+continue (ADR 0016). A completed Run can therefore include a refused call.
+Display the error result and its preview; do not treat a successful wait as
+proof that every proposed tool ran.
+
+For prepared calls, toolStarted precedes authorization. A toolCompleted error
+result can describe a refusal or an executor error, and host tools can return
+the same code strings themselves. The reducer keeps executorEntered unknown
+for these results. Use separate executor instrumentation and durable journal
+state to establish whether an effect occurred. The headless example checks its
+actual write counter and file state in addition to presenting the not_allowed
+result. Audited authorization retains its typed failure behavior.
 
 ## One event consumer, then drain
 

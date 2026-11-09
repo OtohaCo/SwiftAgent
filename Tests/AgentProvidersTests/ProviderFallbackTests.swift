@@ -6,7 +6,7 @@ import Foundation
 import Testing
 
 struct ProviderFallbackTests {
-    @Test(arguments: ["contextWindowExceeded", "authentication", "invalidRequest", "cancelled"])
+    @Test(arguments: ["contextWindowExceeded", "authentication", "invalidRequest", "quotaExhausted", "modelNotFound", "cancelled"])
     func decodedNonretryableKindsAreRejected(_ kind: String) throws {
         let json = Data("{\"maxAttempts\":2,\"maxRetriesPerProvider\":1,\"retryableKinds\":[\"\(kind)\"]}".utf8)
         #expect(throws: (any Error).self) { try JSONDecoder().decode(ModelProviderFallbackPolicy.self, from: json) }
@@ -61,13 +61,18 @@ struct ProviderFallbackTests {
         #expect(await probe.requests.count == 2)
     }
 
-    @Test func legalDecodedPolicyRoundTripsAndRetriesTransientErrors() async throws {
+    @Test(arguments: ["unavailable", "overloaded", "streamEndedEarly"])
+    func legalDecodedPolicyRoundTripsAndRetriesTransientErrors(failure: String) async throws {
         let policy = try ModelProviderFallbackPolicy(maxAttempts: 2, maxRetriesPerProvider: 1)
         let decoded = try JSONDecoder().decode(ModelProviderFallbackPolicy.self, from: JSONEncoder().encode(policy))
         #expect(decoded == policy)
         let probe = RouteProviderProbe()
         let provider = RouteFixtureProvider(probe: probe) { request, turn, emit in
-            if turn == 1 { throw ModelProviderError(kind: .unavailable, message: "fixture") }
+            if turn == 1 {
+                throw ModelProviderError(kind: failure == "streamEndedEarly" ? .transport
+                    : (failure == "overloaded" ? .overloaded : .unavailable), message: "fixture",
+                    diagnostic: failure == "streamEndedEarly" ? .init(stage: .streamLifecycle, reason: .streamEndedEarly) : nil)
+            }
             try emitContents(textEvents(request, "retried"), emit: emit)
         }
         let route = try ModelProviderRoute(id: "fixture", candidates: [provider], policy: decoded)

@@ -94,7 +94,7 @@ struct ExecutionReportReducerTests {
         #expect(reducer.report.modelText == "Saved successfully")
     }
 
-    @Test func readOnlyGoalRejectsMutationBeforeExecutorEntry() throws {
+    @Test func auditedAuthorizationFailureReportsKnownNonexecution() throws {
         let ids = IdentityFixture()
         var reducer = ExecutionReportReducer(sessionID: ids.sessionID, runID: ids.runID)
         reducer.consume(.runStarted(ids.info))
@@ -105,6 +105,42 @@ struct ExecutionReportReducerTests {
         #expect(tool.status == .failed(.toolInvocation(.authorizationDenied)))
         #expect(reducer.report.receipts.isEmpty)
         #expect(tool.executorEntered == false)
+    }
+
+    @Test(arguments: ["not_allowed", "authorization_failed", "not_answered", "busy"])
+    func refusalResultsAreVisibleWithoutInventingExecutionFacts(code: String) throws {
+        let ids = IdentityFixture()
+        var reducer = ExecutionReportReducer(sessionID: ids.sessionID, runID: ids.runID)
+        reducer.consume(.runStarted(ids.info))
+        reducer.consume(.model(.toolCallCompleted(ids.call)))
+        reducer.consume(.toolStarted(ids.call))
+        reducer.consume(.toolCompleted(.init(callID: ids.call.id, content: [.json(.object([
+            "code": .string(code), "message": .string("The call did not run.")
+        ]))], isError: true)))
+        reducer.recordLogicalResult(response: ids.response, outcome: .completed, receipts: [])
+
+        let tool = try #require(reducer.report.toolObservations.first)
+        #expect(tool.status == .completed(isError: true))
+        #expect(tool.resultPreview == "The call did not run.")
+        // A read-only executor can also return these words; they are not proof of nonexecution.
+        #expect(tool.executorEntered == nil)
+        #expect(tool.receipt == nil && reducer.report.receipts.isEmpty)
+        #expect(reducer.report.diagnostics.isEmpty)
+        #expect(reducer.report.runtimeTermination == .completed(.completed))
+    }
+
+    @Test(arguments: ["Nothing changed; choose another action.", "没有更改。"])
+    func refusalPreviewIsBoundedAndDoesNotBecomeModelAnswer(message: String) {
+        let ids = IdentityFixture()
+        var reducer = ExecutionReportReducer(sessionID: ids.sessionID, runID: ids.runID, maximumPreviewLength: 8)
+        reducer.consume(.runStarted(ids.info))
+        reducer.consume(.toolCompleted(.init(callID: ids.call.id, content: [.json(.object([
+            "message": .string(message), "code": .string("not_allowed")
+        ]))], isError: true)))
+        let preview = reducer.report.toolObservations.first?.resultPreview ?? ""
+        #expect(!preview.isEmpty && preview.utf8.count <= 8 && message.hasPrefix(preview))
+        #expect(reducer.report.modelText.isEmpty)
+        #expect(reducer.report.toolObservations.first?.executorEntered == nil)
     }
 
     @Test func recoverableToolErrorIsNotReportedAsSuccessfulEffect() {

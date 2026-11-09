@@ -44,6 +44,15 @@ final class DependencyGuardTests: XCTestCase {
         }
     }
 
+    func testWindowsStorageSDKsStayLimitedToJournalFileStore() {
+        for sdk in ["WinSDK", "ucrt"] {
+            XCTAssertEqual(DependencyGuard.violations("import \(sdk)", module: "AgentJournalFileStore"), [])
+            for module in DependencyGuard.dependencies.keys where module != "AgentJournalFileStore" {
+                XCTAssertFalse(DependencyGuard.violations("import \(sdk)", module: module).isEmpty)
+            }
+        }
+    }
+
     func testPlatformSDKIsAllowedOnlyInItsDedicatedAdapter() {
         XCTAssertEqual(DependencyGuard.violations("import FoundationModels\nimport AgentModels", module: "AgentAppleProvider"), [])
         for module in ["AgentModels", "AgentTools", "AgentCore", "AgentProviders"] {

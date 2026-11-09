@@ -284,23 +284,26 @@ struct AnthropicConversationControlTests {
         _ = try await two.wait(); try await two.waitForDrain()
         let removed = try await session.bindCapabilities(identity: "registry", version: "3", backendInstanceID: "fixture", backendVersion: "3", allowedResources: [], tools: [])
         let three = try await session.run("tool removed", capabilities: removed, using: binding("3"))
-        do { _ = try await three.wait(); Issue.record("Removed tool was allowed") }
-        catch let error as ToolRegistryError { #expect(error == .unknownTool("new_tool")) }
+        #expect(try await three.wait().outcome == .completed)
         try await three.waitForDrain()
         #expect(await discoveries.count == 1)
         #expect(await updatedExecutions.count == 1)
         let sent = await probe.requests
-        #expect(sent.count == 5)
+        #expect(sent.count == 6)
         let initial = try JSONDecoder().decode(JSONValue.self, from: sent[0].httpBody!)
         let updated = try JSONDecoder().decode(JSONValue.self, from: sent[2].httpBody!)
         let removedBody = try JSONDecoder().decode(JSONValue.self, from: sent[4].httpBody!)
         #expect(initial["tools"] == updated["tools"] && updated["tools"] == removedBody["tools"])
         #expect(String(decoding: sent[2].httpBody!, as: UTF8.self).contains("Updated trusted schema"))
         #expect(String(decoding: sent[2].httpBody!, as: UTF8.self).contains("signature-1"))
-        #expect(!(await session.history.contains { message in
-            if case .tool(let result) = message { return result.callID.rawValue == "removed-call" }
-            return false
-        }))
+        let refusal = try #require(await session.history.compactMap { message -> ToolResultMessage? in
+            if case .tool(let result) = message, result.callID.rawValue == "removed-call" { return result }; return nil
+        }.last)
+        #expect(refusal.isError)
+        guard case .json(let payload)? = refusal.content.first else { Issue.record("Missing refusal result"); return }
+        #expect(payload["code"] == .string("unknown_tool"))
+        let following = String(decoding: sent[5].httpBody!, as: UTF8.self)
+        #expect(following.contains("removed-call") && following.contains("unknown_tool"))
     }
 
     @Test func drainedIdleCompactThenNewUserReminderSupportsRealToolLoop() async throws {

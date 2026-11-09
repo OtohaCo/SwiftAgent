@@ -397,7 +397,11 @@ struct QualificationRunnerTests {
         #expect(!providerFailureNote(schema).contains("private"))
         #expect(shouldPauseProvider(after: schema))
         #expect(shouldPauseProvider(after: .init(kind: .authentication, message: "x")))
-        #expect(!shouldPauseProvider(after: .init(kind: .transport, message: "x")))
+        #expect(!shouldPauseProvider(after: .init(kind: .transport, message: "x",
+            diagnostic: .init(stage: .streamLifecycle, reason: .streamEndedEarly))))
+        #expect(!shouldPauseProvider(after: .init(kind: .overloaded, message: "x")))
+        #expect(shouldPauseProvider(after: .init(kind: .quotaExhausted, message: "x")))
+        #expect(shouldPauseProvider(after: .init(kind: .modelNotFound, message: "x")))
     }
 }
 

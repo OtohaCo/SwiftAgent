@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — examples follow tool refusal results
+
+- Deferred/scoped capability and bounded replanning examples consume linked
+  unknown-tool and authorization refusal results, preserving paired history
+  and checking that refused mutations create no intent or effect.
+- Headless execution reporting displays refusal results within a completed
+  Run without inventing executor-entry evidence or missing-receipt failures.
+- The offline replanning evaluation accepts a completed denial only with a
+  reported not_allowed result and zero independently observed effects.
+- Public initializer and provider/Core composition tests cover configurable
+  SSE bounds, new provider failures and early-stream transport retry.
+
+
 ## Unreleased — opt-in provider request policy
 
 - ProviderRequestPolicyProvider wraps any adapter with separate output idle

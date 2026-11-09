@@ -819,9 +819,9 @@ func providerFailureNote(_ error: ModelProviderError) -> String {
 func shouldPauseProvider(after error: ModelProviderError) -> Bool {
     switch error.kind {
     case .authentication, .permissionDenied, .invalidRequest, .unsupportedCapability, .invalidResponse,
-         .contextWindowExceeded:
+         .contextWindowExceeded, .quotaExhausted, .modelNotFound:
         true
-    case .rateLimited, .unavailable, .transport, .fallbackBlocked:
+    case .rateLimited, .unavailable, .overloaded, .transport, .fallbackBlocked:
         false
     }
 }

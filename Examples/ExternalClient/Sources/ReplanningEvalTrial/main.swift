@@ -143,7 +143,7 @@ import Foundation
             settledA: status?.state == .settled,
             replayOutputA: status?.replayOutput == .object(["committed": .string("A")]),
             pendingStates: pending, pendingQueryError: pendingError,
-            rejectionCallIDs: seen.rejected, feedbackInLaterRequest: seen.feedback,
+            refusalCodes: await probe.refusalCodes, rejectionCallIDs: seen.rejected, feedbackInLaterRequest: seen.feedback,
             usage: seen.usage, milestonesNS: seen.time,
             reportComplete: reports.allSatisfy(\.coverage.isComplete),
             reportDiagnostics: reports.flatMap { $0.diagnostics.map(String.init(describing:)) },

@@ -61,6 +61,10 @@ class ReplanningEvaluationTests(unittest.TestCase):
             self.assertLess(t["effect"], t["settlement"])
             self.assertLessEqual(t["logicalEnd"], t["physicalDrain"])
             safety = {r["task"]["scenario"]: r for r in records if r["task"]["group"] == "safety"}
+            denied = safety["permission_denied"]
+            self.assertEqual(denied["facts"]["outcome"], "completed")
+            self.assertIn("not_allowed", denied["facts"].get("refusalCodes", []))
+            self.assertEqual(denied["facts"]["executorEntered"], 0)
             self.assertTrue(all(r["score"]["success"] for r in safety.values()))
             self.assertEqual(safety["unknown_after_write"]["facts"]["effectIDs"], ["A"])
             self.assertEqual(len(safety["unknown_after_write"]["facts"]["runIDs"]), 2)

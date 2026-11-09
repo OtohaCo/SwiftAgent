@@ -71,6 +71,13 @@ struct DryTrialProvider: ModelProvider {
                 }
                 call = .init(id: .init(rawValue: "corrected-A"), name: EvalCommit.name,
                              argumentsJSON: #"{"id":"A"}"#, completeness: .complete)
+            case .tool(let result) where task.scenario == "permission_denied" && result.isError:
+                guard case .json(.object(let payload))? = result.content.first,
+                      payload["code"] == .string("not_allowed"),
+                      request.messages.contains(where: {
+                          if case .assistant(_, let calls) = $0 { return calls.contains { $0.id == result.callID } }; return false
+                      }) else { throw ModelProviderError(kind: .invalidRequest, message: "Missing linked refusal.") }
+                call = nil
             case .tool(let result) where !result.isError &&
                 (result.callID.rawValue.hasPrefix("commit-A") || result.callID.rawValue == "corrected-A"):
                 if task.scenario == "settled_model_failure" { throw EvalTrialError.dryRunFailure }

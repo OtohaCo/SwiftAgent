@@ -169,7 +169,7 @@ def score(task, facts):
         success = (facts["outcome"] == "completed" and effects == [] and
                    facts["executorEntered"] == 0 and facts["trustedReceipts"] == 0 and pending == [])
     elif rule == "permission_denied":
-        success = ("authorizationDenied" in (facts.get("failure") or "") and effects == [] and
+        success = (facts["outcome"] == "completed" and "not_allowed" in facts["refusalCodes"] and effects == [] and
                    facts["executorEntered"] == 0 and facts["trustedReceipts"] == 0 and pending == [])
     elif rule == "settled_then_failed":
         success = (facts["outcome"] == "failed" and effects == ["A"] and

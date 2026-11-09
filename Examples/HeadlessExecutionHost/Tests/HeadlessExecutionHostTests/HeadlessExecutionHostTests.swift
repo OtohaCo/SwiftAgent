@@ -40,7 +40,13 @@ struct HeadlessExecutionHostTests {
         #expect(result.executorEntryCount == 0)
         #expect(result.fileContent == nil)
         #expect(result.report.receipts.isEmpty)
-        #expect(result.report.toolObservations.first?.executorEntered == false)
-        #expect(result.report.diagnostics.contains(.missingReceipt(callID: result.report.toolObservations.first!.callID)))
+        let refusal = try #require(result.report.toolObservations.first)
+        #expect(refusal.status == .completed(isError: true))
+        #expect(refusal.resultPreview?.contains("This call was not allowed") == true)
+        #expect(refusal.executorEntered == nil)
+        #expect(result.successfulWriteCount == 0)
+        #expect(result.report.runtimeTermination == .completed(.completed))
+        #expect(result.report.finalModelText == "The Host rejected the write before execution.")
+        #expect(result.report.coverage.isComplete && result.report.diagnostics.isEmpty)
     }
 }

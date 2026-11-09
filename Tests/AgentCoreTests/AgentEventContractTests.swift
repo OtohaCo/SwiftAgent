@@ -47,14 +47,17 @@ struct AgentEventContractTests {
         try await run.waitForDrain()
     }
 
-    @Test func waitMatchesTheSingleTerminalEventOnProviderFailure() async throws {
-        let failure = ModelProviderError(kind: .rateLimited, message: "Retry later")
+    @Test(arguments: [ModelProviderError.Kind.rateLimited, .quotaExhausted, .modelNotFound, .overloaded, .transport])
+    func waitMatchesTheSingleTerminalEventOnProviderFailure(kind: ModelProviderError.Kind) async throws {
+        let failure = ModelProviderError(kind: kind, message: "Fixture provider failure",
+            diagnostic: .init(stage: .server, reason: kind == .transport ? .streamEndedEarly : .httpFailure))
         let session = try Agent(
             model: fixtureModel,
             provider: ScriptedProvider { _, _ in throw failure }
         ).makeSession()
         let run = try await session.run("work")
-        await #expect(throws: ModelProviderError.self) { try await run.wait() }
+        do { _ = try await run.wait(); Issue.record("Expected provider failure") }
+        catch let error as ModelProviderError { #expect(error == failure) }
         let events = await collectEvents(run.events)
         try expectSingleLifecycle(events)
         #expect(events.last == .runFinished(.failed(.provider(failure))))

@@ -111,7 +111,7 @@ struct BoundedReplanningBaselineTests {
     }
 
     @Test func sameNamedErrorsFromAuthorizationAndExecutorCannotBecomeAdmissionFeedback() async throws {
-        for scenario: BoundedScenario in [.authorizationEvidenceError, .authorizationDenied, .executorEvidenceError] {
+        for scenario: BoundedScenario in [.authorizationEvidenceError, .executorEvidenceError] {
             let observed = try await BoundedFixture.run(scenario)
             #expect(observed.requests.count == 2 && observed.rejectionFeedback == nil, "\(observed.trace)")
             #expect(!observed.events.contains {
@@ -125,6 +125,28 @@ struct BoundedReplanningBaselineTests {
                 #expect(observed.pendingStates.isEmpty)
             }
         }
+    }
+
+    @Test func authorizationDenialReachesNextRequestWithoutIntentOrEffect() async throws {
+        let observed = try await BoundedFixture.run(.authorizationDenied)
+        #expect(observed.error == nil && observed.outcome == "completed", "\(observed.trace)")
+        #expect(observed.requests.count == 3 && observed.rejectionFeedback == nil)
+        let following = try #require(observed.requests.last)
+        let refusal = try #require(following.messages.compactMap { message -> ToolResultMessage? in
+            if case .tool(let result) = message, result.callID.rawValue == "valid-A" { return result }; return nil
+        }.last)
+        #expect(refusal.isError)
+        guard case .json(.object(let payload))? = refusal.content.first else { Issue.record("Missing refusal"); return }
+        #expect(payload["code"] == .string("not_allowed"))
+        #expect(following.messages.contains {
+            if case .assistant(_, let calls) = $0 { return calls.contains { $0.id == refusal.callID } }; return false
+        })
+        #expect(observed.authorizationEntered == 1 && observed.executorEntered == 0)
+        #expect(observed.executorSawDurableIntent == 0 && observed.externalEffects == 0)
+        #expect(observed.receiptCount == 0 && observed.validMutationState == nil && observed.pendingStates.isEmpty)
+        #expect(observed.events.contains(.toolCompleted(refusal)))
+        #expect(!observed.events.contains { if case .toolAdmissionRejected = $0 { return true }; return false })
+        #expect(observed.reopenedHistoryAndMessageIDsMatch)
     }
 
     @Test func settledMutationClosesReplanningWithoutReplayingTheEffect() async throws {

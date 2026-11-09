@@ -63,7 +63,7 @@ public struct ToolExecutionObservation: Equatable, Sendable {
     mutating func admit(_ call: ToolCall) {
         update(call: call)
         status = .admitted
-        // `toolStarted` is admission, not executor entry.
+        // `toolStarted` precedes authorization and does not prove executor entry.
         executorEntered = nil
     }
 
@@ -74,8 +74,8 @@ public struct ToolExecutionObservation: Equatable, Sendable {
 
     mutating func complete(_ result: ToolResultMessage, preview: String?) {
         status = .completed(isError: result.isError)
-        // A completion event can describe a settled replay. The public event
-        // contract does not expose executor entry, so keep this unknown.
+        // Completion includes pre-admission refusals, executor errors and settled replays.
+        // Their result payloads do not prove executor entry; display them without inferring it.
         executorEntered = nil
         resultPreview = preview
     }
@@ -307,7 +307,7 @@ public struct ExecutionReportReducer: Sendable {
             toolsByID[call.id] = observation
         case .toolCompleted(let result):
             var observation = observation(for: result.callID)
-            observation.complete(result, preview: preview(result.content))
+            observation.complete(result, preview: preview(result.content, isError: result.isError))
             toolsByID[result.callID] = observation
         case .toolReceiptValidated(let receipt):
             merge(receipt)
@@ -512,10 +512,24 @@ public struct ExecutionReportReducer: Sendable {
         String(decoding: Array(value.utf8.prefix(maximumTextLength)), as: UTF8.self)
     }
 
-    private func preview(_ content: [ModelContent]) -> String? {
-        let value = Self.text(from: content)
-        guard !value.isEmpty else { return nil }
-        return String(decoding: Array(value.utf8.prefix(maximumPreviewLength)), as: UTF8.self)
+    private func preview(_ content: [ModelContent], isError: Bool) -> String? {
+        var value = ""
+        for part in content {
+            let text: String
+            switch part {
+            case .text(let message): text = message
+            case .json(.object(let fields)) where isError:
+                guard case .string(let message)? = fields["message"] else { continue }
+                text = message
+            default: continue
+            }
+            let remaining = maximumPreviewLength - value.utf8.count
+            guard remaining > 0 else { break }
+            var bytes = Array(text.utf8.prefix(remaining))
+            while !bytes.isEmpty, String(bytes: bytes, encoding: .utf8) == nil { bytes.removeLast() }
+            value += String(decoding: bytes, as: UTF8.self)
+        }
+        return value.isEmpty ? nil : value
     }
 
     private mutating func addDiagnostic(_ diagnostic: ExecutionReportDiagnostic) {
