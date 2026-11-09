@@ -95,16 +95,15 @@ an `AgentRun`. Admission failures throw from the call; execution failures from
   `host:<operationID>/<tool>/<arguments>`, and Runs and queued inputs cannot name
   `host:` operations, so a retry replays a settled result or is refused until an
   unknown outcome is reconciled, and a model call never shares the key.
-- **Formal history.** User-side messages beginning with
-  `AgentHostToolCall.historyHeader`: the Host's request (the Run's formal input:
-  tool, call identity, the Host's note, arguments as data), then its result as
-  tool data, not instructions; a replay says the earlier result was replayed and
-  the tool not run again; a failure, once the executor returned and no result can
-  still be committed, says from the call's durable state that nothing was changed
-  or that the outcome awaits reconciliation (best effort: the Journal's facts stand
-  either way); `reconcileMutation` settles a Host call with a user-side
-  Host notice. No assistant tool call is ever written for a Host call. The next
-  Run's model sees all of it.
+- **Formal history.** The Host's request is a user-side message beginning with
+  `AgentHostToolCall.historyHeader` (the Run's formal input: tool, call identity,
+  the Host's note, arguments as data). Its result was a second user-side notice
+  until 2026-11-10; [ADR 0018](0018-host-call-results-as-tool-results.md)
+  replaced that with the call in the Host's namespace and a tool result. A failure,
+  once the executor returned and no result can still be committed, says from the
+  call's durable state, on the user's side in fixed SDK words, that nothing was
+  changed or that the outcome awaits reconciliation (best effort: the Journal's
+  facts stand either way). The next Run's model sees all of it.
 - **Host namespace.** Host call identities begin with
   `AgentHostToolCall.callIDPrefix`. A model proposal using that prefix ends its
   Run with `AgentHostInvocationError.reservedCallIdentity` before preparation, so
@@ -120,8 +119,8 @@ Not covered by this implementation:
   wording is not authenticated: other user-side text (a Run's input, steering or
   a queued input) could imitate it, and `note` must be written by the Host, never
   relayed from an embedded panel.
-- Model visibility is not optional, and a large result is kept in history whole:
-  the tool-result projection and excerpts do not apply to Host notices.
+- Model visibility is not optional. A Host result has no read-only proof for
+  context excerpts, so projections keep it whole (OAI-1521's size limit applies).
 - A failure's notice reaches history at drain, not when `wait` returns. A Host
   reconciling a Host call must first `waitForDrain()`, as `reconcileMutation`
   requires; reconciling earlier may lose the failure notice.

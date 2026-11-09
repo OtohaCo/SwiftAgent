@@ -23,8 +23,11 @@ changes; Host calls work on every supported Journal schema. Behavior changes: a
 model tool call whose identity begins with `AgentHostToolCall.callIDPrefix`
 (`host-call-`) now ends its Run with `AgentHostInvocationError.reservedCallIdentity`
 before preparation; `run` and `enqueueFollowUp` refuse an operation identity
-beginning with `host:` (`reservedOperationID`); and `reconcileMutation` settles a
-Host call with a user-side Host notice. The immutable published RC6 tag is
+beginning with `host:` (`reservedOperationID`); and a Host call's result,
+including one settled by `reconcileMutation`, is committed as the call in the
+Host's namespace and a tool result
+([ADR 0018](../adr/0018-host-call-results-as-tool-results.md); before 2026-11-10
+it was a user-side Host notice). The immutable published RC6 tag is
 unchanged.
 
 ## HTTP transport failure reasons (after RC6)

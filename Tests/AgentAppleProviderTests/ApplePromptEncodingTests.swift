@@ -4,6 +4,25 @@ import Testing
 @testable import AgentAppleProvider
 
 struct ApplePromptEncodingTests {
+    /// OAI-1539: a Host call's result reaches the on-device model as a tool row after the Host's call, not as user text.
+    @Test func aHostCallResultIsAToolRowAfterItsCall() throws {
+        let call = ToolCall(id: .init(rawValue: "host-call-1"), name: "move_clip",
+                            argumentsJSON: #"{"clip":"clip-2"}"#, completeness: .complete)
+        let request = ModelRequest(model: AppleFoundationProvider.modelID, messages: [
+            .user([.text("[Host action, not proposed by the assistant] The host asked to run the tool \"move_clip\".")]),
+            .assistant(content: [], toolCalls: [call]),
+            .tool(.init(callID: call.id, content: [.json(.object(["page": .string("plugin words")]))], isError: false)),
+            .user([.text("What changed?")]),
+        ])
+        let encoded = try JSONSerialization.jsonObject(with: ApplePromptEncoding.encode(request)) as? [String: Any]
+        let messages = try #require(encoded?["messages"] as? [[String: Any]])
+        #expect(messages.map { $0["role"] as? String } == ["user", "assistant", "tool", "user"])
+        #expect((messages[1]["toolCalls"] as? [[String: Any]])?.first?["id"] as? String == call.id.rawValue)
+        #expect(messages[2]["callID"] as? String == call.id.rawValue)
+        #expect((messages[2]["content"] as? String)?.contains("plugin words") == true)
+        #expect(messages.filter { $0["role"] as? String == "user" }.allSatisfy { ($0["content"] as? String)?.contains("plugin words") == false })
+    }
+
     @Test func recoverableToolResultPreservesIsErrorTrue() throws {
         let call = ToolCall(id: .init(rawValue: "search-error"), name: "search_resource",
                             argumentsJSON: #"{"query":"missing"}"#, completeness: .complete)

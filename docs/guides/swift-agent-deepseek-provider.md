@@ -61,7 +61,8 @@ With thinking on and tools offered, if an assistant turn with tool calls has
 no matching continuation for the requested DeepSeek model (for example history
 from another provider or model, or a turn whose continuation was removed),
 request encoding fails with `ModelProviderError.invalidRequest` before network
-I/O. A `.developer` message also fails before network I/O because DeepSeek
+I/O. A turn holding only Host calls (`host-call-` identities, ADR 0018) is sent
+without one: DeepSeek never produced it, so it has no reasoning to replay. A `.developer` message also fails before network I/O because DeepSeek
 treats that role as `user`, which would weaken SwiftAgent's trusted
 developer-instruction semantics.
 

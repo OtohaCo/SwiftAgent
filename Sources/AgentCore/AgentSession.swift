@@ -364,8 +364,9 @@ public actor AgentSession {
     /// model is asked. The call is admitted as a Run is (one at a time per Session, after the previous Run drains), on the
     /// immutable `capabilities` of this Session instance, which must be current: only its tools and resources are
     /// reachable. The tool's own authorization, Evidence, durable mutation intent, Receipt validation and reconciliation
-    /// apply as for a model's call. Its history is committed as a Host notice on the user's side, never as an assistant
-    /// proposal, so the next Run's model knows what happened.
+    /// apply as for a model's call. History gets the Host's request on the user's side, labelled as the Host's, then the
+    /// call in the Host's namespace and its tool result (ADR 0018), so the next Run's model knows what happened and the
+    /// tool's output never carries a user message's authority.
     ///
     /// A mutation needs `operationID`, the Host's stable identity for the operation: retrying it replays a settled result
     /// and refuses one whose outcome is unknown until it is reconciled, so it is never executed twice.
@@ -548,8 +549,8 @@ public actor AgentSession {
                                          conversationRevision: conversationRevision)
     }
 
-    /// Commits a Host call's result as a model's would be (its mutation settlement or checkpoint), with formal history
-    /// saying it is the Host's call's result, or an earlier result replayed.
+    /// Commits a Host call's result as a model's would be (its mutation settlement or checkpoint): the call in the Host's
+    /// namespace and its tool result, after the Host's request (OAI-1539); a replay says so in the result.
     private func commitHostResult(_ call: PreparedToolCall, result executed: ToolResult<JSONValue>, runID: UUID,
                                   budget: AgentBudget) async throws -> (message: ToolResultMessage, receipt: AgentToolReceipt?) {
         // As for a model's call: an oversized output is cut before it is committed (OAI-1521).
@@ -562,9 +563,8 @@ public actor AgentSession {
             images = result.images.map { .text($0.textSubstitute) }
         }
         let message = ToolResultMessage(callID: call.call.id, content: [.json(result.output)] + images, isError: result.isModelVisibleError)
-        let notice = ModelMessage.user([.text(AgentHostToolCall.resultText(call: call.call, result: message,
-                                                                           replayed: result.isIdempotentReplay))] + images)
-        let proposed = history + [notice]
+        let proposed = history + AgentHostToolCall.historyMessages(call: call.call, result: message,
+                                                                    replayed: result.isIdempotentReplay)
         do {
             if result.notAdmitted {
                 // Refused before admission (ADR 0016): the Host hears it as an error result; no intent exists.

@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — Host call results are tool results (OAI-1539, ADR 0018)
+
+- A Host call's result (`invokeHostTool`), and a Host mutation settled by
+  `reconcileMutation`, are committed as the call in the Host's `host-call-`
+  namespace and a tool result, after the Host's user-side request. Before, the
+  tool's output was a user-side text notice and reached later model requests
+  with a user message's authority. Replays and reconciliations say so in a
+  leading text part of the result.
+- DeepSeek (thinking with tools) and Gemini accept Host calls without provider
+  state; model calls without it are still refused. Under Gemini's
+  `requireCurrentTurnFunctionSignatures`, a Host call in the current turn is
+  refused.
+- Conversations committed before keep their user-side notices and continue
+  unchanged. Context materials are unchanged.
+
+### Behaviour change
+
+- `AgentHostInvocationResult.result` is unchanged, but formal history after a
+  Host call now ends with `.assistant(content: [], toolCalls: [call])` and
+  `.tool(result)` instead of a `.user` notice.
+
 ## Unreleased — mutations wait only for overlapping resources (OAI-1520, ADR 0017)
 
 - A mutation's scheduler lease conflicts only with calls whose declared resources
