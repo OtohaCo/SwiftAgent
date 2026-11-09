@@ -55,6 +55,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
     let nativeContext: AnthropicNativeContextConfiguration?
     private let promptCaching: AnthropicPromptCaching?
     private let resolvedModelIDsByAlias: [String: String]
+    private let maximumSSEEventBytes: Int
     private let transport: any ProviderHTTPTransport
     public var description: String { "AnthropicProvider" }
     public var debugDescription: String { description }
@@ -62,6 +63,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
 
     public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
                 thinking: AnthropicThinking = .disabled,
+                maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         try self.init(
             apiKey: apiKey,
@@ -70,13 +72,14 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
             thinking: thinking,
             effort: nil,
             resolvedModelIDsByAlias: [:],
-            transport: transport
+            maximumSSEEventBytes: maximumSSEEventBytes, transport: transport
         )
     }
 
     public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
                 thinking: AnthropicThinking = .disabled,
                 effort: AnthropicEffort?,
+                maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         try self.init(
             apiKey: apiKey,
@@ -85,7 +88,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
             thinking: thinking,
             effort: effort,
             resolvedModelIDsByAlias: [:],
-            transport: transport
+            maximumSSEEventBytes: maximumSSEEventBytes, transport: transport
         )
     }
 
@@ -93,10 +96,11 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
                 thinking: AnthropicThinking = .disabled,
                 effort: AnthropicEffort?,
                 resolvedModelIDsByAlias: [String: String],
+                maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
                       thinking: thinking, effort: effort, resolvedModelIDsByAlias: resolvedModelIDsByAlias,
-                      promptCaching: nil, transport: transport)
+                      promptCaching: nil, maximumSSEEventBytes: maximumSSEEventBytes, transport: transport)
     }
 
     /// Optional cache strategy qualified by the Host for this endpoint and resolved model.
@@ -105,16 +109,18 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
                 thinking: AnthropicThinking = .disabled, effort: AnthropicEffort? = nil,
                 resolvedModelIDsByAlias: [String: String] = [:],
                 promptCaching: AnthropicPromptCaching?,
+                maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
             thinking: thinking, effort: effort, resolvedModelIDsByAlias: resolvedModelIDsByAlias,
-            promptCaching: promptCaching, nativeContext: nil, transport: transport)
+            promptCaching: promptCaching, nativeContext: nil, maximumSSEEventBytes: maximumSSEEventBytes, transport: transport)
     }
 
     public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
                 thinking: AnthropicThinking = .disabled, effort: AnthropicEffort? = nil,
                 resolvedModelIDsByAlias: [String: String] = [:], promptCaching: AnthropicPromptCaching? = nil,
                 nativeContext: AnthropicNativeContextConfiguration?,
+                maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !apiKey.contains("\r"), !apiKey.contains("\n"), maximumOutputTokens > 0,
@@ -161,12 +167,13 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
         self.nativeContext = nativeContext
         self.promptCaching = promptCaching
         self.resolvedModelIDsByAlias = resolvedModelIDsByAlias
-        self.transport = transport
+        self.transport = transport; self.maximumSSEEventBytes = maximumSSEEventBytes
     }
 
     public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
                 thinking: AnthropicThinking = .disabled,
                 resolvedModelIDsByAlias: [String: String],
+                maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         try self.init(
             apiKey: apiKey,
@@ -175,7 +182,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
             thinking: thinking,
             effort: nil,
             resolvedModelIDsByAlias: resolvedModelIDsByAlias,
-            transport: transport
+            maximumSSEEventBytes: maximumSSEEventBytes, transport: transport
         )
     }
 
@@ -204,7 +211,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
             http.httpBody = body
             let betas = AnthropicNativeContext.betas(request: request, mode: compactionMode, configuration: nativeContext)
             if !betas.isEmpty { http.setValue(betas.joined(separator: ","), forHTTPHeaderField: "anthropic-beta") }
-            var sse = try ProviderSSEDecoder()
+            var sse = try ProviderSSEDecoder(maximumEventBytes: maximumSSEEventBytes)
             let responseModelName = resolvedModelIDsByAlias[request.model.name] ?? request.model.name
             let fields = try ProviderJSON.object(encoded)
             guard case .array(let messages) = fields["messages"] else { throw ProviderJSON.invalid() }

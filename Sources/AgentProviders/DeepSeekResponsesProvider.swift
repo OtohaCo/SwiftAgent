@@ -40,6 +40,7 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
     private let maximumOutputTokens: Int
     private let reasoningEffort: DeepSeekReasoningEffort
     private let resolvedModelIDsByAlias: [String: String]
+    private let maximumSSEEventBytes: Int
     private let transport: any ProviderHTTPTransport
 
     public var description: String { "DeepSeekResponsesProvider" }
@@ -52,7 +53,8 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
         maximumOutputTokens: Int = 4_096,
         reasoningEffort: DeepSeekReasoningEffort = .high,
         resolvedModelIDsByAlias: [String: String] = [:],
-        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+        maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
     ) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !apiKey.contains("\r"), !apiKey.contains("\n"), maximumOutputTokens > 0,
@@ -81,7 +83,7 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
         self.maximumOutputTokens = maximumOutputTokens
         self.reasoningEffort = reasoningEffort
         self.resolvedModelIDsByAlias = resolvedModelIDsByAlias
-        self.transport = transport
+        self.transport = transport; self.maximumSSEEventBytes = maximumSSEEventBytes
     }
 
     public func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
@@ -105,19 +107,20 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
             http.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             http.httpBody = body
 
-            var sse = try ProviderSSEDecoder()
+            var sse = try ProviderSSEDecoder(maximumEventBytes: maximumSSEEventBytes)
             let responseModelName = resolvedModelIDsByAlias[request.model.name] ?? request.model.name
             var decoder = DeepSeekResponsesStreamDecoder(
                 model: request.model, responseModelName: responseModelName
             )
             var validation = ModelEventAccumulator()
             var receivedHeader = false
-            for try await event in transport.stream(http) {
+            var iterator = transport.stream(http).makeAsyncIterator()
+            while let event = try await iterator.next() {
                 try Task.checkCancellation()
                 switch event {
                 case .response(let status, let headers):
                     guard !receivedHeader else { throw ProviderJSON.invalid() }
-                    guard status == 200 else { throw ProviderHTTPFailure.classify(status, headers: headers) }
+                    guard status == 200 else { throw try await ProviderHTTPFailure.classify(status, headers: headers, remainingBody: &iterator, signals: .deepseek) }
                     receivedHeader = true
                 case .data(let data):
                     guard receivedHeader else { throw ProviderJSON.invalid() }

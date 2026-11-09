@@ -11,6 +11,8 @@ public enum ProviderContextOverflow {
         case responses
         /// Anthropic Messages.
         case anthropic
+        case gemini
+        case deepseek
     }
 
     /// Responses error object: a stream `error` payload, `response.error`, or
@@ -48,6 +50,16 @@ public enum ProviderContextOverflow {
         // Older LM Studio servers send the message as a bare string.
         case (.responses, .string(let message)?): return isLMStudioMessage(message)
         case (.anthropic, .object(let error)?): return isAnthropicOverflow(error)
+        case (.gemini, .object(let error)?):
+            guard text(error["status"]) == "INVALID_ARGUMENT",
+                  let message = text(error["message"])?.lowercased() else { return false }
+            return message.contains("input token count") && message.contains("exceeds the maximum")
+        case (.deepseek, .object(let error)?):
+            if isResponsesOverflow(error) { return true }
+            guard text(error["type"]) == "invalid_request_error",
+                  let message = text(error["message"])?.lowercased() else { return false }
+            return message.hasPrefix("this model's maximum context length is ")
+                && message.contains("tokens") && message.contains("you requested")
         default: return false
         }
     }

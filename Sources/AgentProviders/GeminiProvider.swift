@@ -10,6 +10,7 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
     CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public static let defaultBaseURL = URL(string: "https://generativelanguage.googleapis.com/v1beta")!
     private let credentials: GeminiCredentials
+    private let maximumSSEEventBytes: Int
     private let transport: any ProviderHTTPTransport
     private let configuration: GeminiConfiguration
     private let drain = ProviderRunDrain()
@@ -23,8 +24,9 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
                 maximumOutputTokens: Int? = nil, maximumRequestBytes: Int = 100_000_000,
                 maximumResponseBytes: Int = 16_000_000, authorizationScopeID: String = "default",
                 promptCaching: GeminiPromptCaching = .implicit,
+                maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
-        self.credentials = credentials; self.transport = transport
+        self.credentials = credentials; self.transport = transport; self.maximumSSEEventBytes = maximumSSEEventBytes
         configuration = try .init(baseURL: baseURL, streaming: streaming, thinking: thinking, profile: preservedThinking,
             maximumOutputTokens: maximumOutputTokens, maximumRequestBytes: maximumRequestBytes,
             maximumResponseBytes: maximumResponseBytes, authorizationScopeID: authorizationScopeID, caching: promptCaching)
@@ -65,7 +67,7 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
         if case .explicit(let binding) = configuration.caching { guard Date() < binding.expiresAt else { throw GeminiBoundary.unsupported() } }
         try Task.checkCancellation()
         var header = false, receivedBytes = 0, json = Data()
-        var sse = try ProviderSSEDecoder(), decoder = GeminiResponseDecoder(request: request, configuration: configuration)
+        var sse = try ProviderSSEDecoder(maximumEventBytes: maximumSSEEventBytes), decoder = GeminiResponseDecoder(request: request, configuration: configuration)
         var validation = ModelEventAccumulator()
         var iterator = transport.stream(http).makeAsyncIterator()
         while let event = try await iterator.next() {
@@ -73,7 +75,7 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
             switch event {
             case .response(let status, let headers):
                 guard !header else { throw ProviderJSON.invalid() }; header = true
-                guard status == 200 else { throw ProviderHTTPFailure.classify(status, headers: headers) }
+                guard status == 200 else { throw try await ProviderHTTPFailure.classify(status, headers: headers, remainingBody: &iterator, signals: .gemini) }
             case .data(let data):
                 guard header, data.count <= configuration.maximumResponseBytes - receivedBytes else { throw ProviderJSON.invalid() }
                 receivedBytes += data.count

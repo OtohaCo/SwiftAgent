@@ -42,8 +42,8 @@ enum ProviderHTTPFailure {
             while let event = try await events.next() {
                 try Task.checkCancellation()
                 guard case .data(let chunk) = event else { return failure }
+                guard chunk.count <= maximumErrorBodyBytes - body.count else { return failure }
                 body.append(chunk)
-                guard body.count <= maximumErrorBodyBytes else { return failure }
             }
         } catch is CancellationError {
             throw CancellationError()

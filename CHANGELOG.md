@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — configurable provider stream bounds
+
+- All HTTP model providers accept maximumSSEEventBytes (default 16 MiB).
+  Exceeding it reports the fixed eventTooLarge diagnostic.
+- Gemini and DeepSeek classify bounded HTTP prompt-overflow bodies as
+  contextWindowExceeded. Oversized, malformed and unrelated bodies retain
+  their status classification.
+
 ## Unreleased — provider completion diagnostics
 
 - Gemini completes MALFORMED_FUNCTION_CALL, UNEXPECTED_TOOL_CALL, OTHER and LANGUAGE

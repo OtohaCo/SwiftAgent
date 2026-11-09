@@ -14,7 +14,7 @@ struct ProviderSSEDecoder {
     private let maximumEventBytes: Int
     private var eventBytes = 0
 
-    init(maximumEventBytes: Int = 1_048_576) throws {
+    init(maximumEventBytes: Int = 16 * 1_024 * 1_024) throws {
         guard maximumEventBytes > 0 else {
             throw ModelProviderError(kind: .invalidRequest, message: "The event size limit must be positive.")
         }
@@ -29,7 +29,8 @@ struct ProviderSSEDecoder {
                 if byte == 10 { continue }
             }
             guard eventBytes < maximumEventBytes else {
-                throw ModelProviderError(kind: .invalidResponse, message: "The event stream frame exceeded its size limit.")
+                throw ModelProviderError(kind: .invalidResponse, message: "The event stream frame exceeded its size limit.",
+                    diagnostic: .init(stage: .responseDecoding, reason: .eventTooLarge))
             }
             eventBytes += 1
             if byte == 10 || byte == 13 {

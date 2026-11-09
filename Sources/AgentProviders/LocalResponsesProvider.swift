@@ -106,6 +106,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
     private let maximumOutputTokens: Int
     private let promptCacheKey: String?
     private let promptCaching: OpenAIResponsesPromptCaching?
+    private let maximumSSEEventBytes: Int
     private let transport: any ProviderHTTPTransport
 
     public var description: String { "LocalResponsesProvider" }
@@ -116,7 +117,8 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
 
     public init(
         configuration: Configuration,
-        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+        maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
     ) throws {
         let modelName = configuration.model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !modelName.isEmpty,
@@ -156,7 +158,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
             id: "local-responses",
             capabilities: configuration.capabilities.union([.streaming, .multiTurn])
         )
-        self.transport = transport
+        self.transport = transport; self.maximumSSEEventBytes = maximumSSEEventBytes
     }
 
     public func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
@@ -219,7 +221,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
             http.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             http.httpBody = body
 
-            var sse = try ProviderSSEDecoder()
+            var sse = try ProviderSSEDecoder(maximumEventBytes: maximumSSEEventBytes)
             var decoder = ResponsesStreamDecoder(
                 model: request.model,
                 providerLabel: "Local Responses",
