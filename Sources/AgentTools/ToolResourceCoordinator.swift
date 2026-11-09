@@ -1,13 +1,14 @@
 import Foundation
 
 package actor ToolResourceCoordinator {
+    /// Shared leases (read-only parallel and sequential calls) never conflict with each other. An exclusive lease
+    /// (an exclusive read or any mutation) conflicts with any lease whose resources overlap its own; `.global`
+    /// overlaps every resource. Mutations on disjoint named resources therefore run at once (OAI-1520).
     private struct Request {
         let resources: Set<ToolResource>
-        let mutation: Bool
         let exclusive: Bool
 
         func conflicts(with other: Request) -> Bool {
-            if mutation && other.mutation { return true }
             guard exclusive || other.exclusive else { return false }
             return resources.contains(.global) || other.resources.contains(.global)
                 || !resources.isDisjoint(with: other.resources)
@@ -50,8 +51,7 @@ package actor ToolResourceCoordinator {
         try Task.checkCancellation()
         if let deadline, ContinuousClock.now >= deadline { throw WaitExpired() }
         let id = UUID()
-        let request = Request(resources: Set(resources), mutation: effect == .mutation,
-                              exclusive: execution == .exclusive || effect == .mutation)
+        let request = Request(resources: Set(resources), exclusive: execution == .exclusive || effect == .mutation)
         var timer: Task<Void, Never>?
         defer { timer?.cancel() }
         let lease = try await withTaskCancellationHandler {

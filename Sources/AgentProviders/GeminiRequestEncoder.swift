@@ -63,8 +63,19 @@ enum GeminiRequestEncoder {
                     parts = state.parts
                     for (call, mapping) in zip(calls, state.calls) { pending.append((call, try ProviderJSON.object(parts[mapping.partIndex])["functionCall"]!)) }
                 } else {
-                    guard visible.allSatisfy({ if case .text = $0 { return true }; if case .json = $0 { return true }; return false }), calls.isEmpty else { throw GeminiBoundary.unsupported() }
-                    parts = try visible.map(userPart)
+                    // A model's turn replays only from its received parts. A Host's call (OAI-1539) never had any: it
+                    // is sent as a plain function call, whose response follows by name.
+                    guard visible.allSatisfy({ if case .text = $0 { return true }; if case .json = $0 { return true }; return false }),
+                          calls.allSatisfy(\.id.isHostCall) else { throw GeminiBoundary.unsupported() }
+                    var encoded = try visible.map(userPart)
+                    for call in calls {
+                        guard call.completeness == .complete, GeminiBoundary.functionName(call.name),
+                              let arguments = try? JSONValue.decodeToolArguments(call.argumentsJSON) else { throw GeminiBoundary.invalidRequest() }
+                        let functionCall: JSONValue = .object(["name": .string(call.name), "args": arguments])
+                        encoded.append(.object(["functionCall": functionCall]))
+                        pending.append((call, functionCall))
+                    }
+                    parts = encoded
                 }
                 if configuration.profile == .requireCurrentTurnFunctionSignatures, messageIndex >= currentTurn,
                    let first = parts.first(where: { $0["functionCall"] != nil }) {

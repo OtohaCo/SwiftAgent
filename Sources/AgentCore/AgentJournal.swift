@@ -777,13 +777,15 @@ public actor AgentJournal {
         } else {
             hasMatchingOpenCall = false
         }
-        if pending.intent.call.id.rawValue.hasPrefix(AgentHostToolCall.callIDPrefix) {
-            // A Host call (ADR 0011) is settled as the Host's, never as an assistant proposal.
-            history.append(.user([.text(AgentHostToolCall.reconciledText(call: pending.intent.call, output: output))]))
+        if !hasMatchingOpenCall {
+            history.append(.assistant(content: [], toolCalls: [pending.intent.call]))
+        }
+        if pending.intent.call.id.isHostCall {
+            // A Host call (ADR 0011) is settled as its call in the Host's namespace and a tool result saying it was
+            // reconciled (OAI-1539); its output never goes on the user's side.
+            history.append(.tool(.init(callID: pending.intent.call.id,
+                                       content: [.text(AgentHostToolCall.reconciledNotice), .json(output)], isError: false)))
         } else {
-            if !hasMatchingOpenCall {
-                history.append(.assistant(content: [], toolCalls: [pending.intent.call]))
-            }
             history.append(result)
         }
         let accepted = AgentToolReceipt(callID: pending.intent.call.id, effect: .mutation, receipt: receipt)

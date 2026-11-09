@@ -35,6 +35,11 @@ public enum ModelMessage: Hashable, Sendable, Codable {
 public struct ToolCallID: RawRepresentable, Hashable, Sendable, Codable {
     public let rawValue: String
 
+    /// Identities of calls a Host made outside a model turn (ADR 0011) begin with this. A model's proposal using it is
+    /// refused, so such a call in history was never a model's, and no provider produced reasoning or state for it.
+    package static let hostCallPrefix = "host-call-"
+    package var isHostCall: Bool { rawValue.utf8.starts(with: Self.hostCallPrefix.utf8) }
+
     public init(rawValue: String) {
         self.rawValue = rawValue
     }

@@ -46,6 +46,9 @@ user message. Later parallel calls may be unsigned. Function-result-only wire
 user messages do not start a new turn. All calls in a step precede the ordered
 batch of paired function responses. Missing/tampered continuation or incomplete
 pairing fails locally before credentials/HTTP; completed tools are not repeated.
+A step holding only Host calls (`host-call-` identities, ADR 0018) has no received
+parts and is sent as plain `functionCall` parts with responses matched by name;
+under the strict profile such a step in the current turn is refused (no signature).
 
 Ordinary deferred tool declarations may expand between requests and reset on the
 next Run while exact native parts remain intact. This differs from Anthropic's
