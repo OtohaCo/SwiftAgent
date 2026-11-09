@@ -145,24 +145,123 @@ struct ToolResourceCoordinatorTests {
         }
     }
 
-    @Test func disjointMutationsSerializeButDisjointReadCanProceed() async throws {
+    /// OAI-1520: mutations conflict only where their resources overlap (or one is global), as any other
+    /// exclusive call does. Before, any two mutations on one scheduler waited for each other.
+    @Test func mutationsOnDisjointResourcesHoldLeasesAtOnce() async throws {
         let coordinator = ToolResourceCoordinator()
         let a = ToolResource.named(.init(namespace: "files", id: "a"))
         let b = ToolResource.named(.init(namespace: "files", id: "b"))
         let c = ToolResource.named(.init(namespace: "files", id: "c"))
         let first = try await coordinator.acquire(resources: [a], effect: .mutation, execution: .exclusive)
+        let second = try await coordinator.acquire(resources: [b], effect: .mutation, execution: .exclusive,
+                                                   until: .now.advanced(by: .seconds(5)))
+        let read = try await coordinator.acquire(resources: [c], effect: .readOnly, execution: .parallel,
+                                                 until: .now.advanced(by: .seconds(5)))
+        #expect(Set([first, second, read]).count == 3)
+        #expect(await coordinator.pendingWaiterCount == 0)
+        for lease in [first, second, read] { await coordinator.release(lease) }
+    }
+
+    @Test func mutationsSharingAResourceStayInOrder() async throws {
+        let coordinator = ToolResourceCoordinator()
+        let a = ToolResource.named(.init(namespace: "files", id: "a"))
+        let b = ToolResource.named(.init(namespace: "files", id: "b"))
+        let first = try await coordinator.acquire(resources: [a], effect: .mutation, execution: .exclusive)
         let grants = ResourceGrants()
-        let second = await coordinator.start(resources: [b], effect: .mutation, execution: .exclusive,
-                                             label: "mutation", grants: grants)
-        let read = await coordinator.start(resources: [c], label: "read", grants: grants,
-                                           waitForQueue: false)
-        let readLease = try await read.value
-        #expect(grants.values == ["read"])
+        // A move touching a and b overlaps the held write on a; a later write on b waits behind it in order.
+        let move = await coordinator.start(resources: [a, b], effect: .mutation, execution: .exclusive,
+                                           label: "move", grants: grants)
+        let later = await coordinator.start(resources: [b], effect: .mutation, execution: .exclusive,
+                                            label: "later", grants: grants)
+        #expect(grants.values.isEmpty)
         await coordinator.release(first)
-        let secondLease = try await second.value
-        #expect(grants.values == ["read", "mutation"])
-        await coordinator.release(secondLease)
-        await coordinator.release(readLease)
+        let moveLease = try await move.value
+        #expect(grants.values == ["move"])
+        await coordinator.release(moveLease)
+        let laterLease = try await later.value
+        #expect(grants.values == ["move", "later"])
+        await coordinator.release(laterLease)
+    }
+
+    @Test func aGlobalMutationExcludesEveryCallInBothDirections() async throws {
+        let a = ToolResource.named(.init(namespace: "files", id: "a"))
+        let cases: [(held: [ToolResource], heldEffect: ToolPolicy.Effect, waiting: [ToolResource],
+                     effect: ToolPolicy.Effect, execution: ToolPolicy.Execution)] = [
+            ([.global], .mutation, [a], .mutation, .exclusive),
+            ([.global], .mutation, [a], .readOnly, .parallel),
+            ([a], .mutation, [.global], .mutation, .exclusive),
+            ([a], .readOnly, [.global], .mutation, .exclusive),
+            ([.global], .mutation, [.global], .mutation, .exclusive),
+        ]
+        for item in cases {
+            let coordinator = ToolResourceCoordinator()
+            let held = try await coordinator.acquire(resources: item.held, effect: item.heldEffect,
+                                                     execution: item.heldEffect == .mutation ? .exclusive : .parallel)
+            let grants = ResourceGrants()
+            let next = await coordinator.start(resources: item.waiting, effect: item.effect, execution: item.execution,
+                                               label: "next", grants: grants)
+            #expect(grants.values.isEmpty)
+            await coordinator.release(held)
+            let lease = try await next.value
+            #expect(grants.values == ["next"])
+            await coordinator.release(lease)
+        }
+    }
+
+    @Test func aReadAndAMutationOfOneResourceWaitForEachOther() async throws {
+        let a = ToolResource.named(.init(namespace: "files", id: "a"))
+        for readFirst in [true, false] {
+            let coordinator = ToolResourceCoordinator()
+            let held = readFirst
+                ? try await coordinator.acquire(resources: [a], effect: .readOnly, execution: .parallel)
+                : try await coordinator.acquire(resources: [a], effect: .mutation, execution: .exclusive)
+            let grants = ResourceGrants()
+            let next = readFirst
+                ? await coordinator.start(resources: [a], effect: .mutation, execution: .exclusive, label: "next", grants: grants)
+                : await coordinator.start(resources: [a], effect: .readOnly, execution: .parallel, label: "next", grants: grants)
+            #expect(grants.values.isEmpty)
+            await coordinator.release(held)
+            let lease = try await next.value
+            #expect(grants.values == ["next"])
+            await coordinator.release(lease)
+        }
+    }
+
+    @Test func aMutationCancelledWhileWaitingLeavesNoWaiterAndUnblocksLaterCalls() async throws {
+        let coordinator = ToolResourceCoordinator()
+        let a = ToolResource.named(.init(namespace: "files", id: "a"))
+        let held = try await coordinator.acquire(resources: [a], effect: .readOnly, execution: .parallel)
+        let grants = ResourceGrants()
+        let writer = await coordinator.start(resources: [a], effect: .mutation, execution: .exclusive,
+                                             label: "writer", grants: grants)
+        // Queued behind the waiting writer: an older conflicting waiter is never overtaken.
+        let reader = await coordinator.start(resources: [a], label: "reader", grants: grants)
+        #expect(grants.values.isEmpty)
+        writer.cancel()
+        await #expect(throws: CancellationError.self) { try await writer.value }
+        let readerLease = try await reader.value
+        #expect(grants.values == ["reader"])
+        #expect(await coordinator.pendingWaiterCount == 0)
+        await coordinator.release(readerLease)
+        await coordinator.release(held)
+    }
+
+    /// OAI-1519's lease-wait limit applies to a mutation waiting on its own resource, and not to one on another.
+    @Test func aLeaseWaitLimitEndsOnlyAWaitForAnOverlappingResource() async throws {
+        let coordinator = ToolResourceCoordinator()
+        let a = ToolResource.named(.init(namespace: "files", id: "a"))
+        let b = ToolResource.named(.init(namespace: "files", id: "b"))
+        let held = try await coordinator.acquire(resources: [a], effect: .mutation, execution: .exclusive)
+        await #expect(throws: ToolResourceCoordinator.WaitExpired.self) {
+            _ = try await coordinator.acquire(resources: [a], effect: .mutation, execution: .exclusive,
+                                              until: .now.advanced(by: .milliseconds(80)))
+        }
+        #expect(await coordinator.pendingWaiterCount == 0)
+        let other = try await coordinator.acquire(resources: [b], effect: .mutation, execution: .exclusive,
+                                                  until: .now.advanced(by: .milliseconds(80)))
+        await coordinator.release(other)
+        await coordinator.release(held)
+        #expect(await coordinator.pendingWaiterCount == 0)
     }
 
     @Test func cancelledWaiterIsRemovedAndNoLongerBlocksReaders() async throws {

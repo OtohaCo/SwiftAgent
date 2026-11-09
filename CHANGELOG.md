@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — mutations wait only for overlapping resources (OAI-1520, ADR 0017)
+
+- A mutation's scheduler lease conflicts only with calls whose declared resources
+  overlap its own, or with `.global`. Before, any two mutations on one
+  `ToolScheduler` waited for each other, also across Sessions and for disjoint
+  files. Tools that declare nothing keep the default `[.global]` and still wait
+  for every call.
+- WorkspaceAgent writes to different files now run at once across Sessions
+  sharing a scheduler; same-file writes and moves stay ordered.
+
+### Behaviour change
+
+- Hosts whose mutation tools declare named resources that do not cover
+  everything they touch must widen them (or return `[.global]`): the blanket
+  mutation rule no longer hides the gap.
+
 ## Unreleased — examples follow tool refusal results
 
 - Deferred/scoped capability and bounded replanning examples consume linked

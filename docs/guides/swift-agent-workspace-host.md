@@ -85,16 +85,21 @@ trusted receipt, reload recovers `needsReconciliation` and does not replay
 
 ## Threat model
 
-The shared `ToolScheduler` serializes cooperative Workspace Sessions. Every
-mutation on that scheduler is exclusive of every other mutation, including
-writes to disjoint files. That is a collaboration contract, not protection
+The shared `ToolScheduler` coordinates cooperative Workspace Sessions by file.
+A write holds an exclusive lease on its file, a move on its source and
+destination, so mutations of the same file never overlap and writes to
+different files may run at once (since OAI-1520; before, every mutation on a
+scheduler excluded every other). Lease identities are the exact relative path:
+on a case-insensitive or normalizing volume, `A.txt` and `a.txt` (or composed
+and decomposed spellings) are different leases for one file, and only the hash
+checks below stand between such writers. That is a collaboration contract, not protection
 against an arbitrary process.
 
 Three writers are not the same:
 
 | Writer | What the host guarantees |
 | --- | --- |
-| Cooperative Sessions sharing one scheduler and one store | Mutations do not overlap. Same-file writers see each other's committed hashes. |
+| Cooperative Sessions sharing one scheduler and one store | Mutations of the same path do not overlap. Same-file writers see each other's committed hashes. |
 | A test or operator using the injected post-check barrier | Detected hash, existence, and symlink conflicts fail closed and do not publish a success Receipt. |
 | An arbitrary external process | Best-effort fail-closed at the last hash or existence check, `O_EXCL` create, post-write hash verification, and a pinned root directory identity. Not a linearizable compare-and-swap. |
 

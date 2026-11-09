@@ -22,6 +22,10 @@ public protocol AgentTool: Sendable {
     var maximumResultBytes: Int { get }
 
     func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement]
+    /// What the call's scheduler lease covers. Mutations and exclusive calls wait only for calls whose resources
+    /// overlap theirs (`.global` overlaps all), so a mutation must name everything another Session's call could
+    /// touch at the same time; the default, `[.global]`, waits for every other call. Empty, duplicate or blank
+    /// names fail before the call runs.
     func resourceRequirements(for input: Input) throws -> [ToolResource]
     func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation?
     /// Declare immutable action versions; checked again just before audited dispatch.
