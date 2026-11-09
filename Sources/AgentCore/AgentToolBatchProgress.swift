@@ -32,11 +32,15 @@ actor AgentToolBatchProgress {
         self.emitter = emitter
     }
 
-    func record(index: Int, call: PreparedToolCall, result: ToolResult<JSONValue>) async throws {
+    func record(index: Int, call: PreparedToolCall, result executed: ToolResult<JSONValue>) async throws {
         var reserved = false
         var reservedRejections: [ToolCallID] = []
+        var result = executed
         do {
             try budget.checkActive()
+            // One oversized result must not make every later request too large (OAI-1521). A no-effect
+            // proof binds its payload, which is already small.
+            if result.confirmedNoEffect == nil { result = try result.capped(limit: call.maximumResultBytes) }
             var images = result.images.map(ModelContent.image)
             if !images.isEmpty, lifecycle?.keepsImages == false {
                 // A journal that cannot keep images (format schema 3-9). A read-only result fails here,

@@ -114,7 +114,8 @@ package struct ToolRegistry: Sendable {
                                              name: definition.name, policy: policy)
             }
         }
-        return PreparedToolCall(call: call, policy: registration.tool.policy, resources: invocation.resources,
+        return PreparedToolCall(call: call, policy: registration.tool.policy,
+                                maximumResultBytes: registration.tool.maximumResultBytes, resources: invocation.resources,
                                 evidenceRequirements: invocation.evidenceRequirements,
                                 receiptExpectation: invocation.receiptExpectation, definition: registration.tool.definition,
                                 binding: invocation.binding, context: context, preauthorize: invocation.preauthorize,
@@ -218,6 +219,8 @@ package func invalidOutputPayload(name: String, issue: ToolSchemaValidationError
 package struct PreparedToolCall: Sendable {
     package let call: ToolCall
     package let policy: ToolPolicy
+    /// The tool's result limit (OAI-1521): `ToolResult.capped(limit:)` applies it before a result is committed.
+    package let maximumResultBytes: Int
     package let resources: [ToolResource]
     private let evidenceRequirements: [EvidenceRequirement]
     package var contextSessionID: UUID { context.sessionID }
@@ -232,7 +235,7 @@ package struct PreparedToolCall: Sendable {
     private let preauthorize: @Sendable (ToolContext) async throws -> Void
     private let authorizeBeforeLease: @Sendable (ToolContext) async throws -> Void
 
-    fileprivate init(call: ToolCall, policy: ToolPolicy, resources: [ToolResource],
+    fileprivate init(call: ToolCall, policy: ToolPolicy, maximumResultBytes: Int, resources: [ToolResource],
                      evidenceRequirements: [EvidenceRequirement], receiptExpectation: ToolReceiptExpectation?,
                      definition: ModelToolDefinition, binding: ToolAuthorizationBinding,
                      context: ToolContext, preauthorize: @escaping @Sendable (ToolContext) async throws -> Void,
@@ -241,6 +244,7 @@ package struct PreparedToolCall: Sendable {
                      operation: @escaping AnyAgentTool.Invocation) {
         self.call = call
         self.policy = policy
+        self.maximumResultBytes = maximumResultBytes
         self.resources = resources
         self.evidenceRequirements = evidenceRequirements
         self.receiptExpectation = receiptExpectation
@@ -261,7 +265,8 @@ package struct PreparedToolCall: Sendable {
     package func authorizedBeforeLease(deadline: ContinuousClock.Instant) async throws -> Self {
         guard policy.authorization == .required, auditAuthorization == nil else { return self }
         try await authorizeBeforeLease(executionContext(deadline: deadline))
-        return Self(call: call, policy: policy, resources: resources, evidenceRequirements: evidenceRequirements,
+        return Self(call: call, policy: policy, maximumResultBytes: maximumResultBytes, resources: resources,
+            evidenceRequirements: evidenceRequirements,
             receiptExpectation: receiptExpectation, definition: definition, binding: binding, context: context,
             preauthorize: preauthorize, authorizeBeforeLease: authorizeBeforeLease,
             authorizedOperation: authorizedOperation, operation: authorizedOperation)
@@ -272,7 +277,8 @@ package struct PreparedToolCall: Sendable {
             deadline: context.deadline, idempotencyKey: context.idempotencyKey, argumentsJSON: context.argumentsJSON,
             evidenceLedger: context.evidenceLedger, mutationAdmission: context.mutationAdmission,
             executionAdmission: context.executionAdmission, auditAuthorization: audit)
-        return Self(call: call, policy: policy, resources: resources, evidenceRequirements: evidenceRequirements,
+        return Self(call: call, policy: policy, maximumResultBytes: maximumResultBytes, resources: resources,
+            evidenceRequirements: evidenceRequirements,
             receiptExpectation: receiptExpectation, definition: definition, binding: binding,
             context: updated, preauthorize: preauthorize, authorizeBeforeLease: authorizeBeforeLease,
             authorizedOperation: authorizedOperation, operation: operation)

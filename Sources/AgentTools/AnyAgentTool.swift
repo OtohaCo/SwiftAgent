@@ -6,6 +6,8 @@ import Foundation
 package struct AnyAgentTool: Sendable {
     package let definition: ModelToolDefinition
     package let policy: ToolPolicy
+    /// The tool's result limit (OAI-1521), applied before a result is committed.
+    package let maximumResultBytes: Int
     package typealias Invocation = @Sendable (ToolContext) async throws -> ToolResult<JSONValue>
     package struct PreparedInvocation: Sendable {
         let resources: [ToolResource]
@@ -29,6 +31,8 @@ package struct AnyAgentTool: Sendable {
         // A name that comes from the instance, not the type, is one every model API accepts.
         if definition.name != T.name, !Self.portable(definition.name) { throw ToolInvocationError.invalidDefinition }
         self.definition = definition
+        guard tool.maximumResultBytes >= AgentToolResultLimit.minimumBytes else { throw ToolInvocationError.invalidDefinition }
+        maximumResultBytes = tool.maximumResultBytes
         let policy = tool.policy
         self.policy = policy
         decode = { arguments, prepareAuthorizationBinding in

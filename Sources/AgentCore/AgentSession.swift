@@ -550,8 +550,10 @@ public actor AgentSession {
 
     /// Commits a Host call's result as a model's would be (its mutation settlement or checkpoint), with formal history
     /// saying it is the Host's call's result, or an earlier result replayed.
-    private func commitHostResult(_ call: PreparedToolCall, result: ToolResult<JSONValue>, runID: UUID,
+    private func commitHostResult(_ call: PreparedToolCall, result executed: ToolResult<JSONValue>, runID: UUID,
                                   budget: AgentBudget) async throws -> (message: ToolResultMessage, receipt: AgentToolReceipt?) {
+        // As for a model's call: an oversized output is cut before it is committed (OAI-1521).
+        let result = executed.confirmedNoEffect == nil ? try executed.capped(limit: call.maximumResultBytes) : executed
         var images = result.images.map(ModelContent.image)
         if !images.isEmpty, journal?.supportsImageContent == false {
             // As a model's call: a read-only result fails before anything is committed; a mutation's effect already

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — tool results have a size limit (OAI-1521)
+
+- `AgentTool.maximumResultBytes` (default 1 MiB of encoded JSON output, at
+  least 4 KiB) is applied before a result is committed. A larger output is
+  replaced by `{"truncated": true, "original_bytes", "kept_bytes", "notice",
+  "partial_json"}`, which fits the limit and keeps the start of the output.
+  Before, any size was committed and the history check on the next request
+  failed that Run and every later Run with `historyTooLarge`.
+- Receipts, Evidence, declared tools and images are kept; a mutation settles
+  with the cut output. Host-initiated calls are cut the same way. Confirmed
+  no-effect payloads, already at most 8 KiB, are not changed.
+
 ## Unreleased — tool timeouts count execution only (OAI-1519)
 
 - `ToolPolicy.timeout` now starts when the call holds its resource lease, just

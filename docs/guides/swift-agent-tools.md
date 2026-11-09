@@ -107,6 +107,20 @@ persistence, cancellation and deadlines are not converted by this output
 channel. Input validation remains the separate preparation-time
 `invalid_arguments` result; it does not invoke the executor.
 
+## Result size limit (unreleased)
+
+`AgentTool.maximumResultBytes` (default `AgentToolResultLimit.defaultBytes`,
+1 MiB; at least `AgentToolResultLimit.minimumBytes`, 4 KiB) bounds what one
+result adds to the conversation. A result whose JSON output encodes to more is
+replaced before it is committed by an object with `truncated: true`,
+`original_bytes`, `kept_bytes`, a `notice` for the model and `partial_json`, the
+beginning of the output as JSON text cut short. The replacement fits the limit;
+the Receipt, Evidence, declared tools and images are kept, and a mutation
+settles with the cut output. Images are not counted. Tools that already page or
+cut their own output should set a limit above what they return. The limit bounds
+one result; many results can still exceed the context policy's history limit,
+which projectors handle.
+
 ## Tools Defined at Runtime
 
 A tool whose name, description and schemas are known only at runtime (declared by

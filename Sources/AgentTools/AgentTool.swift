@@ -16,6 +16,10 @@ public protocol AgentTool: Sendable {
     /// type's name, description and schemas; a `RuntimeAgentTool` supplies its own.
     var definition: ModelToolDefinition { get }
     var policy: ToolPolicy { get }
+    /// The most a result of this tool may add to the conversation, in bytes of encoded JSON output; a larger
+    /// one is cut before it is committed, with a notice the model reads (`AgentToolResultLimit`). At least
+    /// `AgentToolResultLimit.minimumBytes`; defaults to `AgentToolResultLimit.defaultBytes`.
+    var maximumResultBytes: Int { get }
 
     func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement]
     func resourceRequirements(for input: Input) throws -> [ToolResource]
@@ -117,12 +121,13 @@ extension AgentTool {
     public func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement] { [] }
     public func resourceRequirements(for input: Input) throws -> [ToolResource] { [.global] }
     public func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation? { nil }
+    public var maximumResultBytes: Int { AgentToolResultLimit.defaultBytes }
     public func authorize(_ input: Input, context: ToolContext) async throws -> ToolAuthorization { .denied }
 }
 
 /// Executor output and unverified metadata. The runtime validates receipts before acknowledging the result.
 public struct ToolResult<Output: Codable & Sendable>: Sendable {
-    public let output: Output
+    public internal(set) var output: Output
     public let evidence: [Evidence]
     public let receipt: ToolReceipt?
     /// Names of tools bound to this Run that the model is told about from the Run's next model
