@@ -1,3 +1,4 @@
+import AgentModels
 import Foundation
 import Testing
 @testable import AgentProviders
@@ -8,6 +9,19 @@ struct ProviderSSEDecoderTests {
         #expect(try decoder.consume(Data(repeating: 120, count: 64)).isEmpty)
         #expect(throws: (any Error).self) { try decoder.consume(Data([120])) }
         #expect(throws: (any Error).self) { try ProviderSSEDecoder(maximumEventBytes: 0) }
+    }
+
+    @Test func defaultAllowsFramesLargerThanOneMiBAndLimitHasDistinctDiagnostic() throws {
+        var decoder = try ProviderSSEDecoder()
+        let text = String(repeating: "x", count: 1_048_577)
+        #expect(try decoder.consume(Data(("data: " + text + "\n\n").utf8)).first?.data == text)
+        var small = try ProviderSSEDecoder(maximumEventBytes: 8)
+        do {
+            _ = try small.consume(Data("data: xx\n\n".utf8))
+            Issue.record("Expected size limit")
+        } catch let error as ModelProviderError {
+            #expect(error.diagnostic?.reason.rawValue == "eventTooLarge")
+        }
     }
 
     @Test func bareCRAndLFDelimitersIgnoreCommentsAndKeepIndependentEvents() throws {

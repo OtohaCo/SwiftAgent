@@ -218,7 +218,7 @@ struct ResponsesStreamDecoder {
         }
     }
 
-    func finish() throws { guard ended else { throw ProviderJSON.invalid() } }
+    func finish() throws { guard ended else { throw ProviderHTTPFailure.streamEndedEarly() } }
 
     private mutating func validateSequenceNumber(_ object: [String: JSONValue]) throws {
         guard let sequence = try ProviderJSON.count(object["sequence_number"]) else { throw ProviderJSON.invalid() }
@@ -980,7 +980,9 @@ struct ResponsesStreamDecoder {
         // The service turned the request down, its safety policies included: sending it again gets the same answer.
         case "invalid_prompt", "invalid_request_error", "data_residency_mismatch", "bio_policy", "cyber_policy",
              "misalignment_policy_violation": kind = .invalidRequest
-        case "insufficient_quota": kind = .permissionDenied
+        case "insufficient_quota": kind = .quotaExhausted
+        case "model_not_found": kind = .modelNotFound
+        case "overloaded_error": kind = .overloaded
         default: kind = .invalidResponse
         }
         if chatGPTPlanToolNames != nil {

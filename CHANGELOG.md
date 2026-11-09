@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased — opt-in provider request policy
+
+- ProviderRequestPolicyProvider wraps any adapter with separate output idle
+  budgets, a total deadline and bounded retries with exponential backoff,
+  jitter and capped Retry-After. Existing adapters keep their timing/retry
+  defaults. Failed pre-output metadata is buffered; no request is replayed
+  after content, reasoning, continuation, tool or terminal output.
+- Clean EOF without the protocol terminal reports transport/streamEndedEarly.
+  Malformed frames and terminal contradictions remain invalidResponse.
+- Bounded HTTP error bodies distinguish quotaExhausted, modelNotFound and
+  overloaded; stream errors use the same kinds. Routes accept overloaded as
+  retryable, while quotaExhausted and modelNotFound remain nonretryable.
+- URLSessionProviderHTTPTransport(requestTimeoutInterval:) lets hosts raise
+  wire-idle limits to match long output budgets.
+
+### Breaking
+
+- ModelProviderError.Kind adds quotaExhausted, modelNotFound and overloaded.
+  Exhaustive switches must handle them. Diagnostic.Reason adds fixed size,
+  stream EOF and request policy timeout codes.
+
+## Unreleased — configurable provider stream bounds
+
+- All HTTP model providers accept maximumSSEEventBytes (default 16 MiB).
+  Exceeding it reports the fixed eventTooLarge diagnostic.
+- Gemini and DeepSeek classify bounded HTTP prompt-overflow bodies as
+  contextWindowExceeded. Oversized, malformed and unrelated bodies retain
+  their status classification.
+
+## Unreleased — provider completion diagnostics
+
+- Gemini completes MALFORMED_FUNCTION_CALL, UNEXPECTED_TOOL_CALL, OTHER and LANGUAGE
+  with an unknown stop reason, preserving text and usage while dropping calls and
+  continuation data. These outcomes no longer fail as invalid responses.
+
 ## Unreleased — a record of every model request
 
 - `ModelRequestAttempt` is a bounded record of one physical model request:

@@ -127,8 +127,7 @@ struct DeepSeekResponsesStreamDecoder {
 
     func finish() throws {
         guard ended else {
-            throw ModelProviderError(kind: .invalidResponse, message: "DeepSeek stream ended without a terminal response.",
-                                     diagnostic: .init(stage: .streamLifecycle, reason: .invalidLifecycle))
+            throw ProviderHTTPFailure.streamEndedEarly()
         }
     }
 
@@ -552,7 +551,9 @@ struct DeepSeekResponsesStreamDecoder {
         case "rate_limit_exceeded": kind = .rateLimited
         case "server_error": kind = .unavailable
         case "invalid_request_error", "invalid_prompt": kind = .invalidRequest
-        case "insufficient_quota": kind = .permissionDenied
+        case "insufficient_quota": kind = .quotaExhausted
+        case "model_not_found": kind = .modelNotFound
+        case "overloaded_error": kind = .overloaded
         default: kind = .invalidResponse
         }
         return .init(kind: kind, message: "DeepSeek generation failed with code '\(diagnostic(code))'.",

@@ -94,7 +94,7 @@ struct ContextWindowExceededTests {
     @Test func nestedStreamErrorEventIsClassifiedByItsCode() async throws {
         let cases: [(String, ModelProviderError.Kind)] = [
             ("rate_limit_exceeded", .rateLimited), ("server_error", .unavailable),
-            ("invalid_prompt", .invalidRequest), ("insufficient_quota", .permissionDenied),
+            ("invalid_prompt", .invalidRequest), ("insufficient_quota", .quotaExhausted),
             ("future_code", .invalidResponse), ("unknown", .invalidResponse),
         ]
         for (code, expected) in cases {

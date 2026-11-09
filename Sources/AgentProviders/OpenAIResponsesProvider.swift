@@ -64,6 +64,7 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
     private let promptCaching: OpenAIResponsesPromptCaching?
     private let resolvedModelIDsByAlias: [String: String]
     private let nativeContext: OpenAINativeContextConfiguration?
+    private let maximumSSEEventBytes: Int
     private let transport: any ProviderHTTPTransport
 
     public var description: String { "OpenAIResponsesProvider" }
@@ -81,11 +82,12 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         reasoningEffort: OpenAIReasoningEffort? = nil,
         reasoningSummary: OpenAIReasoningSummary? = nil,
         promptCacheKey: String? = nil,
-        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+        maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
     ) throws {
         try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
                       reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary,
-                      promptCacheKey: promptCacheKey, resolvedModelIDsByAlias: [:], transport: transport)
+                      promptCacheKey: promptCacheKey, resolvedModelIDsByAlias: [:], maximumSSEEventBytes: maximumSSEEventBytes, transport: transport)
     }
 
     public init(
@@ -96,12 +98,13 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         reasoningSummary: OpenAIReasoningSummary? = nil,
         promptCacheKey: String? = nil,
         resolvedModelIDsByAlias: [String: String],
-        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+        maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
     ) throws {
         try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
                       reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary,
                       promptCacheKey: promptCacheKey, resolvedModelIDsByAlias: resolvedModelIDsByAlias,
-                      promptCaching: nil, transport: transport)
+                      promptCaching: nil, maximumSSEEventBytes: maximumSSEEventBytes, transport: transport)
     }
 
     /// Cache controls require explicit Host qualification for the endpoint and resolved model.
@@ -111,17 +114,19 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         reasoningEffort: OpenAIReasoningEffort? = nil, reasoningSummary: OpenAIReasoningSummary? = nil,
         promptCacheKey: String? = nil, resolvedModelIDsByAlias: [String: String] = [:],
         promptCaching: OpenAIResponsesPromptCaching?,
-        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+        maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
     ) throws {
         try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
             reasoningEffort: reasoningEffort, reasoningSummary: reasoningSummary, promptCacheKey: promptCacheKey,
-            resolvedModelIDsByAlias: resolvedModelIDsByAlias, promptCaching: promptCaching, nativeContext: nil, transport: transport)
+            resolvedModelIDsByAlias: resolvedModelIDsByAlias, promptCaching: promptCaching, nativeContext: nil, maximumSSEEventBytes: maximumSSEEventBytes, transport: transport)
     }
 
     public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
                 reasoningEffort: OpenAIReasoningEffort? = nil, reasoningSummary: OpenAIReasoningSummary? = nil,
                 promptCacheKey: String? = nil, resolvedModelIDsByAlias: [String: String] = [:],
                 promptCaching: OpenAIResponsesPromptCaching? = nil, nativeContext: OpenAINativeContextConfiguration?,
+                maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !apiKey.contains("\r"), !apiKey.contains("\n"), maximumOutputTokens > 0,
@@ -158,7 +163,7 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
         try promptCaching?.validate(endpoint: endpoint)
         self.promptCaching = promptCaching
         self.resolvedModelIDsByAlias = resolvedModelIDsByAlias
-        self.transport = transport
+        self.transport = transport; self.maximumSSEEventBytes = maximumSSEEventBytes
         if let nativeContext, nativeContext.qualification.endpoint != endpoint {
             throw ModelProviderError(kind: .unsupportedCapability, message: "Native context endpoint qualification does not match the provider.")
         }
@@ -206,7 +211,7 @@ public struct OpenAIResponsesProvider: ModelProvider, CustomStringConvertible, C
             http.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             http.httpBody = body
 
-            var sse = try ProviderSSEDecoder()
+            var sse = try ProviderSSEDecoder(maximumEventBytes: maximumSSEEventBytes)
             let responseModelName = resolvedModelIDsByAlias[request.model.name] ?? request.model.name
             var decoder = OpenAIResponsesStreamDecoder(model: request.model, responseModelName: responseModelName, nativeRequest: nativeContext?.automatic != nil ? request : nil)
             var validation = ModelEventAccumulator()

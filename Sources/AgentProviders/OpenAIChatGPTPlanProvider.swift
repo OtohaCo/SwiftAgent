@@ -11,6 +11,7 @@ import FoundationNetworking
 public struct OpenAIChatGPTPlanProvider: ModelProvider, ModelProviderRequestValidator, ModelProviderRunDrain,
     CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     private let credentials: OpenAIChatGPTPlanCredentials
+    private let maximumSSEEventBytes: Int
     private let transport: any ProviderHTTPTransport
     private let drain = ProviderRunDrain()
     public var descriptor: ModelProviderDescriptor {
@@ -21,8 +22,9 @@ public struct OpenAIChatGPTPlanProvider: ModelProvider, ModelProviderRequestVali
     public var customMirror: Mirror { Mirror(self, children: ["descriptor": descriptor]) }
 
     public init(credentials: OpenAIChatGPTPlanCredentials,
+                maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
                 transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) {
-        self.credentials = credentials; self.transport = transport
+        self.credentials = credentials; self.transport = transport; self.maximumSSEEventBytes = maximumSSEEventBytes
     }
 
     public func validate(request: ModelRequest) throws { _ = try ChatGPTPlanRequestEncoder.encode(request) }
@@ -65,7 +67,7 @@ public struct OpenAIChatGPTPlanProvider: ModelProvider, ModelProviderRequestVali
             http.setValue("application/json", forHTTPHeaderField: "Content-Type")
             http.setValue("text/event-stream", forHTTPHeaderField: "Accept")
             try Task.checkCancellation()
-            var sse = try ProviderSSEDecoder()
+            var sse = try ProviderSSEDecoder(maximumEventBytes: maximumSSEEventBytes)
             var decoder = ResponsesStreamDecoder(model: request.model, chatGPTPlanToolNames: request.tools.map(\.name))
             var validation = ModelEventAccumulator(), receivedHeader = false
             var events = transport.stream(http).makeAsyncIterator()

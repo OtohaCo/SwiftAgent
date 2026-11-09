@@ -63,6 +63,8 @@ public struct ModelProviderError: Error, Equatable, Sendable {
             case continuationMismatch, missingContinuation
             /// The final serialized HTTP request exceeded the adapter's local byte ceiling.
             case requestBodyTooLarge
+            case eventTooLarge
+            case streamEndedEarly, firstOutputTimedOut, outputIdleTimedOut, requestDeadlineExceeded
             /// ChatGPT-plan usage admission failed; these do not imply a plan reset time.
             case subscriptionSharingUsageLimitExceeded, subscriptionSharingUsageUnavailable
             case redirect, invalidHTTPResponse, missingHTTPResponse
@@ -83,6 +85,9 @@ public struct ModelProviderError: Error, Equatable, Sendable {
         case permissionDenied
         case invalidRequest
         case unsupportedCapability
+        case quotaExhausted
+        case modelNotFound
+        case overloaded
         case rateLimited
         case unavailable
         case transport

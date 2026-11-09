@@ -71,7 +71,8 @@ struct AnthropicStreamDecoder {
             case "permission_error": kind = .permissionDenied
             case "invalid_request_error", "not_found_error": kind = .invalidRequest
             case "rate_limit_error": kind = .rateLimited
-            case "overloaded_error", "api_error": kind = .unavailable
+            case "overloaded_error": kind = .overloaded
+            case "api_error": kind = .unavailable
             default: kind = .invalidResponse
             }
             throw ModelProviderError(kind: kind, message: "Anthropic generation failed (\(kind.rawValue)).")
@@ -260,7 +261,7 @@ struct AnthropicStreamDecoder {
         }
     }
 
-    func finish() throws { guard ended else { throw ProviderJSON.invalid() } }
+    func finish() throws { guard ended else { throw ProviderHTTPFailure.streamEndedEarly() } }
 
     private mutating func append(_ delta: String, reasoning: Bool = false) -> [ModelEvent] {
         guard !delta.isEmpty else { return [] }

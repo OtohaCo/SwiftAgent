@@ -144,7 +144,7 @@ import Testing
             } else {
                 for try await event in provider.compact(request: .init(request: req, mode: mode, operationID: UUID(), invocationID: req.invocationID!)) { if case .completed(let response) = event { candidate = response.continuation != nil } }
             }
-        } catch let error as ModelProviderError { failed = error.kind == .invalidResponse }
+        } catch let error as ModelProviderError { failed = error.kind == (fault == "missing-terminal" ? .transport : .invalidResponse) }
         #expect(failed && !candidate)
         #expect(await probe.requests.count == 1)
     }
@@ -228,7 +228,7 @@ import Testing
         let req = try request(provider, mode: nil)
         var snapshots: [ModelUsage] = [], failed = false
         do { for try await event in provider.stream(request: req) { if case .usage(let value) = event { snapshots.append(value) } } }
-        catch let error as ModelProviderError { failed = error.kind == .invalidResponse }
+        catch let error as ModelProviderError { failed = error.kind == .transport && error.diagnostic?.reason == .streamEndedEarly }
         let final = try #require(snapshots.last)
         #expect(failed == (variant == "eof"))
         #expect(snapshots.dropLast().allSatisfy { $0.inputTokens == nil })

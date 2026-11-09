@@ -28,7 +28,7 @@ enum ChatGPTPlanFailure {
 
     static func http(_ status: Int, headers: [String: String],
                      events: inout AsyncThrowingStream<ProviderHTTPEvent, Error>.Iterator) async throws -> ModelProviderError {
-        let fallback = ProviderHTTPFailure.classify(status, headers: headers)
+        var fallback = ProviderHTTPFailure.classify(status, headers: headers)
         var body = Data()
         do {
             while let event = try await events.next() {
@@ -40,6 +40,7 @@ enum ChatGPTPlanFailure {
         } catch is CancellationError { throw CancellationError() }
         catch { return fallback }
         try Task.checkCancellation()
+        fallback = ProviderHTTPFailure.classify(status, headers: headers, body: body, signals: .responses)
         guard let root = try? JSONDecoder().decode(JSONValue.self, from: body),
               case .object(let fields) = root, case .object(let error) = fields["error"],
               case .string(let code) = error["code"], let mapped = classify(code: code) else { return fallback }

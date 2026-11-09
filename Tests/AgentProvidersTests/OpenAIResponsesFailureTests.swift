@@ -191,7 +191,7 @@ struct OpenAIResponsesFailureTests {
             ("invalid_request_error", .invalidRequest), ("data_residency_mismatch", .invalidRequest),
             ("bio_policy", .invalidRequest), ("misalignment_policy_violation", .invalidRequest),
             ("cyber_policy", .invalidRequest),
-            ("insufficient_quota", .permissionDenied), ("future_code", .invalidResponse),
+            ("insufficient_quota", .quotaExhausted), ("future_code", .invalidResponse),
         ]
         for (code, expected) in cases {
             let body = providerNamedSSE([
