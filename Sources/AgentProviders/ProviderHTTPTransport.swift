@@ -83,7 +83,14 @@ private final class ProviderHTTPSharedSession: @unchecked Sendable {
 
     deinit {
         let session = session
-        DispatchQueue.global().async { session.finishTasksAndInvalidate() }
+        DispatchQueue.global().async {
+            session.finishTasksAndInvalidate()
+            #if !canImport(Darwin)
+            // Linux's Foundation aborts ("_MultiHandle deallocated with non-zero retain count") when a session is
+            // released while libcurl still winds its handle down; keep it referenced for a while after invalidation.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 60) { withExtendedLifetime(session) {} }
+            #endif
+        }
     }
 
     func start(_ request: URLRequest, for exchange: ProviderHTTPExchange) {

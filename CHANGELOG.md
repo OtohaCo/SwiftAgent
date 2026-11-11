@@ -2,6 +2,10 @@
 
 ## Unreleased — Gemini accepts history from other models
 
+- Linux: provider transports keep their URL session referenced for a minute after
+  invalidating it, so Foundation no longer aborts with "_MultiHandle deallocated with
+  non-zero retain count" when a transport is released.
+
 - Switching to Gemini keeps earlier visible replies, tool calls and their results.
   Other models' private reasoning and continuation data are omitted. Current-turn
   calls without Gemini state use Google's documented literal signature-validation
