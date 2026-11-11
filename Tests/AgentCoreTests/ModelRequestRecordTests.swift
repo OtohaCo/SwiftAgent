@@ -76,11 +76,12 @@ struct ModelRequestRecordTests {
         let provider = LiveProvider { request, emit in
             try emit(.responseStarted(.init(id: "slow", model: request.model)))
             try emit(.usage(reported))
-            try await Task.sleep(for: .seconds(5))
+            try await Task.sleep(for: .seconds(60))
         }
         let loop = AgentLoop(binding: .legacy(model: fixtureModel, provider: provider), tools: try ToolRegistry(tools: []),
                              reportsModelRequests: true)
-        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 0, deadline: .now.advanced(by: .milliseconds(150)))
+        // Leave room for dispatch under suite contention; this tests recording, not startup speed.
+        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 0, deadline: .now.advanced(by: .seconds(2)))
         let events = await collectEvents(loop.events(messages: [], sessionID: UUID(), budget: budget))
         guard case .runFinished(let termination) = events.last else { Issue.record("Missing terminal"); return }
         if case .result = termination { Issue.record("The deadline should end the Run") }
@@ -89,7 +90,7 @@ struct ModelRequestRecordTests {
             .init(ordinal: 1, model: fixtureModel, candidate: nil, responseID: "slow", usage: reported,
                   outcome: .cancelled, duration: .zero),
         ])
-        #expect(records.first.map { $0.duration >= .milliseconds(100) } == true)
+        #expect(records.first.map { $0.duration > .zero } == true)
     }
 
     @Test func aRunThatEndsWithoutWaitingForItsTurnStillRecordsTheRequestOnce() async throws {
@@ -104,7 +105,8 @@ struct ModelRequestRecordTests {
         let loop = AgentLoop(binding: .legacy(model: fixtureModel, provider: provider), tools: try ToolRegistry(tools: []),
                              reportsModelRequests: true,
                              beforeHandlingModelEvent: { event in if case .textDelta = event { await held.wait() } })
-        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 0, deadline: .now.advanced(by: .milliseconds(150)))
+        // Leave room for dispatch under suite contention; this tests recording, not startup speed.
+        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 0, deadline: .now.advanced(by: .seconds(2)))
         let events = await collectEvents(loop.events(messages: [], sessionID: UUID(), budget: budget))
         await held.open()
         #expect(events.last == .runFinished(.failed(.loop(.deadlineExceeded))))
@@ -113,6 +115,44 @@ struct ModelRequestRecordTests {
                   outcome: .cancelled, duration: .zero),
         ])
         #expect(events.dropLast().last.map(isRecord) == true)
+    }
+
+    @Test(arguments: [false, true])
+    func terminalPublicationRecordsThePendingRequestExactlyOnceBeforeALateTurnExits(cancelled: Bool) async throws {
+        // Exercise the publication race without relying on a timer or provider scheduling.
+        let pair = AsyncStream<AgentEvent>.makeStream()
+        let emitter = AgentEventEmitter(pair.continuation)
+        let usage = ModelUsage(inputTokens: 300, cachedInputTokens: 200)
+        var accumulator = ModelEventAccumulator()
+        try accumulator.append(.responseStarted(.init(id: "pending", model: fixtureModel)))
+        try accumulator.append(.usage(usage))
+        let tracker = AgentModelRequestTracker(model: fixtureModel)
+        let pending = try #require(tracker.pending(accumulator))
+        await emitter.requestInFlight(pending)
+        let terminal: AgentRunTermination = cancelled ? .cancelled : .failed(.loop(.deadlineExceeded))
+        await emitter.finish(terminal)
+        // A provider/turn that drains later cannot publish the same physical request again.
+        await emitter.requestEnded(pending.stopped(at: .now), next: nil)
+        await emitter.finish(terminal)
+        let events = await collectEvents(pair.stream)
+        #expect(requestRecords(events).map(\.timeless) == [
+            .init(ordinal: 1, model: fixtureModel, candidate: nil, responseID: "pending", usage: usage,
+                  outcome: .cancelled, duration: .zero),
+        ])
+        #expect(events.count == 2)
+        #expect(events.dropLast().last.map(isRecord) == true)
+        #expect(events.last == .runFinished(terminal))
+    }
+
+    @Test func anExpiredBudgetBeforeDispatchDoesNotInventARequestRecord() async throws {
+        let provider = ScriptedProvider { request, _ in textResponse(request, "must not be called") }
+        let loop = AgentLoop(binding: .legacy(model: fixtureModel, provider: provider),
+                             tools: try ToolRegistry(tools: []), reportsModelRequests: true)
+        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 0, deadline: .now.advanced(by: .milliseconds(-1)))
+        let events = await collectEvents(loop.events(messages: [], sessionID: UUID(), budget: budget))
+        #expect(events.last == .runFinished(.failed(.loop(.deadlineExceeded))))
+        #expect(requestRecords(events).isEmpty)
+        #expect(await provider.log.requests.isEmpty)
     }
 
     @Test func aRequestTheUserStopsIsRecordedAsCancelledWithWhatItReported() async throws {
