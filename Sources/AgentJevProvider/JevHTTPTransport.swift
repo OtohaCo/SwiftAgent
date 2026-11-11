@@ -102,11 +102,18 @@ private final class JevHTTPRouter: NSObject, URLSessionDataDelegate, @unchecked 
     func invalidate(_ session: URLSession) {
         lock.withLock { invalidatingSession = session }
         session.finishTasksAndInvalidate()
+        #if canImport(Darwin)
         // Some Foundation implementations may omit the invalidation callback.
         // Do not capture the session here: the callback normally releases it first.
         DispatchQueue.global().asyncAfter(deadline: .now() + 60) { [weak self] in
             self?.releaseInvalidatingSession()
         }
+        #else
+        // Linux's Foundation aborts ("_MultiHandle deallocated with non-zero retain count") when the session goes
+        // while libcurl still winds its handle down, which can be after the invalidation callback, and the router
+        // itself is released once the session lets go of its delegate. Hold the session strongly for a while.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 60) { withExtendedLifetime(session) {} }
+        #endif
     }
 
     private func releaseInvalidatingSession() {
