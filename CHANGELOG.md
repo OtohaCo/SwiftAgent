@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-- Linux: provider transports hold their invalidated URL session strongly for a minute;
-  releasing it at the invalidation callback still aborted the process mid-run.
+- Linux: provider transports no longer invalidate their URL session; it is kept for the
+  life of the process. Invalidating it aborted long runs with "_MultiHandle deallocated
+  with non-zero retain count" however long the session was held afterwards.
 
 - Journals from the previous release candidate remain readable and writable.
   New index entries include a commit witness; existing entries without it can

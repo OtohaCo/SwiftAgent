@@ -101,18 +101,19 @@ private final class JevHTTPRouter: NSObject, URLSessionDataDelegate, @unchecked 
 
     func invalidate(_ session: URLSession) {
         lock.withLock { invalidatingSession = session }
-        session.finishTasksAndInvalidate()
         #if canImport(Darwin)
+        session.finishTasksAndInvalidate()
         // Some Foundation implementations may omit the invalidation callback.
         // Do not capture the session here: the callback normally releases it first.
         DispatchQueue.global().asyncAfter(deadline: .now() + 60) { [weak self] in
             self?.releaseInvalidatingSession()
         }
         #else
-        // Linux's Foundation aborts ("_MultiHandle deallocated with non-zero retain count") when the session goes
-        // while libcurl still winds its handle down, which can be after the invalidation callback, and the router
-        // itself is released once the session lets go of its delegate. Hold the session strongly for a while.
-        DispatchQueue.global().asyncAfter(deadline: .now() + 60) { withExtendedLifetime(session) {} }
+        // Linux's Foundation aborts ("_MultiHandle deallocated with non-zero retain count") when a session is
+        // invalidated while libcurl still winds its handle down; holding the session longer does not help, the
+        // handle goes with the invalidation itself. Sessions are not invalidated on Linux: what is under way
+        // finishes, and the session is kept for the life of the process.
+        JevRetiredSessions.keep(session)
         #endif
     }
 
@@ -278,3 +279,12 @@ private final class JevHTTPExchange: @unchecked Sendable {
         finish(.success(.init(status: response.statusCode, headers: headers, body: body)))
     }
 }
+
+#if !canImport(Darwin)
+/// Sessions retired on Linux, kept for the life of the process instead of being invalidated (see `invalidate`).
+private enum JevRetiredSessions {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var sessions: [URLSession] = []
+    static func keep(_ session: URLSession) { lock.withLock { sessions.append(session) } }
+}
+#endif
