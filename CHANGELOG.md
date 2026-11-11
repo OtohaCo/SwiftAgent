@@ -1,6 +1,28 @@
 # Changelog
 
-## Unreleased — Gemini accepts history from other models
+## Unreleased
+
+- Empty streamed Anthropic tool arguments are returned as an empty JSON object.
+  Gemini skips assistant turns that contain only private reasoning or continuation data.
+- Journal indexes verify their commit and published file layout after crash recovery.
+  Background maintenance stops when a write has an uncertain outcome and keeps the
+  store unavailable until it is reopened.
+- Retrying a mutation returns its saved result even when the original output was
+  shortened to fit the result limit.
+- Host tool calls return results committed during cancellation or deadline expiry
+  and record the run as completed.
+- Resolving an older mutation preserves the most recent run. Reconciliation and
+  abort require the session's lease to be released.
+- Attachment text descriptions work with conversation controls, including images
+  that exceed the request's image limit.
+- Rejected unknown tool names no longer prevent later DeepSeek or Gemini requests.
+  OpenAI compact windows accept image tool results. Gemini cached tool prefixes
+  keep the same signature placeholder across turns. Provider routes preserve
+  request boundaries and thinking lineage.
+- Workspace file access and segmented journals import the correct C library on
+  static Linux builds.
+
+### Gemini accepts history from other models
 
 - Linux: provider transports keep their URL session referenced for a minute after
   invalidating it, so Foundation no longer aborts with "_MultiHandle deallocated with
@@ -9,7 +31,7 @@
 - Switching to Gemini keeps earlier visible replies, tool calls and their results.
   Other models' private reasoning and continuation data are omitted. Current-turn
   calls without Gemini state use Google's documented literal signature-validation
-  bypass; earlier calls need no placeholder.
+  bypass and keep it in earlier turns so cached prefixes stay stable.
 - Matching Gemini state still replays exactly with its original signatures.
   Invalid calls, mismatched results and changes to native state still fail locally.
   Cached prefixes continue to require the original source messages and wire parts.

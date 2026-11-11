@@ -606,7 +606,9 @@ public actor AgentJournal {
         // state/Run-ID set out of the dictionary on each commit.
         for record in committed {
             if let runID = record.runID {
-                memorySessions[sessionID, default: .init()].lastRunID = runID
+                if !allowMutationSettlement, !events.contains(where: { if case .mutationAborted = $0 { return true }; return false }) {
+                    memorySessions[sessionID, default: .init()].lastRunID = runID
+                }
                 memorySessions[sessionID, default: .init()].runIDs.insert(runID)
             }
             switch record.event {
@@ -756,6 +758,7 @@ public actor AgentJournal {
     /// Reconciliation never reruns the executor or changes the old Run terminal.
     public func reconcileMutation(_ pending: PendingMutationRecovery,
                                   receipt: ToolReceipt, output: JSONValue) throws {
+        guard !sessionLeases.contains(pending.sessionID) else { throw AgentJournalError.sessionLeaseUnavailable }
         let key = MutationKey(sessionID: pending.sessionID, runID: pending.runID, callID: pending.intent.call.id)
         guard let record = try mutationRecord(for: key), record.intent == pending.intent else {
             throw AgentJournalError.mutationIntentConflict
@@ -807,6 +810,7 @@ public actor AgentJournal {
         // Archival executor proof is query data, not a reusable reconciliation
         // decision. Only the live executor-result commit can publish that origin.
         guard confirmedNoEffect.executorProof == nil else { throw AgentJournalError.invalidRecord }
+        guard !sessionLeases.contains(pending.sessionID) else { throw AgentJournalError.sessionLeaseUnavailable }
         let key = MutationKey(sessionID: pending.sessionID, runID: pending.runID, callID: pending.intent.call.id)
         guard let record = try mutationRecord(for: key), record.intent == pending.intent else {
             throw AgentJournalError.mutationIntentConflict
@@ -1440,7 +1444,10 @@ extension AgentJournal {
             nextHeader.conversationControls = value.targetControls
         }
         nextHeader.created = nextHeader.created || events.contains { if case .sessionCreated = $0 { return true }; return false }
-        if let runID { nextHeader.lastRunID = runID }
+        if let runID, !allowMutationSettlement,
+           !events.contains(where: { if case .mutationAborted = $0 { return true }; return false }) {
+            nextHeader.lastRunID = runID
+        }
         var messageStart = initialHeader.messageCount
         var changedMessages: [JournalMessage] = []
         for event in events {

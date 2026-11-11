@@ -151,8 +151,18 @@ enum NativeContextWire {
                 guard found else { throw ProviderJSON.invalid() }
                 let callID = try ProviderJSON.string(item["call_id"])
                 guard !callID.isEmpty, pending.remove(callID) != nil else { throw ProviderJSON.invalid() }
-                // This adapter supports the existing text/JSON client-result contract.
-                _ = try ProviderJSON.string(item["output"])
+                if case .array(let parts) = item["output"] {
+                    guard !parts.isEmpty else { throw ProviderJSON.invalid() }
+                    for part in parts {
+                        let object = try ProviderJSON.object(part)
+                        switch object["type"] {
+                        case .string("input_text"): _ = try ProviderJSON.string(object["text"])
+                        case .string("input_image"):
+                            guard !(try ProviderJSON.string(object["image_url"])).isEmpty else { throw ProviderJSON.invalid() }
+                        default: throw ProviderJSON.invalid()
+                        }
+                    }
+                } else { _ = try ProviderJSON.string(item["output"]) }
             default: throw ModelProviderError(kind: .unsupportedCapability, message: "Unsupported native compact window item.")
             }
         }

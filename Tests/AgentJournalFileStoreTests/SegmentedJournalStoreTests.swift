@@ -524,6 +524,51 @@ import Glibc
         try await reopened.close()
     }
 
+    @Test func maintenanceCannotResumeAfterForegroundCommitBecomesUnknown() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-poison-maintenance-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pause = JournalMaintenancePause(), gate = JournalFaultGate()
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: 4096, maxUnreclaimedBytes: 16384, maxSegmentBatches: 1)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "poison", policy: policy, fault: { stage in
+            if stage == .afterMaintenanceSnapshot { pause.waitOnce() }
+            try gate.check(stage)
+        })
+        _ = try await journal.appendCheckpoint([.checkpoint(history: [.user([.text("original")])], steeringIDs: [])], sessionID: UUID(), runID: UUID(), durability: .durable)
+        await pause.waitUntilEntered()
+        gate.arm(.partialAppend)
+        await #expect(throws: (any Error).self) {
+            _ = try await journal.appendCheckpoint([.checkpoint(history: [.user([.text("partial")])], steeringIDs: [])], sessionID: UUID(), runID: UUID(), durability: .durable)
+        }
+        let current = try Data(contentsOf: directory.appendingPathComponent("CURRENT"))
+        pause.release()
+        await #expect(throws: AgentJournalError.commitUnknown) { _ = try await journal.requestMaintenance() }
+        #expect(try Data(contentsOf: directory.appendingPathComponent("CURRENT")) == current)
+        await #expect(throws: AgentJournalError.commitUnknown) {
+            _ = try await journal.appendCheckpoint([.checkpoint(history: [], steeringIDs: [])], sessionID: UUID(), runID: UUID(), durability: .durable)
+        }
+        try await journal.close()
+    }
+
+    @Test func reusedSequenceCannotPublishAnotherSessionsFailedUpdate() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-sequence-reuse-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = JournalFaultGate()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "reuse", fault: { try gate.check($0) })
+        let session = UUID()
+        let original: [ModelMessage] = [.user([.text("original")])]
+        _ = try await journal.appendCheckpoint([.checkpoint(history: original, steeringIDs: [])], sessionID: session, runID: UUID(), durability: .durable)
+        gate.arm(.beforeCurrentReplace)
+        await #expect(throws: (any Error).self) {
+            _ = try await journal.appendCheckpoint([.checkpoint(history: [.user([.text("uncommitted")])], steeringIDs: [])], sessionID: session, runID: UUID(), durability: .durable)
+        }
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        _ = try await reopened.appendCheckpoint([.checkpoint(history: [.user([.text("other session")])], steeringIDs: [])], sessionID: UUID(), runID: UUID(), durability: .durable)
+        #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == original)
+        #expect(try await reopened.readMessages(sessionID: session).map(\.message) == original)
+        try await reopened.close()
+    }
+
     @Test func failedCloseRetainsOwnershipUntilRetrySucceeds() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-close-fault-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -597,10 +642,12 @@ import Glibc
         let publishedRoot = try Data(contentsOf: current)
         await #expect(throws: failure) { _ = try await journal.requestMaintenance() }
         #expect(try Data(contentsOf: current) == publishedRoot)
+        _ = try await journal.appendCheckpoint([.checkpoint(history: [.user([.text("unrelated")])], steeringIDs: [])],
+            sessionID: UUID(), runID: UUID(), durability: .durable)
+        #expect(try await journal.latestCheckpoint(sessionID: session)?.history == [original])
         // Closing drains the owned maintenance and relinquishes its writer lock;
         // it neither publishes the failed candidate nor depends on ARC timing.
         try await journal.close()
-        #expect(try Data(contentsOf: current) == publishedRoot)
         let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
         #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == [original])
         for _ in 0..<8 { if try await reopened.requestMaintenance()?.sealedSegments == 0 { break } }

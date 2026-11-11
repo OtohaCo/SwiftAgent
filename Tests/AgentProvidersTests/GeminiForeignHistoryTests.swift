@@ -54,9 +54,19 @@ struct GeminiForeignHistoryTests {
         #expect(!encoded.contains("private foreign") && !encoded.contains("openai-responses"))
     }
 
-    @Test func earlierForeignCallsNeedNoDummySignature() throws {
+    @Test func reasoningOnlyAssistantTurnsAreSkipped() throws {
+        let state = ModelProviderContinuation(model: .init(provider: "other", name: "fixture"), format: "other", payload: Data())
+        for content: [ModelContent] in [[.reasoning("private")], [.providerContinuation(state)], [.reasoning("private"), .providerContinuation(state)]] {
+            let request = history(content, calls: [], older: true)
+            let context = try GeminiRequestEncoder.context(request, configuration: configuration())
+            #expect(context.contents.count == 2)
+            #expect(context.contents.allSatisfy { $0["role"] == .string("user") })
+        }
+    }
+
+    @Test func earlierForeignCallsKeepTheirDummySignature() throws {
         let result = try parts(history([.reasoning("discard")], older: true))
-        #expect(result.count == 1 && result[0]["thoughtSignature"] == nil)
+        #expect(result.count == 1 && result[0]["thoughtSignature"] == .string(dummy))
     }
 
     @Test func onlyTheFirstCallInEachForeignStepGetsADummy() throws {
@@ -97,7 +107,18 @@ struct GeminiForeignHistoryTests {
         #expect(try parts(request, profile: .preserve) == [unsigned])
     }
 
-    @Test func foreignCachePrefixCannotMatchNativePartsWithTheSameWireContent() async throws {
+    @Test func closedForeignToolPrefixRemainsCacheableAfterTheNextUserTurn() async throws {
+        let prefix = history([])
+        let probe = ProviderRequestProbe()
+        let client = try GeminiCachedContentClient(credentials: .init(apiKey: { "fixture" }), authorizationScopeID: "default",
+            transport: FixtureHTTPTransport(probe: probe, bodies: [geminiCacheFixture]))
+        let binding = try await client.create(prefix: prefix)
+        let request = ModelRequest(model: model, messages: prefix.messages + [.user([.text("Follow up")])])
+        let config = try configuration()
+        try binding.validate(request: request, context: GeminiRequestEncoder.context(request, configuration: config), configuration: config, now: Date())
+    }
+
+    @Test func foreignCachePrefixCannotMatchNativeSignedParts() async throws {
         let prefix = history([], older: true)
         let config = try configuration()
         let client = try GeminiCachedContentClient(credentials: .init(apiKey: { "fixture" }), authorizationScopeID: "default",
@@ -105,11 +126,11 @@ struct GeminiForeignHistoryTests {
         let binding = try await client.create(prefix: prefix)
         let request = ModelRequest(model: model, messages: prefix.messages + [.user([.text("Follow up")])])
         try binding.validate(request: request, context: GeminiRequestEncoder.context(request, configuration: config), configuration: config, now: Date())
-        let plain: JSONValue = .object(["functionCall": .object(["name": .string(call.name), "args": .object([:]), "id": .string(call.id.rawValue)])])
+        let plain: JSONValue = .object(["functionCall": .object(["name": .string(call.name), "args": .object([:]), "id": .string(call.id.rawValue)]), "thoughtSignature": .string("cmVhbA==")])
         let nativePrefix = history([try native([plain])], older: true)
         let nativeRequest = ModelRequest(model: model, messages: nativePrefix.messages + [.user([.text("Follow up")])])
         let nativeContext = try GeminiRequestEncoder.context(nativeRequest, configuration: config)
-        #expect(nativeContext.contents == (try GeminiRequestEncoder.context(request, configuration: config)).contents)
+        #expect(nativeContext.contents != (try GeminiRequestEncoder.context(request, configuration: config)).contents)
         #expect(throws: ModelProviderError.self) {
             try binding.validate(request: nativeRequest, context: nativeContext, configuration: config, now: Date())
         }

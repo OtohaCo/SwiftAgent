@@ -213,8 +213,9 @@ struct AnthropicStreamDecoder {
             let completed = stopReason == .toolCalls
             var modelCalls: [ToolCall] = []
             for call in calls {
-                let arguments = try call.arguments ?? ProviderJSON.text(call.initialInput)
-                if call.arguments == nil { events.append(.toolCallArgumentsDelta(call.id, arguments)) }
+                let useInitialInput = call.arguments == nil || (call.arguments == "" && call.initialInput == .object([:]))
+                let arguments = try useInitialInput ? ProviderJSON.text(call.initialInput) : call.arguments!
+                if useInitialInput { events.append(.toolCallArgumentsDelta(call.id, arguments)) }
                 let value = ToolCall(id: call.id, name: call.name, argumentsJSON: arguments, completeness: completed ? .complete : .incomplete)
                 if completed {
                     // Input that is not one JSON object is the model's mistake; the runtime reports it to the

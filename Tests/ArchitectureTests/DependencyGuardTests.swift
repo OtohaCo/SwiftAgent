@@ -44,6 +44,17 @@ final class DependencyGuardTests: XCTestCase {
         }
     }
 
+    func testMuslIsLimitedToStorageHosts() {
+        for module in DependencyGuard.dependencies.keys {
+            let failures = DependencyGuard.violations("import Musl", module: module)
+            if module == "WorkspaceAgent" || module == "AgentJournalFileStore" {
+                XCTAssertEqual(failures, [])
+            } else {
+                XCTAssertFalse(failures.isEmpty)
+            }
+        }
+    }
+
     func testWindowsStorageSDKsStayLimitedToJournalFileStore() {
         for sdk in ["WinSDK", "ucrt"] {
             XCTAssertEqual(DependencyGuard.violations("import \(sdk)", module: "AgentJournalFileStore"), [])

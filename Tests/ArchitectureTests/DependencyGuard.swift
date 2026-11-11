@@ -26,6 +26,7 @@ enum DependencyGuard {
             allowed.insert("Crypto")
             allowed.insert("Darwin")
             allowed.insert("Glibc")
+            allowed.insert("Musl")
         }
         if module == "AgentJournalFileStore" {
             allowed.insert("WinSDK")
@@ -33,6 +34,7 @@ enum DependencyGuard {
             allowed.insert("Crypto")
             allowed.insert("Darwin")
             allowed.insert("Glibc")
+            allowed.insert("Musl")
         }
         if module == "AgentTools" { allowed.insert("Crypto") }
         if module == "AgentCore" { allowed.insert("Dispatch") }

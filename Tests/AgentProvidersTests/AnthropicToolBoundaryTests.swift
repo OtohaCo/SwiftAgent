@@ -5,6 +5,19 @@ import Testing
 @testable import AgentProviders
 
 struct AnthropicToolBoundaryTests {
+    @Test func emptyArgumentDeltaProducesEmptyObject() async throws {
+        let provider = try AnthropicProvider(apiKey: "fixture-key", transport: FixtureHTTPTransport(probe: ProviderRequestProbe(),
+            bodies: [try toolStream(arguments: "", stop: "tool_use")]))
+        var completed: ToolCall?
+        var deltas = ""
+        for try await event in provider.stream(request: .init(model: .init(provider: "anthropic", name: "fixture"), messages: [.user([.text("Compute")])])) {
+            if case .toolCallCompleted(let call) = event { completed = call }
+            if case .toolCallArgumentsDelta(_, let delta) = event { deltas += delta }
+        }
+        #expect(completed?.argumentsJSON == "{}")
+        #expect(deltas == "{}")
+    }
+
     @Test func reasoningOnlyTruncationDoesNotPoisonTheNextUserTurn() async throws {
         let partial = providerSSE([
             #"{"type":"message_start","message":{"id":"partial","type":"message","role":"assistant","model":"fixture","content":[],"usage":{"input_tokens":5,"output_tokens":0}}}"#,

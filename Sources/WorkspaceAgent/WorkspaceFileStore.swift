@@ -6,6 +6,10 @@ private let posixUnlink = Darwin.unlink
 import Glibc
 private let posixWrite = Glibc.write
 private let posixUnlink = Glibc.unlink
+#elseif canImport(Musl)
+import Musl
+private let posixWrite = Musl.write
+private let posixUnlink = Musl.unlink
 #endif
 import Foundation
 

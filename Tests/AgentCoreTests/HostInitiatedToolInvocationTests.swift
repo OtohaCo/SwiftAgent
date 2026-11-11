@@ -38,6 +38,32 @@ struct HostInitiatedToolInvocationTests {
         ScriptedProvider { request, _ in textResponse(request, "unused") }
     }
 
+    @Test(arguments: [false, true])
+    func committedHostResultWinsOverDeadlineAndCancellation(cancel: Bool) async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let hold = PublishedCheckpointHold(stage: .beforeCurrentReplace)
+        let journal = try AgentIncrementalJournal.createForTesting(at: url, operationDomain: "host-settlement", supportsRunRecords: true, fault: { hold.check($0) })
+        let session = try Agent(model: fixtureModel, provider: silentProvider()).makeSession(journal: journal)
+        let capabilities = try await binding(session, [AgentCapabilityTool(id: "move", version: "1",
+            tool: try MoveClipTool(journal: journal, probe: HostMutationProbe(), settlementHold: hold))])
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        let invocation = try await session.invokeHostTool(.init(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#),
+            capabilities: capabilities, operationID: "committed", budget: .init(maxModelTurns: 1, maxToolCalls: 1, deadline: deadline))
+        let held = await hold.waitUntilHeld()
+        guard held else { hold.release(); Issue.record("result did not reach publication"); return }
+        if cancel { await invocation.cancel() }
+        try await Task.sleep(until: deadline.advanced(by: .milliseconds(50)), clock: .continuous)
+        hold.release()
+        let result = try await invocation.wait()
+        try await invocation.waitForDrain()
+        #expect(result.result.content == [.json(.object(["moved": .bool(true)]))])
+        guard case .terminal(_, .completed) = try await journal.runRecord(sessionID: session.id, runID: invocation.runID) else {
+            Issue.record("committed host result must complete its run"); return
+        }
+        try await journal.close()
+    }
+
     @Test func aHostCallRunsTheMutationWithIntentAndReceiptAndNoModel() async throws {
         let url = temporaryURL()
         defer { try? FileManager.default.removeItem(at: url) }
@@ -625,13 +651,15 @@ private struct MoveClipTool: AgentTool {
     let probe: HostMutationProbe
     let answer: ToolAuthorization
     let failsAfterEffect: Bool
+    let settlementHold: PublishedCheckpointHold?
     let policy: ToolPolicy
 
-    init(journal: AgentJournal, probe: HostMutationProbe, authorization answer: ToolAuthorization = .allowed, failsAfterEffect: Bool = false) throws {
+    init(journal: AgentJournal, probe: HostMutationProbe, authorization answer: ToolAuthorization = .allowed, failsAfterEffect: Bool = false, settlementHold: PublishedCheckpointHold? = nil) throws {
         self.journal = journal
         self.probe = probe
         self.answer = answer
         self.failsAfterEffect = failsAfterEffect
+        self.settlementHold = settlementHold
         policy = try .mutation(authorization: .required, evidence: .none)
     }
 
@@ -651,6 +679,7 @@ private struct MoveClipTool: AgentTool {
     func execute(_ input: Input, context: ToolContext) async throws -> ToolResult<Output> {
         await probe.record(journal: journal, callID: context.callID)
         if failsAfterEffect { throw HostFixtureError() }
+        settlementHold?.arm()
         return ToolResult(output: .init(moved: true), receipt: ToolReceipt(
             operationID: context.idempotencyKey ?? "", status: .succeeded,
             confirmedTargets: [.init(namespace: "timeline.clip", id: input.clip)], revision: "r2"))

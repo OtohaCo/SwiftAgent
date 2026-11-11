@@ -23,6 +23,32 @@ struct AnthropicConversationControlTests {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return ModelImageDigest.sha256Hex(try encoder.encode(message))
     }
+    @Test(arguments: ["image", "image-limit", "file"])
+    func attachmentDescriptionsWorkWithConversationControls(kind: String) async throws {
+        let probe = ProviderRequestProbe()
+        let provider = try provider(probe, bodies: [anthropicTextFixture])
+        let binding = try AgentModelBinding(profileID: "attachment-controls", profileRevision: "1", model: model, provider: provider,
+            deployment: .init(serviceInstanceID: "fixture", endpointScope: endpoint.absoluteString, apiDialect: "anthropic"),
+            imageInput: kind == "image-limit" ? .native(maximumImageBytesPerRequest: 1) : .describe, fileInput: .describe)
+        var data = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13])
+        data.append(contentsOf: Array("IHDR".utf8))
+        data.append(contentsOf: [0, 0, 0, 4, 0, 0, 0, 3, 8, 2, 0, 0, 0, 0, 0, 0, 0])
+        let attachment: AgentRunInput.Attachment = kind == "file"
+            ? .file(try .init(uri: URL(string: "https://example.com/report")!, mediaType: .pdf, description: "Report", estimatedInputTokens: 20))
+            : .image(try .init(data: data, description: "Screenshot"))
+        let session = try Agent(binding: binding).makeSession()
+        let run = try await session.run(AgentRunInput(text: "Describe", attachments: [attachment]))
+        #expect(try await run.wait().outcome == .completed)
+        try await run.waitForDrain()
+        guard case .user(let content)? = await session.history.first else { Issue.record("missing user attachment"); return }
+        #expect(content.count == 2)
+        if kind == "file" { guard case .file = content.last else { Issue.record("file was not retained"); return } }
+        else { guard case .image = content.last else { Issue.record("image was not retained"); return } }
+        let request = try #require(await probe.requests.first)
+        let body = String(decoding: try #require(request.httpBody), as: UTF8.self)
+        #expect(body.contains(kind == "file" ? "Report" : "Screenshot"))
+    }
+
     @Test(arguments: [false, true])
     func reminderWaitsForParallelResultGroupAndRealSteering(_ steering: Bool) async throws {
         let probe = ProviderRequestProbe(), gate = ReminderToolGate()

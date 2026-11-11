@@ -132,7 +132,7 @@ package struct ToolRegistry: Sendable {
                                       output: ToolSchemaValidator, outputSchema: JSONValue, tools: [String: Registration],
                                       name: String, policy: ToolPolicy) async throws -> ToolResult<JSONValue> {
         let result = try await invoke(executionContext)
-        if !result.isModelVisibleError {
+        if !result.isModelVisibleError && !result.isIdempotentReplay {
             do { try output.validate(result.output) }
             catch let error as ToolSchemaValidationError {
                 guard policy.effect == .readOnly, policy.recoverableErrors == .modelVisible else {

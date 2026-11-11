@@ -12,6 +12,7 @@ enum DeepSeekResponsesRequestEncoder {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid DeepSeek model identifier.")
         }
         try ImageEncoding.refuse(request.messages)
+        let refused = ProviderJSON.refusedToolCalls(request)
         var input: [JSONValue] = []
         for modelMessage in request.messages {
             switch modelMessage {
@@ -31,7 +32,7 @@ enum DeepSeekResponsesRequestEncoder {
                     input.append(contentsOf: restored.items)
                 } else {
                     // A Host's call (OAI-1539) was never DeepSeek's, so it never had reasoning to replay.
-                    if reasoningEffort != .none && !request.tools.isEmpty && !calls.isEmpty && !calls.allSatisfy(\.id.isHostCall) {
+                    if reasoningEffort != .none && !request.tools.isEmpty && !calls.isEmpty && !calls.allSatisfy({ $0.id.isHostCall || refused.contains($0.id) }) {
                         throw ModelProviderError(
                             kind: .invalidRequest,
                             message: "DeepSeek thinking with tools requires the original DeepSeek continuation.",
@@ -40,7 +41,7 @@ enum DeepSeekResponsesRequestEncoder {
                     }
                     let value = try text(content)
                     if !value.isEmpty { input.append(message(role: "assistant", text: value)) }
-                    input.append(contentsOf: try calls.map(functionCall))
+                    input.append(contentsOf: try calls.map { try functionCall($0, refused: refused.contains($0.id)) })
                 }
             case .tool(let result):
                 var output = try text(result.content)
@@ -91,14 +92,15 @@ enum DeepSeekResponsesRequestEncoder {
         .object(["type": .string("message"), "role": .string(role), "content": .string(text)])
     }
 
-    private static func functionCall(_ call: ToolCall) throws -> JSONValue {
-        guard call.completeness == .complete, !call.id.rawValue.isEmpty, isValidToolName(call.name),
+    private static func functionCall(_ call: ToolCall, refused: Bool) throws -> JSONValue {
+        let name = !isValidToolName(call.name) && refused ? ProviderJSON.refusedToolName(call.name) : call.name
+        guard call.completeness == .complete, !call.id.rawValue.isEmpty, isValidToolName(name),
               (try? JSONValue.decodeToolArguments(call.argumentsJSON)) != nil else {
             throw ModelProviderError(kind: .invalidRequest, message: "Invalid tool history.")
         }
         return .object([
             "type": .string("function_call"), "call_id": .string(call.id.rawValue),
-            "name": .string(call.name), "arguments": .string(call.argumentsJSON),
+            "name": .string(name), "arguments": .string(call.argumentsJSON),
         ])
     }
 

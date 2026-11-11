@@ -28,6 +28,21 @@ import Testing
             projectionID: "fixture", projectionVersion: "1", previousCheckpointID: native?.id)
         return plain.withNativeSource(source, invocationID: invocation)
     }
+    @Test func compactWindowAcceptsImageToolOutputs() async throws {
+        let compact = Data(#"{"id":"compact","created_at":1,"object":"response.compaction","output":[{"type":"compaction","id":"cmp","encrypted_content":"opaque"},{"type":"function_call","id":"fc","call_id":"call","name":"screenshot","arguments":"{}","status":"completed"},{"type":"function_call_output","call_id":"call","output":[{"type":"input_text","text":"Settings"},{"type":"input_image","image_url":"data:image/png;base64,cG5n"}]}],"usage":{"input_tokens":20,"output_tokens":3}}"#.utf8)
+        let provider = try provider(ProviderRequestProbe(), bodies: [compact])
+        let req = try request(provider, mode: .openAIStandalone, messages: [.user([.text("Summarize")])])
+        var state: ModelProviderContinuation?
+        for try await event in provider.compact(request: .init(request: req, mode: .openAIStandalone, operationID: UUID(), invocationID: req.invocationID!)) {
+            if case .completed(let response) = event { state = response.continuation }
+        }
+        let payload = try JSONDecoder().decode(JSONValue.self, from: #require(state?.payload))
+        guard case .array(let output) = payload["output"] else { Issue.record("missing compact window"); return }
+        #expect(output.count == 3)
+        #expect(output.last?["output"] == .array([.object(["type": .string("input_text"), "text": .string("Settings")]),
+            .object(["type": .string("input_image"), "image_url": .string("data:image/png;base64,cG5n")])]))
+    }
+
     @Test func standaloneUsesJSONEndpointAndEntireReturnedWindow() async throws {
         let probe = ProviderRequestProbe()
         let compact = Data(#"{"id":"compact-1","created_at":1,"object":"response.compaction","extension":{"retained":true},"output":[{"type":"message","role":"user","content":[{"type":"input_text","text":"original"}]},{"type":"compaction","id":"cmp-1","encrypted_content":"opaque","created_by":"fixture"}],"usage":{"input_tokens":20,"output_tokens":3,"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":1}}}"#.utf8)

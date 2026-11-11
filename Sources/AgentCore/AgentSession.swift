@@ -499,7 +499,7 @@ public actor AgentSession {
         _ = await control.registerStartupWorker(cancelStartup: { work.cancel() })
         let logical = Task { () async throws -> AgentHostInvocationResult in
             let outcome: Result<AgentHostInvocationResult, any Error>
-            do { outcome = .success(try await withAgentDeadline(deadline, operation: { try await work.value })) }
+            do { outcome = .success(try await withAgentDeadline(deadline, gate: runBudget.gate, operation: { try await work.value })) }
             catch {
                 work.cancel()
                 outcome = .failure(error)
@@ -543,7 +543,10 @@ public actor AgentSession {
                     try await self.journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
                 }
             })
-        } catch { throw AgentLoop.toolError(error) }
+        } catch {
+            // Scheduler cancellation after publication cannot undo the host's result.
+            guard await settled.value != nil else { throw AgentLoop.toolError(error) }
+        }
         guard let value = await settled.value else { throw CancellationError() }
         return AgentHostInvocationResult(runID: runID, call: call.call, result: value.message, receipt: value.receipt,
                                          conversationRevision: conversationRevision)
@@ -553,6 +556,8 @@ public actor AgentSession {
     /// namespace and its tool result, after the Host's request (OAI-1539); a replay says so in the result.
     private func commitHostResult(_ call: PreparedToolCall, result executed: ToolResult<JSONValue>, runID: UUID,
                                   budget: AgentBudget) async throws -> (message: ToolResultMessage, receipt: AgentToolReceipt?) {
+        try budget.checkActive()
+        guard budget.gate.settle() else { throw AgentLoopError.deadlineExceeded }
         // As for a model's call: an oversized output is cut before it is committed (OAI-1521).
         let result = executed.confirmedNoEffect == nil ? try executed.capped(limit: call.maximumResultBytes) : executed
         var images = result.images.map(ModelContent.image)

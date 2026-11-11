@@ -362,7 +362,7 @@ public struct ModelProviderRoute: ModelProvider, ModelProviderMutationBoundary, 
             owner = index; changed = true
             checkpoint = .init(id: value.id, generation: value.generation, continuation: native, transition: value.transition,
                 rootConfigurationDigest: value.rootConfigurationDigest, toolBaseline: value.toolBaseline,
-                usage: value.usage, canonicalTailStart: value.canonicalTailStart)
+                usage: value.usage, canonicalTailStart: value.canonicalTailStart, preservedThinkingLineage: value.preservedThinkingLineage)
         } else { checkpoint = nil }
         guard changed else { return (nil, request) }
         return (owner, ModelRequest(model: request.model, messages: messages, tools: request.tools,
@@ -594,7 +594,7 @@ private struct OwnedContinuation: Codable {
     static func wrap(_ state: ModelProviderContinuation, candidate: String) throws -> ModelProviderContinuation {
         let owned = OwnedContinuation(candidate: candidate, format: state.format, payload: state.payload)
         return ModelProviderContinuation(model: state.model, format: format,
-                                         payload: try ProviderJSON.encode(owned), origin: state.origin, contextTransition: state.contextTransition)
+                                         payload: try ProviderJSON.encode(owned), origin: state.origin, contextTransition: state.contextTransition, requestBoundary: state.requestBoundary)
     }
 
     static func unwrap(_ state: ModelProviderContinuation) throws -> (String, ModelProviderContinuation) {
@@ -602,7 +602,7 @@ private struct OwnedContinuation: Codable {
               let owned = try? JSONDecoder().decode(OwnedContinuation.self, from: state.payload),
               !owned.format.isEmpty, !owned.payload.isEmpty else { throw unknownOrigin }
         return (owned.candidate, ModelProviderContinuation(model: state.model, format: owned.format,
-                                                           payload: owned.payload, origin: state.origin, contextTransition: state.contextTransition))
+                                                           payload: owned.payload, origin: state.origin, contextTransition: state.contextTransition, requestBoundary: state.requestBoundary))
     }
 }
 

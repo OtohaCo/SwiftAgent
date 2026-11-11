@@ -7,6 +7,8 @@ import Foundation
 import Darwin
 #elseif canImport(Glibc)
 import Glibc
+#elseif canImport(Musl)
+import Musl
 #elseif os(Windows)
 import WinSDK
 import struct Foundation.UUID
@@ -439,6 +441,7 @@ private struct IndexWitness: Codable {
 private struct Slot<Value: Codable>: Codable {
     let key: String
     let version: UInt64
+    let commitID: UUID
     let value: Value
 }
 
@@ -473,10 +476,6 @@ private struct IndexKind<Value: Codable> {
         self.witnessed = witnessed
         self.requiresAdmissionRejections = requiresAdmissionRejections
         self.requiresAuthorizationAudit = requiresAuthorizationAudit
-    }
-
-    func isPublished(_ slot: Slot<Value>, in root: Root) -> Bool {
-        slot.version <= root.sequence && Self.generation(of: slot.value) <= root.layoutGeneration
     }
 
     /// A position records the layout generation it was written for; other values hold in every layout.
@@ -1562,6 +1561,28 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func load(_ location: Location) throws -> BatchV2 { try readFrame(location).0 }
     private func frameDigest(_ location: Location) throws -> String { try readFrame(location).1 }
 
+    private func isPublished<Value>(_ slot: Slot<Value>, root: Root) throws -> Bool {
+        guard slot.version <= root.sequence, IndexKind<Value>.generation(of: slot.value) <= root.layoutGeneration else { return false }
+        if let position = slot.value as? Location {
+            // File identity binds relocation to the published layout. A reused generation
+            // alone must never activate a pack left behind by a failed maintenance pass.
+            let layout = try layout(root)
+            switch position.kind {
+            case "segment":
+                let end = position.file == root.active ? root.activeEnd : layout.sealed.first { $0.id == position.file }?.end
+                guard let end, position.offset <= end, UInt64(position.length) <= end - position.offset else { return false }
+            case "state":
+                guard layout.packs.contains(position.file) else { return false }
+            case "discarded":
+                guard position.file != root.active, !layout.sealed.contains(where: { $0.id == position.file }),
+                      !layout.packs.contains(position.file) else { return false }
+            default: throw AgentJournalError.invalidRecord
+            }
+            return slot.commitID == position.commitID
+        }
+        return try location(slot.version, root: root).commitID == slot.commitID
+    }
+
     private func pointer<Value: Codable>(_ kind: IndexKind<Value>, key: String, root: Root) throws -> Value? {
         let url = indexURL(kind.name, key)
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -1583,7 +1604,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         let index: Index<Value> = try loadIndex(url)
         for slot in [index.current, index.previous].compactMap({ $0 }) {
             guard slot.key == key else { throw AgentJournalError.invalidRecord }
-            if kind.isPublished(slot, in: root) { return slot.value }
+            if try isPublished(slot, root: root) { return slot.value }
         }
         return nil
     }
@@ -1605,8 +1626,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
         let witnessExists = try kind.witnessed && self.witnessExists(kind.name, key)
         let witnessPublished = try witnessExists && witnessWasPublished(loadWitness(kind.name, key), root: root)
-        let previous = [old?.current, old?.previous].compactMap { $0 }.first { slot in
-            slot.key == key && kind.isPublished(slot, in: root) && (!kind.witnessed || witnessPublished)
+        let previous = try [old?.current, old?.previous].compactMap { $0 }.first { slot in
+            try slot.key == key && isPublished(slot, root: root) && (!kind.witnessed || witnessPublished)
         }
         if let old, old.current.key != key { throw AgentJournalError.invalidRecord }
         if kind.witnessed {
@@ -1626,7 +1647,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 try publishWitness(kind.name, key: key, sequence: version, commitID: commitID)
             }
         }
-        let index = Index(current: Slot(key: key, version: version, value: value), previous: previous)
+        guard let slotCommitID = commitID ?? (value as? Location)?.commitID else { throw AgentJournalError.invalidRecord }
+        let index = Index(current: Slot(key: key, version: version, commitID: slotCommitID, value: value), previous: previous)
         let bytes = try JSONEncoder().encode(index)
         try atomicWrite(JSONEncoder().encode(IndexEnvelope(storeID: storeID,
             digest: Self.digest(bytes), payload: bytes)), at: url)
@@ -1772,9 +1794,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                             lastFrame: root.lastFrame, lastDigest: root.lastDigest, auditRecordCount: root.auditRecordCount)
         let (_, oldRootID) = try currentRoot()
         // Once CURRENT may have changed, only a reopen can tell which root is current.
-        poisoned = true
-        try publishRoot(nextRoot, id: UUID())
-        poisoned = false
+        do { try publishRoot(nextRoot, id: UUID()) }
+        catch { poisoned = true; throw error }
         try? FileManager.default.removeItem(at: rootURL(oldRootID))
         try? FileManager.default.removeItem(at: layoutURL(root.layout))
     }
@@ -1882,6 +1903,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         try Task.checkCancellation()
         lock.lock()
         defer { lock.unlock() }
+        guard !closed else { throw AgentJournalError.storeClosed }
+        guard !poisoned else { throw AgentJournalError.commitUnknown }
         do {
             let (root, oldRootID) = try currentRoot()
             let currentLayout = try layout(root)
@@ -1955,9 +1978,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                layoutGeneration: generation,
                                lastFrame: relocatedLast, lastDigest: root.lastDigest, auditRecordCount: root.auditRecordCount)
             try fault?(.beforeMaintenancePublish)
-            poisoned = true
-            try publishRoot(updated, id: UUID())
-            poisoned = false
+            do { try publishRoot(updated, id: UUID()) }
+            catch { poisoned = true; throw error }
             try? FileManager.default.removeItem(at: rootURL(oldRootID))
             try? FileManager.default.removeItem(at: layoutURL(root.layout))
             for sequence in discarded {
@@ -1986,6 +2008,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func cleanupGarbage() throws {
         lock.lock()
         defer { lock.unlock() }
+        guard !closed else { throw AgentJournalError.storeClosed }
+        guard !poisoned else { throw AgentJournalError.commitUnknown }
         let (root, oldRootID) = try currentRoot()
         let oldLayout = try layout(root)
         if let pack = oldLayout.garbagePacks.first {
@@ -2009,9 +2033,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                                activeBatches: root.activeBatches, layout: newID,
                                layoutDigest: Self.digest(bytes), layoutGeneration: next.generation,
                                lastFrame: root.lastFrame, lastDigest: root.lastDigest, auditRecordCount: root.auditRecordCount)
-            poisoned = true
-            try publishRoot(updated, id: UUID())
-            poisoned = false
+            do { try publishRoot(updated, id: UUID()) }
+            catch { poisoned = true; throw error }
             try? FileManager.default.removeItem(at: rootURL(oldRootID))
             try? FileManager.default.removeItem(at: layoutURL(root.layout))
             return
@@ -2064,9 +2087,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                            layoutDigest: Self.digest(nextBytes),
                            layoutGeneration: next.generation, lastFrame: root.lastFrame,
                            lastDigest: root.lastDigest, auditRecordCount: root.auditRecordCount)
-        poisoned = true
-        try publishRoot(updated, id: UUID())
-        poisoned = false
+        do { try publishRoot(updated, id: UUID()) }
+        catch { poisoned = true; throw error }
         try? FileManager.default.removeItem(at: rootURL(oldRootID))
         try? FileManager.default.removeItem(at: layoutURL(root.layout))
     }
@@ -2076,6 +2098,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func cleanupObsoletePack() throws {
         lock.lock()
         defer { lock.unlock() }
+        guard !closed else { throw AgentJournalError.storeClosed }
+        guard !poisoned else { throw AgentJournalError.commitUnknown }
         let (root, oldRootID) = try currentRoot()
         let currentLayout = try layout(root)
         guard !currentLayout.packs.isEmpty else { packCursor = 0; return }
@@ -2136,9 +2160,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                            activeBatches: root.activeBatches, layout: layoutID,
                            layoutDigest: Self.digest(bytes), layoutGeneration: next.generation,
                            lastFrame: root.lastFrame, lastDigest: root.lastDigest, auditRecordCount: root.auditRecordCount)
-        poisoned = true
-        try publishRoot(updated, id: UUID())
-        poisoned = false
+        do { try publishRoot(updated, id: UUID()) }
+        catch { poisoned = true; throw error }
         packCursor = packs.isEmpty ? 0 : index % packs.count
         try? FileManager.default.removeItem(at: rootURL(oldRootID))
         try? FileManager.default.removeItem(at: layoutURL(root.layout))
@@ -2172,6 +2195,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private func cleanupManagedOrphans() throws {
         lock.lock()
         defer { lock.unlock() }
+        guard !closed else { throw AgentJournalError.storeClosed }
+        guard !poisoned else { throw AgentJournalError.commitUnknown }
         try cleanupManagedOrphansLocked()
     }
 
@@ -2839,7 +2864,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             store.poisoned = true
             let location = try store.append(bytes, to: root, commitID: batch.commitID)
             try store.updateIndex(.positions, key: String(next), value: location,
-                                  version: next, root: root)
+                                  version: next, root: root, commitID: batch.commitID)
             if updateSession {
                 try store.updateIndex(.sessions, key: batch.sessionID.uuidString, value: next,
                                       version: next, root: root, commitID: batch.commitID)
@@ -2847,7 +2872,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                     let key = "\(batch.sessionID.uuidString)/\(batch.messageStart + UInt64(offset))"
                     try store.updateIndex(.messages, key: key,
                                           value: MessagePointer(sequence: next, offset: offset),
-                                          version: next, root: root)
+                                          version: next, root: root, commitID: batch.commitID)
                 }
             }
             if let mutation = batch.mutation {
@@ -2896,15 +2921,15 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 try store.updateIndex(.queueIDs, key: SegmentedJournalStore.followUpKey(batch.sessionID, record.inputID),
                                       value: next, version: next, root: root, commitID: batch.commitID)
                 try store.updateIndex(.queueOrder, key: SegmentedJournalStore.followUpOrdinalKey(batch.sessionID, record.ordinal),
-                                      value: next, version: next, root: root)
+                                      value: next, version: next, root: root, commitID: batch.commitID)
             }
             for link in batch.queueLinks {
                 try store.updateIndex(.queueLinks, key: SegmentedJournalStore.followUpOrdinalKey(batch.sessionID, link.ordinal),
-                                      value: next, version: next, root: root)
+                                      value: next, version: next, root: root, commitID: batch.commitID)
             }
             if let blob {
                 try store.updateIndex(.blobIndex, key: blob.uuidString, value: next,
-                                      version: next, root: root)
+                                      version: next, root: root, commitID: batch.commitID)
             }
             if !auditRecords.isEmpty {
                 var summaries: [String: AuditIndexSummary] = [:]
@@ -2919,7 +2944,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                         let summary = AuditIndexSummary(count: prior.count + 1, lastSequence: record.sequence)
                         summaries[key] = summary
                         try store.updateIndex(.auditMembers, key: "\(key)/\(summary.count)", value: record.sequence,
-                            version: next, root: root)
+                            version: next, root: root, commitID: batch.commitID)
                     }
                 }
                 for (key, summary) in summaries {

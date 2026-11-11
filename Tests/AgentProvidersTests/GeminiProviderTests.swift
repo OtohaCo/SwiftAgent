@@ -209,9 +209,9 @@ struct GeminiProviderTests {
     @Test func unsupportedRequestsAndMalformedConfigurationNeverAcquireCredentials() async throws {
         let probe = ProviderRequestProbe(), tokens = PlanRotatingTokens()
         let provider = try GeminiProvider(credentials: .init(apiKey: { await tokens.next() }), transport: FixtureHTTPTransport(probe: probe, bodies: [geminiTextFixture]))
-        let foreign = ModelProviderContinuation(model: geminiRequest.model, format: "other", payload: Data("{}".utf8))
+        let malformed = ModelProviderContinuation(model: geminiRequest.model, format: GeminiNativeState.format, payload: Data("{}".utf8))
         for request in [ModelRequest(model: .init(provider: "gemini", name: "../escape"), messages: geminiRequest.messages),
-                        .init(model: geminiRequest.model, messages: [.assistant(content: [.providerContinuation(foreign)], toolCalls: []), .user([.text("Hi")])])] {
+                        .init(model: geminiRequest.model, messages: [.assistant(content: [.providerContinuation(malformed)], toolCalls: []), .user([.text("Hi")])])] {
             await #expect(throws: ModelProviderError.self) { _ = try await geminiResponse(provider, request) }
         }
         for url in ["http://remote.example/v1beta", "https://key:secret@host/v1beta", "https://host/v1beta?key=secret", "https://host/%2Fescape"] {

@@ -14,6 +14,7 @@ enum GeminiRequestEncoder {
     static func context(_ request: ModelRequest, configuration: GeminiConfiguration) throws -> GeminiEncodedContext {
         _ = try configuration.endpoint(model: request.model)
         guard request.nativeContext == nil, request.conversationControls == nil else { throw GeminiBoundary.unsupported() }
+        let refused = ProviderJSON.refusedToolCalls(request)
         var system: [JSONValue] = [], contents: [JSONValue] = [], pending: [(ToolCall, JSONValue)] = []
         var results: [ToolCallID: JSONValue] = [:], seenCalls: Set<ToolCallID> = []
         let currentTurn = request.messages.lastIndex { if case .user = $0 { return true }; return false } ?? 0
@@ -81,25 +82,28 @@ enum GeminiRequestEncoder {
                         }
                     }
                     for call in calls {
-                        guard !call.id.rawValue.isEmpty, call.completeness == .complete, GeminiBoundary.functionName(call.name),
+                        let name = !GeminiBoundary.functionName(call.name) && refused.contains(call.id) ? ProviderJSON.refusedToolName(call.name) : call.name
+                        guard !call.id.rawValue.isEmpty, call.completeness == .complete, GeminiBoundary.functionName(name),
                               let arguments = try? JSONValue.decodeToolArguments(call.argumentsJSON) else { throw GeminiBoundary.invalidRequest() }
-                        let functionCall: JSONValue = .object(["name": .string(call.name), "args": arguments, "id": .string(call.id.rawValue)])
+                        let functionCall: JSONValue = .object(["name": .string(name), "args": arguments, "id": .string(call.id.rawValue)])
                         encoded.append(.object(["functionCall": functionCall]))
                         pending.append((call, functionCall))
                     }
                     parts = encoded
                 }
-                if messageIndex >= currentTurn, let first = parts.firstIndex(where: { $0["functionCall"] != nil }) {
+                if let first = parts.firstIndex(where: { $0["functionCall"] != nil }) {
                     if nativeState == nil {
-                        // Google's documented REST sentinel for calls made without Gemini thought signatures.
+                        // Keep foreign wire parts stable as later user turns move the current-turn boundary.
+                        // Google's REST sentinel is valid for calls without Gemini thought signatures.
                         var fields = try ProviderJSON.object(parts[first])
                         fields["thoughtSignature"] = .string("skip_thought_signature_validator")
                         parts[first] = .object(fields)
-                    } else if configuration.profile == .requireCurrentTurnFunctionSignatures {
+                    } else if messageIndex >= currentTurn, configuration.profile == .requireCurrentTurnFunctionSignatures {
                         guard case .string(let signature) = parts[first]["thoughtSignature"], !signature.isEmpty else { throw GeminiBoundary.unsupported() }
                     }
                 }
                 for call in calls { guard seenCalls.insert(call.id).inserted else { throw GeminiBoundary.invalidRequest() } }
+                if nativeState == nil && parts.isEmpty && calls.isEmpty { continue }
                 guard !parts.isEmpty else { throw GeminiBoundary.invalidRequest() }
                 contents.append(.object(["role": .string("model"), "parts": .array(parts)]))
             case .tool: break

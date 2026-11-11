@@ -863,7 +863,7 @@ package struct AgentLoop: Sendable {
         ) : projection
         let retiredPrefix = await nativeContextState.currentHandoff()?.canonicalMessageCount
         let controlView = try proposedControls.map { try AgentConversationControlState.view($0, canonical: canonicalMessages,
-            effective: modelMessages, native: nativeContext, retiredPrefix: retiredPrefix) }
+            effective: projection.messages, native: nativeContext, retiredPrefix: retiredPrefix) }
         let controlBytes = try controlView.map { try AgentConversationControlState.encode($0.controls).count } ?? 0
         let visibleBytes = sharesCanonicalMessageStorage(modelMessages, messages)
             ? sourceEncoding.byteCount : try AgentContextWindow.encodedByteCount(modelMessages)

@@ -2,6 +2,23 @@ import AgentModels
 import Foundation
 
 enum ProviderJSON {
+    /// Only rejected, undeclared calls may replace an illegal provider function name.
+    /// Canonical history keeps the model's original name and refusal.
+    static func refusedToolCalls(_ request: ModelRequest) -> Set<ToolCallID> {
+        let errors = Set(request.messages.compactMap { message -> ToolCallID? in
+            if case .tool(let result) = message, result.isError { return result.callID }; return nil
+        })
+        let declared = Set(request.tools.map(\.name))
+        return Set(request.messages.flatMap { message -> [ToolCallID] in
+            guard case .assistant(_, let calls) = message else { return [] }
+            return calls.filter { errors.contains($0.id) && !declared.contains($0.name) }.map(\.id)
+        })
+    }
+
+    static func refusedToolName(_ name: String) -> String {
+        "refused_tool_" + ModelImageDigest.sha256Hex(Data(name.utf8))
+    }
+
     /// History replaces complete arguments that are not one JSON object with
     /// `ToolCall.replacedInvalidArgumentsJSON`. Native function-call items, paired with `calls` in
     /// order, take the same replacement so the continuation still matches. Nothing else is changed:

@@ -75,7 +75,7 @@ struct AgentToolResultLimitTests {
         }
         let journal = try makeTestJournal(at: url)
         let provider = ScriptedProvider { request, turn in
-            turn == 1 ? toolResponse(request, [.init(id: .init(rawValue: "write"), name: LargeOutputTool.name,
+            request.messages.last?.role != .tool ? toolResponse(request, [.init(id: .init(rawValue: "write-\(turn)"), name: LargeOutputTool.name,
                                                      argumentsJSON: "{}", completeness: .complete)])
                 : textResponse(request, "ok")
         }
@@ -91,6 +91,13 @@ struct AgentToolResultLimitTests {
         let committed = try #require(lastToolResult(checkpoint?.history ?? []))
         let committedBytes = try encodedBytes(committed)
         #expect(cutNotice(committed) != nil && committedBytes <= 8192)
+        let retry = try await session.run("Retry", operationID: "big-write")
+        let replay = try await retry.wait()
+        try await retry.waitForDrain()
+        #expect(replay.outcome == .completed)
+        #expect(replay.receipts.count == 1)
+        let replayed = try #require(lastToolResult(await session.history))
+        #expect(replayed.content == committed.content)
         try await journal.close()
     }
 }

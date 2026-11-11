@@ -67,9 +67,18 @@ final class AgentMutationRecoveryTests: XCTestCase {
             _ = try await reopened.admit(try mutationRequest(session: UUID(), run: UUID(), call: "retry", key: "operation-1"))
             XCTFail("unknown external outcome must block retry")
         } catch { XCTAssertEqual(error as? AgentJournalError, .mutationRequiresReconciliation) }
+        let newerRun = UUID()
+        _ = try await reopened.appendCheckpoint([.checkpoint(history: [.user([.text("newer run")])], steeringIDs: [])],
+            sessionID: session, runID: newerRun, durability: .durable)
         let receipt = validReceipt(key: "operation-1")
+        try await reopened.acquireSessionLease(sessionID: session)
+        await #expect(throws: AgentJournalError.sessionLeaseUnavailable) {
+            try await reopened.reconcileMutation(try XCTUnwrap(pending.first), receipt: receipt, output: .bool(true))
+        }
+        await reopened.releaseSessionLease(sessionID: session)
         try await reopened.reconcileMutation(try XCTUnwrap(pending.first), receipt: receipt,
                                               output: .object(["updated": .bool(true)]))
+        #expect(try await reopened.hasRun(newerRun, sessionID: session))
         #expect(try await reopened.pendingMutations().isEmpty)
         let replay = try await reopened.admit(try mutationRequest(session: UUID(), run: UUID(), call: "retry", key: "operation-1"))
         guard case .settled(let replayed, let output) = replay else { return XCTFail("settled replay expected") }
@@ -118,7 +127,16 @@ final class AgentMutationRecoveryTests: XCTestCase {
             XCTFail("an in-flight operation cannot be aborted")
         } catch { XCTAssertEqual(error as? AgentJournalError, .mutationRequiresReconciliation) }
         let quarantined = try #require(try await journal.recoverPendingMutations(sessionID: session).first)
+        let newerRun = UUID()
+        _ = try await journal.appendCheckpoint([.checkpoint(history: [.user([.text("newer run")])], steeringIDs: [])],
+            sessionID: session, runID: newerRun, durability: .durable)
+        try await journal.acquireSessionLease(sessionID: session)
+        await #expect(throws: AgentJournalError.sessionLeaseUnavailable) {
+            try await journal.abortMutation(quarantined, confirmedNoEffect: confirmation)
+        }
+        await journal.releaseSessionLease(sessionID: session)
         try await journal.abortMutation(quarantined, confirmedNoEffect: confirmation)
+        #expect(try await journal.hasRun(newerRun, sessionID: session))
         #expect(try await journal.mutationStatus(identity: "operation-3")?.abortConfirmation == confirmation)
         let conflict = ToolMutationAdmissionRequest(sessionID: UUID(), runID: UUID(), callID: .init(rawValue: "different"),
                                                      name: "write", argumentsJSON: #"{"id":"other"}"#,
