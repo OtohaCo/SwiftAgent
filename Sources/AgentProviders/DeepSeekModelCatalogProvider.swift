@@ -16,7 +16,7 @@ public struct DeepSeekModelCatalogProvider: ModelCatalogProvider {
         endpoint: URL? = nil,
         serviceInstanceID: String,
         authorizationScopeID: String? = nil,
-        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared
     ) throws {
         try validateCatalogCredential(apiKey)
         guard let endpoint = endpoint ?? URL(string: "https://api.deepseek.com/models") else {

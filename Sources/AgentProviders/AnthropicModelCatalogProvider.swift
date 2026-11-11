@@ -18,7 +18,7 @@ public struct AnthropicModelCatalogProvider: ModelCatalogDetailProvider {
         apiVersion: String = "2023-06-01",
         serviceInstanceID: String,
         authorizationScopeID: String? = nil,
-        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared
     ) throws {
         try validateCatalogCredential(apiKey)
         try validateCatalogCredential(apiVersion)

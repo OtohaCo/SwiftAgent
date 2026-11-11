@@ -48,6 +48,18 @@ Detailed guides:
 - [Local Responses and LM Studio](guides/swift-agent-local-responses-provider.md)
 - [Apple on-device and PCC](guides/swift-agent-apple-provider.md)
 
+## Default HTTP transport
+
+Network model providers and their catalog/cache clients default to
+`URLSessionProviderHTTPTransport.shared`. Its session lives for the process,
+with cookies, credential storage and response caching disabled. Requests have
+separate routing and cancellation; cancelling one stream leaves others running.
+
+Pass a `ProviderHTTPTransport` explicitly to keep control of transport behavior.
+`URLSessionProviderHTTPTransport()` still creates an independent transport;
+`init(requestTimeoutInterval:)` keeps its configured wire idle timeout. The
+shared default keeps the existing timeout and redirect rules.
+
 ## Decision Providers
 
 Decision providers do not implement `ModelProvider`, produce conversation

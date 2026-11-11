@@ -25,7 +25,7 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
                 maximumResponseBytes: Int = 16_000_000, authorizationScopeID: String = "default",
                 promptCaching: GeminiPromptCaching = .implicit,
                 maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared) throws {
         self.credentials = credentials; self.transport = transport; self.maximumSSEEventBytes = maximumSSEEventBytes
         configuration = try .init(baseURL: baseURL, streaming: streaming, thinking: thinking, profile: preservedThinking,
             maximumOutputTokens: maximumOutputTokens, maximumRequestBytes: maximumRequestBytes,

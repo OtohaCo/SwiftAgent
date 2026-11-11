@@ -19,7 +19,7 @@ public struct OpenAIChatGPTPlanModelCatalogProvider: ModelCatalogProvider,
 
     public init(credentials: OpenAIChatGPTPlanCredentials, serviceInstanceID: String,
                 authorizationScopeID: String,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared) throws {
         scope = try .init(provider: "openai", serviceInstanceID: serviceInstanceID,
             endpointScope: Self.endpoint.absoluteString, apiDialect: "openai-chatgpt-plan-models", apiVersion: "v1",
             authorizationScopeID: authorizationScopeID)

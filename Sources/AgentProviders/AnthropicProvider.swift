@@ -64,7 +64,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
     public init(apiKey: String, endpoint: URL? = nil, maximumOutputTokens: Int = 4_096,
                 thinking: AnthropicThinking = .disabled,
                 maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared) throws {
         try self.init(
             apiKey: apiKey,
             endpoint: endpoint,
@@ -80,7 +80,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
                 thinking: AnthropicThinking = .disabled,
                 effort: AnthropicEffort?,
                 maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared) throws {
         try self.init(
             apiKey: apiKey,
             endpoint: endpoint,
@@ -97,7 +97,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
                 effort: AnthropicEffort?,
                 resolvedModelIDsByAlias: [String: String],
                 maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared) throws {
         try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
                       thinking: thinking, effort: effort, resolvedModelIDsByAlias: resolvedModelIDsByAlias,
                       promptCaching: nil, maximumSSEEventBytes: maximumSSEEventBytes, transport: transport)
@@ -110,7 +110,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
                 resolvedModelIDsByAlias: [String: String] = [:],
                 promptCaching: AnthropicPromptCaching?,
                 maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared) throws {
         try self.init(apiKey: apiKey, endpoint: endpoint, maximumOutputTokens: maximumOutputTokens,
             thinking: thinking, effort: effort, resolvedModelIDsByAlias: resolvedModelIDsByAlias,
             promptCaching: promptCaching, nativeContext: nil, maximumSSEEventBytes: maximumSSEEventBytes, transport: transport)
@@ -121,7 +121,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
                 resolvedModelIDsByAlias: [String: String] = [:], promptCaching: AnthropicPromptCaching? = nil,
                 nativeContext: AnthropicNativeContextConfiguration?,
                 maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !apiKey.contains("\r"), !apiKey.contains("\n"), maximumOutputTokens > 0,
               let endpoint = endpoint ?? URL(string: "https://api.anthropic.com/v1/messages") else {
@@ -174,7 +174,7 @@ public struct AnthropicProvider: ModelProvider, CustomStringConvertible, CustomD
                 thinking: AnthropicThinking = .disabled,
                 resolvedModelIDsByAlias: [String: String],
                 maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared) throws {
         try self.init(
             apiKey: apiKey,
             endpoint: endpoint,

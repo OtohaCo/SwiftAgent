@@ -20,6 +20,9 @@ public protocol ProviderHTTPTransport: Sendable {
 /// ("_MultiHandle deallocated with non-zero retain count"; swift-corelibs-foundation PR #5491). Each request is a task
 /// of the shared session; its callbacks are routed to that request by the task's identifier.
 public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport {
+    /// The transport used by providers when none is injected.
+    public static let shared = URLSessionProviderHTTPTransport()
+
     private let shared: ProviderHTTPSharedSession
     private let requestTimeoutInterval: TimeInterval?
 

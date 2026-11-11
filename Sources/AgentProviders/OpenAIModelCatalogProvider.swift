@@ -16,7 +16,7 @@ public struct OpenAIModelCatalogProvider: ModelCatalogDetailProvider {
         endpoint: URL? = nil,
         serviceInstanceID: String,
         authorizationScopeID: String? = nil,
-        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared
     ) throws {
         try self.init(
             apiKey: apiKey, endpoint: endpoint, serviceInstanceID: serviceInstanceID,
@@ -32,7 +32,7 @@ public struct OpenAIModelCatalogProvider: ModelCatalogDetailProvider {
         endpoint: URL? = nil,
         serviceInstanceID: String,
         authorizationScopeID: String? = nil,
-        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport(),
+        transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared,
         allowsPrivateNetworkHTTP: Bool
     ) throws {
         try validateCatalogCredential(apiKey)

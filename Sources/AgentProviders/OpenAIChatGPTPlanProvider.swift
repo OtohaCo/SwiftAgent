@@ -23,7 +23,7 @@ public struct OpenAIChatGPTPlanProvider: ModelProvider, ModelProviderRequestVali
 
     public init(credentials: OpenAIChatGPTPlanCredentials,
                 maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) {
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared) {
         self.credentials = credentials; self.transport = transport; self.maximumSSEEventBytes = maximumSSEEventBytes
     }
 

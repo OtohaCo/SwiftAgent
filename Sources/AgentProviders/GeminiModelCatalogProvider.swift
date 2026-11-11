@@ -16,7 +16,7 @@ public struct GeminiModelCatalogProvider: ModelCatalogProvider, CustomStringConv
     public var customMirror: Mirror { Mirror(self, children: ["scope": scope]) }
     public init(credentials: GeminiCredentials, baseURL: URL = GeminiProvider.defaultBaseURL,
                 serviceInstanceID: String, authorizationScopeID: String,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared) throws {
         do {
             configuration = try .init(baseURL: baseURL, streaming: false, thinking: nil, profile: .preserve,
                 maximumOutputTokens: nil, maximumRequestBytes: 100_000_000, maximumResponseBytes: 2_000_000,

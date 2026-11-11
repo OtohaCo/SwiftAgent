@@ -118,7 +118,7 @@ public struct LocalResponsesProvider: ModelProvider, CustomStringConvertible,
     public init(
         configuration: Configuration,
         maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared
     ) throws {
         let modelName = configuration.model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !modelName.isEmpty,

@@ -54,7 +54,7 @@ public struct DeepSeekResponsesProvider: ModelProvider, CustomStringConvertible,
         reasoningEffort: DeepSeekReasoningEffort = .high,
         resolvedModelIDsByAlias: [String: String] = [:],
         maximumSSEEventBytes: Int = 16 * 1_024 * 1_024,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared
     ) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !apiKey.contains("\r"), !apiKey.contains("\n"), maximumOutputTokens > 0,

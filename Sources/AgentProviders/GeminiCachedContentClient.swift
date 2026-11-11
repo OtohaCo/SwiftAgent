@@ -15,7 +15,7 @@ public struct GeminiCachedContentClient: Sendable, CustomStringConvertible, Cust
     public var customMirror: Mirror { Mirror(self, children: [:]) }
     public init(credentials: GeminiCredentials, baseURL: URL = GeminiProvider.defaultBaseURL,
                 authorizationScopeID: String, maximumRequestBytes: Int = 100_000_000,
-                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport()) throws {
+                transport: any ProviderHTTPTransport = URLSessionProviderHTTPTransport.shared) throws {
         self.credentials = credentials; self.transport = transport
         configuration = try .init(baseURL: baseURL, streaming: false, thinking: nil, profile: .preserve,
             maximumOutputTokens: nil, maximumRequestBytes: maximumRequestBytes, maximumResponseBytes: 2_000_000,

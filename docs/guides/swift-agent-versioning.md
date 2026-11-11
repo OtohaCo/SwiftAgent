@@ -1,5 +1,13 @@
 # SwiftAgent Semantic Versioning
 
+## Shared default HTTP transport (after RC6)
+
+Adds `URLSessionProviderHTTPTransport.shared`. Network model providers and their
+catalog/cache clients use this process-wide instance by default. Explicit
+transport construction and injection remain available, and initializer function
+signatures are unchanged. No enum case, protocol requirement or Journal schema
+changes. See the [provider transport contract](../providers.md#default-http-transport).
+
 ## Model request records (after RC6, unreleased branch)
 
 Adds `ModelRequestAttempt`, the case `ModelEvent.requestAttempt`, the opt-in
