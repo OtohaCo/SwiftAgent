@@ -6,7 +6,9 @@ import Testing
 struct GeminiForeignHistoryTests {
     private let model = ModelID(provider: "gemini", name: "fixture")
     private let call = ToolCall(id: .init(rawValue: "foreign-call-1"), name: "lookup", argumentsJSON: "{}", completeness: .complete)
-    // Google documents this literal REST bypass for function calls from other models.
+    // REST qualification on 2026-11-11: both literal and base64 bypass values returned HTTP 200
+    // and consumed a synthetic function result; the no-call control also returned 200.
+    // Keep Google's documented literal. This qualifies one endpoint, not every deployment.
     private let dummy = "skip_thought_signature_validator"
 
     private func configuration(_ profile: GeminiPreservedThinkingProfile = .requireCurrentTurnFunctionSignatures) throws -> GeminiConfiguration {
@@ -46,6 +48,7 @@ struct GeminiForeignHistoryTests {
         #expect(parts[1]["text"] == .string("{\"shown\":true}"))
         #expect(parts[2]["functionCall"]?["id"] == .string(call.id.rawValue))
         #expect(parts[2]["thoughtSignature"] == .string(dummy))
+        #expect(parts[2]["thoughtSignature"] != .string(Data(dummy.utf8).base64EncodedString()))
         #expect(contents[2]["parts"]?[0]?["functionResponse"]?["id"] == .string(call.id.rawValue))
         let encoded = try ProviderJSON.text(body)
         #expect(!encoded.contains("private foreign") && !encoded.contains("openai-responses"))

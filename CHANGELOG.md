@@ -4,8 +4,8 @@
 
 - Switching to Gemini keeps earlier visible replies, tool calls and their results.
   Other models' private reasoning and continuation data are omitted. Current-turn
-  calls without Gemini state use Google's documented signature-validation bypass;
-  earlier calls need no placeholder.
+  calls without Gemini state use Google's documented literal signature-validation
+  bypass; earlier calls need no placeholder.
 - Matching Gemini state still replays exactly with its original signatures.
   Invalid calls, mismatched results and changes to native state still fail locally.
   Cached prefixes continue to require the original source messages and wire parts.
