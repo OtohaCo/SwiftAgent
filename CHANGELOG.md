@@ -2,6 +2,8 @@
 
 ## Unreleased — Host call results are tool results (OAI-1539, ADR 0018)
 
+- `AgentJournalFileStore` builds with the static Linux SDK (musl): the writer
+  lock imported `Glibc` on every non-Apple, non-Windows platform.
 - A Host call's result (`invokeHostTool`), and a Host mutation settled by
   `reconcileMutation`, are committed as the call in the Host's `host-call-`
   namespace and a tool result, after the Host's user-side request. Before, the

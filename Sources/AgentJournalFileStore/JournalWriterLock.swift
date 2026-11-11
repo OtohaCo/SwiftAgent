@@ -3,8 +3,10 @@ import Foundation
 import WinSDK
 #elseif canImport(Darwin)
 import Darwin
-#else
+#elseif canImport(Glibc)
 import Glibc
+#elseif canImport(Musl)
+import Musl
 #endif
 
 /// The writer owns this non-inheritable handle until close, including during opening/recovery.
