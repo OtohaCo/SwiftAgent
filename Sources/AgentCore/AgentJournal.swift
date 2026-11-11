@@ -442,7 +442,8 @@ public actor AgentJournal {
             sessionID: sessionID,
             runID: runID,
             timestamp: timestamp,
-            durability: durability
+            durability: durability,
+            allowMutationSettlement: false
         )[0]
     }
 
@@ -455,7 +456,7 @@ public actor AgentJournal {
         durability: AgentJournalDurability = .memory
     ) throws -> [AgentJournalRecord] {
         try appendCheckpoint(events, sessionID: sessionID, runID: runID, timestamp: timestamp,
-                             durability: durability, allowMutationSettlement: false)
+                             durability: durability, allowMutationSettlement: false, admittingRunID: runID)
     }
 
     /// Appends the startup frame while the session is still pre-admission.
@@ -480,6 +481,7 @@ public actor AgentJournal {
             timestamp: timestamp,
             durability: durability,
             allowMutationSettlement: false,
+            admittingRunID: runID,
             admissionDeadline: deadline,
             checkAdmissionCancellation: true,
             followUpInputID: followUpInputID, runAdmission: runAdmission,
@@ -519,6 +521,7 @@ public actor AgentJournal {
         timestamp: Date,
         durability: AgentJournalDurability,
         allowMutationSettlement: Bool,
+        admittingRunID: UUID? = nil,
         admissionDeadline: ContinuousClock.Instant? = nil,
         checkAdmissionCancellation: Bool = false,
         followUpInputID: String? = nil,
@@ -546,7 +549,7 @@ public actor AgentJournal {
             let result = try writeStore(store) { view in
                 try appendToStore(events, sessionID: sessionID, runID: runID,
                                   timestamp: timestamp, view: view,
-                                  allowMutationSettlement: allowMutationSettlement,
+                                  allowMutationSettlement: allowMutationSettlement, admittingRunID: admittingRunID,
                                   followUpInputID: followUpInputID,
                                   admitsNewWork: admitsNewWork ?? checkAdmissionCancellation,
                                   auditDrafts: auditDrafts, runAdmission: runAdmission, runTerminal: runTerminal,
@@ -606,7 +609,8 @@ public actor AgentJournal {
         // state/Run-ID set out of the dictionary on each commit.
         for record in committed {
             if let runID = record.runID {
-                if !allowMutationSettlement, !events.contains(where: { if case .mutationAborted = $0 { return true }; return false }) {
+                let currentRun = admittingRunID ?? memorySessions[sessionID]?.lastRunID
+                if currentRun == nil || currentRun == runID {
                     memorySessions[sessionID, default: .init()].lastRunID = runID
                 }
                 memorySessions[sessionID, default: .init()].runIDs.insert(runID)
@@ -785,7 +789,7 @@ public actor AgentJournal {
         }
         if pending.intent.call.id.isHostCall {
             // A Host call (ADR 0011) is settled as its call in the Host's namespace and a tool result saying it was
-            // reconciled (OAI-1539); its output never goes on the user's side.
+            // reconciled; its output never goes on the user's side.
             history.append(.tool(.init(callID: pending.intent.call.id,
                                        content: [.text(AgentHostToolCall.reconciledNotice), .json(output)], isError: false)))
         } else {
@@ -1341,6 +1345,7 @@ extension AgentJournal {
     func appendToStore(
         _ events: [AgentJournalEvent], sessionID: UUID, runID: UUID?, timestamp: Date,
         view: any JournalStoreView, allowMutationSettlement: Bool,
+        admittingRunID: UUID? = nil,
         followUpInputID: String? = nil, admitsNewWork: Bool = false,
         auditDrafts: [JournalAuditDraft] = [],
         runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil,
@@ -1444,8 +1449,8 @@ extension AgentJournal {
             nextHeader.conversationControls = value.targetControls
         }
         nextHeader.created = nextHeader.created || events.contains { if case .sessionCreated = $0 { return true }; return false }
-        if let runID, !allowMutationSettlement,
-           !events.contains(where: { if case .mutationAborted = $0 { return true }; return false }) {
+        let currentRun = admittingRunID ?? initialHeader.lastRunID
+        if let runID, currentRun == nil || currentRun == runID {
             nextHeader.lastRunID = runID
         }
         var messageStart = initialHeader.messageCount

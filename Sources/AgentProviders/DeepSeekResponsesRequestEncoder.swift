@@ -31,7 +31,7 @@ enum DeepSeekResponsesRequestEncoder {
                 ) {
                     input.append(contentsOf: restored.items)
                 } else {
-                    // A Host's call (OAI-1539) was never DeepSeek's, so it never had reasoning to replay.
+                    // A Host's call was never DeepSeek's, so it never had reasoning to replay.
                     if reasoningEffort != .none && !request.tools.isEmpty && !calls.isEmpty && !calls.allSatisfy({ $0.id.isHostCall || refused.contains($0.id) }) {
                         throw ModelProviderError(
                             kind: .invalidRequest,

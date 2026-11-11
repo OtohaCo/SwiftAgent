@@ -11,6 +11,89 @@ import Glibc
 #endif
 
 @Suite struct SegmentedJournalStoreTests {
+    @Test(arguments: [false, true])
+    func legacySlotsRemainReadableAndWritable(writeFirst: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-legacy-slots-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let session = UUID()
+        let original: [ModelMessage] = [.user([.text("original")]), .user([.text("second")])]
+        let created = try AgentIncrementalJournal.create(at: directory, operationDomain: "legacy-slots")
+        for count in 1...original.count {
+            _ = try await created.appendCheckpoint([.checkpoint(history: Array(original.prefix(count)), steeringIDs: [])],
+                sessionID: session, runID: UUID(), durability: .durable)
+        }
+        try await created.close()
+        // rc.9 Slot JSON has exactly key/version/value. Keep Location.commitID and
+        // witness commit IDs: those already existed in that release.
+        let converted = try writeLegacySlotIndexes(in: directory)
+        #expect(converted >= 4)
+        let policy = try JournalMaintenancePolicy(segmentBytes: 1024, maxWorkBytes: 4096, maxUnreclaimedBytes: 16384, maxSegmentBatches: 1)
+        let reopened = try AgentIncrementalJournal.open(at: directory, policy: policy)
+        let updated = original + [.user([.text("appended by new writer")])]
+        if !writeFirst {
+            #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == original)
+            #expect(try await reopened.readMessages(sessionID: session).map(\.message) == original)
+        }
+        _ = try await reopened.appendCheckpoint([.checkpoint(history: updated, steeringIDs: [])],
+            sessionID: session, runID: UUID(), durability: .durable)
+        #expect(try await reopened.latestCheckpoint(sessionID: session)?.history == updated)
+        #expect(try await reopened.readMessages(sessionID: session).map(\.message) == updated)
+        for _ in 0..<10 { if try await reopened.requestMaintenance()?.sealedSegments == 0 { break } }
+        try await reopened.close()
+        let final = try AgentIncrementalJournal.open(at: directory, policy: policy)
+        #expect(try await final.latestCheckpoint(sessionID: session)?.history == updated)
+        #expect(try await final.readMessages(sessionID: session).map(\.message) == updated)
+        _ = try await final.appendCheckpoint([.checkpoint(history: updated + [.user([.text("after reopen")])], steeringIDs: [])],
+            sessionID: session, runID: UUID(), durability: .durable)
+        try await final.close()
+    }
+
+    private func writeLegacySlotIndexes(in directory: URL) throws -> Int {
+        let enumerator = try #require(FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil))
+        var converted = 0
+        for case let url as URL in enumerator where url.pathExtension == "json" {
+            guard var envelope = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
+                  let payload = envelope["payload"] as? String, let bytes = Data(base64Encoded: payload),
+                  var index = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                  var current = index["current"] as? [String: Any] else { continue }
+            current.removeValue(forKey: "commitID")
+            index["current"] = current
+            if var previous = index["previous"] as? [String: Any] {
+                previous.removeValue(forKey: "commitID")
+                index["previous"] = previous
+            }
+            let legacy = try JSONSerialization.data(withJSONObject: index, options: [.sortedKeys])
+            envelope["payload"] = legacy.base64EncodedString()
+            envelope["digest"] = ModelImageDigest.sha256Hex(legacy)
+            try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys]).write(to: url)
+            converted += 1
+        }
+        return converted
+    }
+
+    @Test func messagePagesReadSharedPositionsAndLayoutOnce() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-page-reads-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "page-reads")
+        let session = UUID()
+        let history = (0..<100).map { ModelMessage.user([.text("message \($0)")]) }
+        _ = try await journal.appendCheckpoint([.checkpoint(history: history, steeringIDs: [])],
+            sessionID: session, runID: UUID(), durability: .durable)
+        let indexBytes = try indexFiles(in: directory, kind: "messages").reduce(UInt64(0)) { try $0 + UInt64(Data(contentsOf: $1).count) }
+        let before = try #require(await journal.storageMetrics())
+        #expect(try await journal.readMessages(sessionID: session, limit: 1).count == 1)
+        let afterSmall = try #require(await journal.storageMetrics())
+        #expect(try await journal.readMessages(sessionID: session, limit: 100).map(\.message) == history)
+        let afterLarge = try #require(await journal.storageMetrics())
+        let smallBytes = afterSmall.bytesRead - before.bytesRead
+        let largeBytes = afterLarge.bytesRead - afterSmall.bytesRead
+        // Extending a page within one batch reads only the extra message indexes.
+        // Position, layout and batch bytes must not be read again for each message.
+        #expect(largeBytes <= smallBytes + indexBytes)
+        #expect(afterLarge.decodedBatches - afterSmall.decodedBatches == afterSmall.decodedBatches - before.decodedBatches)
+        try await journal.close()
+    }
+
     @Test func appendRestoreAndSharedIdentity() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("journal-v4-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -790,10 +873,14 @@ import Glibc
         let root = try JSONSerialization.jsonObject(with: Data(contentsOf: rootURL)) as! [String: Any]
         let layoutID = try #require(root["layout"] as? String)
         let layoutURL = directory.appendingPathComponent("layouts/\(ownedID)_\(layoutID).json")
+        let activeOwner = try AgentIncrementalJournal.open(at: directory)
+        #expect(try await activeOwner.readMessages(sessionID: session).count == 1)
         let layout = try Data(contentsOf: layoutURL)
         var damaged = layout
         damaged[damaged.count - 3] ^= 0x01
         try damaged.write(to: layoutURL)
+        await #expect(throws: AgentJournalError.checksumMismatch) { _ = try await activeOwner.maintenanceStatus() }
+        try await activeOwner.close()
         #expect(throws: AgentJournalError.checksumMismatch) { _ = try AgentIncrementalJournal.open(at: directory) }
         #expect(try Data(contentsOf: layoutURL) == damaged)
     }

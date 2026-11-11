@@ -553,12 +553,12 @@ public actor AgentSession {
     }
 
     /// Commits a Host call's result as a model's would be (its mutation settlement or checkpoint): the call in the Host's
-    /// namespace and its tool result, after the Host's request (OAI-1539); a replay says so in the result.
+    /// namespace and its tool result, after the Host's request; a replay says so in the result.
     private func commitHostResult(_ call: PreparedToolCall, result executed: ToolResult<JSONValue>, runID: UUID,
                                   budget: AgentBudget) async throws -> (message: ToolResultMessage, receipt: AgentToolReceipt?) {
         try budget.checkActive()
         guard budget.gate.settle() else { throw AgentLoopError.deadlineExceeded }
-        // As for a model's call: an oversized output is cut before it is committed (OAI-1521).
+        // As for a model's call: an oversized output is cut before it is committed.
         let result = executed.confirmedNoEffect == nil ? try executed.capped(limit: call.maximumResultBytes) : executed
         var images = result.images.map(ModelContent.image)
         if !images.isEmpty, journal?.supportsImageContent == false {

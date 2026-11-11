@@ -7,6 +7,15 @@ import Testing
 @testable import AgentProviders
 
 struct ProviderHTTPTransportTests {
+    @Test func releasedTransportInvalidatesAndReleasesItsSessionBeforeFallback() async throws {
+        let probe = ProviderInvalidatedSessionProbe()
+        var transport: URLSessionProviderHTTPTransport? = URLSessionProviderHTTPTransport(configurationFactory: { .ephemeral }, invalidationObserver: { probe.observe($0) })
+        #expect(transport != nil)
+        transport = nil
+        try await eventually { probe.invalidated }
+        try await eventually { probe.released }
+    }
+
     @Test func configuredWireIdleAllowsLongPolicyBudgets() async throws {
         let fixture = ProviderHTTPFixture()
         defer { fixture.remove() }
@@ -463,3 +472,12 @@ private final class ProviderHTTPURLProtocol: URLProtocol {
 #if !canImport(FoundationNetworking)
 extension ProviderHTTPURLProtocol: @unchecked Sendable {}
 #endif
+
+private final class ProviderInvalidatedSessionProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var session: URLSession?
+    private var observed = false
+    func observe(_ value: URLSession) { lock.withLock { session = value; observed = true } }
+    var invalidated: Bool { lock.withLock { observed } }
+    var released: Bool { lock.withLock { observed && session == nil } }
+}

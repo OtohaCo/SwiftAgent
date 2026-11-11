@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Journals from the previous release candidate remain readable and writable.
+  New index entries include a commit witness; existing entries without it can
+  still be opened, appended, packed and reopened.
+- Journal reads share position and layout data within each locked operation,
+  avoiding repeated file reads for messages in the same batch.
+- A new run becomes current even when its startup also aborts an earlier intent.
+  Resolving an older run's mutation still preserves the current run.
+
 - Empty streamed Anthropic tool arguments are returned as an empty JSON object.
   Gemini skips assistant turns that contain only private reasoning or continuation data.
 - Journal indexes verify their commit and published file layout after crash recovery.
@@ -24,9 +32,9 @@
 
 ### Gemini accepts history from other models
 
-- Linux: provider transports keep their URL session referenced for a minute after
-  invalidating it, so Foundation no longer aborts with "_MultiHandle deallocated with
-  non-zero retain count" when a transport is released.
+- Provider transports retain their URL session until its invalidation callback,
+  then release it outside the callback. A one-minute timer remains as a fallback
+  when Foundation omits the callback, avoiding premature session release on Linux.
 
 - Switching to Gemini keeps earlier visible replies, tool calls and their results.
   Other models' private reasoning and continuation data are omitted. Current-turn

@@ -441,7 +441,7 @@ private struct IndexWitness: Codable {
 private struct Slot<Value: Codable>: Codable {
     let key: String
     let version: UInt64
-    let commitID: UUID
+    let commitID: UUID?
     let value: Value
 }
 
@@ -725,6 +725,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     private var closed = false
     private var poisoned = false
     private var expectedCurrent: Current?
+    // Reused only within one locked access to a validated root. The next root
+    // read or publication clears these, so later accesses still detect disk damage.
+    private var cachedLayout: (id: UUID, digest: String, generation: UInt64, value: Layout)?
+    private var cachedPositions: [UInt64: Location] = [:]
     private let expectedFormatDigest: String
     private var reclaimed: UInt64 = 0
     private var lastMaintenanceError: String?
@@ -1341,7 +1345,13 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
+    private func resetReadCaches() {
+        cachedLayout = nil
+        cachedPositions.removeAll(keepingCapacity: true)
+    }
+
     private func currentRoot() throws -> (Root, UUID) {
+        resetReadCaches()
         let current = try JSONDecoder().decode(Current.self,
             from: readData(directoryURL.appendingPathComponent("CURRENT")))
         if let expectedCurrent {
@@ -1362,14 +1372,18 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private func layout(_ root: Root) throws -> Layout {
+        if let cachedLayout, cachedLayout.id == root.layout, cachedLayout.digest == root.layoutDigest,
+           cachedLayout.generation == root.layoutGeneration { return cachedLayout.value }
         let bytes = try readData(layoutURL(root.layout))
         guard Self.digest(bytes) == root.layoutDigest else { throw AgentJournalError.checksumMismatch }
         let value = try JSONDecoder().decode(Layout.self, from: bytes)
         guard value.generation == root.layoutGeneration else { throw AgentJournalError.invalidRecord }
+        cachedLayout = (root.layout, root.layoutDigest, root.layoutGeneration, value)
         return value
     }
 
     private func publishRoot(_ root: Root, id: UUID) throws {
+        resetReadCaches()
         let bytes = try JSONEncoder().encode(root)
         try writeNew(bytes, at: rootURL(id))
         let current = Current(root: id, digest: Self.digest(bytes))
@@ -1578,9 +1592,12 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                       !layout.packs.contains(position.file) else { return false }
             default: throw AgentJournalError.invalidRecord
             }
-            return slot.commitID == position.commitID
+            return slot.commitID == nil || slot.commitID == position.commitID
         }
-        return try location(slot.version, root: root).commitID == slot.commitID
+        // Earlier indexes did not record the updating commit. Preserve their published
+        // version check; every newly written slot carries the stronger commit witness.
+        guard let commitID = slot.commitID else { return true }
+        return try location(slot.version, root: root).commitID == commitID
     }
 
     private func pointer<Value: Codable>(_ kind: IndexKind<Value>, key: String, root: Root) throws -> Value? {
@@ -1666,11 +1683,13 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
     }
 
     private func location(_ sequence: UInt64, root: Root) throws -> Location {
+        if let cached = cachedPositions[sequence] { return cached }
         guard sequence > 0, sequence <= root.sequence,
               let location: Location = try pointer(.positions, key: String(sequence), root: root) else {
             throw AgentJournalError.invalidRecord
         }
         guard location.commitID != nil else { throw AgentJournalError.invalidRecord }
+        cachedPositions[sequence] = location
         return location
     }
 

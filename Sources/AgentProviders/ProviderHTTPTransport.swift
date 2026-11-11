@@ -35,7 +35,8 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport {
         self.init(requestTimeoutInterval: requestTimeoutInterval, configurationFactory: { .ephemeral })
     }
 
-    internal init(requestTimeoutInterval: TimeInterval? = nil, configurationFactory: @escaping @Sendable () -> URLSessionConfiguration) {
+    internal init(requestTimeoutInterval: TimeInterval? = nil, configurationFactory: @escaping @Sendable () -> URLSessionConfiguration,
+                  invalidationObserver: (@Sendable (URLSession) -> Void)? = nil) {
         self.requestTimeoutInterval = requestTimeoutInterval
         let configuration = configurationFactory()
         configuration.urlCache = nil
@@ -43,7 +44,7 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport {
         configuration.httpShouldSetCookies = false
         configuration.urlCredentialStorage = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        shared = ProviderHTTPSharedSession(configuration: configuration)
+        shared = ProviderHTTPSharedSession(configuration: configuration, invalidationObserver: invalidationObserver)
     }
 
     /// How many requests are still routed to their streams; for tests.
@@ -72,10 +73,11 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport {
 /// The session keeps the router (its delegate) until the session is let go, which happens when the transport is gone:
 /// on another queue, so never from inside one of the session's own callbacks.
 private final class ProviderHTTPSharedSession: @unchecked Sendable {
-    let router = ProviderHTTPRouter()
+    let router: ProviderHTTPRouter
     private let session: URLSession
 
-    init(configuration: URLSessionConfiguration) {
+    init(configuration: URLSessionConfiguration, invalidationObserver: (@Sendable (URLSession) -> Void)?) {
+        router = ProviderHTTPRouter(invalidationObserver: invalidationObserver)
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1
         session = URLSession(configuration: configuration, delegate: router, delegateQueue: queue)
@@ -83,14 +85,8 @@ private final class ProviderHTTPSharedSession: @unchecked Sendable {
 
     deinit {
         let session = session
-        DispatchQueue.global().async {
-            session.finishTasksAndInvalidate()
-            #if !canImport(Darwin)
-            // Linux's Foundation aborts ("_MultiHandle deallocated with non-zero retain count") when a session is
-            // released while libcurl still winds its handle down; keep it referenced for a while after invalidation.
-            DispatchQueue.global().asyncAfter(deadline: .now() + 60) { withExtendedLifetime(session) {} }
-            #endif
-        }
+        let router = router
+        DispatchQueue.global().async { router.invalidate(session) }
     }
 
     func start(_ request: URLRequest, for exchange: ProviderHTTPExchange) {
@@ -103,8 +99,41 @@ private final class ProviderHTTPSharedSession: @unchecked Sendable {
 /// Hands the shared session's callbacks to the exchange of the task they are for. A task with no exchange (finished,
 /// or cancelled by its stream) is cancelled or ignored.
 private final class ProviderHTTPRouter: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let invalidationObserver: (@Sendable (URLSession) -> Void)?
+
+    init(invalidationObserver: (@Sendable (URLSession) -> Void)?) {
+        self.invalidationObserver = invalidationObserver
+        super.init()
+    }
+
     private let lock = NSLock()
     private var exchanges: [Int: ProviderHTTPExchange] = [:]
+    private var invalidatingSession: URLSession?
+
+    func invalidate(_ session: URLSession) {
+        lock.withLock { invalidatingSession = session }
+        session.finishTasksAndInvalidate()
+        // Some Foundation implementations may omit the invalidation callback.
+        // Do not capture the session here: the callback normally releases it first.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 60) { [weak self] in
+            self?.releaseInvalidatingSession()
+        }
+    }
+
+    private func releaseInvalidatingSession() {
+        let session = lock.withLock {
+            let value = invalidatingSession
+            invalidatingSession = nil
+            return value
+        }
+        // Avoid final destruction inside the session's own delegate callback.
+        if let session { DispatchQueue.global().async { withExtendedLifetime(session) {} } }
+    }
+
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: (any Error)?) {
+        releaseInvalidatingSession()
+        invalidationObserver?(session)
+    }
 
     var activeCount: Int { lock.withLock { exchanges.count } }
 

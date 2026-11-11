@@ -7,6 +7,33 @@ import Testing
 import XCTest
 
 struct AgentRunRecordTests {
+    @Test func startupWithAnOlderIntentAbortStillAdmitsItsRun() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("startup-intent-abort-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "startup-abort", supportsRunRecords: true)
+        let session = UUID(), newRun = UUID(), previousRun = UUID()
+        let call = ToolCallID(rawValue: "old-intent")
+        let target = EvidenceReference(namespace: "fixture", id: "document")
+        _ = try await journal.admit(.init(sessionID: session, runID: newRun, callID: call, name: "write",
+            argumentsJSON: "{}", resources: [.named(target)], idempotencyKey: "older-intent",
+            receiptExpectation: .init(targets: [target], revision: .present)))
+        _ = try await journal.appendCheckpoint([.checkpoint(history: [.user([.text("previous run")])], steeringIDs: [])],
+            sessionID: session, runID: previousRun, durability: .durable)
+        let admission = try await journal.prepareRunAdmission(sessionID: session, text: "new run", operationID: nil, correlation: nil)
+        _ = try await journal.appendStartupCheckpoint([
+            .mutationAborted(callID: call, confirmation: .init(basis: "Host verified no external effect")),
+            .checkpoint(history: [.user([.text("previous run")]), .user([.text("new run")])], steeringIDs: []),
+        ], sessionID: session, runID: newRun, deadline: .now.advanced(by: .seconds(10)), durability: .durable, runAdmission: admission)
+        #expect(try await journal.hasRun(newRun, sessionID: session))
+        #expect(try await journal.mutationStatus(sessionID: session, runID: newRun, callID: call)?.state == .aborted)
+        _ = try await journal.appendCheckpointForCurrentRun([.checkpoint(history: [.user([.text("previous run")]), .user([.text("new run")])], steeringIDs: [])],
+            sessionID: session, runID: newRun, durability: .durable)
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        #expect(try await reopened.hasRun(newRun, sessionID: session))
+        try await reopened.close()
+    }
+
     @Test func admissionAndTerminalAreQueryableWithoutAWaiter() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("run-record-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }

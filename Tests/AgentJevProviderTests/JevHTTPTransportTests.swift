@@ -6,6 +6,15 @@ import Testing
 @testable import AgentJevProvider
 
 struct JevHTTPTransportTests {
+    @Test func releasedTransportInvalidatesAndReleasesItsSessionBeforeFallback() async throws {
+        let probe = JevInvalidatedSessionProbe()
+        var transport: URLSessionJevHTTPTransport? = URLSessionJevHTTPTransport(invalidationObserver: { probe.observe($0) })
+        #expect(transport != nil)
+        transport = nil
+        try await eventually { probe.invalidated }
+        try await eventually { probe.released }
+    }
+
     /// One session serves a transport's requests (a session per request triggers a Foundation bug on Linux,
     /// swift-corelibs-foundation PR #5491); each finished request is forgotten.
     @Test func oneTransportCarriesRequestsOneAfterAnother() async throws {
@@ -187,3 +196,12 @@ private final class JevHTTPURLProtocol: URLProtocol {
 #if !canImport(FoundationNetworking)
 extension JevHTTPURLProtocol: @unchecked Sendable {}
 #endif
+
+private final class JevInvalidatedSessionProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var session: URLSession?
+    private var observed = false
+    func observe(_ value: URLSession) { lock.withLock { session = value; observed = true } }
+    var invalidated: Bool { lock.withLock { observed } }
+    var released: Bool { lock.withLock { observed && session == nil } }
+}

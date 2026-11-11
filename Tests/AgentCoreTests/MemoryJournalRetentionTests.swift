@@ -33,6 +33,12 @@ struct MemoryJournalRetentionTests {
         #expect(try await journal.hasRun(first, sessionID: a))
         #expect(!(try await journal.hasRun(first, sessionID: b)))
         _ = try await journal.append(.runCompleted(.completed), sessionID: a, runID: second)
+        let retainedHistory: [ModelMessage] = [.user([.text("a")]), .assistant(content: [.text("answer")], toolCalls: [])]
+        // A completion for a different run does not admit it or take the current run's ownership.
+        _ = try await journal.appendCheckpointForCurrentRun([.checkpoint(history: retainedHistory, steeringIDs: [steering])],
+            sessionID: a, runID: first)
+        _ = try await journal.appendStartupCheckpoint([.checkpoint(history: retainedHistory, steeringIDs: [steering])],
+            sessionID: a, runID: second, deadline: .now.advanced(by: .seconds(10)), durability: .memory)
         await #expect(throws: CancellationError.self) {
             _ = try await journal.appendCheckpointForCurrentRun([.checkpoint(history: [], steeringIDs: [])], sessionID: a, runID: first)
         }
