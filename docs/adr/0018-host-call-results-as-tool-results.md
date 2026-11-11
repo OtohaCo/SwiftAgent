@@ -45,7 +45,7 @@ Host namespace is ever written for a Host call.
 | OpenAI Responses, local Responses | `function_call` + `function_call_output` | none |
 | ChatGPT plan | same, in the `swiftagent` namespace | none |
 | DeepSeek | same | with thinking on and tools offered, a turn of Host calls no longer needs a DeepSeek continuation: DeepSeek never produced reasoning for it. Model calls without one are still refused. |
-| Gemini | `functionCall` in a model turn, `functionResponse` by name | a turn of Host calls without received parts is sent as plain function calls. Model turns still replay only from their parts. Under `requireCurrentTurnFunctionSignatures` a Host call in the current turn is refused (it has no signature); after a Run's input it is a past turn. |
+| Gemini | `functionCall` in a model turn, paired `functionResponse` | Host and foreign model calls replay as plain function calls with matching IDs. The first such call in a current-turn step uses the documented skip-validation sentinel. Matching native Gemini turns retain their exact parts and signature checks. |
 | Apple on-device | `assistant` row with calls, `tool` row | none |
 
 `ToolCallID.isHostCall` (package) lets adapters recognise the namespace without

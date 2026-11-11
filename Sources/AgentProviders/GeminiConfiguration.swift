@@ -52,7 +52,8 @@ public struct GeminiThinkingConfiguration: Hashable, Sendable {
 public enum GeminiPreservedThinkingProfile: Hashable, Sendable {
     /// Retain received parts exactly; does not claim strict-model qualification.
     case preserve
-    /// First function-call part of every step in the current turn must have a received signature.
+    /// Native steps in the current turn require a received signature on their first function call.
+    /// Foreign and Host calls use the documented skip-validation sentinel instead.
     case requireCurrentTurnFunctionSignatures
 }
 

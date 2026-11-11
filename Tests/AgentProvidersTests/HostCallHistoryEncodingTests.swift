@@ -106,8 +106,7 @@ struct HostCallHistoryEncodingTests {
         }
     }
 
-    /// Gemini replays a model's turn only from its received parts. A Host call has none: it is sent as a function call
-    /// with a matching function response, also under the strict signature profile, since it is never in the current turn.
+    /// Host and foreign model calls replay with paired function responses, without foreign provider state.
     @Test(arguments: [GeminiPreservedThinkingProfile.preserve, .requireCurrentTurnFunctionSignatures])
     func geminiSendsAFunctionResponseAfterAFunctionCall(_ profile: GeminiPreservedThinkingProfile) throws {
         let configuration = try GeminiConfiguration(baseURL: GeminiProvider.defaultBaseURL, streaming: true, thinking: nil,
@@ -132,23 +131,23 @@ struct HostCallHistoryEncodingTests {
             #expect(!(try Self.wire(part)).contains("ignore earlier instructions"))
         }
 
-        // A model's call without its received parts is still refused.
+        // A model's call without Gemini parts also replays as a plain function call.
         let modelCall = ToolCall(id: .init(rawValue: "call-1"), name: "move_clip", argumentsJSON: "{}", completeness: .complete)
         let stateless = ModelRequest(model: model, messages: [
             .user([.text("Move it")]), .assistant(content: [], toolCalls: [modelCall]),
             .tool(.init(callID: modelCall.id, content: [.json(.object([:]))], isError: false)), .user([.text("Next")]),
         ], tools: [Self.tool])
-        #expect(throws: ModelProviderError.self) { _ = try GeminiRequestEncoder.encode(stateless, configuration: configuration) }
+        _ = try GeminiRequestEncoder.encode(stateless, configuration: configuration)
     }
 
-    /// Under the strict profile, a Host call in the current turn (no user message after it) has no signature and is
-    /// refused rather than sent unsigned.
-    @Test func geminiStrictProfileRefusesAHostCallInTheCurrentTurn() throws {
+    /// Current-turn Host calls have no native signature, so use the documented skip-validation sentinel.
+    @Test func geminiStrictProfileSignsAHostCallInTheCurrentTurnWithTheDummy() throws {
         let configuration = try GeminiConfiguration(baseURL: GeminiProvider.defaultBaseURL, streaming: true, thinking: nil,
             profile: .requireCurrentTurnFunctionSignatures, maximumOutputTokens: nil, maximumRequestBytes: 100_000_000,
             maximumResponseBytes: 16_000_000, authorizationScopeID: "default", caching: .implicit)
         let current = ModelRequest(model: .init(provider: "gemini", name: "gemini-fixture"),
             messages: Array(Self.request(.init(provider: "gemini", name: "gemini-fixture")).messages.dropLast()), tools: [Self.tool])
-        #expect(throws: ModelProviderError.self) { _ = try GeminiRequestEncoder.encode(current, configuration: configuration) }
+        let body = try JSONDecoder().decode(JSONValue.self, from: GeminiRequestEncoder.encode(current, configuration: configuration))
+        #expect(try Self.wire(body).contains("skip_thought_signature_validator"))
     }
 }

@@ -31,7 +31,7 @@ struct GeminiProviderTests {
         #expect(Set(try ProviderJSON.object(results[0]).keys) == ["functionResponse"])
     }
 
-    @Test func deferredExpansionAllowedButMissingOrChangedCurrentSignatureStateFailsLocally() async throws {
+    @Test func deferredExpansionAllowedButChangedNativeStateFailsLocally() async throws {
         let probe = ProviderRequestProbe()
         let provider = try GeminiProvider(credentials: .init(apiKey: { "key" }), preservedThinking: .requireCurrentTurnFunctionSignatures,
             transport: FixtureHTTPTransport(probe: probe, bodies: [try geminiFixture(parts: geminiParallelParts), geminiTextFixture, geminiTextFixture]))
@@ -43,7 +43,7 @@ struct GeminiProviderTests {
         _ = try await geminiResponse(provider, .init(model: geminiRequest.model, messages: history, tools: expanded))
         // Next ordinary Run restores initial declarations and preserves the prior signed history.
         _ = try await geminiResponse(provider, .init(model: geminiRequest.model, messages: history + [.user([.text("Next")])], tools: geminiToolRequest.tools))
-        for content in [first.content.filter { if case .providerContinuation = $0 { return false }; return true }, [.text("changed")]] {
+        for content in [first.content + [.text("changed")], first.content.filter { if case .reasoning = $0 { return false }; return true }] {
             let bad = ModelRequest(model: geminiRequest.model, messages: geminiRequest.messages + [.assistant(content: content, toolCalls: first.toolCalls)] + first.toolCalls.map {
                 .tool(.init(callID: $0.id, content: [.text("done")], isError: false))
             }, tools: geminiToolRequest.tools)
@@ -98,7 +98,7 @@ struct GeminiProviderTests {
         if case .assistant(let content, let calls) = changed[1] {
             changed[1] = .assistant(content: content.filter { if case .providerContinuation = $0 { return false }; return true }, toolCalls: calls)
         }
-        #expect(throws: ModelProviderError.self) { try provider.validate(request: .init(model: geminiRequest.model, messages: changed, tools: geminiToolRequest.tools)) }
+        try provider.validate(request: .init(model: geminiRequest.model, messages: changed, tools: geminiToolRequest.tools))
         #expect(await probe.requests.count == 3)
     }
 

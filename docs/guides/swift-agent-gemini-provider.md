@@ -44,11 +44,18 @@ validate a signature. `.preserve` supports ordinary legacy replay;
 signature on the first function-call part of every step since the latest formal
 user message. Later parallel calls may be unsigned. Function-result-only wire
 user messages do not start a new turn. All calls in a step precede the ordered
-batch of paired function responses. Missing/tampered continuation or incomplete
-pairing fails locally before credentials/HTTP; completed tools are not repeated.
-A step holding only Host calls (`host-call-` identities, ADR 0018) has no received
-parts and is sent as plain `functionCall` parts with responses matched by name;
-under the strict profile such a step in the current turn is refused (no signature).
+batch of paired function responses. Tampered matching native continuations and
+incomplete pairing fail locally before credentials/HTTP; completed tools are not repeated.
+
+History from another model or endpoint, including calls without Gemini state,
+replays visible text/JSON and complete function calls with their original call
+IDs. Foreign reasoning and opaque continuations are omitted. The first function
+call of each such step in the current turn uses Google's documented
+`skip_thought_signature_validator` literal; earlier turns need no placeholder.
+This also applies to Host calls. Matching native Gemini steps still require their
+received signatures under the strict profile; the bypass does not repair native
+state. Explicit cache bindings compare the original source messages as well as
+wire parts, so equivalent foreign and native parts cannot substitute for each other.
 
 Ordinary deferred tool declarations may expand between requests and reset on the
 next Run while exact native parts remain intact. This differs from Anthropic's

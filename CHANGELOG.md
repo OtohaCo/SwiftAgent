@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — Gemini accepts history from other models
+
+- Switching to Gemini keeps earlier visible replies, tool calls and their results.
+  Other models' private reasoning and continuation data are omitted. Current-turn
+  calls without Gemini state use Google's documented signature-validation bypass;
+  earlier calls need no placeholder.
+- Matching Gemini state still replays exactly with its original signatures.
+  Invalid calls, mismatched results and changes to native state still fail locally.
+  Cached prefixes continue to require the original source messages and wire parts.
+
 ## Unreleased — Host call results are tool results (OAI-1539, ADR 0018)
 
 - `AgentJournalFileStore` builds with the static Linux SDK (musl): the writer
@@ -10,10 +20,9 @@
   tool's output was a user-side text notice and reached later model requests
   with a user message's authority. Replays and reconciliations say so in a
   leading text part of the result.
-- DeepSeek (thinking with tools) and Gemini accept Host calls without provider
-  state; model calls without it are still refused. Under Gemini's
-  `requireCurrentTurnFunctionSignatures`, a Host call in the current turn is
-  refused.
+- DeepSeek (thinking with tools) accepts Host calls without provider state;
+  model calls without it are still refused. Gemini accepts Host and foreign
+  model calls as described above.
 - Conversations committed before keep their user-side notices and continue
   unchanged. Context materials are unchanged.
 

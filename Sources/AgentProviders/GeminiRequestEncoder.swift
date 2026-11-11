@@ -53,33 +53,51 @@ enum GeminiRequestEncoder {
                 contents.append(.object(["role": .string("user"), "parts": .array(encoded)]))
             case .assistant(let visible, let calls):
                 let states = visible.compactMap { if case .providerContinuation(let s) = $0 { return s }; return nil }
-                let parts: [JSONValue]
-                if !states.isEmpty {
-                    guard states.count == 1, states[0].format == GeminiNativeState.format, states[0].model == request.model,
-                          states[0].contextTransition == nil, states[0].requestBoundary == nil,
-                          let state = try? JSONDecoder().decode(GeminiNativeState.self, from: states[0].payload),
-                          GeminiBoundary.exact(state.endpoint, configuration.endpointScope) else { throw GeminiBoundary.unsupported() }
-                    try validate(state: state, content: visible, calls: calls)
+                var nativeState: GeminiNativeState?
+                let localStates = states.filter { $0.format == GeminiNativeState.format && $0.model == request.model }
+                if !localStates.isEmpty {
+                    guard states.count == 1,
+                          let state = try? JSONDecoder().decode(GeminiNativeState.self, from: localStates[0].payload) else {
+                        throw GeminiBoundary.unsupported()
+                    }
+                    if GeminiBoundary.exact(state.endpoint, configuration.endpointScope) {
+                        guard localStates[0].contextTransition == nil, localStates[0].requestBoundary == nil else { throw GeminiBoundary.unsupported() }
+                        try validate(state: state, content: visible, calls: calls)
+                        nativeState = state
+                    }
+                }
+                var parts: [JSONValue]
+                if let state = nativeState {
                     parts = state.parts
                     for (call, mapping) in zip(calls, state.calls) { pending.append((call, try ProviderJSON.object(parts[mapping.partIndex])["functionCall"]!)) }
                 } else {
-                    // A model's turn replays only from its received parts. A Host's call (OAI-1539) never had any: it
-                    // is sent as a plain function call, whose response follows by name.
-                    guard visible.allSatisfy({ if case .text = $0 { return true }; if case .json = $0 { return true }; return false }),
-                          calls.allSatisfy(\.id.isHostCall) else { throw GeminiBoundary.unsupported() }
-                    var encoded = try visible.map(userPart)
+                    // Other models' reasoning and opaque state cannot be replayed as Gemini's thoughts.
+                    var encoded: [JSONValue] = []
+                    for content in visible {
+                        switch content {
+                        case .text, .json: encoded.append(try userPart(content))
+                        case .reasoning, .providerContinuation: continue
+                        default: throw GeminiBoundary.unsupported()
+                        }
+                    }
                     for call in calls {
-                        guard call.completeness == .complete, GeminiBoundary.functionName(call.name),
+                        guard !call.id.rawValue.isEmpty, call.completeness == .complete, GeminiBoundary.functionName(call.name),
                               let arguments = try? JSONValue.decodeToolArguments(call.argumentsJSON) else { throw GeminiBoundary.invalidRequest() }
-                        let functionCall: JSONValue = .object(["name": .string(call.name), "args": arguments])
+                        let functionCall: JSONValue = .object(["name": .string(call.name), "args": arguments, "id": .string(call.id.rawValue)])
                         encoded.append(.object(["functionCall": functionCall]))
                         pending.append((call, functionCall))
                     }
                     parts = encoded
                 }
-                if configuration.profile == .requireCurrentTurnFunctionSignatures, messageIndex >= currentTurn,
-                   let first = parts.first(where: { $0["functionCall"] != nil }) {
-                    guard case .string(let signature) = first["thoughtSignature"], !signature.isEmpty else { throw GeminiBoundary.unsupported() }
+                if messageIndex >= currentTurn, let first = parts.firstIndex(where: { $0["functionCall"] != nil }) {
+                    if nativeState == nil {
+                        // Google's documented REST sentinel for calls made without Gemini thought signatures.
+                        var fields = try ProviderJSON.object(parts[first])
+                        fields["thoughtSignature"] = .string("skip_thought_signature_validator")
+                        parts[first] = .object(fields)
+                    } else if configuration.profile == .requireCurrentTurnFunctionSignatures {
+                        guard case .string(let signature) = parts[first]["thoughtSignature"], !signature.isEmpty else { throw GeminiBoundary.unsupported() }
+                    }
                 }
                 for call in calls { guard seenCalls.insert(call.id).inserted else { throw GeminiBoundary.invalidRequest() } }
                 guard !parts.isEmpty else { throw GeminiBoundary.invalidRequest() }
