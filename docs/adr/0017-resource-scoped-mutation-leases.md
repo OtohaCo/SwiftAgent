@@ -18,7 +18,7 @@ exclusive read-only call does. Two leases conflict when at least one is exclusiv
 and their resources overlap; `.global` overlaps every resource. Shared leases never
 conflict with each other. Waiting order is unchanged: a waiter never overtakes an
 older conflicting waiter, disjoint work may pass it. Lease-wait limits and
-cancellation (ADR 0016, OAI-1519) are unchanged.
+cancellation (ADR 0016) are unchanged.
 
 `resourceRequirements(for:)` keeps its default of `[.global]`, so a tool that
 declares nothing still waits for every other call. Validation (no empty, duplicate

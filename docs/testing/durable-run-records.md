@@ -57,4 +57,4 @@ The portable Linux script runs on the corresponding CI runner, not on this
 macOS workstation. Acceptance must name the actual commit, event, attempt and
 jobs; an earlier green commit is not evidence for this patch. Public fixtures
 do not certify a live skill_run, compiler task, remote service, travel workflow,
-automatic Host recovery or OAI-319 integration.
+automatic Host recovery or host integration.

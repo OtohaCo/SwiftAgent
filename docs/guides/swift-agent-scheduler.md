@@ -40,7 +40,7 @@ and every mutation take exclusive leases. An exclusive lease conflicts with any
 lease whose resources overlap; global intersects every named resource. Older
 conflicting waiters cannot be overtaken, while disjoint work may progress. Two
 mutations with disjoint named resources run at once, also across Sessions on
-one scheduler (OAI-1520; before, any two mutations waited for each other).
+one scheduler (before, any two mutations waited for each other).
 
 The names are the whole contract: the scheduler cannot see what a tool really
 touches. A mutation must name every resource another Session's call could

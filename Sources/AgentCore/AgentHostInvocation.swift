@@ -95,7 +95,7 @@ extension AgentHostToolCall {
         return lines.joined(separator: "\n")
     }
 
-    /// What formal history keeps for the Host's call once it has a result (OAI-1539): the call in the Host's namespace and
+    /// What formal history keeps for the Host's call once it has a result: the call in the Host's namespace and
     /// its tool result, so the tool's output reaches the model as a tool's, never with a user message's authority. A
     /// retry of a settled operation says first that its earlier result was replayed.
     package static func historyMessages(call: ToolCall, result: ToolResultMessage, replayed: Bool) -> [ModelMessage] {

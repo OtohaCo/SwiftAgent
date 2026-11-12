@@ -32,8 +32,8 @@ history like any other result, and the Run continues with the next model request
 | `authorize` returned `.denied` | `not_allowed` | fixed |
 | `authorize` threw `RecoverableToolError` | the error's `code` | the error's `message` and `details` |
 | `authorize` threw any other error | `authorization_failed` | fixed |
-| Authorization outlived `ToolScheduler.authorizationWaitLimit` (OAI-1519) | `not_answered` | fixed |
-| The lease wait outlived `ToolScheduler.leaseWaitLimit` (OAI-1519) | `busy` | fixed |
+| Authorization outlived `ToolScheduler.authorizationWaitLimit` | `not_answered` | fixed |
+| The lease wait outlived `ToolScheduler.leaseWaitLimit` | `busy` | fixed |
 
 Rules:
 

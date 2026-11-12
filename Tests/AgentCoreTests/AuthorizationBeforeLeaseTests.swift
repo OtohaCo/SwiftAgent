@@ -47,7 +47,7 @@ import Testing
         try await fixture.close()
     }
 
-    /// OAI-1519: the wait for an answer has its own limit; past it the model is told and nothing runs.
+    /// The wait for an answer has its own limit; past it the model is told and nothing runs.
     @Test func anAnswerArrivingAfterTheAuthorizationLimitNeverExecutes() async throws {
         let fixture = try LeaseFixture(timeout: .seconds(5), authorizationWaitLimit: .milliseconds(150))
         defer { fixture.cleanup() }
@@ -68,7 +68,7 @@ import Testing
         try await fixture.close()
     }
 
-    /// OAI-1519: a call that waited for a busy lease longer than its own timeout still gets its whole
+    /// A call that waited for a busy lease longer than its own timeout still gets its whole
     /// execution time once it starts; the call that held the lease still times out on its own.
     @Test func aCallThatWaitedLongForTheLeaseStillGetsItsExecutionTime() async throws {
         let fixture = try LeaseFixture(timeout: .milliseconds(300), gatedAnswers: [], gatedExecutors: ["B"])
@@ -92,7 +92,7 @@ import Testing
         try await fixture.close()
     }
 
-    /// OAI-1519: a slow answer does not use the call's execution time.
+    /// A slow answer does not use the call's execution time.
     @Test func aSlowAnswerDoesNotUseTheExecutionTime() async throws {
         let fixture = try LeaseFixture(timeout: .milliseconds(200))
         defer { fixture.cleanup() }
@@ -106,7 +106,7 @@ import Testing
         try await fixture.close()
     }
 
-    /// OAI-1519: an executor that runs past the tool's timeout still times out as before.
+    /// An executor that runs past the tool's timeout still times out as before.
     @Test func anExecutorPastItsTimeoutStillTimesOut() async throws {
         let fixture = try LeaseFixture(timeout: .milliseconds(150), gatedAnswers: [], gatedExecutors: ["A"])
         defer { fixture.cleanup() }
@@ -120,7 +120,7 @@ import Testing
         try await fixture.close()
     }
 
-    /// OAI-1519: past its own lease wait limit, a call is told the resource is busy and nothing runs.
+    /// Past its own lease wait limit, a call is told the resource is busy and nothing runs.
     @Test func aCallPastItsLeaseWaitLimitIsToldTheResourceIsBusy() async throws {
         let fixture = try LeaseFixture(timeout: .seconds(5), gatedAnswers: [], gatedExecutors: ["B"],
                                        leaseWaitLimit: .milliseconds(150))
@@ -141,7 +141,7 @@ import Testing
         try await fixture.close()
     }
 
-    /// OAI-1519: without a limit of its own, the Run's deadline still ends an unanswered call.
+    /// Without a limit of its own, the Run's deadline still ends an unanswered call.
     @Test func theRunDeadlineStillEndsAnUnansweredCall() async throws {
         let fixture = try LeaseFixture(timeout: .seconds(5), runTimeout: .milliseconds(200))
         defer { fixture.cleanup() }

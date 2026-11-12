@@ -38,7 +38,7 @@ actor AgentToolBatchProgress {
         var result = executed
         do {
             try budget.checkActive()
-            // One oversized result must not make every later request too large (OAI-1521). A no-effect
+            // One oversized result must not make every later request too large. A no-effect
             // proof binds its payload, which is already small.
             if result.confirmedNoEffect == nil { result = try result.capped(limit: call.maximumResultBytes) }
             var images = result.images.map(ModelContent.image)

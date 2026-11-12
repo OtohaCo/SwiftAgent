@@ -4,7 +4,7 @@ import Foundation
 package actor ToolResourceCoordinator {
     /// Shared leases (read-only parallel and sequential calls) never conflict with each other. An exclusive lease
     /// (an exclusive read or any mutation) conflicts with any lease whose resources overlap its own; `.global`
-    /// overlaps every resource. Mutations on disjoint named resources therefore run at once (OAI-1520).
+    /// overlaps every resource. Mutations on disjoint named resources therefore run at once.
     private struct Request {
         let resources: Set<ToolResource>
         let exclusive: Bool

@@ -4,7 +4,7 @@ import Testing
 @testable import AgentAppleProvider
 
 struct ApplePromptEncodingTests {
-    /// OAI-1539: a Host call's result reaches the on-device model as a tool row after the Host's call, not as user text.
+    /// A Host call's result reaches the on-device model as a tool row after the Host's call, not as user text.
     @Test func aHostCallResultIsAToolRowAfterItsCall() throws {
         let call = ToolCall(id: .init(rawValue: "host-call-1"), name: "move_clip",
                             argumentsJSON: #"{"clip":"clip-2"}"#, completeness: .complete)

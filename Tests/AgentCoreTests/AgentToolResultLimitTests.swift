@@ -4,7 +4,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-/// OAI-1521: a tool result larger than its tool's limit is cut before it is committed, with a notice the
+/// A tool result larger than its tool's limit is cut before it is committed, with a notice the
 /// model can read, so one oversized result can no longer make every later request too large.
 @Suite(.manualClock) struct AgentToolResultLimitTests {
     @Test func anOversizedResultIsCutAndTheConversationGoesOn() async throws {

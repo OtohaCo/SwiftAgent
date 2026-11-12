@@ -3,7 +3,7 @@ import AgentModels
 import Foundation
 import Testing
 
-/// OAI-1521: cutting an oversized output keeps whole characters and fits the limit.
+/// Cutting an oversized output keeps whole characters and fits the limit.
 struct AgentToolResultLimitCutTests {
     @Test(arguments: ["音", "é", "😀", "\"", "\u{01}"])
     func aCutOutputFitsTheLimitAndKeepsWholeCharacters(_ character: String) throws {

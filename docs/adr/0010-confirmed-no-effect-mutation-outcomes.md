@@ -10,7 +10,7 @@ deferred and unimplemented.
 
 ## Context and pre-implementation behavior
 
-The OtohaAI Host report (OAI-257) describes a need to return a conflict to the
+The OtohaAI Host report describes a need to return a conflict to the
 model after a correctly classified mutation has definitively produced no
 business effect. We have not independently inspected or reproduced that Host
 integration. This report does not establish how other Hosts, MCP servers or CLI

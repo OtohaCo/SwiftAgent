@@ -120,7 +120,7 @@ Not covered by this implementation:
   a queued input) could imitate it, and `note` must be written by the Host, never
   relayed from an embedded panel.
 - Model visibility is not optional. A Host result has no read-only proof for
-  context excerpts, so projections keep it whole (OAI-1521's size limit applies).
+  context excerpts, so projections keep it whole (the tool result size limit applies).
 - A failure's notice reaches history at drain, not when `wait` returns. A Host
   reconciling a Host call must first `waitForDrain()`, as `reconcileMutation`
   requires; reconciling earlier may lose the failure notice.

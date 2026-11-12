@@ -89,7 +89,7 @@ import Testing
         #expect(try await journal.mutationStatus(identity: receipt.receipt.operationID)?.state == .settled)
         #expect(await provider.log.requests.isEmpty, "no model is asked")
 
-        // OAI-1539: the Host's request is user-side and labelled as the Host's; the call and its result are a tool call
+        // The Host's request is user-side and labelled as the Host's; the call and its result are a tool call
         // in the Host's namespace and a tool result, so the tool's output never carries a user message's authority.
         let history = try await session.conversationSnapshot().messages
         #expect(history.suffix(2) == [.assistant(content: [], toolCalls: [result.call]), .tool(result.result)])
@@ -129,7 +129,7 @@ import Testing
         try await journal.close()
     }
 
-    /// OAI-1539: a conversation committed before Host results became tool results (they were user-side notices) is read
+    /// A conversation committed before Host results became tool results (they were user-side notices) is read
     /// and continued as it is; its old notices are not rewritten.
     @Test func aConversationWithEarlierUserSideHostNoticesContinues() async throws {
         let url = temporaryURL()
@@ -354,7 +354,7 @@ import Testing
         try await journal.reconcileMutation(pending, receipt: ToolReceipt(operationID: pending.intent.idempotencyKey, status: .succeeded,
             confirmedTargets: [.init(namespace: "timeline.clip", id: "clip-2")], revision: "r2"), output: .object(["moved": .bool(true)]))
 
-        // OAI-1539: settled as the Host's call and its tool result; the output stays off the user's side.
+        // Settled as the Host's call and its tool result; the output stays off the user's side.
         let history = try #require(try await journal.latestCheckpoint(sessionID: session.id)?.history)
         #expect(history.dropLast().last == .assistant(content: [], toolCalls: [pending.intent.call]))
         guard case .tool(let result)? = history.last, case .text(let notice)? = result.content.first else {

@@ -1,7 +1,7 @@
 import AgentModels
 import Foundation
 
-/// How much one tool result may add to the conversation (OAI-1521). A result whose JSON output encodes
+/// How much one tool result may add to the conversation. A result whose JSON output encodes
 /// to more than its tool's `maximumResultBytes` is replaced, before it is committed, by an object that
 /// says so and keeps the beginning of the output as JSON text cut short:
 ///

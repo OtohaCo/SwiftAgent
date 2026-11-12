@@ -108,7 +108,7 @@ struct AgentIsolationTests {
             await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await run.wait() }
         }
         let sessionB = try b.makeSession()
-        // B waits for the lease A's executor still holds; that wait is not B's execution time (OAI-1519).
+        // B waits for the lease A's executor still holds; that wait is not B's execution time.
         let waiting = Task { try await sessionB.run("B").wait() }
         await scheduler.waitUntilPendingWaiterCountEquals(1)
         try await Task.sleep(for: .milliseconds(200))

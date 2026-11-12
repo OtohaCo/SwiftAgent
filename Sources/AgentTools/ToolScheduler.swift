@@ -13,7 +13,7 @@ public struct ToolScheduler: Sendable {
     private let authorizationWaitLimit: Duration?
     private let leaseWaitLimit: Duration?
 
-    /// A call's time is spent in three parts, each with its own limit (OAI-1519):
+    /// A call's time is spent in three parts, each with its own limit:
     /// - its authorization before the lease (`beforeResourceLease`, or audited authorization) is bounded by
     ///   `authorizationWaitLimit`, or by the Run's deadline alone when nil. Past the limit the call is told to
     ///   the model as unanswered (`not_answered`) and never runs;

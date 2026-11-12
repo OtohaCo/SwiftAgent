@@ -11,7 +11,7 @@ Actual fetched main: `4baa5afc8105d36275737a62bf8a20a10db216fb` (PR #100),
 tree `a07567c07fa428ba5d845352951827338d98f3aa`.
 Only SwiftAgent changed. OtohaAI/sub2api, pricing, OpenAI standalone, compaction
 modes and schema versions are unchanged. The scope includes the small
-[OAI-612 diagnostic request](https://github.com/OtohaCo/SwiftAgent/issues/101#issuecomment-6119081514).
+[diagnostic request](https://github.com/OtohaCo/SwiftAgent/issues/101#issuecomment-6119081514).
 
 ## Confirmed defects and behavior
 

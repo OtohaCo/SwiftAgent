@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import AgentProviders
 
-/// OAI-1539: a Host call's result is committed as the call in the Host's namespace and its tool result. Every adapter
+/// A Host call's result is committed as the call in the Host's namespace and its tool result. Every adapter
 /// must send it as a tool result after a function call, never as user text, and accept that the call has no provider
 /// state: no model proposed it, so no reasoning or signature ever existed for it.
 struct HostCallHistoryEncodingTests {

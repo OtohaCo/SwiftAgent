@@ -219,7 +219,7 @@ package func invalidOutputPayload(name: String, issue: ToolSchemaValidationError
 package struct PreparedToolCall: Sendable {
     package let call: ToolCall
     package let policy: ToolPolicy
-    /// The tool's result limit (OAI-1521): `ToolResult.capped(limit:)` applies it before a result is committed.
+    /// The tool's result limit: `ToolResult.capped(limit:)` applies it before a result is committed.
     package let maximumResultBytes: Int
     package let resources: [ToolResource]
     private let evidenceRequirements: [EvidenceRequirement]

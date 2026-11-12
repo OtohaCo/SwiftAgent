@@ -26,7 +26,7 @@ struct ToolResourceCoordinatorTests {
         #expect(try JSONDecoder().decode([ToolResource].self, from: JSONEncoder().encode(exact)) == exact)
     }
 
-    /// OAI-1519: a lease wait with a limit ends at it without leaving a waiter or a lease behind.
+    /// A lease wait with a limit ends at it without leaving a waiter or a lease behind.
     @Test func aLimitedWaitEndsWithoutHoldingOrLeavingALease() async throws {
         let coordinator = ToolResourceCoordinator()
         let held = try await coordinator.acquire(resources: [.global], effect: .mutation, execution: .exclusive)
@@ -145,7 +145,7 @@ struct ToolResourceCoordinatorTests {
         }
     }
 
-    /// OAI-1520: mutations conflict only where their resources overlap (or one is global), as any other
+    /// Mutations conflict only where their resources overlap (or one is global), as any other
     /// exclusive call does. Before, any two mutations on one scheduler waited for each other.
     @Test func mutationsOnDisjointResourcesHoldLeasesAtOnce() async throws {
         let coordinator = ToolResourceCoordinator()
@@ -246,7 +246,7 @@ struct ToolResourceCoordinatorTests {
         await coordinator.release(held)
     }
 
-    /// OAI-1519's lease-wait limit applies to a mutation waiting on its own resource, and not to one on another.
+    /// The lease-wait limit applies to a mutation waiting on its own resource, and not to one on another.
     @Test func aLeaseWaitLimitEndsOnlyAWaitForAnOverlappingResource() async throws {
         let coordinator = ToolResourceCoordinator()
         let a = ToolResource.named(.init(namespace: "files", id: "a"))

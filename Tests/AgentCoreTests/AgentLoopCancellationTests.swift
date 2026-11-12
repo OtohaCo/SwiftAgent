@@ -114,7 +114,7 @@ import XCTest
         await gateA.open()
     }
 
-    /// OAI-1519: authorization has its own wait limit, given to it as its deadline; an answer after it never executes.
+    /// Authorization has its own wait limit, given to it as its deadline; an answer after it never executes.
     @Test func lateAuthorizationCannotExecuteAndReceivesItsWaitDeadline() async throws {
         let gate = ManualGate()
         let entered = XCTestExpectation(description: "Authorization entered")

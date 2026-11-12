@@ -6,7 +6,7 @@ import Foundation
 package struct AnyAgentTool: Sendable {
     package let definition: ModelToolDefinition
     package let policy: ToolPolicy
-    /// The tool's result limit (OAI-1521), applied before a result is committed.
+    /// The tool's result limit, applied before a result is committed.
     package let maximumResultBytes: Int
     package typealias Invocation = @Sendable (ToolContext) async throws -> ToolResult<JSONValue>
     package struct PreparedInvocation: Sendable {

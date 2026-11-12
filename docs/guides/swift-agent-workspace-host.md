@@ -88,7 +88,7 @@ trusted receipt, reload recovers `needsReconciliation` and does not replay
 The shared `ToolScheduler` coordinates cooperative Workspace Sessions by file.
 A write holds an exclusive lease on its file, a move on its source and
 destination, so mutations of the same file never overlap and writes to
-different files may run at once (since OAI-1520; before, every mutation on a
+different files may run at once (before, every mutation on a
 scheduler excluded every other). Lease identities are the exact relative path:
 on a case-insensitive or normalizing volume, `A.txt` and `a.txt` (or composed
 and decomposed spellings) are different leases for one file, and only the hash
