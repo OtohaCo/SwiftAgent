@@ -73,6 +73,7 @@ package struct AnyAgentTool: Sendable {
             /// Nothing has run and no intent exists yet: a denial or a failed decision is the model's to hear
             /// (ADR 0016). Cancellation, deadline, Evidence and runtime checks still end the call as before.
             @Sendable func authorizeWithoutAudit(_ context: ToolContext) async throws {
+                let context = context.running(policy.effect)
                 let authorization: ToolAuthorization
                 do { authorization = try await tool.authorize(input, context: context) }
                 catch is CancellationError { throw CancellationError() }
@@ -98,6 +99,7 @@ package struct AnyAgentTool: Sendable {
                 try await authorizeWithoutAudit(context)
             }
             let preauthorize: @Sendable (ToolContext) async throws -> Void = { context in
+                let context = context.running(policy.effect)
                 guard let audit = context.auditAuthorization else { return }
                 audit.beginEvaluation()
                 try context.checkActive()
@@ -119,6 +121,7 @@ package struct AnyAgentTool: Sendable {
                 } else { try await audit.recordToolAuthorization(nil, failed: false) }
             }
             let run: @Sendable (ToolContext, Bool) async throws -> ToolResult<JSONValue> = { context, authorized in
+                let context = context.running(policy.effect)
                 try context.checkActive()
                 try checkInvocationIdentity(context)
                 try await Self.validateEvidence(requirements, context: context)
@@ -306,9 +309,7 @@ package struct AnyAgentTool: Sendable {
     /// The tool's policy, or the read-only one it gives for this input (`AgentTool.readOnlyPolicy(for:)`).
     private static func policy<T: AgentTool>(of tool: T, for input: T.Input) throws -> ToolPolicy {
         guard let narrowed = try tool.readOnlyPolicy(for: input) else { return tool.policy }
-        guard narrowed.effect == .readOnly, tool.policy.recoverableErrors != .confirmedNoEffect else {
-            throw ToolInvocationError.invalidDefinition
-        }
+        guard narrowed.effect == .readOnly else { throw ToolInvocationError.invalidDefinition }
         return narrowed
     }
 

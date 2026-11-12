@@ -20,8 +20,8 @@ public protocol AgentTool: Sendable {
     /// `policy`. Such a call is scheduled, authorized and settled as a read: a shared lease, beside neighbouring
     /// parallel reads when its execution is `.parallel`, and no mutation intent or reconciliation. Its receipt is
     /// still checked when `receiptExpectation(for:)` declares one. Decide from the input alone: the runtime asks
-    /// again before audited dispatch and expects the same answer. A policy that is not read-only, or one returned
-    /// by a tool whose own policy proves no effect (`.confirmedNoEffect`), fails the call's preparation.
+    /// again before audited dispatch and expects the same answer. A policy that is not read-only fails the call's
+    /// preparation. `ToolContext.effect` tells the tool, as it authorizes and runs a call, which policy the call has.
     func readOnlyPolicy(for input: Input) throws -> ToolPolicy?
     /// The most a result of this tool may add to the conversation, in bytes of encoded JSON output; a larger
     /// one is cut before it is committed, with a notice the model reads (`AgentToolResultLimit`). At least

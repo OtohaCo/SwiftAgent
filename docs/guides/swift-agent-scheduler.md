@@ -48,8 +48,10 @@ under (a shell tool reading a file, say). Such a call takes a shared lease on th
 same resources, joins neighbouring parallel reads when its execution is
 `.parallel`, and is settled as a read: no mutation intent, no reconciliation.
 The other calls of the tool stay exclusive mutations. The answer must follow from
-the input alone; a policy that is not read-only, or one from a tool that proves
-no effect, fails the call's preparation.
+the input alone; a policy that is not read-only fails the call's preparation.
+`ToolContext.effect` tells the tool and its wrappers which effect a call runs
+under, so a wrapper reports a refusal of a read as a model-visible error and a
+refusal of a change as a confirmed no-effect.
 
 The names are the whole contract: the scheduler cannot see what a tool really
 touches. A mutation must name every resource another Session's call could

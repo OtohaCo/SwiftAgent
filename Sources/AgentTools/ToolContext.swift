@@ -10,6 +10,10 @@ public struct ToolContext: Sendable, Equatable {
     /// The exact model arguments retained for durable mutation intent.
     public let argumentsJSON: String?
     package var noEffectBinding: ToolNoEffectBinding? = nil
+    /// The effect the runtime gives this call when it authorizes or runs it: the tool's policy, or the read-only one the
+    /// tool gave for this input (`AgentTool.readOnlyPolicy(for:)`). A wrapper decides with it how a refusal is told: a
+    /// read's as a model-visible error, a change's as a confirmed no-effect. Nil in a context the runtime did not hand over.
+    public package(set) var effect: ToolPolicy.Effect? = nil
     package let evidenceLedger: EvidenceLedger?
     package let mutationAdmission: (any ToolMutationAdmission)?
     package let executionAdmission: (any ToolExecutionAdmission)?
@@ -67,6 +71,12 @@ public struct ToolContext: Sendable, Equatable {
             && lhs.deadline == rhs.deadline
             && lhs.idempotencyKey == rhs.idempotencyKey
             && lhs.argumentsJSON == rhs.argumentsJSON
+    }
+
+    package func running(_ effect: ToolPolicy.Effect) -> Self {
+        var value = self
+        value.effect = effect
+        return value
     }
 
     package func checkActive() throws {

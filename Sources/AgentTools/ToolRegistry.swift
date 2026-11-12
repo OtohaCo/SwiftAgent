@@ -97,7 +97,7 @@ package struct ToolRegistry: Sendable {
         do { try registration.input.validate(arguments) }
         catch let error as ToolSchemaValidationError { throw ToolRegistryError.invalidArguments(error) }
         let invocation = try registration.tool.prepare(arguments: arguments, prepareAuthorizationBinding: prepareAuthorizationBinding)
-        if registration.tool.policy.recoverableErrors == .confirmedNoEffect {
+        if invocation.policy.recoverableErrors == .confirmedNoEffect {
             try ToolNoEffectProof.checkAdmission(context: context, definition: registration.tool.definition,
                 arguments: arguments, resources: invocation.resources, action: invocation.binding,
                 expectation: invocation.receiptExpectation)
