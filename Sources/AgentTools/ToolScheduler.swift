@@ -56,6 +56,32 @@ public struct ToolScheduler: Sendable {
         await drain.wait(.init(sessionID: sessionID, runID: runID), waiterDidRegister: waiterDidRegister)
     }
 
+    /// Runs a Host's own operation on `resources` under a lease of this scheduler, as a call of `effect` would hold one:
+    /// it waits for calls whose leases conflict with it, and they wait for it until `body` returns. For work outside any
+    /// Run that touches what tools name, such as applying reviewed files to a workspace. A wait still unanswered at
+    /// `deadline` throws `ToolSchedulerError.deadlineExceeded` without running `body`. Never call it from a tool's
+    /// executor on the same scheduler for resources the call already holds: the lease would wait for itself.
+    public func withLease<T: Sendable>(
+        on resources: [ToolResource], effect: ToolPolicy.Effect, until deadline: ContinuousClock.Instant? = nil,
+        _ body: @Sendable () async throws -> T
+    ) async throws -> T {
+        let lease: UUID
+        do {
+            lease = try await coordinator.acquire(resources: resources, effect: effect,
+                                                  execution: effect == .mutation ? .exclusive : .parallel, until: deadline)
+        } catch is ToolResourceCoordinator.WaitExpired {
+            throw ToolSchedulerError.deadlineExceeded
+        }
+        do {
+            let value = try await body()
+            await coordinator.release(lease)
+            return value
+        } catch {
+            await coordinator.release(lease)
+            throw error
+        }
+    }
+
     package func pendingWaiterCount() async -> Int {
         await coordinator.pendingWaiterCount
     }

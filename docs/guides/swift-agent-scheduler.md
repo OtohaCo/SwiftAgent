@@ -63,6 +63,11 @@ separately. Host authors must identify shared resources consistently and use a
 shared scheduler for them. Separate scheduler instances are separate
 coordination domains.
 
+A Host's own operation on such resources, outside any Run, takes the same lease
+with `ToolScheduler.withLease(on:effect:until:_:)`: a mutation waits for and keeps
+out conflicting calls, a read shares with reads. Never take it from inside a call's
+executor for resources that call already holds on the same scheduler.
+
 ## Deadlines and Completion
 
 A call's time has three parts, each bounded separately, and all by the Run's

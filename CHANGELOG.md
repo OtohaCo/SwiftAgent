@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `ToolScheduler.withLease(on:effect:until:_:)` runs a Host's own operation under a
+  scheduler lease, so work outside a Run that touches what tools name (applying
+  reviewed files to a workspace, say) waits for conflicting calls and keeps them out
+  until it returns.
+
 - `AgentTool.readOnlyPolicy(for:)` lets a mutation tool run a call that, for its
   input, only observes as a read: a shared lease, beside neighbouring parallel
   reads, and no mutation intent. Other calls of the tool stay exclusive. Nil, the
