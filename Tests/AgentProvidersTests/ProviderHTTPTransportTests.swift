@@ -7,6 +7,7 @@ import Testing
 @testable import AgentProviders
 
 struct ProviderHTTPTransportTests {
+    #if canImport(Darwin)
     @Test func releasedTransportInvalidatesAndReleasesItsSessionBeforeFallback() async throws {
         let probe = ProviderInvalidatedSessionProbe()
         var transport: URLSessionProviderHTTPTransport? = URLSessionProviderHTTPTransport(configurationFactory: { .ephemeral }, invalidationObserver: { probe.observe($0) })
@@ -15,6 +16,19 @@ struct ProviderHTTPTransportTests {
         try await eventually { probe.invalidated }
         try await eventually { probe.released }
     }
+    #else
+    /// Linux keeps a released transport's session for the life of the process instead of invalidating it.
+    @Test func releasedTransportKeepsItsSessionWithoutInvalidating() async throws {
+        let probe = ProviderInvalidatedSessionProbe()
+        let before = LinuxRetiredSessions.count
+        var transport: URLSessionProviderHTTPTransport? = URLSessionProviderHTTPTransport(configurationFactory: { .ephemeral }, invalidationObserver: { probe.observe($0) })
+        #expect(transport != nil)
+        transport = nil
+        try await eventually { LinuxRetiredSessions.count > before }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(!probe.invalidated)
+    }
+    #endif
 
     @Test func configuredWireIdleAllowsLongPolicyBudgets() async throws {
         let fixture = ProviderHTTPFixture()
@@ -32,7 +46,8 @@ struct ProviderHTTPTransportTests {
         defer { task.cancel() }
         try await fixture.waitForStart()
         fixture.perform { instance in
-            Task { await observed.append(.response(status: Int(instance.request.timeoutInterval), headers: [:])) }
+            let timeout = Int(instance.request.timeoutInterval)
+            Task { await observed.append(.response(status: timeout, headers: [:])) }
         }
         try await eventually { await observed.count == 1 }
         if case .response(let timeout, _)? = await observed.events.first { #expect(timeout == 600) }

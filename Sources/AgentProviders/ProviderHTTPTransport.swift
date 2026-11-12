@@ -53,6 +53,9 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport {
     /// How many requests are still routed to their streams; for tests.
     internal var activeRequests: Int { shared.router.activeCount }
 
+    /// Live request collectors, including any retained after routing ends; for tests.
+    internal var liveExchanges: Int { shared.exchangeCount.value }
+
     public func stream(_ request: URLRequest) -> AsyncThrowingStream<ProviderHTTPEvent, Error> {
         let shared = shared
         return AsyncThrowingStream { continuation in
@@ -64,7 +67,7 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport {
             if let requestTimeoutInterval { request.timeoutInterval = max(request.timeoutInterval, requestTimeoutInterval) }
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.httpShouldHandleCookies = false
-            let exchange = ProviderHTTPExchange(continuation: continuation)
+            let exchange = ProviderHTTPExchange(continuation: continuation, lifetime: shared.exchangeCount)
             // The stream keeps the shared session alive while the request runs.
             continuation.onTermination = { @Sendable _ in withExtendedLifetime(shared) { exchange.cancel() } }
             shared.start(request, for: exchange)
@@ -77,6 +80,7 @@ public struct URLSessionProviderHTTPTransport: ProviderHTTPTransport {
 /// on another queue, so never from inside one of the session's own callbacks.
 private final class ProviderHTTPSharedSession: @unchecked Sendable {
     let router: ProviderHTTPRouter
+    let exchangeCount = ProviderHTTPExchangeCount()
     private let session: URLSession
 
     init(configuration: URLSessionConfiguration, invalidationObserver: (@Sendable (URLSession) -> Void)?) {
@@ -196,18 +200,32 @@ private final class ProviderHTTPRouter: NSObject, URLSessionDataDelegate, @unche
     }
 }
 
+/// Counts actual collector lifetimes separately from the router's active entries.
+private final class ProviderHTTPExchangeCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.withLock { count } }
+    func created() { lock.withLock { count += 1 } }
+    func released() { lock.withLock { count -= 1 } }
+}
+
 // One request and its stream. Session callbacks and stream termination can race. All mutable lifecycle state is
 // locked, and terminal paths detach references before invoking callbacks.
 private final class ProviderHTTPExchange: @unchecked Sendable {
+    private let lifetime: ProviderHTTPExchangeCount
     private let lock = NSLock()
     private var continuation: AsyncThrowingStream<ProviderHTTPEvent, Error>.Continuation?
     private var task: URLSessionDataTask?
     private var onEnd: (@Sendable () -> Void)?
     private var receivedResponse = false
 
-    init(continuation: AsyncThrowingStream<ProviderHTTPEvent, Error>.Continuation) {
+    init(continuation: AsyncThrowingStream<ProviderHTTPEvent, Error>.Continuation, lifetime: ProviderHTTPExchangeCount) {
         self.continuation = continuation
+        self.lifetime = lifetime
+        lifetime.created()
     }
+
+    deinit { lifetime.released() }
 
     /// False when the stream already ended: the task is not started.
     func attach(_ task: URLSessionDataTask, onEnd: @escaping @Sendable () -> Void) -> Bool {
@@ -289,5 +307,7 @@ enum LinuxRetiredSessions {
     static func keep(_ session: URLSession) {
         lock.withLock { sessions.append(session) }
     }
+    /// How many sessions are kept; for tests.
+    static var count: Int { lock.withLock { sessions.count } }
 }
 #endif
