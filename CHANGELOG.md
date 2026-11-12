@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `ProviderRequestPolicy(idleCountsWireActivity: true)` lets bytes the provider receives
+  restart the idle budget even when they decode to no event: SSE keep-alives, `ping`
+  and lifecycle events, encrypted reasoning items and signature-only reasoning parts.
+  Long hidden reasoning is then not cut off as idle; a silent stream still times out.
+  Custom adapters report such activity with `ProviderWireActivity.report()`.
+
 - A fail-fast Journal open retries a contended writer lock for up to 250 ms before it
   reports `storeInUse`. A child process started at the same moment shares the lock
   descriptor until it execs, which made an open right after `close()` fail at random

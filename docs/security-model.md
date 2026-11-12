@@ -361,7 +361,10 @@ Not bounded by the SDK:
   output token limits and the Host's request policy bound them.
 - **Request timing.** Adapters set no deadline or retry of their own; the URL
   loading idle timeout applies. `ProviderRequestPolicyProvider` (opt-in) adds
-  idle budgets, a total deadline and bounded retries.
+  idle budgets, a total deadline and bounded retries. Its idle budgets count
+  decoded output only, unless `idleCountsWireActivity` is set: then received
+  bytes that decode to no event (keep-alives, encrypted or signature-only
+  reasoning) also restart them.
 - **Non-cooperative executors** pin their lease and Session as described above.
 
 ## Data at rest

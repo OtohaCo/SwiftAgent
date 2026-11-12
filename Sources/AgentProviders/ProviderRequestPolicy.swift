@@ -2,10 +2,18 @@ import AgentModels
 import Foundation
 
 /// Opt-in limits for one logical model request, including its retries.
-/// Idle budgets measure normalized output, not HTTP bytes or SSE heartbeats.
+/// Idle budgets measure normalized output, not HTTP bytes or SSE heartbeats,
+/// unless `idleCountsWireActivity` is set.
 public struct ProviderRequestPolicy: Sendable {
     public let idleBeforeFirstOutput: Duration?
     public let idleAfterOutput: Duration?
+    /// When true, bytes the provider receives also restart the idle budget, even when
+    /// they decode to no `ModelEvent`: SSE comments, `ping` and lifecycle events,
+    /// encrypted reasoning items and signature-only reasoning parts. Such activity
+    /// never counts as output, so a request without output can still be retried.
+    /// The total deadline is unaffected. Built-in adapters report activity for every
+    /// received chunk; a custom adapter reports it with `ProviderWireActivity.report()`.
+    public let idleCountsWireActivity: Bool
     public let totalDeadline: Duration?
     public let maximumAttempts: Int
     public let initialBackoff: Duration
@@ -15,7 +23,8 @@ public struct ProviderRequestPolicy: Sendable {
     public init(idleBeforeFirstOutput: Duration? = nil, idleAfterOutput: Duration? = nil,
                 totalDeadline: Duration? = nil, maximumAttempts: Int = 1,
                 initialBackoff: Duration = .seconds(1), maximumBackoff: Duration = .seconds(30),
-                maximumRetryAfter: Duration = .seconds(60)) throws {
+                maximumRetryAfter: Duration = .seconds(60),
+                idleCountsWireActivity: Bool = false) throws {
         guard [idleBeforeFirstOutput, idleAfterOutput, totalDeadline].allSatisfy({ $0.map { $0 > .zero } ?? true }),
               (1...100).contains(maximumAttempts), initialBackoff >= .zero,
               maximumBackoff >= initialBackoff, maximumRetryAfter >= .zero else {
@@ -28,6 +37,7 @@ public struct ProviderRequestPolicy: Sendable {
         self.initialBackoff = initialBackoff
         self.maximumBackoff = maximumBackoff
         self.maximumRetryAfter = maximumRetryAfter
+        self.idleCountsWireActivity = idleCountsWireActivity
     }
 
     func delay(after attempt: Int, retryAfter: Duration?, jitter: Double) -> Duration {
@@ -132,13 +142,16 @@ public struct ProviderRequestPolicyProvider: ModelProvider, ModelProviderRequest
         AsyncThrowingStream { continuation in
             let key = drain.begin(request)
             let state = PolicyAttemptState(continuation: continuation, policy: policy, clock: clock, deadline: deadline)
+            let activity = policy.idleCountsWireActivity ? ProviderWireActivityRecorder { await state.wireActivity() } : nil
             let producer = Task {
                 defer { drain.end(key) }
                 await state.start()
                 do {
                     try Task.checkCancellation()
                     var terminal = false
-                    for try await event in inner.stream(request: request) {
+                    // The inner adapter's producer task inherits the recorder.
+                    let events = ProviderWireActivity.$recorder.withValue(activity) { inner.stream(request: request) }
+                    for try await event in events {
                         try Task.checkCancellation()
                         if case .responseCompleted = event { terminal = true }
                         guard await state.accept(event) else { break }
@@ -182,6 +195,7 @@ private actor PolicyAttemptState {
         self.continuation = continuation; self.policy = policy; self.clock = clock; self.deadline = deadline
     }
     func start() { schedule() }
+    func wireActivity() { if !ended { schedule() } }
     func accept(_ event: ModelEvent) -> Bool {
         guard !ended else { return false }
         if policyOutput(event) { output = true; schedule() }
@@ -210,5 +224,35 @@ private actor PolicyAttemptState {
     private func expire(_ version: Int, reason: ModelProviderError.Diagnostic.Reason) {
         guard version == generation else { return }
         finish(policyTimeout(reason))
+    }
+}
+
+/// Activity on the wire of the current model request, for `ProviderRequestPolicy.idleCountsWireActivity`.
+public enum ProviderWireActivity {
+    @TaskLocal static var recorder: ProviderWireActivityRecorder?
+
+    /// Report that the provider received bytes for the request being streamed. Call it from
+    /// the adapter's stream (or a task it starts) when data arrives that may decode to no
+    /// event. Outside a policy that counts wire activity it does nothing.
+    public static func report() { recorder?.record() }
+}
+
+/// Coalesces reports: at most one restart of the idle budget is pending at a time.
+final class ProviderWireActivityRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = false
+    private var count = 0
+    private let restart: @Sendable () async -> Void
+
+    init(_ restart: @escaping @Sendable () async -> Void) { self.restart = restart }
+
+    var reports: Int { lock.withLock { count } }
+
+    func record() {
+        guard lock.withLock({ count += 1; let start = !pending; pending = true; return start }) else { return }
+        Task {
+            lock.withLock { pending = false }
+            await restart()
+        }
     }
 }

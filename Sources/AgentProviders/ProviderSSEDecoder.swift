@@ -22,6 +22,7 @@ struct ProviderSSEDecoder {
     }
 
     mutating func consume(_ bytes: Data) throws -> [ProviderSSEEvent] {
+        if !bytes.isEmpty { ProviderWireActivity.report() }
         var events: [ProviderSSEEvent] = []
         for byte in bytes {
             if skipLF {
