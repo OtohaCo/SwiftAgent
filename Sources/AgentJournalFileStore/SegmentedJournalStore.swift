@@ -1026,26 +1026,12 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
         }
     }
 
-    /// How long fail-fast ownership keeps retrying a contended lock before it reports
-    /// `storeInUse`. A child process the host is starting shares the close-on-exec lock
-    /// descriptor until it execs, so an open right after `close()` can see the lock held
-    /// for that moment. A real owner still holds it after this bound.
-    static let spawnWindowGrace: Duration = .milliseconds(250)
-
-    private static func spawnWindowRetry() -> @Sendable () throws -> Void {
-        let end = ContinuousClock.now.advanced(by: spawnWindowGrace)
-        return {
-            guard ContinuousClock.now < end else { throw JournalWriterLock.Contended() }
-            Thread.sleep(forTimeInterval: 0.001)
-        }
-    }
-
     private static func lockStore(_ directory: URL,
                                   retry: (@Sendable () throws -> Void)? = nil,
                                   observer: (@Sendable (JournalOpeningStage) -> Void)? = nil) throws -> JournalWriterLock {
         do {
             let owner = try JournalWriterLock(file: directory.appendingPathComponent(".writer.lock"),
-                                              retry: retry ?? spawnWindowRetry(),
+                                              retry: retry ?? JournalWriterLock.spawnWindowRetry(),
                                               contended: { observer?(.lockContended) })
             observer?(.lockAcquired)
             return owner

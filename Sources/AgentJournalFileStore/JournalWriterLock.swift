@@ -74,6 +74,20 @@ final class JournalWriterLock {
 
     deinit { try? close() }
 
+    /// How long fail-fast ownership keeps retrying a contended lock before it reports
+    /// `storeInUse`. A child process the host is starting shares the close-on-exec lock
+    /// descriptor until it execs, so an open right after `close()` can see the lock held
+    /// for that moment. A real owner still holds it after this bound.
+    static let spawnWindowGrace: Duration = .milliseconds(250)
+
+    static func spawnWindowRetry() -> @Sendable () throws -> Void {
+        let end = ContinuousClock.now.advanced(by: spawnWindowGrace)
+        return {
+            guard ContinuousClock.now < end else { throw Contended() }
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+    }
+
     #if os(Windows)
     private static func windowsError(_ code: DWORD = GetLastError()) -> Unavailable { Unavailable(cause: NSError(domain: "Win32", code: Int(code))) }
     #endif

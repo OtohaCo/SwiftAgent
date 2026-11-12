@@ -11,7 +11,9 @@ struct JournalWriterLockTests {
         let first = try JournalWriterLock(file: file)
         #expect(throws: (any Error).self) { try JournalWriterLock(file: file) }
         try first.close()
-        let second = try JournalWriterLock(file: file)
+        // A child another test is starting can share the closed descriptor until it execs;
+        // reacquire the way a fail-fast open does.
+        let second = try JournalWriterLock(file: file, retry: JournalWriterLock.spawnWindowRetry())
         try second.close()
         try second.close()
     }
