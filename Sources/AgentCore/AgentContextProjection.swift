@@ -190,34 +190,65 @@ public struct AgentIdentityContextProjector: AgentContextProjector {
     }
 }
 
-/// Explicit cross-provider handoff. It strips only opaque provider state and
-/// model-private reasoning; canonical tool calls and results stay paired.
+/// Explicit cross-provider handoff: the one outbound view of a history made with other models, accounts or settings. The
+/// history itself is never changed; only the request sent to the next model is.
+/// - Another binding's provider continuation and model-private reasoning are left out. An assistant turn whose every
+///   continuation was made under `keeping` (the next binding's own `continuationOrigin`, for the same model) is sent whole,
+///   since some providers refuse a tool call that comes back without the thinking before it.
+/// - An assistant turn left with neither content nor tool calls is folded away: no provider accepts an empty turn.
+/// - A tool call whose name not every provider accepts (`ToolCall.isPortableName`) goes by `ToolCall.portableName(for:)`.
+///   Its identifier, arguments and result stay as they were, so call and result still pair.
 public struct AgentSemanticHandoffProjector: AgentContextProjector {
-    public init() {}
+    public let keeping: ModelProviderContinuationOrigin?
+
+    public init(keeping origin: ModelProviderContinuationOrigin? = nil) {
+        keeping = origin
+    }
 
     public func project(_ input: AgentContextProjectionInput) async throws -> AgentContextProjection {
-        let messages = input.canonicalMessages.map { message -> ModelMessage in
-            guard case .assistant(let content, let calls) = message else { return message }
+        var messages: [ModelMessage] = []
+        messages.reserveCapacity(input.canonicalMessages.count)
+        for message in input.canonicalMessages {
+            guard case .assistant(let content, let calls) = message, !isOwn(content, model: input.model) else {
+                messages.append(message)
+                continue
+            }
             let visible = content.filter { part in
                 switch part {
                 case .providerContinuation, .reasoning: false
                 default: true
                 }
             }
-            return .assistant(content: visible, toolCalls: calls)
+            guard !visible.isEmpty || !calls.isEmpty else { continue }
+            let portable = calls.map { call in
+                ToolCall.isPortableName(call.name) ? call
+                    : ToolCall(id: call.id, name: ToolCall.portableName(for: call.name), argumentsJSON: call.argumentsJSON,
+                               completeness: call.completeness)
+            }
+            messages.append(.assistant(content: visible, toolCalls: portable))
         }
+        let lossy = messages != input.canonicalMessages
         return .init(
             messages: messages,
             plan: .init(
                 projectionID: "semantic-handoff",
-                version: "1",
+                version: "2",
                 sourceRevision: input.conversationRevision,
                 sourceDigest: try input.sourceDigest(),
                 contextEpoch: input.contextEpoch,
-                lossy: true,
-                reason: "Provider-private continuation and reasoning were excluded."
+                lossy: lossy,
+                reason: lossy ? "Another binding's private continuation and reasoning were excluded; empty turns and tool names other models refuse were adapted." : nil
             )
         )
+    }
+
+    private func isOwn(_ content: [ModelContent], model: ModelID) -> Bool {
+        guard let keeping else { return false }
+        let continuations = content.compactMap { part -> ModelProviderContinuation? in
+            if case .providerContinuation(let state) = part { return state }
+            return nil
+        }
+        return !continuations.isEmpty && continuations.allSatisfy { $0.model == model && $0.origin == keeping }
     }
 }
 

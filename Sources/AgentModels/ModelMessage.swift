@@ -1,3 +1,4 @@
+import Foundation
 public enum ModelRole: String, Hashable, Sendable, Codable {
     case system, developer, user, assistant, tool
 }
@@ -69,6 +70,18 @@ public struct ToolCall: Hashable, Sendable, Codable {
     /// The model is told in the call's result that its arguments were invalid; every provider needs a
     /// call's input to be an object, and a provider continuation replays the same replacement.
     package static let replacedInvalidArgumentsJSON = "{}"
+
+    /// Whether every model API accepts `name` for a tool call: letters, digits, "_" and "-", at most 64.
+    public static func isPortableName(_ name: String) -> Bool {
+        (1...64).contains(name.utf8.count)
+            && name.utf8.allSatisfy { ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x41 && $0 <= 0x5A) || ($0 >= 0x61 && $0 <= 0x7A) || $0 == 0x5F || $0 == 0x2D }
+    }
+
+    /// The name a call goes by in a request to another model: its own when portable, otherwise a stable stand-in made from
+    /// it (`tool_` and 32 hexadecimal digits of its SHA-256), the same on every request. Histories keep the original.
+    public static func portableName(for name: String) -> String {
+        isPortableName(name) ? name : "tool_" + String(ModelImageDigest.sha256Hex(Data(name.utf8)).prefix(32))
+    }
 
     public init(
         id: ToolCallID,

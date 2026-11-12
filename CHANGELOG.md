@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `AgentSemanticHandoffProjector(keeping:)` is the one outbound view of a history
+  made with other models: it keeps turns whose every continuation has the next
+  binding's origin, folds assistant turns left empty once another binding's
+  reasoning and continuation are removed, and sends a tool call whose name not
+  every provider accepts under `ToolCall.portableName(for:)` (same identifier,
+  arguments and result). The history is not changed. `ToolCall.isPortableName`
+  is the shared name rule. A property test encodes random multi-provider
+  histories with each provider's encoder.
+
 - `ToolScheduler.withLease(on:effect:until:_:)` runs a Host's own operation under a
   scheduler lease, so work outside a Run that touches what tools name (applying
   reviewed files to a workspace, say) waits for conflicting calls and keeps them out

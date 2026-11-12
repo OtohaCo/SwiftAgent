@@ -314,10 +314,7 @@ package struct AnyAgentTool: Sendable {
     }
 
     /// Letters, digits, "_" and "-", at most 64: accepted by every provider's tool names.
-    static func portable(_ name: String) -> Bool {
-        (1...64).contains(name.utf8.count)
-            && name.utf8.allSatisfy { ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x41 && $0 <= 0x5A) || ($0 >= 0x61 && $0 <= 0x7A) || $0 == 0x5F || $0 == 0x2D }
-    }
+    static func portable(_ name: String) -> Bool { ToolCall.isPortableName(name) }
 
     private static func validateEvidence(_ requirements: [EvidenceRequirement], context: ToolContext) async throws {
         guard !requirements.isEmpty else { return }

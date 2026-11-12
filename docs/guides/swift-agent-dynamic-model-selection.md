@@ -97,9 +97,16 @@ deployment. Candidates given without IDs are known only to their Route
 instance, so their state is refused after a restart. Use a semantic handoff to
 continue such a conversation elsewhere.
 
-`AgentSemanticHandoffProjector` is an explicit, lossy Host choice. It removes
-provider-private continuation and reasoning while preserving visible content
-and tool-call/result pairs. It does not fabricate a native continuation, close
+`AgentSemanticHandoffProjector` is an explicit, lossy Host choice and the one
+place where a history made by other models is adapted for the next one. It
+removes provider-private continuation and reasoning while preserving visible
+content and tool-call/result pairs; with `keeping:` set to the next binding's
+`continuationOrigin`, assistant turns whose every continuation has that origin
+and model are sent whole. An assistant turn left empty is folded away, and a
+tool call whose name not every provider accepts goes by
+`ToolCall.portableName(for:)` with its identifier, arguments and result
+unchanged. The history itself, and the raw proposal the model made, are never
+rewritten: only the request is. It does not fabricate a native continuation, close
 an unresolved tool call, mint Evidence, or authorize a mutation. If no safe
 handoff exists, keep the old Session unchanged and surface the typed failure.
 
