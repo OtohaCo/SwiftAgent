@@ -122,6 +122,69 @@ import Glibc
         #expect(try ChildRun.probe(directory).status == 42)
     }
 
+    /// A holder that lets go while a fail-fast open is contending (as a child that is
+    /// still starting does) does not make the open report another writer.
+    @Test func failFastOpenRidesOutAHolderThatReleasesAtContention() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("lock-brief-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let initial = try AgentIncrementalJournal.create(at: directory, operationDomain: "brief")
+        try await initial.close()
+        let holder = BriefHolder(try JournalWriterLock(file: directory.appendingPathComponent(".writer.lock")))
+        let observer = OpeningObserver(onContention: { holder.release() })
+        let opened = try await AgentIncrementalJournal.openAsyncForTesting(at: directory,
+            writerLockWait: .failFast, observer: observer.observe)
+        #expect(observer.contentions >= 1)
+        #expect(observer.acquisitions == 1)
+        #expect(try ChildRun.probe(directory).status == 42)
+        try await opened.close()
+        #expect(try ChildRun.probe(directory).status == 0)
+    }
+
+    /// A holder that keeps the lock is still reported promptly as another writer.
+    @Test func failFastOpenStillRefusesAHolderThatKeepsTheLock() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("lock-kept-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let initial = try AgentIncrementalJournal.create(at: directory, operationDomain: "kept")
+        try await initial.close()
+        let holder = try JournalWriterLock(file: directory.appendingPathComponent(".writer.lock"))
+        defer { try? holder.close() }
+        let observer = OpeningObserver()
+        let started = ContinuousClock.now
+        await #expect(throws: AgentJournalError.storeInUse) {
+            try await AgentIncrementalJournal.openAsyncForTesting(at: directory,
+                writerLockWait: .failFast, observer: observer.observe)
+        }
+        #expect(observer.contentions >= 1 && observer.acquisitions == 0)
+        #expect(started.duration(to: .now) < .seconds(5))
+    }
+
+    /// The real cause: a forked child that has not yet exec'd shares the lock description.
+    /// An in-process fail-fast open that starts inside that window succeeds once it execs.
+    @Test func failFastOpenRidesOutARealPreExecWindow() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("fork-brief-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try AgentIncrementalJournal.create(at: directory, operationDomain: "fork-window")
+        try await store.close()
+        let process = Process()
+        process.executableURL = try ChildRun.journalTestProcess()
+        process.arguments = ["fork-window", directory.path]
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input; process.standardOutput = output; process.standardError = Pipe()
+        try process.run()
+        defer { if process.isRunning { input.fileHandleForWriting.closeFile(); process.waitUntilExit() } }
+        #expect(try line(output.fileHandleForReading).hasPrefix("WINDOW "))
+        let gate = input.fileHandleForWriting
+        let observer = OpeningObserver(onContention: { gate.write(Data([1])) })
+        let opened = try await AgentIncrementalJournal.openAsyncForTesting(at: directory,
+            writerLockWait: .failFast, observer: observer.observe)
+        #expect(observer.contentions >= 1)
+        #expect(try line(output.fileHandleForReading) == "EXECUTED")
+        try await opened.close()
+        gate.write(Data([1]))
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+    }
+
     private func line(_ handle: FileHandle) throws -> String {
         var bytes = Data()
         while let part = try handle.read(upToCount: 1), !part.isEmpty {
@@ -165,13 +228,22 @@ private final class OpeningObserver: @unchecked Sendable {
     private let (acquired, acquisitionSignal) = AsyncStream<Void>.makeStream()
     private let hold = DispatchSemaphore(value: 0)
     private let blockAcquired: Bool
-    init(blockAcquired: Bool = false) { self.blockAcquired = blockAcquired }
+    private let onContention: (@Sendable () -> Void)?
+    private var contendedCount = 0
+    init(blockAcquired: Bool = false, onContention: (@Sendable () -> Void)? = nil) {
+        self.blockAcquired = blockAcquired
+        self.onContention = onContention
+    }
     var acquisitions: Int { lock.withLock { acquiredCount } }
     var formatReads: Int { lock.withLock { readCount } }
+    var contentions: Int { lock.withLock { contendedCount } }
     @Sendable func observe(_ stage: JournalOpeningStage) {
         switch stage {
         case .formatValidated: lock.withLock { readCount += 1 }
-        case .lockContended: contentionSignal.yield()
+        case .lockContended:
+            let first = lock.withLock { contendedCount += 1; return contendedCount == 1 }
+            if first { onContention?() }
+            contentionSignal.yield()
         case .lockAcquired:
             lock.withLock { acquiredCount += 1 }
             acquisitionSignal.yield()
@@ -181,4 +253,13 @@ private final class OpeningObserver: @unchecked Sendable {
     func waitForContention() async { for await _ in contended { return } }
     func waitForAcquisition() async { for await _ in acquired { return } }
     func release() { hold.signal() }
+}
+
+/// An in-process lock holder that lets go once, from any thread.
+private final class BriefHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: JournalWriterLock?
+    init(_ held: JournalWriterLock) { self.held = held }
+    func release() { lock.withLock { try? held?.close(); held = nil } }
+    deinit { release() }
 }

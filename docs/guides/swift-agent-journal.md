@@ -128,9 +128,11 @@ directory to inspect its verified root. A failed close retains ownership for
 a retry of close, never for another mutation. The lock descriptor is
 close-on-exec, so a child process started while the store is open does not keep
 it locked after close. Until such a child starts its new program it still
-shares the descriptor: an open right after `close()`, while the same process is
-spawning, can briefly get `storeInUse` and succeeds once the spawn completes
-([#47](https://github.com/OtohaCo/SwiftAgent/issues/47)).
+shares the descriptor. A fail-fast open rides out that moment: it retries a
+contended lock for up to 250 ms before it reports `storeInUse`, so an open right
+after `close()` while the same process is spawning succeeds once the spawn
+completes ([#47](https://github.com/OtohaCo/SwiftAgent/issues/47)). A lock that is
+still held after that bound belongs to another writer.
 
 ## Committed state and queries
 

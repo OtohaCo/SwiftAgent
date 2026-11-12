@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- A fail-fast Journal open retries a contended writer lock for up to 250 ms before it
+  reports `storeInUse`. A child process started at the same moment shares the lock
+  descriptor until it execs, which made an open right after `close()` fail at random
+  while the host was spawning processes (#47). A lock held past the bound is still
+  refused.
+
 - Linux: provider transports no longer invalidate their URL session; it is kept for the
   life of the process. Invalidating it aborted long runs with "_MultiHandle deallocated
   with non-zero retain count" however long the session was held afterwards.
