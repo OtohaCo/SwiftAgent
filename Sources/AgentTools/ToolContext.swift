@@ -71,7 +71,7 @@ public struct ToolContext: Sendable, Equatable {
 
     package func checkActive() throws {
         try Task.checkCancellation()
-        if let deadline, ContinuousClock.now >= deadline {
+        if let deadline, AgentClock.now >= deadline {
             throw ToolInvocationError.deadlineExceeded
         }
     }

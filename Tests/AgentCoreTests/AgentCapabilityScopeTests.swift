@@ -6,7 +6,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentCapabilityScopeTests {
+@Suite(.manualClock) struct AgentCapabilityScopeTests {
     @Test(arguments: [false, true])
     func revokeCancelsCooperativeStartupProjectionOrEstimator(estimator: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("scope-startup-cancel-\(UUID())")
@@ -961,7 +961,7 @@ private final class ScopeIntentCommitGate: @unchecked Sendable {
     }
 
     func waitUntilEntered() async -> Bool {
-        await XCTWaiter.fulfillment(of: [entered], timeout: 3) == .completed
+        await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed
     }
 
     func release() {

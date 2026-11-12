@@ -5,7 +5,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-struct AuditBoundaryTests {
+@Suite(.manualClock) struct AuditBoundaryTests {
     @Test(arguments: [false, true])
     func revocationAfterIntentOrFinalAdmissionNeverErasesTheIntent(_ final: Bool) async throws {
         let directory = auditTestDirectory()
@@ -51,6 +51,7 @@ struct AuditBoundaryTests {
         let run = try await Agent(model: fixtureModel, provider: AuditExecutionProvider(), tools: [try AuditExecutionTool(probe: probe)],
             configuration: .init(authorization: configuration)).makeSession(journal: journal).run("write")
         await entered.wait()
+        await ManualAgentClock.current.advanceWhenArmed(by: .seconds(1))
         await #expect(throws: AgentAuthorizationError.authorizerTimedOut) { try await run.wait() }
         await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
         #expect(await probe.executorEntered == 0)

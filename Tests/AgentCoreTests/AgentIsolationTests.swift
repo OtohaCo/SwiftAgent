@@ -20,10 +20,10 @@ struct AgentIsolationTests {
         )
         let first = try await session.run("first")
         _ = try await first.wait()
-        #expect(await XCTWaiter.fulfillment(of: [releaseStarted], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [releaseStarted], timeout: 60) == .completed)
 
         let replacement = Task { try await session.run("second") }
-        let waitedForDrain = await XCTWaiter.fulfillment(of: [drainWaitStarted], timeout: 1)
+        let waitedForDrain = await XCTWaiter.fulfillment(of: [drainWaitStarted], timeout: 60)
         await releaseGate.open()
 
         #expect(waitedForDrain == .completed)
@@ -100,7 +100,7 @@ struct AgentIsolationTests {
         let b = try isolationAgent(scheduler: scheduler, tool: LeaseProbe(gate: gate, entered: entered, returned: returned,
                                                                          probe: probe, timeout: .milliseconds(100)))
         let run = try await a.makeSession().run("A")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         if cancel {
             await run.cancel()
             await #expect(throws: CancellationError.self) { try await run.wait() }
@@ -114,7 +114,7 @@ struct AgentIsolationTests {
         try await Task.sleep(for: .milliseconds(200))
         #expect(await probe.labels == ["A"])
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         #expect(try await waiting.value.outcome == .completed)
         #expect(try await sessionB.run("C").wait().outcome == .completed)
         #expect(await probe.labels == ["A", "B", "C"])
@@ -127,7 +127,7 @@ struct AgentIsolationTests {
         let agent = try isolationAgent(scheduler: scheduler, tool: LeaseProbe(gate: gate, entered: entered, returned: returned,
                                                                              probe: probe, timeout: .seconds(3)))
         let a = try await agent.makeSession().run("A")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         #expect(try await agent.makeSession().run("other").wait().outcome == .completed)
         #expect(await probe.labels == ["A", "other"])
         await gate.open()
@@ -157,19 +157,19 @@ struct AgentIsolationTests {
         let first = try await session.run("A")
 
         #expect(await providerProbe.waitUntilStarted("A"))
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) {
             try await first.wait()
         }
 
         let replacement = Task { try await session.run("B") }
-        #expect(await XCTWaiter.fulfillment(of: [drainWaitStarted], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [drainWaitStarted], timeout: 60) == .completed)
         let labelsBeforeSecondWorker = await providerProbe.labels
         #expect(labelsBeforeSecondWorker == ["A"])
         #expect(await probe.labels == ["A"])
 
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         let second = try await replacement.value
         _ = try await second.wait()
         #expect(await providerProbe.labels == ["A", "B"])
@@ -216,20 +216,20 @@ struct AgentIsolationTests {
         let session = try agent.makeSession(drainWaitDidBegin: { _ in drainWaitStarted.fulfill() })
         let first = try await session.run("A")
 
-        #expect(await XCTWaiter.fulfillment(of: [enteredA, enteredB], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [enteredA, enteredB], timeout: 60) == .completed)
         await first.cancel()
         await #expect(throws: CancellationError.self) { try await first.wait() }
 
         await gateA.open()
-        #expect(await XCTWaiter.fulfillment(of: [returnedA], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returnedA], timeout: 60) == .completed)
 
         let replacement = Task { try await session.run("B") }
-        #expect(await XCTWaiter.fulfillment(of: [drainWaitStarted], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [drainWaitStarted], timeout: 60) == .completed)
         let labelsBeforeSecondWorker = await providerProbe.labels
         #expect(labelsBeforeSecondWorker == ["A"])
 
         await gateB.open()
-        #expect(await XCTWaiter.fulfillment(of: [returnedB], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returnedB], timeout: 60) == .completed)
         let second = try await replacement.value
         _ = try await second.wait()
         let labelsAfterSecondWorker = await providerProbe.labels

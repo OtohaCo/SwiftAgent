@@ -4,7 +4,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-struct FileContentRunTests {
+@Suite(.manualClock) struct FileContentRunTests {
     private func file(_ name: String = "report", tokens: Int = 2000) throws -> ModelFileReference {
         try .init(uri: URL(string: "https://example.com/files/\(name)")!, mediaType: .pdf,
                   description: "immutable report", estimatedInputTokens: tokens)

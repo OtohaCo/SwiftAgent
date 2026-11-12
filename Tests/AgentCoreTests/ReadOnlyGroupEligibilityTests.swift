@@ -5,7 +5,7 @@ import AgentTools
 @testable import AgentCore
 import AgentJournalFileStore
 
-@Suite struct ReadOnlyGroupEligibilityTests {
+@Suite(.manualClock) struct ReadOnlyGroupEligibilityTests {
     // Deliberately constructed projector inputs, separate from SDK execution below.
     @Test(arguments: [false, true]) func unprovedFailedOrMixedGroupIsNeverRemoved(mixed: Bool) async throws {
         let failed = ToolCall(id: .init(rawValue: "failed"), name: mixed ? "search" : "write", argumentsJSON: "{}", completeness: .complete)

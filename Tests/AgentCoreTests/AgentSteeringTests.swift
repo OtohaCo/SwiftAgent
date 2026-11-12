@@ -17,7 +17,7 @@ struct AgentSteeringTests {
         }
         let session = try Agent(model: fixtureModel, provider: provider, tools: [AddTool(log: log)]).makeSession()
         let run = try await session.run("original")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         await #expect(throws: AgentRunError.emptySteering) { try await run.steer(" \n") }
         let id = try await run.steer("correction")
         await gate.open()
@@ -56,7 +56,7 @@ struct AgentSteeringTests {
         )
 
         let run = try await session.run("original", using: binding)
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         _ = try await run.steer("correction")
         await gate.open()
         _ = try await run.wait()
@@ -73,7 +73,7 @@ struct AgentSteeringTests {
         let provider = ScriptedProvider { request, turn in turn == 1 ? toolResponse(request, calls) : textResponse(request, "Done") }
         let session = try Agent(model: fixtureModel, provider: provider, tools: [tool, AddTool(log: EffectLog())]).makeSession()
         let run = try await session.run("work")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         _ = try await run.steer("adjust")
         await gate.open()
         let result = try await run.wait()
@@ -96,7 +96,7 @@ struct AgentSteeringTests {
             configuration: AgentConfiguration(maxModelTurns: 1)
         ).makeSession()
         let run = try await session.run("original")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         let a = try await run.steer("one"), b = try await run.steer("two")
         #expect(a != b)
         await gate.open()
@@ -117,7 +117,7 @@ struct AgentSteeringTests {
         }
         let session = try Agent(model: fixtureModel, provider: provider, tools: [AddTool(log: EffectLog()), blocker]).makeSession()
         let run = try await session.run("original")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         _ = try await run.steer("remember")
         await run.cancel()
         await #expect(throws: CancellationError.self) { try await run.wait() }
@@ -125,7 +125,7 @@ struct AgentSteeringTests {
             .tool(.init(callID: call.id, content: [.json(.object(["sum": .number(5)]))], isError: false)), .user([.text("remember")])]
         #expect(await session.history == checkpoint)
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         let next = try await session.run("continue")
         _ = try await next.wait()
         #expect(await session.history == checkpoint + [.user([.text("continue")]), .assistant(content: [.text("Next")], toolCalls: [])])
@@ -153,7 +153,7 @@ struct AgentSteeringTests {
             }
             let session = try Agent(model: fixtureModel, provider: provider, tools: [AddTool(log: log)]).makeSession()
             let run = try await session.run("original")
-            #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+            #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
             _ = try await run.steer("correction A")
             _ = try await run.steer("correction B")
             let release: @Sendable () async -> Void = { await responseGate.open() }
@@ -166,8 +166,8 @@ struct AgentSteeringTests {
             let oldRequestCount = await provider.log.requests.count
             await responseGate.open()
             await continuationGate.open()
-            #expect(await XCTWaiter.fulfillment(of: [firstReturned], timeout: 1) == .completed)
-            if oldRequestCount > 1 { #expect(await XCTWaiter.fulfillment(of: [secondReturned], timeout: 1) == .completed) }
+            #expect(await XCTWaiter.fulfillment(of: [firstReturned], timeout: 60) == .completed)
+            if oldRequestCount > 1 { #expect(await XCTWaiter.fulfillment(of: [secondReturned], timeout: 60) == .completed) }
             let expected: [ModelMessage] = [.user([.text("original")]), .user([.text("correction A")]), .user([.text("correction B")])]
             #expect(await session.history == expected)
             #expect(await session.activeRunID == nil)

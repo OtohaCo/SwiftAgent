@@ -4,7 +4,7 @@ import AgentModels
 import Testing
 @testable import AgentCore
 
-struct AuditExportTests {
+@Suite(.manualClock) struct AuditExportTests {
     @Test func lostAckResendsStableRecordsAndCheckpointSurvivesReopen() async throws {
         let directory = auditTestDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

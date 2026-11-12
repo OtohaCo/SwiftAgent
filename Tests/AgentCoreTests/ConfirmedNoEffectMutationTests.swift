@@ -5,7 +5,7 @@ import AgentTools
 import Foundation
 import Testing
 
-struct ConfirmedNoEffectMutationTests {
+@Suite(.manualClock) struct ConfirmedNoEffectMutationTests {
     @Test func executorConflictIsAtomicallyRecordedBeforeAReauthorizedNewAttempt() async throws {
         let directory = auditTestDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

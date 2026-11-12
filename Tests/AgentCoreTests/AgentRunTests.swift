@@ -5,7 +5,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentRunTests {
+@Suite(.manualClock) struct AgentRunTests {
     @Test func explicitCancelIsObservableAndSessionCanContinue() async throws {
         let gate = ManualGate()
         let entered = XCTestExpectation(description: "Provider entered")
@@ -16,7 +16,7 @@ struct AgentRunTests {
         }
         let session = try Agent(model: fixtureModel, provider: provider).makeSession()
         let run = try await session.run("first")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         await run.cancel()
         await run.cancel()
         await #expect(throws: CancellationError.self) { try await run.wait() }
@@ -24,7 +24,7 @@ struct AgentRunTests {
         let next = try await session.run("next")
         _ = try await next.wait()
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [late], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [late], timeout: 60) == .completed)
         #expect(await session.history == [.user([.text("first")]), .user([.text("next")]), .assistant(content: [.text("Done")], toolCalls: [])])
     }
 
@@ -36,15 +36,15 @@ struct AgentRunTests {
         let provider = ScriptedProvider { request, _ in entered.fulfill(); await gate.wait(); return textResponse(request, "Done") }
         let session = try Agent(model: fixtureModel, provider: provider).makeSession()
         let run = try await session.run("work")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         let waiter = Task {
             defer { finished.fulfill() }
             waiting.fulfill()
             return try await run.wait()
         }
-        #expect(await XCTWaiter.fulfillment(of: [waiting], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [waiting], timeout: 60) == .completed)
         waiter.cancel()
-        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 60) == .completed)
         await gate.open()
         await #expect(throws: CancellationError.self) { try await waiter.value }
         #expect(try await run.wait().outcome == .completed)
@@ -58,7 +58,7 @@ struct AgentRunTests {
         let session = try Agent(model: fixtureModel, provider: provider).makeSession()
         let run = try await session.run("work")
         let observer = Task { await collectEvents(run.events) }
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         observer.cancel()
         _ = await observer.value
         await gate.open()
@@ -88,7 +88,7 @@ struct AgentRunTests {
         let agent = try Agent(model: fixtureModel, provider: provider)
         let a = try agent.makeSession(), b = try agent.makeSession()
         let firstA = try await a.run("A"), firstB = try await b.run("B")
-        #expect(await XCTWaiter.fulfillment(of: [enteredA, enteredB], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [enteredA, enteredB], timeout: 60) == .completed)
         await firstA.cancel()
         await #expect(throws: CancellationError.self) { try await firstA.wait() }
         let nextA = try await a.run("A2")
@@ -107,11 +107,11 @@ struct AgentRunTests {
         waiting.expectedFulfillmentCount = 3
         let provider = ScriptedProvider { request, _ in entered.fulfill(); await gate.wait(); return textResponse(request, "Done") }
         let run = try await Agent(model: fixtureModel, provider: provider).makeSession().run("work")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         let a = Task { waiting.fulfill(); return try await run.wait() }
         let b = Task { waiting.fulfill(); return try await run.wait() }
         let c = Task { waiting.fulfill(); return try await run.wait() }
-        #expect(await XCTWaiter.fulfillment(of: [waiting], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [waiting], timeout: 60) == .completed)
         a.cancel()
         await #expect(throws: CancellationError.self) { try await a.value }
         await gate.open()
@@ -149,7 +149,7 @@ struct AgentRunTests {
         let agent = try Agent(model: fixtureModel, provider: provider, tools: [tool])
         let session = try agent.makeSession(id: sessionID)
         let run = try await session.run("block")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         await run.cancel()
         await #expect(throws: CancellationError.self) { try await run.wait() }
         #expect(await collectEvents(run.events).last == .runFinished(.cancelled))
@@ -161,7 +161,7 @@ struct AgentRunTests {
 
         await gate.open()
         try await run.waitForDrain()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
 
         let after = try await replacement.run("after drain")
         #expect(try await after.wait().outcome == .completed)
@@ -197,7 +197,7 @@ struct AgentRunTests {
         }
         let session = try Agent(model: fixtureModel, provider: provider, tools: [tool]).makeSession()
         let run = try await session.run("block")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         await run.cancel()
         await #expect(throws: CancellationError.self) { try await run.wait() }
 
@@ -206,7 +206,7 @@ struct AgentRunTests {
         let a = Task { waiting.fulfill(); try await run.waitForDrain() }
         let b = Task { waiting.fulfill(); try await run.waitForDrain() }
         let c = Task { waiting.fulfill(); try await run.waitForDrain() }
-        #expect(await XCTWaiter.fulfillment(of: [waiting], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [waiting], timeout: 60) == .completed)
         a.cancel()
         await #expect(throws: CancellationError.self) { try await a.value }
 
@@ -219,7 +219,7 @@ struct AgentRunTests {
         await gate.open()
         try await b.value
         try await c.value
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         #expect(await session.activeRunID == nil)
     }
 }

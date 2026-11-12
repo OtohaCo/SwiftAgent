@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-struct AgentContextPolicyTests {
+@Suite(.manualClock) struct AgentContextPolicyTests {
     @Test func restoredSessionUsesCurrentInstructionsAndKeepsFormalConversation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("context-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }

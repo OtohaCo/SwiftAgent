@@ -197,7 +197,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let sessionID = UUID()
         let session = try agent.makeSession(id: sessionID, journal: journal)
         let run = try await session.run("Write once", operationID: "file-side-effect")
-        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 2)
+        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 60)
         XCTAssertEqual(enteredResult, .completed)
         XCTAssertEqual(try String(contentsOf: effect, encoding: .utf8), "effect\n")
         await run.cancel()
@@ -233,7 +233,7 @@ final class AgentMutationRecoveryTests: XCTestCase {
         let sessionID = UUID()
         let run = try await agent.makeSession(id: sessionID, journal: journal)
             .run("Write once", operationID: "timed-file-effect")
-        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 3)
+        let enteredResult = await XCTWaiter.fulfillment(of: [entered], timeout: 60)
         XCTAssertEqual(enteredResult, .completed)
         await #expect(throws: AgentLoopError.toolTimedOut(call.id)) { _ = try await run.wait() }
         #expect(try await journal.pendingMutations(sessionID: sessionID).map(\.state) == [.needsReconciliation])

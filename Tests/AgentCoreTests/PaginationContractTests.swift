@@ -4,7 +4,7 @@ import AgentJournalFileStore
 import AgentModels
 @testable import AgentCore
 
-struct PaginationContractTests {
+@Suite(.manualClock) struct PaginationContractTests {
     @Test func messageAfterIsInclusiveAndQueueAfterIsExclusiveIncludingReopen() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pagination-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }

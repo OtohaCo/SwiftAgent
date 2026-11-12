@@ -5,7 +5,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-struct AuditStageCloseoutTests {
+@Suite(.manualClock) struct AuditStageCloseoutTests {
     @Test(arguments: ["deny", "cancel", "cancel-after-effect", "deadline", "authorizer-timeout", "read-prefix", "mutation-prefix"])
     func preparedButUnscheduledCallsHaveKnownCloseout(_ scenario: String) async throws {
         let directory = auditTestDirectory()
@@ -26,11 +26,14 @@ struct AuditStageCloseoutTests {
             identity: configuration.identity, authorizerTimeout: .seconds(1)) }
         let session = try Agent(model: fixtureModel, provider: provider, tools: [a, b, prefix],
             configuration: .init(authorization: configuration)).makeSession(journal: journal)
-        let budget = scenario == "deadline" ? try AgentBudget(maxModelTurns: 3, maxToolCalls: 5, deadline: .now.advanced(by: .seconds(1))) : nil
+        let budget = scenario == "deadline" ? try AgentBudget(maxModelTurns: 3, maxToolCalls: 5, deadline: ManualAgentClock.current.after(.seconds(1))) : nil
         let run = try await session.run("batch", budget: budget)
         if ["cancel", "cancel-after-effect", "deadline", "authorizer-timeout"].contains(scenario) {
             await entered.wait()
             if scenario == "cancel" || scenario == "cancel-after-effect" { await run.cancel() }
+            if scenario == "deadline" || scenario == "authorizer-timeout" {
+                await ManualAgentClock.current.advanceWhenArmed(by: .seconds(1))
+            }
             await #expect(throws: (any Error).self) { try await run.wait() }
             await release.open()
         } else { await #expect(throws: AgentAuthorizationError.authorizationDenied) { try await run.wait() } }

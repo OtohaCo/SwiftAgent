@@ -69,7 +69,7 @@ public actor EvidenceLedger: Equatable {
 
     private func checkActive(_ deadline: ContinuousClock.Instant?) throws {
         try Task.checkCancellation()
-        if let deadline, ContinuousClock.now >= deadline { throw EvidenceError.deadlineExceeded }
+        if let deadline, AgentClock.now >= deadline { throw EvidenceError.deadlineExceeded }
     }
 
     private func currentTime() throws -> Date {

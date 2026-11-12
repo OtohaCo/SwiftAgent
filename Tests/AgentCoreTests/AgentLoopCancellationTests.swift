@@ -5,7 +5,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentLoopCancellationTests {
+@Suite(.manualClock) struct AgentLoopCancellationTests {
     @Test func deadlineEndsAStalledProviderRequest() async throws {
         let gate = ManualGate()
         let entered = XCTestExpectation(description: "Provider entered")
@@ -16,14 +16,15 @@ struct AgentLoopCancellationTests {
             return textResponse(request, "Late answer")
         }
         let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: []))
-        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 1, deadline: .now.advanced(by: .milliseconds(150)))
+        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 1, deadline: ManualAgentClock.current.after(.milliseconds(150)))
         let task = Task {
             defer { finished.fulfill() }
             do { return Result<AgentLoopResult, Error>.success(try await loop.run(messages: [], sessionID: UUID(), budget: budget)) }
             catch { return .failure(error) }
         }
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
-        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
+        ManualAgentClock.current.advance(by: .milliseconds(150))
+        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 60) == .completed)
         await gate.open()
         let result = await task.value
         guard case .failure(let error) = result else { Issue.record("Late answer accepted"); return }
@@ -47,11 +48,11 @@ struct AgentLoopCancellationTests {
             do { return Result<AgentLoopResult, Error>.success(try await loop.run(messages: [], sessionID: UUID(), budget: testBudget())) }
             catch { return .failure(error) }
         }
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         task.cancel()
-        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 60) == .completed)
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         guard case .failure(let error) = await task.value else { Issue.record("Cancelled run succeeded"); return }
         #expect(error is CancellationError)
         #expect(await log.names.isEmpty)
@@ -77,10 +78,11 @@ struct AgentLoopCancellationTests {
             do { return Result<AgentLoopResult, Error>.success(try await loop.run(messages: [], sessionID: UUID(), budget: testBudget())) }
             catch { return .failure(error) }
         }
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
-        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
+        ManualAgentClock.current.advance(by: .milliseconds(100))
+        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 60) == .completed)
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         guard case .failure(let error) = await task.value else { Issue.record("Late tool result accepted"); return }
         #expect(error as? AgentLoopError == .toolTimedOut(blockingCall.id))
         #expect(await log.names.isEmpty)
@@ -104,7 +106,7 @@ struct AgentLoopCancellationTests {
         let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: []))
         let a = Task { try await loop.run(messages: messagesA, sessionID: UUID(), budget: testBudget()) }
         let b = Task { try await loop.run(messages: messagesB, sessionID: UUID(), budget: testBudget()) }
-        #expect(await XCTWaiter.fulfillment(of: [enteredA, enteredB], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [enteredA, enteredB], timeout: 60) == .completed)
         a.cancel()
         await #expect(throws: CancellationError.self) { try await a.value }
         await gateB.open()
@@ -133,12 +135,13 @@ struct AgentLoopCancellationTests {
             do { return Result<AgentLoopResult, Error>.success(try await loop.run(messages: [], sessionID: UUID(), budget: budget)) }
             catch { return .failure(error) }
         }
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         if let deadline = await log.contexts.first?.deadline { #expect(deadline < budget.deadline) }
         else { Issue.record("Tool deadline missing") }
-        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 1) == .completed)
+        ManualAgentClock.current.advance(by: .milliseconds(100))
+        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 60) == .completed)
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         guard case .success(let result) = await task.value else { Issue.record("The Run did not go on"); return }
         guard case .tool(let refusal)? = result.history.last(where: { if case .tool = $0 { true } else { false } }),
               case .json(.object(let fields))? = refusal.content.first else { Issue.record("No refusal"); return }

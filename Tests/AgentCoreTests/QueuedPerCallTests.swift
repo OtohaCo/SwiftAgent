@@ -6,7 +6,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct QueuedPerCallTests {
+@Suite(.manualClock) struct QueuedPerCallTests {
     @Test(arguments: [["same", "same"], ["A", "B", "A"]])
     func independentMutations(values: [String]) async throws {
         let result = try await exercise(values, identity: .perCall)
@@ -100,7 +100,7 @@ struct QueuedPerCallTests {
             catch { Issue.record("Run failed: \(error)") }
             finished.fulfill()
         })
-        let observed = await XCTWaiter.fulfillment(of: [finished], timeout: 15)
+        let observed = await XCTWaiter.fulfillment(of: [finished], timeout: 120)
         await dispatcher.stop()
         try await dispatcher.waitForDrain()
         #expect(observed == .completed)
@@ -113,7 +113,7 @@ struct QueuedPerCallTests {
                 catch { Issue.record("second Run failed: \(error)") }
                 finishedAgain.fulfill()
             })
-            let observedAgain = await XCTWaiter.fulfillment(of: [finishedAgain], timeout: 15)
+            let observedAgain = await XCTWaiter.fulfillment(of: [finishedAgain], timeout: 120)
             await another.stop(); try await another.waitForDrain()
             #expect(observedAgain == .completed)
             let results = try await journal.readMessages(sessionID: second.id).compactMap { record -> JSONValue? in

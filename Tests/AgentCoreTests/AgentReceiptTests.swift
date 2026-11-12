@@ -75,7 +75,7 @@ struct AgentReceiptTests {
                                        timeout: cancel ? .seconds(5) : .milliseconds(100))
         let provider = ScriptedProvider { request, _ in toolResponse(request, [receiptCall()]) }
         let run = try await Agent(model: fixtureModel, provider: provider, tools: [tool]).makeSession().run("read")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         if cancel {
             await run.cancel()
             await #expect(throws: CancellationError.self) { try await run.wait() }
@@ -83,7 +83,7 @@ struct AgentReceiptTests {
             await #expect(throws: AgentLoopError.toolTimedOut(receiptCall().id)) { try await run.wait() }
         }
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         let events = await collectEvents(run.events)
         #expect(!events.contains { if case .toolReceiptValidated = $0 { true } else { false } })
         #expect(!events.contains { if case .toolCompleted = $0 { true } else { false } })

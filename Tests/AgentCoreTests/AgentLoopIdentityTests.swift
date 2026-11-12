@@ -4,7 +4,7 @@ import AgentTools
 import Foundation
 import Testing
 
-struct AgentLoopIdentityTests {
+@Suite(.manualClock) struct AgentLoopIdentityTests {
     @Test func invalidUsageCannotDispatchAnOtherwiseValidToolProposal() async throws {
         for decreased in [false, true] {
             let log = EffectLog()

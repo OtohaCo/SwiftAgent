@@ -5,7 +5,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentEventCancellationTests {
+@Suite(.manualClock) struct AgentEventCancellationTests {
     @Test func modelCancellationIsAnObservableTerminalEvent() async throws {
         let provider = ScriptedProvider { request, _ in textResponse(request, "Stopped", stop: .cancelled) }
         let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: []))
@@ -57,10 +57,10 @@ struct AgentEventCancellationTests {
         let observer = Task { await collectEvents(a) }
         let bStream = loop.events(messages: [.user([.text("B")])], sessionID: UUID(), budget: try testBudget())
         let observerB = Task { await collectEvents(bStream) }
-        #expect(await XCTWaiter.fulfillment(of: [entered, enteredB], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered, enteredB], timeout: 60) == .completed)
         observer.cancel()
         _ = await observer.value
-        #expect(await XCTWaiter.fulfillment(of: [cancelled, stopped], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [cancelled, stopped], timeout: 60) == .completed)
         await gateB.open()
         let b = await observerB.value
         guard case .runFinished(.result(let result)) = b.last else { Issue.record("Second stream failed"); return }
@@ -76,17 +76,18 @@ struct AgentEventCancellationTests {
         let tool = try BlockingTool(gate: gate, entered: entered, returned: returned, timeout: .seconds(5))
         let provider = ScriptedProvider { request, _ in toolResponse(request, [blockingCall]) }
         let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: [AnyAgentTool(tool)]))
-        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 1, deadline: .now.advanced(by: .milliseconds(150)))
+        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 1, deadline: ManualAgentClock.current.after(.milliseconds(150)))
         let stream = loop.events(messages: [], sessionID: UUID(), budget: budget)
         let observer = Task {
             let events = await collectEvents(stream)
             finished.fulfill()
             return events
         }
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
-        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
+        ManualAgentClock.current.advance(by: .milliseconds(150))
+        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 60) == .completed)
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         let failure = AgentFailure.loop(.deadlineExceeded)
         #expect(Array(await observer.value.suffix(3)) == [
             .toolStarted(blockingCall), .toolFailed(blockingCall.id, failure), .runFinished(.failed(failure)),
@@ -110,10 +111,10 @@ struct AgentEventCancellationTests {
             let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: [AnyAgentTool(tool)]))
             let stream = loop.events(messages: [], sessionID: UUID(), budget: try testBudget())
             let observer = Task { await collectEvents(stream) }
-            #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+            #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
             observer.cancel()
             _ = await observer.value
-            #expect(await XCTWaiter.fulfillment(of: [cancelled, stopped], timeout: 1) == .completed)
+            #expect(await XCTWaiter.fulfillment(of: [cancelled, stopped], timeout: 60) == .completed)
             #expect(await log.names == (phase == .authorization ? [] : ["execute"]))
             #expect(await provider.log.requests.count == 1)
         }

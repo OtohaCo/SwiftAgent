@@ -6,7 +6,7 @@ import Testing
 
 /// Tools defined at runtime through the Agent and a Run's capability binding: each is known by its
 /// definition's name, and the model is offered that definition.
-struct RuntimeToolBindingTests {
+@Suite(.manualClock) struct RuntimeToolBindingTests {
     private func readOnly() throws -> ToolPolicy {
         try ToolPolicy(effect: .readOnly, execution: .parallel, idempotency: .safe, timeout: .seconds(1), authorization: .notRequired)
     }

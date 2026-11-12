@@ -6,7 +6,7 @@ import Testing
 @testable import AgentCore
 
 /// Images returned by tools (ADR 0012): what the model is sent, what the Run refuses, what the journal keeps.
-struct ImageContentRunTests {
+@Suite(.manualClock) struct ImageContentRunTests {
     static func png(width: Int = 64, height: Int = 48, padding: Int = 0, seed: UInt8 = 0) throws -> ModelImage {
         var data = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13])
         data.append(contentsOf: Array("IHDR".utf8))

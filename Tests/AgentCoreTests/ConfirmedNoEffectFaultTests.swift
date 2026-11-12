@@ -6,7 +6,7 @@ import Testing
 import XCTest
 @testable import AgentCore
 
-struct ConfirmedNoEffectFaultTests {
+@Suite(.manualClock) struct ConfirmedNoEffectFaultTests {
     @Test(arguments: [false, true], [false, true])
     func publicationFailureOrUnknownNeverContinuesOrExposesHalfAFact(_ unknown: Bool, _ large: Bool) async throws {
         let directory = auditTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
@@ -44,7 +44,22 @@ struct ConfirmedNoEffectFaultTests {
                 largeArguments: large, beforeReturn: { await gate.enterAndWait() })]).makeSession(journal: journal)
         let run = try await session.run("write")
         try await gate.waitUntilEntered(); await run.cancel()
-        await #expect(throws: (any Error).self) { try await session.run("must not overlap") }
+        // The next Run is refused at once, or waits for the cancelled Run's executor until its own
+        // deadline: time moves past that deadline once the wait is armed.
+        let clock = ManualAgentClock.current
+        let overlapDeadline = clock.after(.seconds(1))
+        let overlapBudget = try AgentBudget(maxModelTurns: 1, maxToolCalls: 1, deadline: overlapDeadline)
+        let finished = ClockTestFlag()
+        let overlap = Task {
+            defer { finished.set() }
+            return try await session.run("must not overlap", budget: overlapBudget)
+        }
+        let bound = ContinuousClock.now.advanced(by: .seconds(60))
+        while !finished.isSet, !clock.hasSleeper(until: overlapDeadline), ContinuousClock.now < bound {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        if !finished.isSet { clock.advance(by: .seconds(1)) }
+        await #expect(throws: (any Error).self) { try await overlap.value }
         #expect(await counts.effects == 0); #expect(await provider.log.requests.count == 1)
         await gate.release()
         await #expect(throws: (any Error).self) { try await run.wait() }; try await run.waitForDrain()
@@ -64,13 +79,14 @@ struct ConfirmedNoEffectFaultTests {
         let session = try Agent(model: fixtureModel, provider: provider, tools: []).makeSession(journal: journal)
         let scope = try await session.bindCapabilities(identity: "controlled", version: "1", backendInstanceID: "fixture-backend",
             backendVersion: "1", allowedResources: [.global], tools: [.init(id: "write", version: "1", tool: tool)])
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        let clock = ManualAgentClock.current
+        let deadline = clock.after(.seconds(2))
         let run = try await session.run("write", capabilities: scope,
-            budget: AgentBudget(maxModelTurns: 4, maxToolCalls: 4, deadline: stop == "deadline" ? deadline : .now.advanced(by: .seconds(30))))
+            budget: AgentBudget(maxModelTurns: 4, maxToolCalls: 4, deadline: stop == "deadline" ? deadline : clock.after(.seconds(30))))
         try await gate.waitUntilEntered()
         if stop == "revoke" { await scope.revoke() }
-        else if stop == "deadline" { try await ContinuousClock().sleep(until: deadline) } // Absolute budget trigger, never stage hunting.
-        else { await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await run.wait() } }
+        else if stop == "deadline" { clock.advance(by: .seconds(2)) } // Absolute budget trigger, never stage hunting.
+        else { clock.advance(by: .seconds(2)); await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await run.wait() } }
         #expect(await scope.status().activeRuns == 1)
         await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await journal.close() }
         await gate.release()
@@ -136,7 +152,7 @@ actor NoEffectReturnGate {
         if !released { await withCheckedContinuation { exits.append($0) } }
     }
     func waitUntilEntered() async throws {
-        guard await XCTWaiter.fulfillment(of: [entrance], timeout: 10) == .completed else { throw ToolNoEffectError.unavailable }
+        guard await XCTWaiter.fulfillment(of: [entrance], timeout: 60) == .completed else { throw ToolNoEffectError.unavailable }
     }
     func release() { released = true; exits.forEach { $0.resume() }; exits.removeAll() }
 }

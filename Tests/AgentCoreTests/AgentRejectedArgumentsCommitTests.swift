@@ -5,7 +5,7 @@ import AgentTools
 import Foundation
 import Testing
 
-struct AgentRejectedArgumentsCommitTests {
+@Suite(.manualClock) struct AgentRejectedArgumentsCommitTests {
     @Test(arguments: [false, true])
     func loopWithoutLifecycleStillPublishesRejectedResults(mixed: Bool) async throws {
         let bad = rejectedCall(), good = addition("good")
@@ -152,12 +152,13 @@ struct AgentRejectedArgumentsCommitTests {
         let provider = ScriptedProvider { request, _ in hold.arm(); return toolResponse(request, calls) }
         let session = try Agent(model: fixtureModel, provider: provider, tools: [try AddTool(log: log, execution: .sequential)])
             .makeSession(journal: journal)
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        let clock = ManualAgentClock.current
+        let deadline = clock.after(.seconds(2))
         let run = try await session.run("Add", budget: .init(maxModelTurns: 3, maxToolCalls: 3, deadline: deadline))
         let observation = Task { await collectEvents(run.events) }
         #expect(await hold.waitUntilHeld())
         switch ending {
-        case .deadline: try await ContinuousClock().sleep(until: deadline)
+        case .deadline: clock.advance(by: .seconds(2))
         case .cancellation: await run.cancel()
         }
         hold.release()

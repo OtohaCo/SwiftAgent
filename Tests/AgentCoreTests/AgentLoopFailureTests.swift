@@ -4,7 +4,7 @@ import AgentTools
 import Foundation
 import Testing
 
-struct AgentLoopFailureTests {
+@Suite(.manualClock) struct AgentLoopFailureTests {
     /// A denial is a result the model hears (ADR 0016, `AgentPreAdmissionResultTests`); these still end the Run.
     @Test func mutationIntegrityAndInvalidOutputStayFailClosed() async throws {
         let cases: [(ToolPolicy, Double, ToolInvocationError?)] = [

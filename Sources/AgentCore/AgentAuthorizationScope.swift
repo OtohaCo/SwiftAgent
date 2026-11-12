@@ -1,3 +1,4 @@
+import AgentModels
 import Foundation
 
 /// Process-local policy generation and revocation. Remote policy changes require Host online checks.
@@ -49,7 +50,7 @@ public final class AgentAuthorizationScope: @unchecked Sendable {
         try lock.withLock {
             try Task.checkCancellation()
             try checkLocked(generation)
-            guard ContinuousClock.now < expires else { throw AgentAuthorizationError.expired }
+            guard AgentClock.now < expires else { throw AgentAuthorizationError.expired }
             let ticket = UUID(); admissions.insert(ticket); return ticket
         }
     }

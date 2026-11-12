@@ -546,7 +546,7 @@ struct AgentModelBindingTests {
         try await journal.close()
     }
 
-    @Test func projectorExceedingRunDeadlineDoesNotCommitInput() async throws {
+    @Test(.manualClock) func projectorExceedingRunDeadlineDoesNotCommitInput() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("swift-agent-preflight-projector-\(UUID().uuidString).log")
         defer {
@@ -570,11 +570,11 @@ struct AgentModelBindingTests {
             projector: NonCooperativeBlockingProjector(gate: gate)
         )
         let budget = try AgentBudget(maxModelTurns: 1, maxToolCalls: 0,
-                                     deadline: .now.advanced(by: .milliseconds(100)))
+                                     deadline: ManualAgentClock.current.after(.milliseconds(100)))
 
         let first = Task { try await session.run("must not commit", using: binding, budget: budget) }
         await gate.waitUntilBlocked()
-        try await Task.sleep(for: .milliseconds(150))
+        ManualAgentClock.current.advance(by: .milliseconds(150))
         await #expect(throws: AgentSessionError.runInProgress) {
             try await session.run("overlap")
         }
@@ -592,7 +592,7 @@ struct AgentModelBindingTests {
         _ = try await next.wait()
     }
 
-    @Test func tokenEstimatorExceedingRunDeadlineDoesNotCommitInput() async throws {
+    @Test(.manualClock) func tokenEstimatorExceedingRunDeadlineDoesNotCommitInput() async throws {
         let gate = NonCooperativeEstimatorGate()
         let startupReleased = AsyncSignal()
         let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
@@ -613,11 +613,11 @@ struct AgentModelBindingTests {
             tokenBudget: tokenBudget
         )
         let budget = try AgentBudget(maxModelTurns: 1, maxToolCalls: 0,
-                                     deadline: .now.advanced(by: .milliseconds(100)))
+                                     deadline: ManualAgentClock.current.after(.milliseconds(100)))
 
         let first = Task { try await session.run("must not commit", using: binding, budget: budget) }
         await gate.waitUntilBlocked()
-        try await Task.sleep(for: .milliseconds(150))
+        ManualAgentClock.current.advance(by: .milliseconds(150))
         await #expect(throws: AgentSessionError.runInProgress) {
             try await session.run("overlap")
         }
@@ -631,7 +631,7 @@ struct AgentModelBindingTests {
         #expect(await provider.log.requests.isEmpty)
     }
 
-    @Test func latePreflightResultCannotCommitAfterDeadline() async throws {
+    @Test(.manualClock) func latePreflightResultCannotCommitAfterDeadline() async throws {
         let gate = NonCooperativeProjectionGate()
         let provider = ScriptedProvider { request, _ in textResponse(request, "must not run") }
         let session = try Agent(model: fixtureModel, provider: provider).makeSession()
@@ -644,11 +644,11 @@ struct AgentModelBindingTests {
             projector: NonCooperativeBlockingProjector(gate: gate)
         )
         let budget = try AgentBudget(maxModelTurns: 1, maxToolCalls: 0,
-                                     deadline: .now.advanced(by: .milliseconds(100)))
+                                     deadline: ManualAgentClock.current.after(.milliseconds(100)))
 
         let first = Task { try await session.run("late result", using: binding, budget: budget) }
         await gate.waitUntilBlocked()
-        try await Task.sleep(for: .milliseconds(150))
+        ManualAgentClock.current.advance(by: .milliseconds(150))
         await #expect(throws: AgentLoopError.deadlineExceeded) { try await first.value }
 
         await gate.release()
@@ -657,7 +657,7 @@ struct AgentModelBindingTests {
         #expect(await provider.log.requests.isEmpty)
     }
 
-    @Test func latePreflightRetainsCleanupUntilTheSessionIdentityCanBeReused() async throws {
+    @Test(.manualClock) func latePreflightRetainsCleanupUntilTheSessionIdentityCanBeReused() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("swift-agent-preflight-late-release-\(UUID().uuidString).log")
         defer {
@@ -685,12 +685,12 @@ struct AgentModelBindingTests {
                 projector: NonCooperativeBlockingProjector(gate: gate)
             )
             let budget = try AgentBudget(maxModelTurns: 1, maxToolCalls: 0,
-                                         deadline: .now.advanced(by: .milliseconds(100)))
+                                         deadline: ManualAgentClock.current.after(.milliseconds(100)))
             first = Task { try await session.run("must not commit", using: binding, budget: budget) }
         }
 
         await gate.waitUntilBlocked()
-        try await Task.sleep(for: .milliseconds(150))
+        ManualAgentClock.current.advance(by: .milliseconds(150))
         await #expect(throws: AgentLoopError.deadlineExceeded) { try await first.value }
 
         await gate.release()

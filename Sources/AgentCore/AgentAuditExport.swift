@@ -197,7 +197,7 @@ public actor AuditExporter {
             await work.begin()
             do {
                 let sink = sink, work = work
-                return try await withOperationDeadline(ContinuousClock.now.advanced(by: configuration.sinkTimeout),
+                return try await withOperationDeadline(AgentClock.now.advanced(by: configuration.sinkTimeout),
                     timeoutError: AgentAuthorizationError.auditUnavailable) {
                     try await sink.write(batch)
                 } onOperationFinished: { await work.end() }

@@ -4,7 +4,7 @@ import AgentTools
 import Foundation
 import Testing
 
-struct AgentEventTests {
+@Suite(.manualClock) struct AgentEventTests {
     @Test func textResponseHasGoldenEventOrderAndRunIdentity() async throws {
         let provider = ScriptedProvider { request, _ in textResponse(request, "Hello") }
         let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: []))

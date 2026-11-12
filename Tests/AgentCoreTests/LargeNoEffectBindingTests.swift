@@ -5,7 +5,7 @@ import AgentTools
 import Foundation
 import Testing
 
-struct LargeNoEffectBindingTests {
+@Suite(.manualClock) struct LargeNoEffectBindingTests {
     @Test(arguments: [false, true])
     func realProofBindsTheOriginalArgumentsAndUnchangedKey(_ stable: Bool) async throws {
         let directory = auditTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }

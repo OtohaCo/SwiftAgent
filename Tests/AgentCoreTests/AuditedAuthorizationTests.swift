@@ -5,7 +5,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-struct AuditedAuthorizationTests {
+@Suite(.manualClock) struct AuditedAuthorizationTests {
     @Test func requiredModeRejectsMissingPrerequisitesBeforeInputAndProvider() async throws {
         let log = EffectLog()
         let provider = ScriptedProvider { request, _ in textResponse(request, "unused") }

@@ -4,7 +4,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentEventContractTests {
+@Suite(.manualClock) struct AgentEventContractTests {
     @Test func waitMatchesTheSingleTerminalEventOnSuccess() async throws {
         try await verifySessionTerminal { request in
             textResponse(request, "Hello")
@@ -37,7 +37,7 @@ struct AgentEventContractTests {
         }
         let session = try Agent(model: fixtureModel, provider: provider).makeSession()
         let run = try await session.run("work")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         await run.cancel()
         await #expect(throws: CancellationError.self) { try await run.wait() }
         let events = await collectEvents(run.events)

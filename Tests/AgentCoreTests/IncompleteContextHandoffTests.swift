@@ -6,7 +6,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-@Suite struct IncompleteContextHandoffTests {
+@Suite(.manualClock) struct IncompleteContextHandoffTests {
     @Test func drainedTruncatedTurnCanExplicitlyRetireWithoutInventingCompletion() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("incomplete-handoff-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -198,9 +198,9 @@ import Testing
         let gate = IncompleteProjector(), target = try incompleteBinding(provider, projector: gate)
         let scope = try await session.bindCapabilities(identity: "scope", version: "1", backendInstanceID: "fixture", backendVersion: "1", allowedResources: [.global], tools: [])
         let exit = try await session.handoffToOrdinary(using: target, capabilities: scope, discardingRetiredProviderContinuations: true, allowingIncompleteTurn: true,
-            deadline: .now.advanced(by: .seconds(action == "deadline" ? 2 : 30)))
+            deadline: ManualAgentClock.current.after(.seconds(action == "deadline" ? 2 : 30)))
         await gate.gate.waitEntered()
-        if action == "deadline" { await #expect(throws: AgentLoopError.deadlineExceeded) { try await exit.wait() } }
+        if action == "deadline" { ManualAgentClock.current.advance(by: .seconds(2)); await #expect(throws: AgentLoopError.deadlineExceeded) { try await exit.wait() } }
         else {
             if action == "revoke" { await scope.revoke() } else { await exit.cancel() }
             await #expect(throws: CancellationError.self) { try await exit.wait() }

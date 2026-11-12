@@ -5,7 +5,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-struct AuditExecutionRegressionTests {
+@Suite(.manualClock) struct AuditExecutionRegressionTests {
     @Test func runtimeEvidenceRejectionIsNotAHostDeny() async throws {
         let setup = try auditExecutionSetup(evidence: true)
         defer { try? FileManager.default.removeItem(at: setup.directory) }

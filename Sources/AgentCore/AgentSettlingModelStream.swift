@@ -48,7 +48,7 @@ private final class LateCloser: @unchecked Sendable {
     func start() {
         let gate = gate, continuation = continuation
         task = Task {
-            do { try await ContinuousClock().sleep(until: gate.deadline) } catch { return }
+            do { try await AgentClock.sleep(until: gate.deadline) } catch { return }
             continuation.finish()
         }
     }

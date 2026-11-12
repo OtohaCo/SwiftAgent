@@ -5,7 +5,7 @@ import Testing
 import XCTest
 @testable import AgentCore
 
-struct AgentConversationContextTests {
+@Suite(.manualClock) struct AgentConversationContextTests {
     @Test func crossRunToolResultIsVisibleAndDrivesUseResource() async throws {
         let committed = CommittedTranscript()
         let used = EffectLog()
@@ -272,12 +272,12 @@ struct AgentConversationContextTests {
             tools: [AddTool(log: EffectLog()), blocker]
         ).makeSession()
         let run = try await session.run("original")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         _ = try await run.steer("remember")
         await run.cancel()
         await #expect(throws: CancellationError.self) { try await run.wait() }
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         _ = try await session.run("continue").wait()
         let followUp = try #require(await provider.log.requests.first { $0.messages.last == .user([.text("continue")]) })
         try ConversationTranscript.requirePairedToolHistory(followUp.messages)

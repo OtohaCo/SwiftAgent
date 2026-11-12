@@ -6,7 +6,7 @@ import Foundation
 let fixtureModel = ModelID(provider: "fixture", name: "test")
 
 func testBudget(turns: Int = 4, calls: Int = 8) throws -> AgentBudget {
-    try AgentBudget(maxModelTurns: turns, maxToolCalls: calls, deadline: .now.advanced(by: .seconds(10)))
+    try AgentBudget(maxModelTurns: turns, maxToolCalls: calls, deadline: AgentClock.now.advanced(by: .seconds(60)))
 }
 
 actor RequestLog {

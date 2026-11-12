@@ -6,7 +6,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentRunRecordTests {
+@Suite(.manualClock) struct AgentRunRecordTests {
     @Test func startupWithAnOlderIntentAbortStillAdmitsItsRun() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("startup-intent-abort-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -169,8 +169,9 @@ struct AgentRunRecordTests {
         let gate = RecordGate()
         let provider = ScriptedProvider { request, _ in toolResponse(request, [.init(id: .init(rawValue: "slow"), name: RecordSlowTool.name, argumentsJSON: "{}", completeness: .complete)]) }
         let session = try Agent(model: fixtureModel, provider: provider, tools: [try RecordSlowTool(gate: gate)]).makeSession(journal: h.journal)
-        let run = try await session.run("go", budget: .init(maxModelTurns: 2, maxToolCalls: 1, deadline: .now.advanced(by: .seconds(2))))
+        let run = try await session.run("go", budget: .init(maxModelTurns: 2, maxToolCalls: 1, deadline: ManualAgentClock.current.after(.seconds(2))))
         #expect(await gate.waitUntilEntered())
+        ManualAgentClock.current.advance(by: .seconds(2))
         await #expect(throws: AgentLoopError.deadlineExceeded) { try await run.wait() }
         guard case .terminal(_, .incomplete(.deadline)) = try await session.runRecord(runID: run.id) else { Issue.record("missing deadline fact"); await gate.release(); return }
         await #expect(throws: AgentJournalError.sessionLeaseUnavailable) { try await h.journal.close() }
@@ -376,7 +377,7 @@ struct AgentRunRecordTests {
         let dispatch = try await session.startFollowUpDispatch(policy: .init(), resolver: RecordQueueResolver(session: session, provider: provider), onRun: { _, run in
             _ = try? await run.wait(); finished.fulfill()
         })
-        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 5) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 60) == .completed)
         await dispatch.stop(); try await dispatch.waitForDrain()
         let queued = try #require(try await session.followUp(inputID: "one"))
         #expect(queued.identity == identity)
@@ -418,7 +419,7 @@ private actor RecordGate {
         entered.fulfill()
         if !open { await withCheckedContinuation { waiters.append($0) } }
     }
-    func waitUntilEntered() async -> Bool { await XCTWaiter.fulfillment(of: [entered], timeout: 5) == .completed }
+    func waitUntilEntered() async -> Bool { await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed }
     func release() { open = true; let current = waiters; waiters.removeAll(); current.forEach { $0.resume() } }
 }
 

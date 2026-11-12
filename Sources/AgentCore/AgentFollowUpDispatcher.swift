@@ -316,7 +316,7 @@ public actor AgentFollowUpDispatcher {
     }
 
     private func dispatch(_ head: JournalStoredFollowUp, generation: UInt64) async throws {
-        let deadline = ContinuousClock.now.advanced(by: policy.runTimeout)
+        let deadline = AgentClock.now.advanced(by: policy.runTimeout)
         let budget = try AgentBudget(maxModelTurns: policy.maxModelTurns,
                                       maxToolCalls: policy.maxToolCalls, deadline: deadline)
         guard let identity = await journal.storeIdentity() else {

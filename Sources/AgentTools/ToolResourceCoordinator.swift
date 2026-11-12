@@ -1,3 +1,4 @@
+import AgentModels
 import Foundation
 
 package actor ToolResourceCoordinator {
@@ -49,7 +50,7 @@ package actor ToolResourceCoordinator {
                          execution: ToolPolicy.Execution, until deadline: ContinuousClock.Instant? = nil) async throws -> UUID {
         try ToolResource.validate(resources)
         try Task.checkCancellation()
-        if let deadline, ContinuousClock.now >= deadline { throw WaitExpired() }
+        if let deadline, AgentClock.now >= deadline { throw WaitExpired() }
         let id = UUID()
         let request = Request(resources: Set(resources), exclusive: execution == .exclusive || effect == .mutation)
         var timer: Task<Void, Never>?
@@ -60,7 +61,7 @@ package actor ToolResourceCoordinator {
                 grantEligibleWaiters()
                 if let deadline, waiters.contains(where: { $0.id == id }) {
                     timer = Task { [weak self] in
-                        guard (try? await ContinuousClock().sleep(until: deadline)) != nil else { return }
+                        guard (try? await AgentClock.sleep(until: deadline)) != nil else { return }
                         await self?.expireWaiter(id)
                     }
                 }

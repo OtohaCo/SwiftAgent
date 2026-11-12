@@ -4,7 +4,7 @@ import AgentTools
 import Testing
 import XCTest
 
-struct AgentBarrierTests {
+@Suite(.manualClock) struct AgentBarrierTests {
     @Test func sequentialAndExclusiveCallsSeparateParallelGroups() async throws {
         let parallel = XCTestExpectation(description: "Parallel group entered")
         parallel.expectedFulfillmentCount = 2
@@ -21,13 +21,13 @@ struct AgentBarrierTests {
         let run = try await Agent(model: fixtureModel, provider: provider, tools: [
             BarrierTool<ParallelKind>(probe: probe), BarrierTool<SequentialKind>(probe: probe), BarrierTool<ExclusiveKind>(probe: probe),
         ]).makeSession().run("Read in phases")
-        #expect(await XCTWaiter.fulfillment(of: [parallel], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [parallel], timeout: 60) == .completed)
         #expect(await probe.active == Set(["p1", "p2"]))
         await pGate.open()
-        #expect(await XCTWaiter.fulfillment(of: [sequential], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [sequential], timeout: 60) == .completed)
         #expect(await probe.active == Set(["s"]))
         await sGate.open()
-        #expect(await XCTWaiter.fulfillment(of: [exclusive], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [exclusive], timeout: 60) == .completed)
         #expect(await probe.active == Set(["e"]))
         await eGate.open()
         let result = try await run.wait()

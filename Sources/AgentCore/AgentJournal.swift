@@ -1001,7 +1001,7 @@ public actor AgentJournal {
     ) throws {
         guard checkCancellation else { return }
         try Task.checkCancellation()
-        if let deadline, ContinuousClock.now >= deadline {
+        if let deadline, AgentClock.now >= deadline {
             throw AgentJournalStartupAdmissionError.deadlineExceeded
         }
     }

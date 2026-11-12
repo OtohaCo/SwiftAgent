@@ -7,7 +7,8 @@ import Testing
 /// A tool's own authorization (often a person's answer) runs before the call waits for its scheduler
 /// lease, so one unanswered mutation does not hold every other mutation back. The executor still runs
 /// under the lease and is never entered without an `allowed` answer.
-struct AuthorizationBeforeLeaseTests {
+/// Limits are measured on a manual clock: a limit passes only where a test advances time.
+@Suite(.manualClock) struct AuthorizationBeforeLeaseTests {
     @Test func aMutationWaitingForItsAnswerDoesNotHoldTheLeaseFromAnother() async throws {
         let fixture = try LeaseFixture(timeout: .seconds(5))
         defer { fixture.cleanup() }
@@ -51,6 +52,8 @@ struct AuthorizationBeforeLeaseTests {
         let fixture = try LeaseFixture(timeout: .seconds(5), authorizationWaitLimit: .milliseconds(150))
         defer { fixture.cleanup() }
         let a = try await fixture.session().run("A", operationID: "A")
+        await fixture.probe.waitFor("authorize:A")
+        await ManualAgentClock.current.advanceWhenArmed(by: .milliseconds(150))
         let answered = try await a.wait()
         #expect(answered.outcome == .completed)
         #expect(refusalCode(answered.history) == "not_answered")
@@ -75,8 +78,10 @@ struct AuthorizationBeforeLeaseTests {
 
         let a = try await fixture.session().run("A", operationID: "A")
         await fixture.probe.waitFor("authorize:A")
+        let clock = ManualAgentClock.current
+        await clock.advanceWhenArmed(by: .milliseconds(300))
         await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "B"))) { try await b.wait() }
-        try await Task.sleep(for: .milliseconds(400))
+        clock.advance(by: .milliseconds(400))
         #expect(await fixture.probe.events == ["authorize:B", "execute:B", "authorize:A"], "A still waits, past its own timeout")
         await fixture.executors.open()
         #expect(try await a.wait().outcome == .completed)
@@ -93,7 +98,7 @@ struct AuthorizationBeforeLeaseTests {
         defer { fixture.cleanup() }
         let a = try await fixture.session().run("A", operationID: "A")
         await fixture.probe.waitFor("authorize:A")
-        try await Task.sleep(for: .milliseconds(450))
+        ManualAgentClock.current.advance(by: .milliseconds(450))
         await fixture.answers.open()
         #expect(try await a.wait().outcome == .completed)
         try await a.waitForDrain()
@@ -106,6 +111,8 @@ struct AuthorizationBeforeLeaseTests {
         let fixture = try LeaseFixture(timeout: .milliseconds(150), gatedAnswers: [], gatedExecutors: ["A"])
         defer { fixture.cleanup() }
         let a = try await fixture.session().run("A", operationID: "A")
+        await fixture.probe.waitFor("execute:A")
+        await ManualAgentClock.current.advanceWhenArmed(by: .milliseconds(150))
         await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await a.wait() }
         await fixture.executors.open()
         try await a.waitForDrain()
@@ -121,6 +128,8 @@ struct AuthorizationBeforeLeaseTests {
         let b = try await fixture.session().run("B", operationID: "B")
         await fixture.probe.waitFor("execute:B")
         let a = try await fixture.session().run("A", operationID: "A")
+        await fixture.probe.waitFor("authorize:A")
+        await ManualAgentClock.current.advanceWhenArmed(by: .milliseconds(150))
         let refused = try await a.wait()
         #expect(refused.outcome == .completed && refusalCode(refused.history) == "busy")
         #expect(await fixture.scheduler.pendingWaiterCount() == 0)
@@ -137,6 +146,8 @@ struct AuthorizationBeforeLeaseTests {
         let fixture = try LeaseFixture(timeout: .seconds(5), runTimeout: .milliseconds(200))
         defer { fixture.cleanup() }
         let a = try await fixture.session().run("A", operationID: "A")
+        await fixture.probe.waitFor("authorize:A")
+        await ManualAgentClock.current.advanceWhenArmed(by: .milliseconds(200))
         await #expect(throws: AgentLoopError.deadlineExceeded) { try await a.wait() }
         await fixture.answers.open()
         try await a.waitForDrain()
@@ -189,6 +200,8 @@ struct AuthorizationBeforeLeaseTests {
         await fixture.probe.waitFor("authorize:A")
 
         let b = try await fixture.session().run("B", operationID: "B")
+        // A's timed invocation and B's lease wait both end at the same instant.
+        await ManualAgentClock.current.advanceWhenArmed(by: .milliseconds(300), timers: 2)
         let refused = try await b.wait()
         #expect(refusalCode(refused.history) == "busy")
         await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "A"))) { try await a.wait() }

@@ -65,10 +65,10 @@ struct AgentEvidenceTests {
             LateEvidenceTool(gate: gate, entered: entered, returned: returned), ResourceUse(scope: .sameSession),
         ]).makeSession()
         let first = try await session.run("discover")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         await #expect(throws: AgentLoopError.toolTimedOut(.init(rawValue: "call-1"))) { try await first.wait() }
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         await #expect(throws: EvidenceError.self) { try await session.run("use").wait() }
     }
 }

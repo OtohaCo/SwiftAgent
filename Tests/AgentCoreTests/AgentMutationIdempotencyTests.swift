@@ -4,7 +4,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-struct AgentMutationIdempotencyTests {
+@Suite(.manualClock) struct AgentMutationIdempotencyTests {
     @Test func settledRetryReturnsExistingReceiptWithoutExecutingAgain() async throws {
         let url = temporaryJournalURL()
         defer { cleanupJournal(url) }

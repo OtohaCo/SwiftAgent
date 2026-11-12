@@ -5,7 +5,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-@Suite struct NativeCompactionOperationTests {
+@Suite(.manualClock) struct NativeCompactionOperationTests {
     @Test func automaticToolFactsAndCheckpointUseOnePublication() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -201,8 +201,9 @@ import Testing
         let agent = try nativeFixtureAgent(model: .init(provider: "native-fixture", name: "model"), provider: provider)
         let journal = AgentJournal(), session = try agent.makeSession(journal: journal)
         let run = try await session.run("source", budget: .init(maxModelTurns: 8, maxToolCalls: 0,
-                                                                deadline: .now.advanced(by: .milliseconds(300))))
+                                                                deadline: ManualAgentClock.current.after(.milliseconds(300))))
         await barrier.waitEntered()
+        ManualAgentClock.current.advance(by: .milliseconds(300))
         await #expect(throws: AgentLoopError.deadlineExceeded) { try await run.wait() }
         #expect(try await journal.nativeContextCheckpoint(sessionID: session.id) != nil)
         #expect(try await session.conversationSnapshot().messages.count == 1)

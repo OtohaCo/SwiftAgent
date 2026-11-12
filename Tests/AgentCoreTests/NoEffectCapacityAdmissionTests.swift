@@ -5,7 +5,7 @@ import AgentTools
 import Foundation
 import Testing
 
-struct NoEffectCapacityAdmissionTests {
+@Suite(.manualClock) struct NoEffectCapacityAdmissionTests {
     @Test(arguments: ["definition", "binding", "expectation", "input"])
     func staticCapacityIsRejectedBeforeIntentAndExecutor(_ mode: String) async throws {
         let directory = auditTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }

@@ -6,7 +6,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentCompletionCommitTests {
+@Suite(.manualClock) struct AgentCompletionCommitTests {
     @Test(arguments: [true, false])
     func cancellationAroundCheckpointKeepsHistoryAndEventsConsistent(checkpointCommitted: Bool) async throws {
         let channel = AsyncStream<AgentEvent>.makeStream()
@@ -32,7 +32,7 @@ struct AgentCompletionCommitTests {
         let response = ModelResponse(info: .init(id: "response", model: fixtureModel), toolCalls: [call], stopReason: .toolCalls)
         let progress = AgentToolBatchProgress(prefix: [], response: response, budget: budget, lifecycle: lifecycle, emitter: emitter)
         let recording = Task { try await progress.record(index: 0, call: prepared, result: result) }
-        #expect(await XCTWaiter.fulfillment(of: [committed], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [committed], timeout: 60) == .completed)
         recording.cancel()
         let finishing = await emitter.beginFinishing(.cancelled)
         await gate.open()
@@ -211,11 +211,12 @@ struct AgentCompletionCommitTests {
         }
         let session = try Agent(model: fixtureModel, provider: provider, tools: [try AddTool(log: EffectLog())])
             .makeSession(journal: journal)
-        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        let clock = ManualAgentClock.current
+        let deadline = clock.after(.seconds(1))
         let run = try await session.run("first", budget: try AgentBudget(maxModelTurns: 3, maxToolCalls: 1, deadline: deadline))
         #expect(await hold.waitUntilHeld(), "the tool result's checkpoint must reach publication")
         switch ending {
-        case .deadline: try await Task.sleep(until: deadline.advanced(by: .milliseconds(50)), clock: .continuous)
+        case .deadline: clock.advance(by: .milliseconds(1_050))
         case .cancellation: await run.cancel()
         }
         hold.release()
@@ -267,7 +268,7 @@ final class PublishedCheckpointHold: @unchecked Sendable {
         resume.wait()
     }
 
-    func waitUntilHeld(timeout: Duration = .seconds(10)) async -> Bool {
+    func waitUntilHeld(timeout: Duration = .seconds(60)) async -> Bool {
         await withTaskGroup(of: Bool.self) { group in
             group.addTask { for await _ in self.held { return true }; return false }
             group.addTask { try? await Task.sleep(for: timeout); return false }

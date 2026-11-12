@@ -4,7 +4,7 @@ import AgentModels
 import Foundation
 import Testing
 
-struct StaleJournalBaselineTests {
+@Suite(.manualClock) struct StaleJournalBaselineTests {
     @Test(arguments: ["three", "two"], [false, true])
     func oldSessionRejectsSeriallyChangedHistory(nextInput: String, records: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

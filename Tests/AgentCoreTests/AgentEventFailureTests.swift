@@ -57,10 +57,10 @@ struct AgentEventFailureTests {
             finished.fulfill()
             return events
         }
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
-        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [finished], timeout: 60) == .completed)
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         let events = await observer.value
         let failure = AgentFailure.loop(.toolTimedOut(blockingCall.id))
         #expect(Array(events.suffix(3)) == [.toolStarted(blockingCall), .toolFailed(blockingCall.id, failure), .runFinished(.failed(failure))])

@@ -5,7 +5,7 @@ import AgentTools
 import Foundation
 import Testing
 
-struct AgentPreAdmissionReplanningTests {
+@Suite(.manualClock) struct AgentPreAdmissionReplanningTests {
     private let policy = AgentPreAdmissionReplanning.evidenceRejection(toolNames: [BoundedTestMutation.name])
 
     @Test func evidenceRejectedNativeProposalCannotRetainUnpublishedTransition() async throws {
@@ -445,10 +445,11 @@ struct AgentPreAdmissionReplanningTests {
                 return messages
             })
         let budget = try AgentBudget(maxModelTurns: 6, maxToolCalls: 5,
-            deadline: .now.advanced(by: .seconds(2)))
+            deadline: ManualAgentClock.current.after(.seconds(2)))
         let task = Task { try await loop.execute(messages: [.user([.text("start")])], sessionID: UUID(),
             runID: UUID(), budget: budget, structuredOutput: nil, emitter: nil, lifecycle: lifecycle) }
         await gate.waitUntilBlocked()
+        ManualAgentClock.current.advance(by: .seconds(2))
         await #expect(throws: AgentLoopError.deadlineExceeded) { try await task.value }
         await gate.open()
         #expect(await provider.log.requests.count == 2)

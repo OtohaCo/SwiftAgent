@@ -5,7 +5,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-struct AuditCommitFaultTests {
+@Suite(.manualClock) struct AuditCommitFaultTests {
     @Test(arguments: ["proposal", "decision", "application", "settlement"], [false, true])
     func failedPublicationNeverGrantsPermissionOrRepeatsAnEffect(_ point: String, runRecords: Bool) async throws {
         for uncertain in [false, true] {

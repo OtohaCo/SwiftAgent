@@ -5,7 +5,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-struct AuditFailureRecoveryTests {
+@Suite(.manualClock) struct AuditFailureRecoveryTests {
     @Test(arguments: [false, true])
     func failureAuditCannotShortCircuitRecovery(_ commitUnknown: Bool) async throws {
         let directory = auditTestDirectory()

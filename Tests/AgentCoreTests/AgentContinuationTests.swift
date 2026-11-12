@@ -4,7 +4,7 @@ import AgentTools
 import Foundation
 import Testing
 
-struct AgentContinuationTests {
+@Suite(.manualClock) struct AgentContinuationTests {
     @Test func incompleteResponseDropsStateForDiscardedCallsBeforeTheNextRequest() async throws {
         let state = ModelProviderContinuation(model: fixtureModel, format: "fixture.v1", payload: Data([0, 255]))
         let probe = EffectLog()

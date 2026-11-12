@@ -7,14 +7,16 @@ import Testing
 
 /// An answer the model source handed over whole before the Run's deadline is complete. The deadline
 /// only decides whether a Run that has no such answer yet ran out of time.
-struct AgentSettledAnswerDeadlineTests {
+/// Deadlines are measured on a manual clock: time passes only where a test advances it.
+@Suite(.manualClock) struct AgentSettledAnswerDeadlineTests {
     /// The answer arrives well before the deadline, but the stream is only closed after it.
-    private func providerClosingLate(after delay: Duration, text: String = "the whole answer") -> any ModelProvider {
+    private func providerClosingLate(after delay: Duration, text: String = "the whole answer",
+                                     beforeEnd: @escaping @Sendable () async -> Void = {}) -> any ModelProvider {
         ScriptedProvider { request, _ in
             let info = ResponseInfo(id: "response", model: request.model)
             return [.responseStarted(info), .textDelta(text),
                     .responseCompleted(.init(info: info, content: [.text(text)], stopReason: .endTurn))]
-        }.delayingStreamEnd(by: delay)
+        }.delayingStreamEnd(by: delay, beforeEnd: beforeEnd)
     }
 
     /// Hold before actual CURRENT replacement, so the answer is not durably published
@@ -35,18 +37,19 @@ struct AgentSettledAnswerDeadlineTests {
             return textResponse(request, "persisted final answer")
         }
         let session = try Agent(model: fixtureModel, provider: provider).makeSession(id: sessionID, journal: journal)
-        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        let clock = ManualAgentClock.current
+        let deadline = clock.after(.seconds(1))
         let run = try await session.run("Answer", budget: AgentBudget(
             maxModelTurns: 2, maxToolCalls: 0, deadline: deadline))
         let held = await hold.waitUntilHeld()
         #expect(held)
         if !held { hold.release(); return }
-        #expect(ContinuousClock.now < deadline, "final response reached publication before deadline")
+        #expect(clock.now < deadline, "final response reached publication before deadline")
         // Journal reads share the held writer's lock, so inspect the actual published root:
         // it still points to the independently checked user-only checkpoint, not the final candidate.
         #expect(try Data(contentsOf: currentURL) == hold.currentBeforePublication)
         if cancelDuringPublication { await run.cancel() }
-        try await Task.sleep(until: deadline.advanced(by: .milliseconds(50)), clock: .continuous)
+        clock.advance(by: .milliseconds(1_050))
         #expect(try Data(contentsOf: currentURL) == hold.currentBeforePublication,
                 "final checkpoint must still be unpublished after deadline")
         hold.release()
@@ -99,25 +102,31 @@ struct AgentSettledAnswerDeadlineTests {
     }
 
     @Test func answerReceivedBeforeTheDeadlineCompletesWhenTheStreamClosesAfterIt() async throws {
-        let provider = providerClosingLate(after: .milliseconds(600))
-        let session = try Agent(model: fixtureModel, provider: provider,
-                                configuration: .init(runTimeout: .milliseconds(300))).makeSession()
-        let run = try await session.run("Answer")
-        let result = try await run.wait()
+        // The Run has the whole answer; only then does the deadline pass, and the stream closes after it.
+        let received = ClockTestSignal()
+        let provider = providerClosingLate(after: .milliseconds(600), beforeEnd: { await received.wait() })
+        let clock = ManualAgentClock.current
+        let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: []),
+                             beforeHandlingModelEvent: { event in
+            if case .responseCompleted = event { await received.signal() }
+        })
+        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 0, deadline: clock.after(.milliseconds(300)))
+        let result = try await loop.run(messages: [ModelMessage.user([.text("Answer")])], sessionID: UUID(), budget: budget)
+        #expect(clock.now >= budget.deadline)
         #expect(result.outcome == .completed)
         #expect(result.response.content == [.text("the whole answer")])
-        let history = await session.history
-        #expect(history.last == .assistant(content: [.text("the whole answer")], toolCalls: []))
+        #expect(result.history.last == .assistant(content: [.text("the whole answer")], toolCalls: []))
     }
 
     @Test func answerTheModelSourceHandedOverBeforeTheDeadlineCompletesWhenTheRunReadsItLate() async throws {
         let provider = ScriptedProvider { request, _ in textResponse(request, "the whole answer") }
         // The model source has sent everything at once; the Run gets to the first event after the deadline.
+        let clock = ManualAgentClock.current
         let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: []),
                              beforeHandlingModelEvent: { event in
-            if case .responseStarted = event { try? await Task.sleep(for: .milliseconds(600)) }
+            if case .responseStarted = event { clock.advance(by: .milliseconds(600)) }
         })
-        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 0, deadline: .now.advanced(by: .milliseconds(300)))
+        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 0, deadline: clock.after(.milliseconds(300)))
         let result = try await loop.run(messages: [ModelMessage.user([.text("Answer")])], sessionID: UUID(), budget: budget)
         #expect(result.outcome == .completed)
         #expect(result.history.last == .assistant(content: [.text("the whole answer")], toolCalls: []))
@@ -125,7 +134,9 @@ struct AgentSettledAnswerDeadlineTests {
 
     @Test func steeringAfterAnAnswerReopensTheDeadlineBeforeAnotherModelRequest() async throws {
         let source = ScriptedProvider { request, _ in textResponse(request, "first answer") }
-        let session = try Agent(model: fixtureModel, provider: source.delayingStreamEnd(by: .milliseconds(600)),
+        let steered = ClockTestSignal()
+        let session = try Agent(model: fixtureModel,
+                                provider: source.delayingStreamEnd(by: .milliseconds(600), beforeEnd: { await steered.wait() }),
                                 configuration: .init(runTimeout: .milliseconds(300))).makeSession()
         let run = try await session.run("Answer")
         // Observe the emitted response start rather than guessing when dispatch occurred.
@@ -133,20 +144,26 @@ struct AgentSettledAnswerDeadlineTests {
             if case .model(.responseStarted) = event { break }
         }
         _ = try await run.steer("Need another answer")
+        await steered.signal()
         await #expect(throws: AgentLoopError.deadlineExceeded) { _ = try await run.wait() }
         try await run.waitForDrain()
         #expect(await source.log.requests.count == 1)
     }
 
     @Test func aRunWithoutAnAnswerByTheDeadlineStillTimesOut() async throws {
+        let entered = ClockTestSignal()
         let provider = ScriptedProvider { request, _ in
             let info = ResponseInfo(id: "response", model: request.model)
-            try await Task.sleep(for: .seconds(5))
+            await entered.signal()
+            // No answer until the Run's deadline has ended the request.
+            try await Task.sleep(for: .seconds(600))
             return [.responseStarted(info), .responseCompleted(.init(info: info, content: [.text("late")], stopReason: .endTurn))]
         }
         let session = try Agent(model: fixtureModel, provider: provider,
                                 configuration: .init(runTimeout: .milliseconds(300))).makeSession()
         let run = try await session.run("Answer")
+        await entered.wait()
+        ManualAgentClock.current.advance(by: .milliseconds(300))
         await #expect(throws: AgentLoopError.deadlineExceeded) { _ = try await run.wait() }
         let history = await session.history
         #expect(!history.contains { if case .assistant = $0 { true } else { false } })
@@ -154,24 +171,27 @@ struct AgentSettledAnswerDeadlineTests {
 }
 
 extension ScriptedProvider {
-    /// Same events, but the stream only finishes `delay` after the last of them.
-    func delayingStreamEnd(by delay: Duration) -> any ModelProvider {
-        DelayedEndProvider(inner: self, delay: delay)
+    /// Same events, but the stream only finishes `delay` (on the test's manual clock) after the last of them.
+    func delayingStreamEnd(by delay: Duration, beforeEnd: @escaping @Sendable () async -> Void = {}) -> any ModelProvider {
+        DelayedEndProvider(inner: self, delay: delay, beforeEnd: beforeEnd)
     }
 }
 
 private struct DelayedEndProvider: ModelProvider {
     let inner: ScriptedProvider
     let delay: Duration
+    let beforeEnd: @Sendable () async -> Void
     var descriptor: ModelProviderDescriptor { inner.descriptor }
 
     func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         let upstream = inner.stream(request: request)
+        let clock = ManualAgentClock.current, beforeEnd = beforeEnd, delay = delay
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     for try await event in upstream { continuation.yield(event) }
-                    try await Task.sleep(for: delay)
+                    await beforeEnd()
+                    clock.advance(by: delay)
                     continuation.finish()
                 } catch { continuation.finish(throwing: error) }
             }

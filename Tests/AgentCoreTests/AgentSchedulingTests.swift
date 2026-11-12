@@ -5,7 +5,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentSchedulingTests {
+@Suite(.manualClock) struct AgentSchedulingTests {
     @Test func oneReadFailureDoesNotCancelAnAlreadyStartedIndependentRead() async throws {
         let firstGate = ManualGate(), secondGate = ManualGate()
         await firstGate.open()
@@ -54,10 +54,10 @@ struct AgentSchedulingTests {
             }
             return observed
         }
-        #expect(await XCTWaiter.fulfillment(of: [first, second], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [first, second], timeout: 60) == .completed)
         await secondGate.open()
-        #expect(await XCTWaiter.fulfillment(of: [secondDone], timeout: 1) == .completed)
-        #expect(await XCTWaiter.fulfillment(of: [secondCommitted], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [secondDone], timeout: 60) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [secondCommitted], timeout: 60) == .completed)
         await firstGate.open()
         let result = try await run.wait()
         #expect(await order.values == [2, 1])

@@ -4,7 +4,7 @@ import Foundation
 import Testing
 
 // Validation-only integration candidate: no additional SDK behavior.
-struct MaintenanceCombinationTests {
+@Suite(.manualClock) struct MaintenanceCombinationTests {
     @Test func latestMemoryStateCommittedRevisionEpochAndTrustedCacheCoexist() async throws {
         let journal = AgentJournal()
         let provider = ScriptedProvider { request, turn in

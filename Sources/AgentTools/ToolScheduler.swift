@@ -100,7 +100,7 @@ public struct ToolScheduler: Sendable {
         var cursor = 0
         while cursor < calls.count {
             try Task.checkCancellation()
-            guard ContinuousClock.now < deadline else { throw ToolSchedulerError.deadlineExceeded }
+            guard AgentClock.now < deadline else { throw ToolSchedulerError.deadlineExceeded }
             var end = cursor + 1
             if isParallel(calls[cursor]) {
                 while end < calls.count, isParallel(calls[end]) { end += 1 }
@@ -127,7 +127,7 @@ public struct ToolScheduler: Sendable {
         try await withThrowingTaskGroup(of: Completion.self) { group in
             for index in range {
                 try Task.checkCancellation()
-                guard ContinuousClock.now < deadline else { throw ToolSchedulerError.deadlineExceeded }
+                guard AgentClock.now < deadline else { throw ToolSchedulerError.deadlineExceeded }
                 let call = calls[index]
                 try await onStarted(call)
                 group.addTask {
@@ -174,7 +174,7 @@ public struct ToolScheduler: Sendable {
         let drainKey = ToolExecutionDrain.Key(sessionID: call.contextSessionID, runID: call.contextRunID)
         let audited = call.auditAuthorization != nil
         func limited(_ limit: Duration?) -> ContinuousClock.Instant {
-            limit.map { min(deadline, ContinuousClock.now.advanced(by: $0)) } ?? deadline
+            limit.map { min(deadline, AgentClock.now.advanced(by: $0)) } ?? deadline
         }
         // Human/network authorization holds no scheduler resource lease.
         var admitted = call
@@ -212,7 +212,7 @@ public struct ToolScheduler: Sendable {
             return ToolPreAdmissionRefusal.busy.result
         }
         // The tool's own timeout starts here, with the lease held.
-        let toolDeadline = min(deadline, ContinuousClock.now.advanced(by: call.policy.timeout))
+        let toolDeadline = min(deadline, AgentClock.now.advanced(by: call.policy.timeout))
         let timeoutError: ToolSchedulerError = toolDeadline == deadline ? .deadlineExceeded : .toolTimedOut(call.call.id)
         let leased = admitted
         await drain.begin(drainKey)

@@ -250,7 +250,7 @@ public actor AgentSession {
         let runBudget = try budget?.renewed() ?? AgentBudget(
             maxModelTurns: maxModelTurns,
             maxToolCalls: maxToolCalls,
-            deadline: .now.advanced(by: runTimeout)
+            deadline: AgentClock.now.advanced(by: runTimeout)
         )
         if dispatchStarting || (dispatcherID != nil && dispatcherID != dispatchOwnerID) {
             throw AgentFollowUpError.dispatchOwned
@@ -387,7 +387,7 @@ public actor AgentSession {
         let operation = operationID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         if registry.hasMutation(named: [call.name]), operation == nil { throw AgentHostInvocationError.operationIDRequired }
         let runBudget = try budget?.renewed() ?? AgentBudget(
-            maxModelTurns: maxModelTurns, maxToolCalls: maxToolCalls, deadline: .now.advanced(by: runTimeout)
+            maxModelTurns: maxModelTurns, maxToolCalls: maxToolCalls, deadline: AgentClock.now.advanced(by: runTimeout)
         )
         if dispatchStarting || dispatcherID != nil { throw AgentFollowUpError.dispatchOwned }
         guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
@@ -1515,13 +1515,13 @@ public actor AgentSession {
         guard !dispatchStarting, dispatcherID == nil else { throw AgentFollowUpError.dispatchOwned }
         if let journal, !journal.supportsContextHandoff { throw AgentJournalError.unsupportedFormat }
         if allowingIncompleteTurn, journal?.supportsIncompleteContextHandoff != true { throw AgentJournalError.unsupportedFormat }
-        let deadline = deadline ?? .now.advanced(by: runTimeout)
+        let deadline = deadline ?? AgentClock.now.advanced(by: runTimeout)
         let operationID = UUID(), control = AgentContextHandoffControl(), drain = AgentRunDrain()
         startingRun = true
         do {
             if let pendingDrainTask { try await withAgentDeadline(deadline, operation: { await pendingDrainTask.value }) }
             try Task.checkCancellation()
-            guard ContinuousClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
+            guard AgentClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
             try await AgentSessionIdentityRegistry.shared.acquire(id, storeID: await journal?.storeIdentity()?.storeID)
             do { if let journal { try await journal.acquireSessionLease(sessionID: id) } }
             catch {
@@ -1552,7 +1552,7 @@ public actor AgentSession {
             // not tool/executor admission. A later revoke cannot erase committed history.
             try await capabilities?.scope.checkRun(operationID)
             try Task.checkCancellation()
-            guard ContinuousClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
+            guard AgentClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
             try await control.seal()
             if let journal, let witness = persistentHistoryWitness {
                 try await journal.publishContextHandoff(value, history: history, sessionID: id,
@@ -1662,7 +1662,7 @@ public actor AgentSession {
             }
         }
         if let journal, !journal.supportsNativeContext { throw AgentJournalError.unsupportedFormat }
-        let deadline = deadline ?? .now.advanced(by: runTimeout)
+        let deadline = deadline ?? AgentClock.now.advanced(by: runTimeout)
         let operationID = UUID(), invocationID = UUID()
         let control = AgentCompactionControl(), drain = AgentRunDrain()
         let channel = AsyncStream<ModelCompactionEvent>.makeStream(bufferingPolicy: .bufferingNewest(128))
@@ -1701,7 +1701,7 @@ public actor AgentSession {
                     operationID: operationID, invocationID: invocationID, events: events)
             }
             try Task.checkCancellation()
-            guard ContinuousClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
+            guard AgentClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
             let (response, request, reminderProof) = responseAndRequest
             var published: ModelNativeContextCheckpoint?
             if let continuation = response.continuation {
@@ -1732,7 +1732,7 @@ public actor AgentSession {
                             conversationRevision: conversationRevision, structuredOutput: structuredOutput)
                     }
                 }
-                guard ContinuousClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
+                guard AgentClock.now < deadline else { throw AgentLoopError.deadlineExceeded }
                 try await control.seal()
                 if let journal, let witness = persistentHistoryWitness {
                     try await journal.publishNativeContext(value, history: history, sessionID: id, runID: nil,

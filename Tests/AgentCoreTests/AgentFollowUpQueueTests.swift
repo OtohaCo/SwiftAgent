@@ -6,7 +6,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentFollowUpQueueTests {
+@Suite(.manualClock) struct AgentFollowUpQueueTests {
     @Test func explicitDispatcherAdmitsFifoAndStopsWithoutConsumingTheEventStream() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("follow-up-dispatch-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -134,7 +134,7 @@ struct AgentFollowUpQueueTests {
         await gate.waitUntilEntered()
         #expect(try await session.withdrawFollowUp(inputID: "remove") == .withdrawn)
         await gate.release()
-        let observed = await XCTWaiter.fulfillment(of: [nextFinished], timeout: 3)
+        let observed = await XCTWaiter.fulfillment(of: [nextFinished], timeout: 60)
         await dispatcher.stop()
         try await dispatcher.waitForDrain()
         #expect(observed == .completed)
@@ -1325,7 +1325,7 @@ private actor QueueResolverGate {
         await withCheckedContinuation { observers.append($0) }
     }
     func waitUntilCancelled() async -> Bool {
-        await XCTWaiter.fulfillment(of: [cancelled], timeout: 3) == .completed
+        await XCTWaiter.fulfillment(of: [cancelled], timeout: 60) == .completed
     }
     func release() {
         continuation?.resume()
@@ -1505,7 +1505,7 @@ private final class QueueCommitBarrier: @unchecked Sendable {
         condition.unlock()
     }
     func waitUntilEntered() async -> Bool {
-        await XCTWaiter.fulfillment(of: [entered], timeout: 3) == .completed
+        await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed
     }
     func release() {
         condition.lock(); released = true; condition.broadcast(); condition.unlock()
@@ -1527,7 +1527,7 @@ private final class QueueMaintenanceBarrier: @unchecked Sendable {
         condition.unlock()
     }
     func waitUntilEntered() async -> Bool {
-        await XCTWaiter.fulfillment(of: [entered], timeout: 3) == .completed
+        await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed
     }
     func release() { condition.lock(); released = true; condition.broadcast(); condition.unlock() }
 }

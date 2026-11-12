@@ -5,7 +5,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentRecoverableToolErrorTests {
+@Suite(.manualClock) struct AgentRecoverableToolErrorTests {
     @Test func visibleReadOnlyFailureLetsModelCorrectTheQueryInTheSameRun() async throws {
         let failed = recoverableCall(id: "missing-call", query: "missing")
         let corrected = recoverableCall(id: "corrected-call", query: "available")
@@ -318,11 +318,11 @@ struct AgentRecoverableToolErrorTests {
         let session = try Agent(model: fixtureModel, provider: provider, tools: [tool]).makeSession()
         let run = try await session.run("Search")
 
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         await run.cancel()
         await #expect(throws: CancellationError.self) { try await run.wait() }
         await gate.open()
-        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [returned], timeout: 60) == .completed)
         try await run.waitForDrain()
 
         #expect(await provider.log.requests.count == 1)

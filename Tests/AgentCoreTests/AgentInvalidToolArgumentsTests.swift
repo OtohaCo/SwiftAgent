@@ -7,7 +7,7 @@ import Testing
 
 /// A tool call whose arguments are not a JSON object, or do not match the tool's input schema,
 /// is a model mistake. The tool does not run; the model is told what was wrong and the Run goes on.
-struct AgentInvalidToolArgumentsTests {
+@Suite(.manualClock) struct AgentInvalidToolArgumentsTests {
     @Test func committedRejectionSurvivesALaterSiblingExecutionFailureAndJournalReopen() async throws {
         let directory = auditTestDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

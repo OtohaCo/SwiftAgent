@@ -21,7 +21,7 @@ package final class OperationDeadlineGate: @unchecked Sendable {
     package var isSettled: Bool { lock.withLock { state == .settled } }
 
     /// Marks the result as in time. False if the deadline already passed or took the operation.
-    package func settle(now: ContinuousClock.Instant = .now) -> Bool {
+    package func settle(now: ContinuousClock.Instant = AgentClock.now) -> Bool {
         lock.withLock {
             switch state {
             case .settled: return true
@@ -54,7 +54,7 @@ package final class OperationDeadlineGate: @unchecked Sendable {
 
     package func checkActive(timeoutError: any Error) throws {
         try Task.checkCancellation()
-        guard isSettled || ContinuousClock.now < deadline else { throw timeoutError }
+        guard isSettled || AgentClock.now < deadline else { throw timeoutError }
     }
 }
 
@@ -70,7 +70,7 @@ package func withOperationDeadline<Value: Sendable>(
 ) async throws -> Value {
     do {
         try Task.checkCancellation()
-        guard ContinuousClock.now < deadline else { throw timeoutError }
+        guard AgentClock.now < deadline else { throw timeoutError }
     } catch {
         // The caller may have registered the operation before this preflight.
         await onOperationFinished()
@@ -80,7 +80,7 @@ package func withOperationDeadline<Value: Sendable>(
     let worker = Task {
         do {
             try Task.checkCancellation()
-            guard ContinuousClock.now < deadline else { throw timeoutError }
+            guard AgentClock.now < deadline else { throw timeoutError }
             let value = try await operation()
             await onOperationFinished()
             await race.resolve(.success(value))
@@ -91,7 +91,7 @@ package func withOperationDeadline<Value: Sendable>(
     }
     let timer = Task {
         do {
-            try await ContinuousClock().sleep(until: deadline)
+            try await AgentClock.sleep(until: deadline)
             if let gate, !gate.expire() { return }
             worker.cancel()
             await race.resolve(.failure(timeoutError))
@@ -107,11 +107,11 @@ package func withOperationDeadline<Value: Sendable>(
             Task { await race.resolve(.failure(CancellationError())) }
         }
         try Task.checkCancellation()
-        guard gate?.isSettled == true || ContinuousClock.now < deadline else { throw timeoutError }
+        guard gate?.isSettled == true || AgentClock.now < deadline else { throw timeoutError }
         return value
     } catch {
         try Task.checkCancellation()
-        guard gate?.isSettled == true || ContinuousClock.now < deadline else { throw timeoutError }
+        guard gate?.isSettled == true || AgentClock.now < deadline else { throw timeoutError }
         throw error
     }
 }

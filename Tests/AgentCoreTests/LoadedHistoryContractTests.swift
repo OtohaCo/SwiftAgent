@@ -4,7 +4,7 @@ import AgentModels
 import Foundation
 import Testing
 
-struct LoadedHistoryContractTests {
+@Suite(.manualClock) struct LoadedHistoryContractTests {
     @Test func snapshotRestoresDurableHistoryAndUsesCurrentInstructions() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

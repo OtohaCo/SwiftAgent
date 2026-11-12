@@ -4,7 +4,7 @@ import AgentModels
 import Foundation
 import Testing
 
-struct ContextSourceCoordinateTests {
+@Suite(.manualClock) struct ContextSourceCoordinateTests {
     @Test(arguments: [false, true]) func committedToolSourcesUseTheActualSessionRevision(_ durable: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

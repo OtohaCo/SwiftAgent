@@ -5,7 +5,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentSessionTests {
+@Suite(.manualClock) struct AgentSessionTests {
     @Test func sequentialRunsReuseSessionHistoryAndAgentInstructions() async throws {
         let provider = ScriptedProvider { request, turn in textResponse(request, "answer \(turn)") }
         let agent = try Agent(model: fixtureModel, provider: provider, instructions: "Be precise.")
@@ -36,7 +36,7 @@ struct AgentSessionTests {
         let agent = try Agent(model: fixtureModel, provider: provider)
         let a = try agent.makeSession(), b = try agent.makeSession()
         let first = try await a.run("A")
-        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
         await #expect(throws: AgentSessionError.runInProgress) { try await a.run("conflict") }
         #expect(await a.history == [.user([.text("A")])])
         let other = try await b.run("B")

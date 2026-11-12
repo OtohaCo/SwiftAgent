@@ -4,7 +4,7 @@ import AgentTools
 import Foundation
 import Testing
 
-struct AgentLoopContractTests {
+@Suite(.manualClock) struct AgentLoopContractTests {
     @Test func malformedUnknownAndInvalidBatchMembersNeverExecute() async throws {
         let valid = ToolCall(id: .init(rawValue: "a"), name: "add", argumentsJSON: #"{"lhs":2,"rhs":3}"#, completeness: .complete)
         let unknown = ToolCall(id: .init(rawValue: "b"), name: "missing", argumentsJSON: "{}", completeness: .complete)

@@ -5,7 +5,7 @@ import Foundation
 import Testing
 import XCTest
 
-struct AgentEventStreamingTests {
+@Suite(.manualClock) struct AgentEventStreamingTests {
     @Test func textDeltaArrivesBeforeProviderFinishes() async throws {
         let gate = ManualGate()
         let received = XCTestExpectation(description: "Delta received")
@@ -27,7 +27,7 @@ struct AgentEventStreamingTests {
             }
             return events
         }
-        #expect(await XCTWaiter.fulfillment(of: [received], timeout: 1) == .completed)
+        #expect(await XCTWaiter.fulfillment(of: [received], timeout: 60) == .completed)
         await gate.open()
         let events = await observer.value
         guard case .runFinished(.result(let result)) = events.last else { Issue.record("Missing result"); return }

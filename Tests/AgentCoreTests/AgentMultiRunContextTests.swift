@@ -3,7 +3,7 @@ import AgentModels
 import Foundation
 import Testing
 
-struct AgentMultiRunContextTests {
+@Suite(.manualClock) struct AgentMultiRunContextTests {
     @Test func laterRunSeesTheUserTurnFromThreeRunsEarlier() async throws {
         let provider = ScriptedProvider { request, _ in
             if request.messages.last == .user([.text("What was the first question?")]) {

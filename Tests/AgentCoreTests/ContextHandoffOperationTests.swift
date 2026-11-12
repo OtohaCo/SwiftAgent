@@ -5,7 +5,7 @@ import Foundation
 import Testing
 @testable import AgentCore
 
-@Suite struct ContextHandoffOperationTests {
+@Suite(.manualClock) struct ContextHandoffOperationTests {
     @Test(arguments: [false, true])
     func publicationFailureNeverInstallsFictionalRetirement(_ unknown: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -45,9 +45,10 @@ import Testing
         let gate = HandoffProjectionGate()
         let target = try handoffBinding(provider, projector: gate)
         let operation = try await session.handoffToOrdinary(using: target, discardingRetiredProviderContinuations: true,
-            deadline: .now.advanced(by: .milliseconds(deadline ? 150 : 5_000)))
+            deadline: ManualAgentClock.current.after(.milliseconds(deadline ? 150 : 5_000)))
         await gate.waitEntered()
         if deadline {
+            ManualAgentClock.current.advance(by: .milliseconds(150))
             await #expect(throws: AgentLoopError.deadlineExceeded) { try await operation.wait() }
         } else {
             await operation.cancel()

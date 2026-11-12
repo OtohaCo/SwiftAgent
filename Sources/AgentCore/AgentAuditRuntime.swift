@@ -213,7 +213,7 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
         guard let authorizer = configuration.authorizer else { throw AgentAuthorizationError.missingAuthorizer }
         try configuration.scope.check(expectedGeneration: request.policyGeneration)
         try await journal.checkAuditAvailability(backlog: configuration.backlog)
-        let started = ContinuousClock.now
+        let started = AgentClock.now
         let deadline = min(context.deadline ?? request.deadline, started.advanced(by: configuration.authorizerTimeout))
         await work.begin()
         do {
@@ -248,7 +248,7 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
                 }
                 try context.checkActive()
                 try self.configuration.scope.check(expectedGeneration: self.request.policyGeneration)
-                guard ContinuousClock.now < deadline else { throw AgentAuthorizationError.authorizerTimedOut }
+                guard AgentClock.now < deadline else { throw AgentAuthorizationError.authorizerTimedOut }
                 switch decision.outcome {
                 case .deny: throw AgentAuthorizationError.authorizationDenied
                 case .requiresUserAction: throw AgentAuthorizationError.requiresUserAction
@@ -258,9 +258,9 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
                 if let notAfter = decision.notAfter {
                     let seconds = notAfter.timeIntervalSinceNow
                     guard seconds > 0 else { throw AgentAuthorizationError.expired }
-                    expires = min(expires, ContinuousClock.now.advanced(by: .seconds(seconds)))
+                    expires = min(expires, AgentClock.now.advanced(by: .seconds(seconds)))
                 }
-                guard ContinuousClock.now < expires else { throw AgentAuthorizationError.expired }
+                guard AgentClock.now < expires else { throw AgentAuthorizationError.expired }
                 self.lock.withLock { self.expires = expires; self.enterprisePhase = false }
             } onOperationFinished: { await self.work.end() }
         } catch { throw error }
@@ -310,7 +310,7 @@ final class AgentAuditInvocation: ToolAuditAuthorization, @unchecked Sendable {
         try Task.checkCancellation()
         guard binding == request.binding else { throw AgentAuthorizationError.actionChanged }
         let expires = lock.withLock { expires }
-        guard let expires, ContinuousClock.now < expires else { throw AgentAuthorizationError.expired }
+        guard let expires, AgentClock.now < expires else { throw AgentAuthorizationError.expired }
         try configuration.scope.check(expectedGeneration: request.policyGeneration)
     }
 

@@ -8,7 +8,7 @@ import Testing
 /// A Run's capability binding can hold deferred tools: bound and callable once declared, but not sent
 /// to the model from the start. A tool result (a Host's "find tools" tool) declares some of them, and
 /// the next model request of the same Run carries their definitions.
-struct DeferredToolDeclarationTests {
+@Suite(.manualClock) struct DeferredToolDeclarationTests {
     @Test func deferredToolsAreBoundButNotOfferedToTheModel() async throws {
         let fetches = DeclarationLog()
         let provider = ScriptedProvider { request, _ in textResponse(request, "done") }

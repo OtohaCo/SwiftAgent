@@ -7,7 +7,7 @@ import Testing
 /// A read-only tool that declares its recoverable errors model-visible returned something its output
 /// schema does not allow, or that cannot be carried as JSON. Nothing was changed, so the model is told
 /// the tool's result could not be used and the Run goes on. Every other tool still fails closed.
-struct AgentInvalidToolOutputTests {
+@Suite(.manualClock) struct AgentInvalidToolOutputTests {
     private func run(output: Double, recoverableErrors: ToolPolicy.RecoverableErrors) async throws
         -> (result: AgentLoopResult?, events: [AgentEvent], requests: [ModelRequest]) {
         let policy = try ToolPolicy(effect: .readOnly, execution: .sequential, idempotency: .safe,

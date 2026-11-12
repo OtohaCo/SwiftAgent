@@ -4,7 +4,7 @@ import AgentJournalFileStore
 import Foundation
 import Testing
 
-struct AgentContextPipelineTests {
+@Suite(.manualClock) struct AgentContextPipelineTests {
     private let session = UUID()
     private let model = ModelID(provider: "fixture", name: "small")
 

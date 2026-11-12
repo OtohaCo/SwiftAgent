@@ -9,7 +9,7 @@ import Testing
 /// capability snapshot and the same guarantees as a model's call: tool authorization, durable mutation admission, the
 /// Journal, Receipt validation and reconciliation. Formal history says the Host made it; the next Run's model sees it.
 /// The model can never make a call in the Host's name.
-struct HostInitiatedToolInvocationTests {
+@Suite(.manualClock) struct HostInitiatedToolInvocationTests {
     private func temporaryURL() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("host-invocation-\(UUID().uuidString)")
     }
@@ -47,13 +47,14 @@ struct HostInitiatedToolInvocationTests {
         let session = try Agent(model: fixtureModel, provider: silentProvider()).makeSession(journal: journal)
         let capabilities = try await binding(session, [AgentCapabilityTool(id: "move", version: "1",
             tool: try MoveClipTool(journal: journal, probe: HostMutationProbe(), settlementHold: hold))])
-        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        let clock = ManualAgentClock.current
+        let deadline = clock.after(.seconds(1))
         let invocation = try await session.invokeHostTool(.init(name: MoveClipTool.name, argumentsJSON: #"{"clip":"clip-2","at":12}"#),
             capabilities: capabilities, operationID: "committed", budget: .init(maxModelTurns: 1, maxToolCalls: 1, deadline: deadline))
         let held = await hold.waitUntilHeld()
         guard held else { hold.release(); Issue.record("result did not reach publication"); return }
         if cancel { await invocation.cancel() }
-        try await Task.sleep(until: deadline.advanced(by: .milliseconds(50)), clock: .continuous)
+        clock.advance(by: .milliseconds(1_050))
         hold.release()
         let result = try await invocation.wait()
         try await invocation.waitForDrain()
@@ -290,7 +291,10 @@ struct HostInitiatedToolInvocationTests {
         let capabilities = try await binding(session, [AgentCapabilityTool(id: "wait", version: "1", tool: try WaitingReadTool(gate: gate, cooperative: false))])
 
         let invocation = try await session.invokeHostTool(AgentHostToolCall(name: WaitingReadTool.name, argumentsJSON: "{}"), capabilities: capabilities,
-            operationID: nil, budget: try AgentBudget(maxModelTurns: 1, maxToolCalls: 1, deadline: .now.advanced(by: .milliseconds(200))))
+            operationID: nil, budget: try AgentBudget(maxModelTurns: 1, maxToolCalls: 1, deadline: ManualAgentClock.current.after(.milliseconds(200))))
+        // The executor is running (and ignores cancellation) when the deadline passes.
+        await gate.waitUntilEntered()
+        ManualAgentClock.current.advance(by: .milliseconds(200))
         await #expect(throws: AgentLoopError.deadlineExceeded) { _ = try await invocation.wait() }
         let next = Task { try await session.run("Next", budget: try testBudget()) }
         try await Task.sleep(for: .milliseconds(200))
