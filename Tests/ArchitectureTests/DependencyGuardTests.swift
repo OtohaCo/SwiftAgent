@@ -157,7 +157,7 @@ final class DependencyGuardTests: XCTestCase {
                 }
             }
             XCTAssertEqual(moduleNames, DependencyGuard.dependencies[name], name)
-            if name == "WorkspaceAgent" || name == "AgentJournalFileStore" || name == "AgentTools" {
+            if name == "WorkspaceAgent" || name == "AgentJournalFileStore" || name == "AgentJournalSQLiteStore" || name == "AgentTools" {
                 XCTAssertEqual(productNames, ["Crypto"], name)
             } else {
                 XCTAssertEqual(productNames, [], "\(name) must not link extra packages")
