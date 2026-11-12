@@ -107,14 +107,14 @@ package struct ToolRegistry: Sendable {
         let output = registration.output
         let outputSchema = registration.outputSchema
         let definition = registration.tool.definition
-        let policy = registration.tool.policy
+        let policy = invocation.policy
         @Sendable func checked(_ invoke: @escaping AnyAgentTool.Invocation) -> AnyAgentTool.Invocation {
             { executionContext in
                 try await Self.checkedResult(of: invoke, context: executionContext, output: output, outputSchema: outputSchema, tools: tools,
                                              name: definition.name, policy: policy)
             }
         }
-        return PreparedToolCall(call: call, policy: registration.tool.policy,
+        return PreparedToolCall(call: call, policy: policy,
                                 maximumResultBytes: registration.tool.maximumResultBytes, resources: invocation.resources,
                                 evidenceRequirements: invocation.evidenceRequirements,
                                 receiptExpectation: invocation.receiptExpectation, definition: registration.tool.definition,

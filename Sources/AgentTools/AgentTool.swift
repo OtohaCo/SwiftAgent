@@ -16,6 +16,13 @@ public protocol AgentTool: Sendable {
     /// type's name, description and schemas; a `RuntimeAgentTool` supplies its own.
     var definition: ModelToolDefinition { get }
     var policy: ToolPolicy { get }
+    /// For a mutation tool, the read-only policy of a call that, for this input, only observes, or nil to keep
+    /// `policy`. Such a call is scheduled, authorized and settled as a read: a shared lease, beside neighbouring
+    /// parallel reads when its execution is `.parallel`, and no mutation intent or reconciliation. Its receipt is
+    /// still checked when `receiptExpectation(for:)` declares one. Decide from the input alone: the runtime asks
+    /// again before audited dispatch and expects the same answer. A policy that is not read-only, or one returned
+    /// by a tool whose own policy proves no effect (`.confirmedNoEffect`), fails the call's preparation.
+    func readOnlyPolicy(for input: Input) throws -> ToolPolicy?
     /// The most a result of this tool may add to the conversation, in bytes of encoded JSON output; a larger
     /// one is cut before it is committed, with a notice the model reads (`AgentToolResultLimit`). At least
     /// `AgentToolResultLimit.minimumBytes`; defaults to `AgentToolResultLimit.defaultBytes`.
@@ -123,6 +130,7 @@ extension AgentTool {
     }
 
     public func evidenceRequirements(for input: Input) throws -> [EvidenceRequirement] { [] }
+    public func readOnlyPolicy(for input: Input) throws -> ToolPolicy? { nil }
     public func resourceRequirements(for input: Input) throws -> [ToolResource] { [.global] }
     public func receiptExpectation(for input: Input) throws -> ToolReceiptExpectation? { nil }
     public var maximumResultBytes: Int { AgentToolResultLimit.defaultBytes }

@@ -1,6 +1,6 @@
 # SwiftAgent Tool Scheduling
 
-last-verified: 2026-11-10
+last-verified: 2026-11-12
 
 ToolScheduler executes prepared, schema-validated calls for the single AgentLoop.
 Contiguous read-only parallel calls overlap. Sequential and exclusive calls are
@@ -41,6 +41,15 @@ lease whose resources overlap; global intersects every named resource. Older
 conflicting waiters cannot be overtaken, while disjoint work may progress. Two
 mutations with disjoint named resources run at once, also across Sessions on
 one scheduler (before, any two mutations waited for each other).
+
+A mutation tool can also tell, per input, that a call only observes:
+`AgentTool.readOnlyPolicy(for:)` returns the read-only policy that call runs
+under (a shell tool reading a file, say). Such a call takes a shared lease on the
+same resources, joins neighbouring parallel reads when its execution is
+`.parallel`, and is settled as a read: no mutation intent, no reconciliation.
+The other calls of the tool stay exclusive mutations. The answer must follow from
+the input alone; a policy that is not read-only, or one from a tool that proves
+no effect, fails the call's preparation.
 
 The names are the whole contract: the scheduler cannot see what a tool really
 touches. A mutation must name every resource another Session's call could

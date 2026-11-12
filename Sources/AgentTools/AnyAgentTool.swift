@@ -10,6 +10,8 @@ package struct AnyAgentTool: Sendable {
     package let maximumResultBytes: Int
     package typealias Invocation = @Sendable (ToolContext) async throws -> ToolResult<JSONValue>
     package struct PreparedInvocation: Sendable {
+        /// The call's policy: the tool's own, or the read-only one it gave for this input.
+        let policy: ToolPolicy
         let resources: [ToolResource]
         let evidenceRequirements: [EvidenceRequirement]
         let receiptExpectation: ToolReceiptExpectation?
@@ -33,8 +35,8 @@ package struct AnyAgentTool: Sendable {
         self.definition = definition
         guard tool.maximumResultBytes >= AgentToolResultLimit.minimumBytes else { throw ToolInvocationError.invalidDefinition }
         maximumResultBytes = tool.maximumResultBytes
-        let policy = tool.policy
-        self.policy = policy
+        let declared = tool.policy
+        self.policy = declared
         decode = { arguments, prepareAuthorizationBinding in
             let input: T.Input
             do {
@@ -44,6 +46,7 @@ package struct AnyAgentTool: Sendable {
             } catch {
                 throw ToolInvocationError.invalidArguments
             }
+            let policy = try Self.policy(of: tool, for: input)
             let requirements = policy.evidence == .required ? try tool.evidenceRequirements(for: input) : []
             let resources = try tool.resourceRequirements(for: input)
             try ToolResource.validate(resources)
@@ -127,7 +130,7 @@ package struct AnyAgentTool: Sendable {
                 }
                 try await context.executionAdmission?.check(runID: context.runID, resources: resources)
                 if let audit = context.auditAuthorization {
-                    try audit.checkPreparedAction(definition: tool.definition, policy: tool.policy,
+                    try audit.checkPreparedAction(definition: tool.definition, policy: Self.policy(of: tool, for: input),
                         resources: tool.resourceRequirements(for: input), expectation: tool.receiptExpectation(for: input),
                         binding: tool.authorizationBinding(for: input))
                 }
@@ -162,7 +165,7 @@ package struct AnyAgentTool: Sendable {
                             expectation: receiptExpectation
                         )
                         if let audit = context.auditAuthorization {
-                            try audit.checkPreparedAction(definition: tool.definition, policy: tool.policy,
+                            try audit.checkPreparedAction(definition: tool.definition, policy: Self.policy(of: tool, for: input),
                         resources: tool.resourceRequirements(for: input), expectation: tool.receiptExpectation(for: input),
                         binding: tool.authorizationBinding(for: input))
                             let scopeTicket = try await context.executionAdmission?.admit(runID: context.runID, resources: resources)
@@ -186,7 +189,7 @@ package struct AnyAgentTool: Sendable {
                 func executorContext() throws -> ToolContext {
                     var value = context
                     if policy.recoverableErrors == .confirmedNoEffect {
-                        guard tool.definition == definition, tool.policy == policy,
+                        guard tool.definition == definition, declared == policy,
                               try tool.resourceRequirements(for: input) == resources,
                               try tool.receiptExpectation(for: input) == receiptExpectation,
                               try tool.authorizationBinding(for: input) == binding else { throw ToolNoEffectError.invalidBinding }
@@ -197,7 +200,7 @@ package struct AnyAgentTool: Sendable {
                 }
                 do {
                     if let audit = context.auditAuthorization {
-                        try audit.checkPreparedAction(definition: tool.definition, policy: tool.policy,
+                        try audit.checkPreparedAction(definition: tool.definition, policy: Self.policy(of: tool, for: input),
                         resources: tool.resourceRequirements(for: input), expectation: tool.receiptExpectation(for: input),
                         binding: tool.authorizationBinding(for: input))
                         let scopeTicket = try await context.executionAdmission?.admit(runID: context.runID, resources: resources)
@@ -207,7 +210,7 @@ package struct AnyAgentTool: Sendable {
                                 try await audit.recordAdmission()
                                 try context.checkActive()
                                 // No await between final binding check, entry observation and executor call.
-                                try audit.checkPreparedAction(definition: tool.definition, policy: tool.policy,
+                                try audit.checkPreparedAction(definition: tool.definition, policy: Self.policy(of: tool, for: input),
                         resources: tool.resourceRequirements(for: input), expectation: tool.receiptExpectation(for: input),
                         binding: tool.authorizationBinding(for: input))
                                 enteredContext = try executorContext()
@@ -245,7 +248,7 @@ package struct AnyAgentTool: Sendable {
                           try tool.receiptExpectation(for: input) == receiptExpectation,
                           try tool.authorizationBinding(for: input) == binding,
                           try tool.resourceRequirements(for: input) == resources,
-                          tool.definition == definition, tool.policy == policy else { throw ToolNoEffectError.invalidBinding }
+                          tool.definition == definition, declared == policy else { throw ToolNoEffectError.invalidBinding }
                     guard let operationID = context.idempotencyKey,
                           error.proof.scopeInstanceID == context.executionAdmission?.scopeInstanceID,
                           error.proof.definition == definition, error.proof.actionBinding == binding,
@@ -293,11 +296,20 @@ package struct AnyAgentTool: Sendable {
                 return ToolResult(output: output, evidence: result.evidence, receipt: result.receipt,
                                   declaredTools: result.declaredTools, images: result.images)
             }
-            return PreparedInvocation(resources: resources, evidenceRequirements: requirements,
+            return PreparedInvocation(policy: policy, resources: resources, evidenceRequirements: requirements,
                                       receiptExpectation: receiptExpectation, binding: binding,
                                       preauthorize: preauthorize, authorizeBeforeLease: authorizeBeforeLease,
                                       invoke: { try await run($0, false) }, invokeAuthorized: { try await run($0, true) })
         }
+    }
+
+    /// The tool's policy, or the read-only one it gives for this input (`AgentTool.readOnlyPolicy(for:)`).
+    private static func policy<T: AgentTool>(of tool: T, for input: T.Input) throws -> ToolPolicy {
+        guard let narrowed = try tool.readOnlyPolicy(for: input) else { return tool.policy }
+        guard narrowed.effect == .readOnly, tool.policy.recoverableErrors != .confirmedNoEffect else {
+            throw ToolInvocationError.invalidDefinition
+        }
+        return narrowed
     }
 
     /// Letters, digits, "_" and "-", at most 64: accepted by every provider's tool names.

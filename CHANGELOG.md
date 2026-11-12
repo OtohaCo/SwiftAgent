@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `AgentTool.readOnlyPolicy(for:)` lets a mutation tool run a call that, for its
+  input, only observes as a read: a shared lease, beside neighbouring parallel
+  reads, and no mutation intent. Other calls of the tool stay exclusive. Nil, the
+  default, keeps the tool's policy.
+
 - `ProviderRequestPolicy(idleCountsWireActivity: true)` lets bytes the provider receives
   restart the idle budget even when they decode to no event: SSE keep-alives, `ping`
   and lifecycle events, encrypted reasoning items and signature-only reasoning parts.
