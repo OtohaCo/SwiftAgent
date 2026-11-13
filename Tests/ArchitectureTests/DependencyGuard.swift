@@ -6,6 +6,7 @@ enum DependencyGuard {
         "AgentTools": ["AgentModels"],
         "AgentCore": ["AgentModels", "AgentTools"],
         "AgentJournalFileStore": ["AgentCore", "AgentModels", "AgentTools"],
+        "AgentJournalSQLiteStore": ["AgentCore", "AgentModels", "AgentTools"],
         "AgentAppleProvider": ["AgentModels"],
         "AgentDecisions": ["AgentModels"],
         "AgentJevProvider": ["AgentModels", "AgentDecisions"],
@@ -35,6 +36,12 @@ enum DependencyGuard {
             allowed.insert("Darwin")
             allowed.insert("Glibc")
             allowed.insert("Musl")
+        }
+        if module == "AgentJournalSQLiteStore" {
+            allowed.insert("SQLite3")
+            allowed.insert("Crypto")
+            allowed.insert("Darwin")
+            allowed.insert("Glibc")
         }
         if module == "AgentTools" { allowed.insert("Crypto") }
         if module == "AgentCore" { allowed.insert("Dispatch") }

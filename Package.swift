@@ -9,6 +9,7 @@ let package = Package(
         .library(name: "AgentTools", targets: ["AgentTools"]),
         .library(name: "AgentCore", targets: ["AgentCore"]),
         .library(name: "AgentJournalFileStore", targets: ["AgentJournalFileStore"]),
+        .library(name: "AgentJournalSQLiteStore", targets: ["AgentJournalSQLiteStore"]),
         .library(name: "AgentProviders", targets: ["AgentProviders"]),
         .library(name: "AgentAppleProvider", targets: ["AgentAppleProvider"]),
         .library(name: "AgentDecisions", targets: ["AgentDecisions"]),
@@ -25,6 +26,9 @@ let package = Package(
         .target(name: "AgentTools", dependencies: ["AgentModels", .product(name: "Crypto", package: "swift-crypto")]),
         .target(name: "AgentCore", dependencies: ["AgentModels", "AgentTools"]),
         .target(name: "AgentJournalFileStore", dependencies: [
+            "AgentCore", "AgentModels", "AgentTools", .product(name: "Crypto", package: "swift-crypto"),
+        ]),
+        .target(name: "AgentJournalSQLiteStore", dependencies: [
             "AgentCore", "AgentModels", "AgentTools", .product(name: "Crypto", package: "swift-crypto"),
         ]),
         .target(name: "JournalProcessPrimitives"),
@@ -54,7 +58,7 @@ let package = Package(
         .testTarget(name: "AgentToolsTests", dependencies: ["AgentTools", "AgentModels"]),
         .testTarget(name: "AgentCoreTests", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentTools", "AgentModels"]),
         .testTarget(name: "AgentJournalFileStoreTests", dependencies: ["AgentJournalFileStore", "AgentCore", "AgentTools", "AgentModels", "JournalTestProcess"]),
-        .testTarget(name: "AgentJournalContractTests", dependencies: ["AgentJournalFileStore", "AgentCore", "AgentTools", "AgentModels"]),
+        .testTarget(name: "AgentJournalContractTests", dependencies: ["AgentJournalFileStore", "AgentJournalSQLiteStore", "AgentCore", "AgentTools", "AgentModels"]),
         .testTarget(name: "AgentAppleProviderTests", dependencies: ["AgentAppleProvider", "AgentModels", "AgentTools", "AgentCore"]),
         .testTarget(name: "AgentProvidersTests", dependencies: ["AgentProviders", "AgentCatalog", "AgentModels", "AgentTools", "AgentCore", "AgentJournalFileStore", "AgentUsage"]),
         .testTarget(

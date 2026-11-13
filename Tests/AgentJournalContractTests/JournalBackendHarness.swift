@@ -78,6 +78,7 @@ extension JournalBackendHarness {
 enum JournalContractBackends {
     static let all: [any JournalBackendHarness] = [
         SegmentedFileBackendHarness(),
+        SQLiteBackendHarness(),
     ]
 }
 
