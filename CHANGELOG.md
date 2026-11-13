@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `AgentJournalSQLiteStore` is a second, optional durable Journal product: one
+  SQLite database per store (write-ahead log, `synchronous = FULL`, optional
+  `F_FULLFSYNC` on Apple platforms), the same capabilities as the segmented store,
+  and `upgradeForIncompleteContextHandoff(at:)` as one transaction. It passes the
+  backend-independent contract, fault-injection and lock tests beside
+  `AgentJournalFileStore`, which is unchanged and needs no SQLite. Its writer lock
+  is the segmented store's (`.writer.lock`, `flock` or `LockFileEx`, the same
+  spawn-window grace). On Linux, including the static Linux SDK, and on Windows it
+  compiles SQLite 3.53.4 from the `CAgentSQLite` target; an application that also
+  uses SQLite there should depend on that product instead of a second copy.
+
 - `AgentSemanticHandoffProjector(keeping:)` is the one outbound view of a history
   made with other models: it keeps turns whose every continuation has the next
   binding's origin, folds assistant turns left empty once another binding's

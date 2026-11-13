@@ -203,9 +203,11 @@ Mutation tools require a durable `AgentJournal` at Session creation, durable
 intent before execution, a trusted validated Receipt and durable settlement before
 success is claimed. Share a scheduler across sessions touching the same resources.
 Create or open the local segmented store through the optional
-`AgentJournalFileStore` product; one open handle is the single writer and holds
-the operation domain shared by its Sessions. Old framed Journal files are
-rejected without conversion.
+`AgentJournalFileStore` product, or a single-database store through the optional
+`AgentJournalSQLiteStore` product (`AgentSQLiteJournal`); both pass the same
+backend-independent contract tests. One open handle is the single writer and holds
+the operation domain shared by its Sessions. Neither store reads the other's
+format, and old framed Journal files are rejected without conversion.
 For retries of one logical mutation, retain the same non-empty `operationID`,
 matching tool and semantic arguments, and shared journal. A new identity is a new
 operation, not a safe retry.
@@ -227,6 +229,8 @@ create a trusted Receipt or settle the Journal.
 | AgentTools | AgentModels | Typed tools, validation and execution policy |
 | AgentCore | AgentModels, AgentTools | The single agent loop, sessions and runs |
 | AgentJournalFileStore | AgentCore, AgentModels, AgentTools, Crypto | Optional segmented durable Journal, indexed recovery and automatic maintenance |
+| AgentJournalSQLiteStore | AgentCore, AgentModels, AgentTools, Crypto, CAgentSQLite (Linux, Windows) | Optional durable Journal in one SQLite database (write-ahead log, full sync) |
+| CAgentSQLite | None | SQLite amalgamation for Linux and Windows; Apple platforms use the system SQLite |
 | AgentCatalog | AgentModels | Open model/deployment metadata, tri-state capabilities, discovery protocols and bounded cache |
 | AgentProviders | AgentModels, AgentCatalog | Anthropic, OpenAI API/plan Responses, native Gemini, DeepSeek, Local and provider contracts |
 | AgentAppleProvider | AgentModels | Apple on-device/PCC planning and platform SDK isolation |

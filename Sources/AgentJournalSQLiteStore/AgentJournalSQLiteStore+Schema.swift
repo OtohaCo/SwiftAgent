@@ -3,30 +3,11 @@ import AgentModels
 import AgentTools
 import Crypto
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
+#else
+import CAgentSQLite
 #endif
-
-enum DarwinOrPosix {
-    static func openFD(_ path: String, _ flags: Int32, _ mode: mode_t) -> Int32 {
-        #if canImport(Darwin)
-        return Darwin.open(path, flags, mode)
-        #else
-        return Glibc.open(path, flags, mode)
-        #endif
-    }
-
-    static func closeFD(_ fd: Int32) -> Int32 {
-        #if canImport(Darwin)
-        return Darwin.close(fd)
-        #else
-        return Glibc.close(fd)
-        #endif
-    }
-}
 
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
@@ -49,34 +30,18 @@ extension AgentJournalSQLiteStore {
         }
     }
 
+    /// Fail-fast opening still rides out the moment a child process the Host is starting shares the
+    /// close-on-exec lock descriptor (the segmented store's rule); a real owner still holds it after that.
     static func acquireExclusiveLock(
         at lockURL: URL,
         retry: (@Sendable () throws -> Void)?
-    ) throws -> Int32 {
-        let fd = DarwinOrPosix.openFD(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
-        guard fd >= 0 else {
-            throw AgentJournalError.persistenceUnavailable("unable to open writer lock file")
-        }
-        while true {
-            if flock(fd, LOCK_EX | LOCK_NB) == 0 {
-                return fd
-            }
-            let code = errno
-            if code == EWOULDBLOCK || code == EAGAIN {
-                if let retry {
-                    do {
-                        try retry()
-                        continue
-                    } catch {
-                        _ = DarwinOrPosix.closeFD(fd)
-                        throw error
-                    }
-                }
-                _ = DarwinOrPosix.closeFD(fd)
-                throw AgentJournalError.storeInUse
-            }
-            _ = DarwinOrPosix.closeFD(fd)
-            throw AgentJournalError.persistenceUnavailable("writer lock failed: errno \(code)")
+    ) throws -> SQLiteJournalWriterLock {
+        do {
+            return try SQLiteJournalWriterLock(file: lockURL, retry: retry ?? SQLiteJournalWriterLock.spawnWindowRetry())
+        } catch is SQLiteJournalWriterLock.Contended {
+            throw AgentJournalError.storeInUse
+        } catch let error as SQLiteJournalWriterLock.Unavailable {
+            throw AgentJournalError.persistenceUnavailable("writer lock: \(error.cause.localizedDescription)")
         }
     }
 

@@ -2,7 +2,11 @@ import AgentCore
 import AgentModels
 import AgentTools
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CAgentSQLite
+#endif
 
 private struct SQLiteRunEnvelope: Codable {
     let storeID: UUID

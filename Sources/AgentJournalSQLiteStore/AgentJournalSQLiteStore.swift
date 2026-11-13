@@ -3,11 +3,10 @@ import AgentModels
 import AgentTools
 import Crypto
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
+#else
+import CAgentSQLite
 #endif
 
 public enum SQLiteJournalLockWait: Sendable {
@@ -201,6 +200,23 @@ public enum AgentSQLiteJournal {
         }
     }
 
+    /// Offline, writer-exclusive upgrade of a context-handoff store to one that can retire a turn that did not
+    /// finish (incomplete context handoff, with file references). Close and drain every owner first. History,
+    /// effects and Run terminals are untouched: only the store's capabilities change, in one SQLite transaction,
+    /// so the outcome is either the old store or the upgraded one. A store without context handoff, or one
+    /// already upgraded, is refused with `unsupportedFormat`.
+    public static func upgradeForIncompleteContextHandoff(
+        at directory: URL,
+        durability: SQLiteJournalDurability = .fullSync
+    ) throws -> AgentJournal {
+        do {
+            return AgentJournal(store: try AgentJournalSQLiteStore.upgradeForIncompleteContextHandoff(
+                at: directory, durability: durability))
+        } catch {
+            throw normalized(error)
+        }
+    }
+
     private static func runAsyncOpen(
         deadline: ContinuousClock.Instant?,
         operation: @escaping @Sendable (AsyncOpenGate) throws -> AgentJournalSQLiteStore
@@ -258,6 +274,8 @@ private final class AsyncOpenGate: @unchecked Sendable {
 package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
     static let magic = "SWIFTAGENT-SQLITE-JOURNAL"
     static let supportedSchemaVersion = 1
+    /// The same name the segmented file store uses, so a Host waiting for a released store watches one file.
+    static let writerLockName = ".writer.lock"
 
     package let directoryURL: URL
     package let storeID: UUID
@@ -279,7 +297,7 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
     private let countersLock = NSLock()
     private var writerDB: OpaquePointer?
     private var readerDB: OpaquePointer?
-    private var lockFD: Int32
+    private var writerLock: SQLiteJournalWriterLock?
     private var closed = false
     private var poisoned = false
     let fault: (@Sendable (SQLiteJournalFaultStage) throws -> Void)?
@@ -327,7 +345,7 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
         capabilities: CapabilitiesRecord,
         writerDB: OpaquePointer,
         readerDB: OpaquePointer,
-        lockFD: Int32,
+        writerLock: SQLiteJournalWriterLock,
         fault: (@Sendable (SQLiteJournalFaultStage) throws -> Void)?
     ) {
         self.directoryURL = directoryURL
@@ -346,14 +364,14 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
         self.supportsIncompleteContextHandoff = capabilities.supportsIncompleteContextHandoff
         self.writerDB = writerDB
         self.readerDB = readerDB
-        self.lockFD = lockFD
+        self.writerLock = writerLock
         self.fault = fault
     }
 
     deinit {
         if let db = readerDB { sqlite3_close_v2(db) }
         if let db = writerDB { sqlite3_close_v2(db) }
-        if lockFD >= 0 { _ = DarwinOrPosix.closeFD(lockFD) }
+        try? writerLock?.close()
     }
 
     static func create(
@@ -379,12 +397,16 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
         guard !FileManager.default.fileExists(atPath: directory.path) else {
             throw AgentJournalError.persistenceUnavailable("create requires a new directory")
         }
+        #if os(Windows)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        #else
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        let lockFD = try acquireExclusiveLock(at: directory.appendingPathComponent("LOCK"), retry: nil)
+        #endif
+        let writerLock = try acquireExclusiveLock(at: directory.appendingPathComponent(writerLockName), retry: nil)
         let dbURL = directory.appendingPathComponent("journal.sqlite3")
         let writer = try openConnection(at: dbURL, readOnly: false, durability: durability)
         do {
@@ -451,12 +473,12 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
                 capabilities: caps,
                 writerDB: writer,
                 readerDB: reader,
-                lockFD: lockFD,
+                writerLock: writerLock,
                 fault: fault
             )
         } catch {
             sqlite3_close_v2(writer)
-            _ = DarwinOrPosix.closeFD(lockFD)
+            try? writerLock.close()
             throw error
         }
     }
@@ -479,12 +501,12 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: dbURL.path) else {
             throw AgentJournalError.invalidHeader
         }
-        let lockFD = try acquireExclusiveLock(at: directory.appendingPathComponent("LOCK"), retry: lockRetry)
+        let writerLock = try acquireExclusiveLock(at: directory.appendingPathComponent(writerLockName), retry: lockRetry)
         let writer: OpaquePointer
         do {
             writer = try openConnection(at: dbURL, readOnly: false, durability: durability)
         } catch {
-            _ = DarwinOrPosix.closeFD(lockFD)
+            try? writerLock.close()
             throw error
         }
         do {
@@ -497,13 +519,85 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
                 capabilities: loaded.capabilities,
                 writerDB: writer,
                 readerDB: reader,
-                lockFD: lockFD,
+                writerLock: writerLock,
                 fault: fault
             )
         } catch {
             sqlite3_close_v2(writer)
-            _ = DarwinOrPosix.closeFD(lockFD)
+            try? writerLock.close()
             throw error
+        }
+    }
+
+    static func upgradeForIncompleteContextHandoff(
+        at url: URL,
+        durability: SQLiteJournalDurability
+    ) throws -> AgentJournalSQLiteStore {
+        let old = try open(at: url, durability: durability)
+        do {
+            try old.publishIncompleteContextHandoff()
+            try old.close()
+        } catch {
+            try? old.close()
+            throw error
+        }
+        return try open(at: url, durability: durability)
+    }
+
+    private func publishIncompleteContextHandoff() throws {
+        guard supportsContextHandoff, !supportsIncompleteContextHandoff else {
+            throw AgentJournalError.unsupportedFormat
+        }
+        let upgraded = CapabilitiesRecord(
+            supportsAdmissionRejections: true,
+            supportsAuthorizationAudit: true,
+            supportsConfirmedNoEffect: true,
+            noEffectProofVersion: 2,
+            supportsPerCallFollowUps: true,
+            supportsRunRecords: true,
+            supportsImageContent: true,
+            supportsFileContent: true,
+            supportsNativeContext: true,
+            supportsContextHandoff: true,
+            supportsIncompleteContextHandoff: true
+        )
+        let capsBytes = try Self.canonicalJSON(upgraded)
+        try writeLock.withLock {
+            guard !closed else { throw AgentJournalError.storeClosed }
+            guard !poisoned, let db = writerDB else { throw AgentJournalError.commitUnknown }
+            try Self.exec(on: db, "BEGIN IMMEDIATE TRANSACTION;")
+            do {
+                let meta = try loadMetaState(on: db)
+                let digest = Self.computeMetaDigest(
+                    magic: Self.magic,
+                    schemaVersion: Self.supportedSchemaVersion,
+                    storeID: storeID,
+                    domain: operationDomain,
+                    capabilitiesBytes: capsBytes,
+                    logicalSequence: meta.logicalSequence,
+                    nextRecordSequence: meta.nextRecordSequence,
+                    layoutGeneration: meta.layoutGeneration,
+                    auditHighWater: meta.auditHighWater
+                )
+                try Self.withPrepared(
+                    on: db,
+                    sql: "UPDATE store_meta SET capabilities_json = ?, digest = ? WHERE singleton = 1;"
+                ) { stmt in
+                    Self.bindBlob(stmt, 1, capsBytes)
+                    Self.bindText(stmt, 2, digest)
+                    try Self.stepDone(stmt, on: db)
+                }
+            } catch {
+                try? Self.exec(on: db, "ROLLBACK;")
+                throw error
+            }
+            do {
+                try Self.exec(on: db, "COMMIT;")
+            } catch {
+                // SQLite may or may not have made the change durable; reopen to see which format is current.
+                poisoned = true
+                throw AgentJournalError.commitUnknown
+            }
         }
     }
 
@@ -610,9 +704,9 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
             sqlite3_close_v2(db)
             writerDB = nil
         }
-        if lockFD >= 0 {
-            _ = DarwinOrPosix.closeFD(lockFD)
-            lockFD = -1
+        if let writerLock {
+            self.writerLock = nil
+            try? writerLock.close()
         }
     }
 

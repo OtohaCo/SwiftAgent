@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "AgentCore", targets: ["AgentCore"]),
         .library(name: "AgentJournalFileStore", targets: ["AgentJournalFileStore"]),
         .library(name: "AgentJournalSQLiteStore", targets: ["AgentJournalSQLiteStore"]),
+        .library(name: "CAgentSQLite", targets: ["CAgentSQLite"]),
         .library(name: "AgentProviders", targets: ["AgentProviders"]),
         .library(name: "AgentAppleProvider", targets: ["AgentAppleProvider"]),
         .library(name: "AgentDecisions", targets: ["AgentDecisions"]),
@@ -30,7 +31,21 @@ let package = Package(
         ]),
         .target(name: "AgentJournalSQLiteStore", dependencies: [
             "AgentCore", "AgentModels", "AgentTools", .product(name: "Crypto", package: "swift-crypto"),
+            .target(name: "CAgentSQLite", condition: .when(platforms: [.linux, .windows])),
         ]),
+        // SQLite from its amalgamation where there is no system SQLite module (Linux, the static Linux SDK, Windows).
+        // Apple platforms link the system's SQLite. Version and checksums: Sources/CAgentSQLite/README.md.
+        .target(
+            name: "CAgentSQLite",
+            exclude: ["README.md", "sqlite/sqlite3.c"],
+            cSettings: [
+                .define("SQLITE_THREADSAFE", to: "1"),
+                .define("SQLITE_OMIT_LOAD_EXTENSION"),
+                .define("SQLITE_DEFAULT_MEMSTATUS", to: "0"),
+                .define("HAVE_USLEEP", to: "1"),
+                .define("SQLITE_ENABLE_FTS5"),
+            ]
+        ),
         .target(name: "JournalProcessPrimitives"),
         .executableTarget(name: "JournalTestProcess", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentModels", "AgentTools", "JournalProcessPrimitives"]),
         .executableTarget(name: "JournalBenchmark", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentModels", "AgentTools"]),
@@ -58,7 +73,10 @@ let package = Package(
         .testTarget(name: "AgentToolsTests", dependencies: ["AgentTools", "AgentModels"]),
         .testTarget(name: "AgentCoreTests", dependencies: ["AgentCore", "AgentJournalFileStore", "AgentTools", "AgentModels"]),
         .testTarget(name: "AgentJournalFileStoreTests", dependencies: ["AgentJournalFileStore", "AgentCore", "AgentTools", "AgentModels", "JournalTestProcess"]),
-        .testTarget(name: "AgentJournalContractTests", dependencies: ["AgentJournalFileStore", "AgentJournalSQLiteStore", "AgentCore", "AgentTools", "AgentModels"]),
+        .testTarget(name: "AgentJournalContractTests", dependencies: [
+            "AgentJournalFileStore", "AgentJournalSQLiteStore", "AgentCore", "AgentTools", "AgentModels",
+            .target(name: "CAgentSQLite", condition: .when(platforms: [.linux, .windows])),
+        ]),
         .testTarget(name: "AgentAppleProviderTests", dependencies: ["AgentAppleProvider", "AgentModels", "AgentTools", "AgentCore"]),
         .testTarget(name: "AgentProvidersTests", dependencies: ["AgentProviders", "AgentCatalog", "AgentModels", "AgentTools", "AgentCore", "AgentJournalFileStore", "AgentUsage"]),
         .testTarget(

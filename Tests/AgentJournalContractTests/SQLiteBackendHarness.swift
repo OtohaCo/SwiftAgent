@@ -3,7 +3,11 @@ import AgentJournalFileStore
 @testable import AgentJournalSQLiteStore
 import AgentModels
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CAgentSQLite
+#endif
 
 struct SQLiteBackendHarness: JournalBackendHarness {
     let name: String
@@ -93,6 +97,10 @@ struct SQLiteBackendHarness: JournalBackendHarness {
 
     func open(at directory: URL, smallMaintenanceSegments: Bool) throws -> AgentJournal {
         try AgentSQLiteJournal.open(at: directory, durability: durability)
+    }
+
+    func upgradeForIncompleteContextHandoff(at directory: URL) throws -> AgentJournal {
+        try AgentSQLiteJournal.upgradeForIncompleteContextHandoff(at: directory, durability: durability)
     }
 
     func openAsync(
