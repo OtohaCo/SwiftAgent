@@ -22,7 +22,10 @@ import Testing
         return total
     }
 
-    @Test func comparativeBenchmarkAcrossSegmentedFileAndSQLiteBackends() async throws {
+    /// Opt-in (`SWIFT_AGENT_JOURNAL_BENCHMARK=1`): its hundreds of full-sync commits saturate the disk for about a minute,
+    /// which pushes timing-bound suites running beside it in a parallel `swift test` past their deadlines.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["SWIFT_AGENT_JOURNAL_BENCHMARK"] == "1"))
+    func comparativeBenchmarkAcrossSegmentedFileAndSQLiteBackends() async throws {
         let backends: [any JournalBackendHarness] = [
             SegmentedFileBackendHarness(),
             SQLiteBackendHarness(name: "sqlite-wal-fullsync", durability: .fullSync),
