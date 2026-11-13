@@ -41,6 +41,8 @@ protocol JournalBackendHarness: Sendable, CustomTestStringConvertible {
         deadline: ContinuousClock.Instant?
     ) async throws -> AgentJournal
     func open(at directory: URL, smallMaintenanceSegments: Bool) throws -> AgentJournal
+    /// The offline upgrade of a context-handoff store to incomplete-context handoff, on a closed store.
+    func upgradeForIncompleteContextHandoff(at directory: URL) throws -> AgentJournal
     func openAsync(
         at directory: URL,
         writerLockWait: JournalWriterLockWait,
@@ -78,6 +80,7 @@ extension JournalBackendHarness {
 enum JournalContractBackends {
     static let all: [any JournalBackendHarness] = [
         SegmentedFileBackendHarness(),
+        SQLiteBackendHarness(),
     ]
 }
 

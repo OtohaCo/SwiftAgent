@@ -47,7 +47,7 @@ final class DependencyGuardTests: XCTestCase {
     func testMuslIsLimitedToStorageHosts() {
         for module in DependencyGuard.dependencies.keys {
             let failures = DependencyGuard.violations("import Musl", module: module)
-            if module == "WorkspaceAgent" || module == "AgentJournalFileStore" {
+            if module == "WorkspaceAgent" || module == "AgentJournalFileStore" || module == "AgentJournalSQLiteStore" {
                 XCTAssertEqual(failures, [])
             } else {
                 XCTAssertFalse(failures.isEmpty)
@@ -55,10 +55,15 @@ final class DependencyGuardTests: XCTestCase {
         }
     }
 
-    func testWindowsStorageSDKsStayLimitedToJournalFileStore() {
+    func testWindowsStorageSDKsStayLimitedToJournalStores() {
         for sdk in ["WinSDK", "ucrt"] {
             XCTAssertEqual(DependencyGuard.violations("import \(sdk)", module: "AgentJournalFileStore"), [])
             for module in DependencyGuard.dependencies.keys where module != "AgentJournalFileStore" {
+                // The SQLite store's writer lock is the file store's, so it needs WinSDK, and nothing else.
+                if module == "AgentJournalSQLiteStore" && sdk == "WinSDK" {
+                    XCTAssertEqual(DependencyGuard.violations("import \(sdk)", module: module), [])
+                    continue
+                }
                 XCTAssertFalse(DependencyGuard.violations("import \(sdk)", module: module).isEmpty)
             }
         }
@@ -140,7 +145,18 @@ final class DependencyGuardTests: XCTestCase {
             XCTAssertFalse((product["targets"] as? [String] ?? []).contains("JournalProcessPrimitives"),
                            "The primitive must not become a published product")
         }
-        let libraries = regular.filter { $0["name"] as? String != "JournalProcessPrimitives" }
+        // The vendored SQLite amalgamation is the one reviewed C library: no dependencies, only SQLite's own
+        // compile-time defines, and used by the SQLite store alone (Linux and Windows).
+        let sqlite = try XCTUnwrap(regular.first { $0["name"] as? String == "CAgentSQLite" })
+        XCTAssertEqual((sqlite["dependencies"] as? [Any])?.count, 0)
+        let sqliteSettings = try XCTUnwrap(sqlite["settings"] as? [[String: Any]])
+        XCTAssertEqual(sqliteSettings.count, 5)
+        for setting in sqliteSettings {
+            XCTAssertEqual(setting["tool"] as? String, "c", "\(setting)")
+            let kind = String(data: try JSONSerialization.data(withJSONObject: setting["kind"] ?? [:]), encoding: .utf8) ?? ""
+            XCTAssertTrue(kind.contains("\"define\"") && kind.contains("SQLITE_") || kind.contains("HAVE_USLEEP"), kind)
+        }
+        let libraries = regular.filter { !["JournalProcessPrimitives", "CAgentSQLite"].contains($0["name"] as? String ?? "") }
         XCTAssertEqual(Set(libraries.compactMap { $0["name"] as? String }), Set(DependencyGuard.dependencies.keys))
         for target in libraries {
             let name = try XCTUnwrap(target["name"] as? String)
@@ -150,6 +166,8 @@ final class DependencyGuardTests: XCTestCase {
             for dep in deps {
                 if let byName = dep["byName"] as? [Any], let module = byName.first as? String {
                     moduleNames.insert(module)
+                } else if let byTarget = dep["target"] as? [Any], let module = byTarget.first as? String {
+                    moduleNames.insert(module)
                 } else if let product = dep["product"] as? [Any], let productName = product.first as? String {
                     productNames.insert(productName)
                 } else {
@@ -157,7 +175,7 @@ final class DependencyGuardTests: XCTestCase {
                 }
             }
             XCTAssertEqual(moduleNames, DependencyGuard.dependencies[name], name)
-            if name == "WorkspaceAgent" || name == "AgentJournalFileStore" || name == "AgentTools" {
+            if name == "WorkspaceAgent" || name == "AgentJournalFileStore" || name == "AgentJournalSQLiteStore" || name == "AgentTools" {
                 XCTAssertEqual(productNames, ["Crypto"], name)
             } else {
                 XCTAssertEqual(productNames, [], "\(name) must not link extra packages")

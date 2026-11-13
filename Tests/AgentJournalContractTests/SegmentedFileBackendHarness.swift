@@ -112,6 +112,10 @@ struct SegmentedFileBackendHarness: JournalBackendHarness {
         try AgentIncrementalJournal.open(at: directory, policy: policy(small: smallMaintenanceSegments))
     }
 
+    func upgradeForIncompleteContextHandoff(at directory: URL) throws -> AgentJournal {
+        try AgentIncrementalJournal.upgradeForIncompleteContextHandoff(at: directory)
+    }
+
     func openAsync(
         at directory: URL,
         writerLockWait: JournalWriterLockWait,

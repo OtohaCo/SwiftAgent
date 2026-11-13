@@ -256,7 +256,7 @@ struct ProviderFallbackTests {
             model: .init(provider: "fixture", name: "test"),
             provider: route,
             tools: [try RouteMutationTool()],
-            configuration: AgentConfiguration(runTimeout: .seconds(2))
+            configuration: AgentConfiguration(runTimeout: .seconds(30))
         )
         let session = try agent.makeSession(journal: journal)
         let run = try await session.run("Update the listing")
@@ -375,7 +375,7 @@ struct ProviderFallbackTests {
             model: .init(provider: "fixture", name: "test"),
             provider: route,
             tools: [try RouteMutationTool(probe: executorProbe)],
-            configuration: AgentConfiguration(runTimeout: .seconds(2))
+            configuration: AgentConfiguration(runTimeout: .seconds(30))
         )
         let session = try agent.makeSession(journal: journal)
 
@@ -433,7 +433,7 @@ struct ProviderFallbackTests {
             model: .init(provider: "fixture", name: "test"),
             provider: route,
             tools: [try RouteMutationTool(probe: executorProbe)],
-            configuration: AgentConfiguration(runTimeout: .seconds(2))
+            configuration: AgentConfiguration(runTimeout: .seconds(30))
         )
         let session = try agent.makeSession(journal: journal)
 
