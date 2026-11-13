@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `AgentJournal.seedHistory(_:sessionID:)` gives a Session with no history the
+  earlier part of its conversation as the Host kept it (for example after moving
+  to a new store): user text and assistant text without tool calls, starting with
+  a user message, in one commit. A Session that already has history is refused
+  with `concurrentWriter` and left unchanged, so a Host can call it again after a
+  crash. No Run is admitted; the first Run starts after the seeded messages.
+  Contract-tested on both durable stores.
+
 - `AgentJournalSQLiteStore` is a second, optional durable Journal product: one
   SQLite database per store (write-ahead log, `synchronous = FULL`, optional
   `F_FULLFSYNC` on Apple platforms), the same capabilities as the segmented store,
