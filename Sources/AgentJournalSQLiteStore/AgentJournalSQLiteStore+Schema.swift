@@ -45,6 +45,8 @@ extension AgentJournalSQLiteStore {
         }
     }
 
+    static let busyTimeoutMilliseconds: Int32 = 5_000
+
     static func openConnection(
         at dbURL: URL,
         readOnly: Bool,
@@ -59,7 +61,7 @@ extension AgentJournalSQLiteStore {
             if let db = handle { sqlite3_close_v2(db) }
             throw AgentJournalError.persistenceUnavailable("sqlite open failed: \(rc)")
         }
-        sqlite3_busy_timeout(db, 5_000)
+        sqlite3_busy_timeout(db, busyTimeoutMilliseconds)
         do {
             if !readOnly {
                 #if canImport(Darwin)

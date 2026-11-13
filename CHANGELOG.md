@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed: an open `AgentJournalSQLiteStore` journal no longer restarts background
+  maintenance forever (one core busy per journal). Maintenance now runs when the
+  write-ahead log grows 4 MiB past what the last pass left, truncates it, and stops.
+
 - `AgentRun.inputMessageID` is the stored identity of the input message the Run
   committed: the ID `AgentJournal.readMessages` gives it, and the run record's
   `formalMessageID` where the store keeps run records. It is known as soon as

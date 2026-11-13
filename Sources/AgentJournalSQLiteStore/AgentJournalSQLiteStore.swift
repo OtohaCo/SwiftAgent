@@ -309,6 +309,23 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
     var writeLockNanosecondsCount: UInt64 = 0
     var maintenanceNanosecondsCount: UInt64 = 0
     var encodedBatchesCount: UInt64 = 0
+    var maintenanceRunCount: UInt64 = 0
+
+    /// WAL size at which `status()` asks for maintenance. 4 MiB is about SQLite's default auto-checkpoint
+    /// window (1000 pages of 4 KiB): below it the WAL is normal working space, not work to relieve.
+    package static let walMaintenanceThresholdBytes: UInt64 = 4 * 1024 * 1024
+    /// WAL size the last maintenance left behind (non-zero when a reader kept the checkpoint from truncating).
+    var walBytesAfterMaintenance: UInt64 = 0
+
+    private func currentWALBytes() -> UInt64 {
+        let path = directoryURL.appendingPathComponent("journal.sqlite3").path + "-wal"
+        return (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? UInt64) ?? 0
+    }
+
+    /// Number of `maintain()` runs so far; lets tests check that background maintenance goes quiet.
+    package func maintenanceRuns() -> UInt64 {
+        countersLock.withLock { maintenanceRunCount }
+    }
 
     func noteReadBytes(_ count: Int, decoded: UInt64 = 1) {
         countersLock.withLock {
@@ -624,14 +641,22 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
     package func status() throws -> JournalStoreStatus {
         try readLocked { db in
             let meta = try loadMetaState(on: db)
-            let walURL = URL(fileURLWithPath: directoryURL.appendingPathComponent("journal.sqlite3").path + "-wal")
-            let walBytes = (try? FileManager.default.attributesOfItem(atPath: walURL.path)[.size] as? UInt64) ?? 0
+            let walBytes = currentWALBytes()
+            // Only a WAL that grew a full threshold beyond what the last maintenance left behind is work:
+            // a merely non-empty WAL (or one a reader kept from shrinking) cannot be relieved by maintaining again.
+            // A WAL that has since shrunk lowers the baseline, so the next growth is measured from there.
+            let baseline = countersLock.withLock {
+                walBytesAfterMaintenance = min(walBytesAfterMaintenance, walBytes)
+                return walBytesAfterMaintenance
+            }
+            let needsMaintenance = walBytes >= Self.walMaintenanceThresholdBytes &&
+                walBytes - baseline >= Self.walMaintenanceThresholdBytes
             return JournalStoreStatus(
                 identity: JournalStoreIdentity(storeID: storeID, operationDomain: operationDomain),
                 logicalSequence: meta.logicalSequence,
                 layoutGeneration: meta.layoutGeneration,
                 activeSegmentBytes: walBytes,
-                sealedSegments: walBytes > 0 ? 1 : 0,
+                sealedSegments: needsMaintenance ? 1 : 0,
                 pendingGarbageSegments: 0,
                 pendingGarbagePacks: 0
             )
@@ -648,7 +673,10 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
         let start = DispatchTime.now().uptimeNanoseconds
         defer {
             let elapsed = DispatchTime.now().uptimeNanoseconds - start
-            countersLock.withLock { maintenanceNanosecondsCount += elapsed }
+            countersLock.withLock {
+                maintenanceNanosecondsCount += elapsed
+                maintenanceRunCount += 1
+            }
         }
         try writeLock.withLock {
             guard !closed else { throw AgentJournalError.storeClosed }
@@ -660,14 +688,8 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
         return try writeLock.withLock {
             guard !closed else { throw AgentJournalError.storeClosed }
             guard !poisoned, let writer = writerDB else { throw AgentJournalError.commitUnknown }
-            let walPath = directoryURL.appendingPathComponent("journal.sqlite3").path + "-wal"
-            let beforeBytes = (try? FileManager.default.attributesOfItem(atPath: walPath)[.size] as? UInt64) ?? 0
-            var logFrames: Int32 = 0
-            var checkpointedFrames: Int32 = 0
-            let rc = sqlite3_wal_checkpoint_v2(writer, nil, SQLITE_CHECKPOINT_PASSIVE, &logFrames, &checkpointedFrames)
-            if rc != SQLITE_OK && rc != SQLITE_BUSY && rc != SQLITE_LOCKED {
-                throw Self.sqliteError(on: writer, context: "wal_checkpoint")
-            }
+            let beforeBytes = currentWALBytes()
+            // Meta first, so the checkpoint below also covers this write and leaves nothing behind in the WAL.
             try Self.exec(on: writer, "BEGIN IMMEDIATE TRANSACTION;")
             do {
                 var meta = try loadMetaState(on: writer)
@@ -678,7 +700,16 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
                 try? Self.exec(on: writer, "ROLLBACK;")
                 throw error
             }
-            let afterBytes = (try? FileManager.default.attributesOfItem(atPath: walPath)[.size] as? UInt64) ?? 0
+            // TRUNCATE resets the WAL file to zero bytes when no reader holds it. Do not wait for readers while
+            // holding writeLock: with no busy handler SQLite checkpoints what it can and returns BUSY.
+            sqlite3_busy_timeout(writer, 0)
+            let rc = sqlite3_wal_checkpoint_v2(writer, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil)
+            sqlite3_busy_timeout(writer, Self.busyTimeoutMilliseconds)
+            if rc != SQLITE_OK && rc != SQLITE_BUSY && rc != SQLITE_LOCKED {
+                throw Self.sqliteError(on: writer, context: "wal_checkpoint")
+            }
+            let afterBytes = currentWALBytes()
+            countersLock.withLock { walBytesAfterMaintenance = afterBytes }
             let reclaimed = beforeBytes > afterBytes ? beforeBytes - afterBytes : 0
             return JournalMaintenanceStatus(sealedSegments: 0, reclaimedBytes: reclaimed, lastError: nil)
         }
