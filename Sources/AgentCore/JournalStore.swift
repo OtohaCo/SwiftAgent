@@ -219,6 +219,19 @@ package struct JournalMessage: Codable, Equatable, Sendable {
     package init(id: UUID, value: ModelMessage) { self.id = id; self.value = value }
 }
 
+/// What a Run's startup commit published: its records and the stored identity of the input message it admitted.
+package struct JournalStartupCommit: Sendable {
+    package let records: [AgentJournalRecord]
+    /// Nil when the store keeps no message identities (memory) or the commit admitted no new input message.
+    package let inputMessageID: UUID?
+}
+
+/// Collects, inside one store write, the identity given to the input message the write admitted.
+package final class JournalInputCapture {
+    package var messageID: UUID?
+    package init() {}
+}
+
 package struct JournalStoreChange: Sendable {
     package let sessionID: UUID
     package let expectedRevision: UInt64

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `AgentRun.inputMessageID` is the stored identity of the input message the Run
+  committed: the ID `AgentJournal.readMessages` gives it, and the run record's
+  `formalMessageID` where the store keeps run records. It is known as soon as
+  `run` returns, also on stores without run records, so a Host can keep it with
+  its own record of the message and later ask the Journal whether that message
+  is there. Nil without a durable store or when the startup commit is unknown.
+
 - `AgentSemanticHandoffProjector(keeping:)` is the one outbound view of a history
   made with other models: it keeps turns whose every continuation has the next
   binding's origin, folds assistant turns left empty once another binding's

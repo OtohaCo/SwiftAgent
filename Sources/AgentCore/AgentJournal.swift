@@ -473,8 +473,9 @@ public actor AgentJournal {
         followUpInputID: String? = nil,
         runAdmission: JournalRunAdmission? = nil,
         expectedHistory: AgentJournalHistoryWitness? = nil
-    ) throws -> [AgentJournalRecord] {
-        try appendCheckpoint(
+    ) throws -> JournalStartupCommit {
+        let input = JournalInputCapture()
+        let records = try appendCheckpoint(
             events,
             sessionID: sessionID,
             runID: runID,
@@ -485,8 +486,9 @@ public actor AgentJournal {
             admissionDeadline: deadline,
             checkAdmissionCancellation: true,
             followUpInputID: followUpInputID, runAdmission: runAdmission,
-            expectedHistory: expectedHistory
+            expectedHistory: expectedHistory, inputCapture: input
         )
+        return JournalStartupCommit(records: records, inputMessageID: input.messageID)
     }
 
     @discardableResult
@@ -528,7 +530,8 @@ public actor AgentJournal {
         auditDrafts: [JournalAuditDraft] = [],
         runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil,
         expectedHistory: AgentJournalHistoryWitness? = nil,
-        admitsNewWork: Bool? = nil, completedReminderProof: CompletedReminderTurnProof? = nil
+        admitsNewWork: Bool? = nil, completedReminderProof: CompletedReminderTurnProof? = nil,
+        inputCapture: JournalInputCapture? = nil
     ) throws -> [AgentJournalRecord] {
         try checkStartupAdmission(deadline: admissionDeadline, checkCancellation: checkAdmissionCancellation)
         let nativeTransitions = events.compactMap { event -> ModelNativeContextCheckpoint? in
@@ -553,7 +556,8 @@ public actor AgentJournal {
                                   followUpInputID: followUpInputID,
                                   admitsNewWork: admitsNewWork ?? checkAdmissionCancellation,
                                   auditDrafts: auditDrafts, runAdmission: runAdmission, runTerminal: runTerminal,
-                                  expectedHistory: expectedHistory, completedReminderProof: completedReminderProof)
+                                  expectedHistory: expectedHistory, completedReminderProof: completedReminderProof,
+                                  inputCapture: inputCapture)
             }
             scheduleMaintenanceIfNeeded()
             return result
@@ -1349,7 +1353,8 @@ extension AgentJournal {
         followUpInputID: String? = nil, admitsNewWork: Bool = false,
         auditDrafts: [JournalAuditDraft] = [],
         runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil,
-        expectedHistory: AgentJournalHistoryWitness? = nil, completedReminderProof: CompletedReminderTurnProof? = nil
+        expectedHistory: AgentJournalHistoryWitness? = nil, completedReminderProof: CompletedReminderTurnProof? = nil,
+        inputCapture: JournalInputCapture? = nil
     ) throws -> [AgentJournalRecord] {
         guard !events.isEmpty else { return [] }
         guard allowMutationSettlement || !events.contains(where: Self.isMutationSettlementEvent) else {
@@ -1526,6 +1531,7 @@ extension AgentJournal {
                                             followUpAdmission: admission,
                                             admitsNewWork: admitsNewWork, auditRecords: audits,
                                             runAdmission: runAdmission, runTerminal: runTerminal))
+        if admitsNewWork, let input = changedMessages.last, case .user = input.value { inputCapture?.messageID = input.id }
         return committed
     }
 

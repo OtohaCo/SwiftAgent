@@ -396,6 +396,65 @@ import XCTest
         #expect(throws: AgentRunAdmissionError.invalidCorrelation) { try AgentRunCorrelation(key: key, payloadDigest: "valid") }
     }
 
+    // MARK: Input message identity
+
+    @Test func aRunNamesTheInputMessageItCommitted() async throws {
+        let h = try Harness(); defer { h.remove() }
+        let session = try Agent(model: fixtureModel, provider: ScriptedProvider { request, _ in textResponse(request, "done") })
+            .makeSession(journal: h.journal)
+        let first = try await session.run("first input")
+        try await first.waitForDrain()
+        let second = try await session.run("second input")
+        try await second.waitForDrain()
+        let messages = try await h.journal.readMessages(sessionID: session.id)
+        let inputs = messages.filter { $0.message.role == .user }
+        #expect(inputs.map(\.message) == [.user([.text("first input")]), .user([.text("second input")])])
+        #expect(first.inputMessageID == inputs.first?.id)
+        #expect(second.inputMessageID == inputs.last?.id)
+        guard case .terminal(let record, _) = try await session.runRecord(runID: second.id) else { Issue.record("missing record"); return }
+        #expect(second.inputMessageID == record.formalMessageID)
+        try await h.journal.close()
+    }
+
+    @Test func aStoreWithoutRunRecordsStillNamesTheInputMessage() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("input-id-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "input-id")
+        let session = try Agent(model: fixtureModel, provider: ScriptedProvider { request, _ in textResponse(request, "done") })
+            .makeSession(journal: journal)
+        let run = try await session.run("plain input")
+        try await run.waitForDrain()
+        let input = try await journal.readMessages(sessionID: session.id).first { $0.message.role == .user }
+        #expect(run.inputMessageID != nil)
+        #expect(run.inputMessageID == input?.id)
+        try await journal.close()
+    }
+
+    @Test func noInputMessageIsNamedWithoutADurableCommit() async throws {
+        let provider = ScriptedProvider { request, _ in textResponse(request, "done") }
+        let unjournaled = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let plain = try await unjournaled.run("no journal")
+        try await plain.waitForDrain()
+        #expect(plain.inputMessageID == nil, "messages kept only in memory have no stored identity")
+        let memory = try Agent(model: fixtureModel, provider: provider).makeSession(journal: AgentJournal())
+        let remembered = try await memory.run("memory journal")
+        try await remembered.waitForDrain()
+        #expect(remembered.inputMessageID == nil)
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("input-id-unknown-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = RecordArmedFault(unknown: true)
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "input-id", supportsRunRecords: true,
+            fault: { try fault.check($0) })
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession(journal: journal)
+        fault.arm()
+        let uncertain = try await session.run("maybe committed")
+        #expect(uncertain.inputMessageID == nil, "a startup whose commit is unknown names no input")
+        await #expect(throws: AgentJournalError.commitUnknown) { try await uncertain.wait() }
+        try await uncertain.waitForDrain()
+        try await journal.close()
+    }
+
     private struct Harness {
         let directory: URL
         let journal: AgentJournal

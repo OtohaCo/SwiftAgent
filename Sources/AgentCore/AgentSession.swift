@@ -932,6 +932,7 @@ public actor AgentSession {
         try Task.checkCancellation()
         try budget.checkActive()
         var uncertainStartup = false
+        var inputMessageID: UUID?
         if let journal {
             let sessionID = id
             _ = try await withStartupDeadline(budget.deadline, startupID: startupID,
@@ -959,7 +960,7 @@ public actor AgentSession {
             try budget.checkActive()
             try await capabilities?.scope.checkRun(runID)
             do {
-                try await journal.appendStartupCheckpoint(
+                inputMessageID = try await journal.appendStartupCheckpoint(
                     lifecycleEvents,
                     sessionID: id,
                     runID: runID,
@@ -967,7 +968,7 @@ public actor AgentSession {
                     durability: journal.storage == .durable ? .durable : .memory,
                     followUpInputID: followUpInputID, runAdmission: runAdmission,
                     expectedHistory: persistentHistoryWitness
-                )
+                ).inputMessageID
             } catch AgentJournalStartupAdmissionError.deadlineExceeded {
                 throw AgentLoopError.deadlineExceeded
             } catch AgentJournalError.commitUnknown {
@@ -1029,6 +1030,7 @@ public actor AgentSession {
             sessionID: id,
             binding: binding.info,
             capabilities: capabilities?.info.forRun(runID),
+            inputMessageID: inputMessageID,
             events: channel.stream,
             control: control,
             drain: drain
