@@ -172,7 +172,7 @@ are not a passing live test. See the example guide for limits and acceptance.
 
 `Agent` holds Sendable configuration. `AgentSession` is an actor that owns
 canonical conversation history and one active Run. `AgentRun` exposes `events`,
-`cancel()`, `steer(_:)`, `wait()` and `waitForDrain()`.
+`cancel()`, `steer(_:)`, `note(_:)`, `wait()` and `waitForDrain()`.
 
 A recommended app design separates a MainActor view model from an app-owned
 conversation controller. Reserve startup before the first `await`, retain the

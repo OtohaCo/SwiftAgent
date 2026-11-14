@@ -30,6 +30,72 @@ struct AgentSteeringTests {
         await #expect(throws: AgentRunError.finished) { try await run.steer("too late") }
     }
 
+    @Test func noteDuringModelTurnLetsTheProposedToolsRunFirst() async throws {
+        let gate = ManualGate()
+        let entered = XCTestExpectation(description: "Model entered")
+        let log = EffectLog()
+        let call = addition("proposed")
+        let provider = ScriptedProvider { request, turn in
+            if turn == 1 { entered.fulfill(); await gate.wait(); return toolResponse(request, [call]) }
+            return textResponse(request, "Done")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [AddTool(log: log)]).makeSession()
+        let run = try await session.run("original")
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
+        await #expect(throws: AgentRunError.emptySteering) { try await run.note(" \n") }
+        let id = try await run.note("note")
+        await gate.open()
+        let result = try await run.wait()
+        #expect(result.modelTurns == 2)
+        #expect(result.toolCalls == 1)
+        #expect(await log.names == ["add"])
+        let messages = try #require(await provider.log.requests.last?.messages)
+        #expect(Array(messages.suffix(2)) == [
+            .tool(.init(callID: call.id, content: [.json(.object(["sum": .number(5)]))], isError: false)),
+            .user([.text("note")]),
+        ])
+        #expect(await collectEvents(run.events).contains(.steeringApplied(id: id, text: "note")))
+        await #expect(throws: AgentRunError.finished) { try await run.note("too late") }
+    }
+
+    @Test func noteBeforeAFinalAnswerStillGetsAnotherTurn() async throws {
+        let gate = ManualGate()
+        let entered = XCTestExpectation(description: "Model entered")
+        let provider = ScriptedProvider { request, turn in
+            if turn == 1 { entered.fulfill(); await gate.wait(); return textResponse(request, "First") }
+            return textResponse(request, "Second")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let run = try await session.run("original")
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
+        _ = try await run.note("note")
+        await gate.open()
+        let result = try await run.wait()
+        #expect(result.modelTurns == 2)
+        #expect(await provider.log.requests.last?.messages.last == .user([.text("note")]))
+    }
+
+    @Test func correctionWithANoteStillSupersedesTheProposedTools() async throws {
+        let gate = ManualGate()
+        let entered = XCTestExpectation(description: "Model entered")
+        let log = EffectLog()
+        let provider = ScriptedProvider { request, turn in
+            if turn == 1 { entered.fulfill(); await gate.wait(); return toolResponse(request, [addition("stale")]) }
+            return textResponse(request, "Corrected")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider, tools: [AddTool(log: log)]).makeSession()
+        let run = try await session.run("original")
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
+        _ = try await run.note("note")
+        _ = try await run.steer("correction")
+        await gate.open()
+        let result = try await run.wait()
+        #expect(result.toolCalls == 0)
+        #expect(await log.names.isEmpty)
+        #expect(await provider.log.requests.last?.messages
+            == [.user([.text("original")]), .user([.text("note")]), .user([.text("correction")])])
+    }
+
     @Test func steeringAdvancesTheProjectionCoordinatesBeforeTheNextRequest() async throws {
         let gate = ManualGate()
         let entered = XCTestExpectation(description: "Model entered")

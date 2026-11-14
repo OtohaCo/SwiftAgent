@@ -210,7 +210,7 @@ Segment packing is physical maintenance, not conversational summary. See [Contex
 
 ## Run Control
 
-The public Run surface is `events`, `cancel()`, `steer(_:)`, `wait()`, and
+The public Run surface is `events`, `cancel()`, `steer(_:)`, `note(_:)`, `wait()`, and
 `waitForDrain()`. The backing Task and scheduler handles are not exposed.
 
 ```swift
@@ -250,6 +250,14 @@ a model response and between tool batches. A correction arriving during model
 generation discards unexecuted proposals and requests replanning. Once a tool batch
 has begun, steering does not split it; the correction follows its results. Steering
 uses the same budgets and never resets model-turn limits.
+
+`try await run.note(text)` queues a Host note the same way, for things the Host
+noticed rather than a change of plan (elapsed time, a file changed elsewhere). A note
+does not discard proposals: the tool calls the model has just proposed run first and
+the note follows their results before the next model request. A note before a final
+answer still gets another model turn, as a correction does. When a correction is
+queued with notes, the correction wins: the proposals are discarded and the queued
+inputs are delivered together in FIFO order.
 
 `steeringApplied(id:text:)` reports application to the run context, not a promise
 that a later provider request will succeed. Corrections accepted before cancellation

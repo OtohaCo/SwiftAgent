@@ -61,6 +61,11 @@ public struct AgentRun: Sendable {
     public func cancel() async { await control.cancel() }
     @discardableResult
     public func steer(_ text: String) async throws -> UUID { try await control.enqueue(text) }
+    /// A note from the Host for the Run, taken in like `steer` before its next model request. Unlike a correction,
+    /// it does not supersede tool calls the model has already proposed: they run first and the note follows their
+    /// results. A correction queued with it still supersedes them, and the note is taken in with the correction.
+    @discardableResult
+    public func note(_ text: String) async throws -> UUID { try await control.enqueue(text, supersedesProposedTools: false) }
 
     func waitForDrain(waiterDidRegister: @escaping @Sendable (Bool) -> Void) async throws {
         try await drain.wait(waiterDidRegister: waiterDidRegister)
@@ -77,6 +82,8 @@ public enum AgentRunError: Error, Equatable, Sendable {
 struct AgentSteeringInput: Sendable {
     let id: UUID
     let text: String
+    /// False for a Host note: tool calls already proposed run before it is taken in.
+    var supersedesProposedTools = true
 }
 
 actor AgentRunControl {
@@ -124,9 +131,12 @@ actor AgentRunControl {
         return pending
     }
 
-    func takeSteering(atTermination: Bool) throws -> [AgentSteeringInput] {
+    /// `proposedTools`: the response just settled proposes tool calls to run. Notes alone then wait for the next
+    /// take, after those calls' results.
+    func takeSteering(atTermination: Bool, proposedTools: Bool = false) throws -> [AgentSteeringInput] {
         try Task.checkCancellation()
         guard !cancelled, !finishing else { throw CancellationError() }
+        if proposedTools, !atTermination, !steering.contains(where: \.supersedesProposedTools) { return [] }
         let inputs = steering
         steering.removeAll()
         delivering.append(contentsOf: inputs)
@@ -139,11 +149,11 @@ actor AgentRunControl {
         delivering.removeAll { ids.contains($0.id) }
     }
 
-    func enqueue(_ text: String) throws -> UUID {
+    func enqueue(_ text: String, supersedesProposedTools: Bool = true) throws -> UUID {
         try Task.checkCancellation()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentRunError.emptySteering }
         guard !finishing, !cancelled, result == nil else { throw AgentRunError.finished }
-        let input = AgentSteeringInput(id: UUID(), text: text)
+        let input = AgentSteeringInput(id: UUID(), text: text, supersedesProposedTools: supersedesProposedTools)
         steering.append(input)
         return input.id
     }

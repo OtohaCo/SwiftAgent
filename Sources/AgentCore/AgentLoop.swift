@@ -375,7 +375,8 @@ package struct AgentLoop: Sendable {
             try await emitter?.send(.model(.responseCompleted(response)))
             if response.stopReason == .cancelled { throw CancellationError() }
             if let lifecycle, preparedRequest.conversationControls == nil || response.classification == .finalResponse {
-                let inputs = try await lifecycle.control.takeSteering(atTermination: response.classification == .finalResponse)
+                let inputs = try await lifecycle.control.takeSteering(atTermination: response.classification == .finalResponse,
+                    proposedTools: response.stopReason == .toolCalls && !response.toolCalls.isEmpty)
                 if !inputs.isEmpty {
                     // Another model turn follows: the answer just settled is not the last, and the deadline limits it.
                     budget.gate.reopen()
