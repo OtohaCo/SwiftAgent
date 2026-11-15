@@ -56,6 +56,13 @@ public struct AnthropicNativeContextConfiguration: Hashable, Sendable, Codable {
     public let runReminders: Bool
     public let thinkingPrefixMismatch: AnthropicThinkingPrefixMismatch?
     public let preservedThinking: Bool
+    /// Host-written summarization prompt for native compaction. Sent as
+    /// `instructions` on both the on-demand `compaction` parameter and the threshold
+    /// `compact_20260112` edit, where it replaces the service's default prompt.
+    /// `nil` sends no field, so the request body is unchanged.
+    public private(set) var compactionInstructions: String?
+    /// The service's documented limit for on-demand compaction instructions, in Unicode scalars.
+    public static let maximumCompactionInstructionsLength = 16_384
     public init(qualification: NativeContextQualification, automatic: ModelAutomaticCompaction? = nil,
                 inlineToolChanges: Bool = false, runReminders: Bool = false,
                 thinkingPrefixMismatch: AnthropicThinkingPrefixMismatch? = nil) throws {
@@ -76,7 +83,20 @@ public struct AnthropicNativeContextConfiguration: Hashable, Sendable, Codable {
         self.qualification = qualification; self.automatic = automatic; self.inlineToolChanges = inlineToolChanges
         self.runReminders = runReminders; self.thinkingPrefixMismatch = thinkingPrefixMismatch; self.preservedThinking = preservedThinking
     }
-    private enum CodingKeys: String, CodingKey { case qualification, automatic, inlineToolChanges, runReminders, thinkingPrefixMismatch, preservedThinking }
+    /// Returns a copy that sends `instructions` with native compaction, or none for `nil`.
+    /// Blank text and text over ``maximumCompactionInstructionsLength`` are refused.
+    public func withCompactionInstructions(_ instructions: String?) throws -> Self {
+        if let instructions {
+            guard !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  instructions.unicodeScalars.count <= Self.maximumCompactionInstructionsLength else {
+                throw ModelProviderError(kind: .invalidRequest, message: "Native compaction instructions must be non-blank and at most \(Self.maximumCompactionInstructionsLength) characters.")
+            }
+        }
+        var copy = self
+        copy.compactionInstructions = instructions
+        return copy
+    }
+    private enum CodingKeys: String, CodingKey { case qualification, automatic, inlineToolChanges, runReminders, thinkingPrefixMismatch, preservedThinking, compactionInstructions }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(qualification: c.decode(NativeContextQualification.self, forKey: .qualification),
@@ -84,6 +104,7 @@ public struct AnthropicNativeContextConfiguration: Hashable, Sendable, Codable {
             inlineToolChanges: c.decodeIfPresent(Bool.self, forKey: .inlineToolChanges) ?? false, runReminders: c.decodeIfPresent(Bool.self, forKey: .runReminders) ?? false,
             thinkingPrefixMismatch: c.decodeIfPresent(AnthropicThinkingPrefixMismatch.self, forKey: .thinkingPrefixMismatch),
             preservedThinking: c.decodeIfPresent(Bool.self, forKey: .preservedThinking) ?? false)
+        self = try withCompactionInstructions(c.decodeIfPresent(String.self, forKey: .compactionInstructions))
     }
 }
 

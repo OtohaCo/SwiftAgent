@@ -204,6 +204,18 @@ thinking, compaction usage, repeat/reopen and reminders against their real servi
 Host chooses window/input reserves/cost thresholds and may use sub2api prices
 without ModelPromptPricing. This patch changes no price or scheduling contracts.
 
+## Summarization instructions
+
+`AnthropicNativeContextConfiguration.withCompactionInstructions(_:)` sets a
+Host-written summarization prompt. It is sent as `instructions` on the on-demand
+`compaction` parameter and on the threshold `compact_20260112` edit, where the
+service uses it in place of its default prompt, so it should say what the summary
+must keep and that no tool may be called. Blank text and text over 16,384
+characters (the documented on-demand limit) are refused locally. Without it no
+field is sent and request bodies are byte-for-byte unchanged. Some models
+summarize without earlier thinking when custom instructions are set on threshold
+compaction; see the service documentation.
+
 ## Preserved thinking and explicit fallback
 
 Default replay keeps RC6 strict unchanged-prefix validation. Explicit

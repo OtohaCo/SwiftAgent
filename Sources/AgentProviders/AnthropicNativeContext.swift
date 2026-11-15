@@ -70,7 +70,9 @@ enum AnthropicNativeContext {
                 throw ModelProviderError(kind: .unsupportedCapability, message: "On-demand compaction cannot use threshold compaction or structured output.")
             }
             try closedToolHistory(request.messages)
-            fields["compaction"] = .object(["type": .string("summarize")])
+            var compaction: [String: JSONValue] = ["type": .string("summarize")]
+            if let instructions = configuration?.compactionInstructions { compaction["instructions"] = .string(instructions) }
+            fields["compaction"] = .object(compaction)
         } else if let automatic = configuration?.automatic {
             guard request.nativeContext?.transition.mode != .anthropicOnDemand else {
                 throw ModelProviderError(kind: .unsupportedCapability, message: "Signed on-demand blocks cannot be combined with context_management.")
@@ -84,11 +86,13 @@ enum AnthropicNativeContext {
             }) {
                 throw ModelProviderError(kind: .unsupportedCapability, message: "Signed compaction blocks cannot be combined with threshold context_management.")
             }
-            fields["context_management"] = .object(["edits": .array([.object([
+            var edit: [String: JSONValue] = [
                 "type": .string("compact_20260112"),
                 "trigger": .object(["type": .string("input_tokens"), "value": .number(Decimal(automatic.triggerInputTokens))]),
                 "pause_after_compaction": .bool(automatic.pauseAfterCompaction),
-            ])])])
+            ]
+            if let instructions = configuration?.compactionInstructions { edit["instructions"] = .string(instructions) }
+            fields["context_management"] = .object(["edits": .array([.object(edit)])])
         }
         if let mismatch = configuration?.thinkingPrefixMismatch {
             guard configuration?.qualification.endpoint == endpoint,

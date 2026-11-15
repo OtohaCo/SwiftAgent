@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `AnthropicNativeContextConfiguration.withCompactionInstructions(_:)` lets a Host
+  replace the service's default summarization prompt for Anthropic native
+  compaction (`instructions` on on-demand `compaction` and on the threshold
+  `compact_20260112` edit). Non-blank, at most 16,384 characters. Without it the
+  request body is byte-for-byte unchanged; older encoded configurations decode
+  without instructions.
+
 - Fixed: an open `AgentJournalSQLiteStore` journal no longer restarts background
   maintenance forever (one core busy per journal). Maintenance now runs when the
   write-ahead log grows 4 MiB past what the last pass left, truncates it, and stops.
