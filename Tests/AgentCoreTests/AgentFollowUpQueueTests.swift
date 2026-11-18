@@ -964,6 +964,36 @@ import XCTest
     }
 
     @Test(arguments: [JournalFileFaultStage.beforeAppend, .afterCurrentReplace])
+    func replacingQueuedInputsWithSeveralRecordsRecoversTheWholeEdit(_ stage: JournalFileFaultStage) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("follow-up-edit-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = QueueFaultProbe()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "batch",
+            supportsPerCallFollowUps: true, fault: { try fault.check($0) })
+        let id = UUID()
+        let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"), provider: QueueFixtureProvider())
+        let session = try agent.makeSession(id: id, journal: journal)
+        for input in ["a", "between", "b", "later"] {
+            _ = try await session.enqueueFollowUp(.init(inputID: input, text: input, identity: .perCall, configurationRef: "batch"))
+        }
+        let replacements = ["first", "second", "third"].map {
+            AgentFollowUpInput(inputID: $0, text: $0, identity: .perCall, configurationRef: "batch")
+        }
+        fault.arm(stage)
+        await #expect(throws: (any Error).self) {
+            try await session.replaceQueuedFollowUps(["a", "b"], with: replacements)
+        }
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let restored = try agent.makeSession(id: id, journal: reopened)
+        let queued = try await restored.queuedFollowUps().map(\.inputID)
+        #expect(queued == (stage == .beforeAppend ? ["a", "between", "b", "later"] : ["first", "second", "third", "between", "later"]))
+        _ = try await restored.replaceQueuedFollowUps(["a", "b"], with: replacements)
+        #expect(try await restored.queuedFollowUps().map(\.inputID) == ["first", "second", "third", "between", "later"])
+        try await reopened.close()
+    }
+
+    @Test(arguments: [JournalFileFaultStage.beforeAppend, .afterCurrentReplace])
     func interruptedBatchAdmissionRecoversAllMembersTogether(_ stage: JournalFileFaultStage) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("follow-up-batch-fault-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }

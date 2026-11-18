@@ -2794,8 +2794,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
         func publishFollowUp(_ change: JournalFollowUpChange) throws {
             guard store.supportsPerCallFollowUps || change.records.allSatisfy({ $0.input.identity != .perCall }) else { throw AgentJournalError.unsupportedFormat }
-            guard writable, !didPublish, change.records.count <= 129,
-                  change.links.count <= 129 else {
+            guard writable, !didPublish, change.records.count <= JournalFollowUpChange.maxChanges,
+                  change.links.count <= JournalFollowUpChange.maxChanges else {
                 throw AgentJournalError.invalidRecord
             }
             let current = try followUpHead(sessionID: change.sessionID)

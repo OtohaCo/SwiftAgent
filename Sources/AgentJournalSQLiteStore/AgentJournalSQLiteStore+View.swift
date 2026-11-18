@@ -75,6 +75,7 @@ private struct SQLiteFollowUpEnvelope: Codable {
     let stateKind: String
     let attachments: [AgentRunInput.Attachment]?
     let replaces: [String]?
+    let replacementGroup: [String]?
     let admittedRunID: UUID?
     let admittedFormalMessageID: UUID?
 
@@ -88,6 +89,7 @@ private struct SQLiteFollowUpEnvelope: Codable {
         configurationRef = value.input.configurationRef
         attachments = value.input.attachments.isEmpty ? nil : value.input.attachments
         replaces = value.replaces
+        replacementGroup = value.replacementGroup
         switch value.state {
         case .queued:
             stateKind = "queued"; admittedRunID = nil; admittedFormalMessageID = nil
@@ -130,7 +132,7 @@ private struct SQLiteFollowUpEnvelope: Codable {
             ordinal: ordinal,
             input: input,
             state: state,
-            nextQueued: nextQueued, replaces: replaces
+            nextQueued: nextQueued, replaces: replaces, replacementGroup: replacementGroup
         )
     }
 }
@@ -1111,7 +1113,8 @@ extension AgentJournalSQLiteStore {
             guard store.supportsPerCallFollowUps || change.records.allSatisfy({ $0.input.identity != .perCall }) else {
                 throw AgentJournalError.unsupportedFormat
             }
-            guard writable, !didPublish, change.records.count <= 129, change.links.count <= 129 else {
+            guard writable, !didPublish, change.records.count <= JournalFollowUpChange.maxChanges,
+                  change.links.count <= JournalFollowUpChange.maxChanges else {
                 throw AgentJournalError.invalidRecord
             }
             let current = try followUpHead(sessionID: change.sessionID)

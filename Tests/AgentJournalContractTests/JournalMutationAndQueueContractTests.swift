@@ -196,6 +196,29 @@ import Testing
     }
 
     @Test(arguments: JournalContractBackends.all)
+    func replacingAFullQueueKeepsTheRecoveredInputAndWaitingOrder(_ backend: any JournalBackendHarness) async throws {
+        let directory = tempDir("full-queue-replacement")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try backend.create(at: directory, operationDomain: "full-queue-replacement",
+            smallMaintenanceSegments: false, capabilities: .init(supportsPerCallFollowUps: true))
+        let sessionID = UUID()
+        let ids = (0..<128).map { "old-\($0)" }
+        for id in ids {
+            _ = try await journal.enqueueFollowUp(.init(inputID: id, text: id, identity: .perCall,
+                configurationRef: "batch"), sessionID: sessionID)
+        }
+        let replacements = (0...128).map {
+            AgentFollowUpInput(inputID: "new-\($0)", text: "recovered \($0)", identity: .perCall, configurationRef: "batch")
+        }
+        _ = try await journal.replaceQueuedFollowUps(ids, with: replacements, sessionID: sessionID)
+        try await journal.close()
+        let reopened = try backend.open(at: directory, smallMaintenanceSegments: false)
+        let live = try await reopened.queuedFollowUpBatch(sessionID: sessionID, merging: nil)
+        #expect(live.map(\.input) == replacements)
+        try await reopened.close()
+    }
+
+    @Test(arguments: JournalContractBackends.all)
     func batchedFollowUpsPreserveAttachmentsAndShareAFormalMessage(_ backend: any JournalBackendHarness) async throws {
         let directory = tempDir("batched-followups")
         defer { try? FileManager.default.removeItem(at: directory) }

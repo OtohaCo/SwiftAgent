@@ -1140,7 +1140,7 @@ extension AgentJournal {
                 return existing.publicRecord(storeID: store.storeID)
             }
             var head = try view.followUpHead(sessionID: sessionID)
-            guard head.queuedCount < 128,
+            guard head.queuedCount < AgentFollowUpInput.ordinaryQueueCapacity,
                   input.byteCount <= AgentFollowUpInput.maxQueueBytes - head.queuedBytes else {
                 throw AgentFollowUpError.queueFull
             }
@@ -1171,25 +1171,39 @@ extension AgentJournal {
         return result
     }
 
-    package func replaceQueuedFollowUps(_ inputIDs: [String], with input: AgentFollowUpInput,
-                                       sessionID: UUID) async throws -> AgentFollowUpRecord {
+    package func replaceQueuedFollowUps(_ inputIDs: [String], with inputs: [AgentFollowUpInput],
+                                       sessionID: UUID) async throws -> [AgentFollowUpRecord] {
         try Task.checkCancellation()
-        try input.validate()
         let ids = Set(inputIDs.map { Data($0.utf8) })
-        guard (1...128).contains(inputIDs.count), ids.count == inputIDs.count,
-              !ids.contains(Data(input.inputID.utf8)) else { throw AgentFollowUpError.invalidInput }
+        let replacementIDs = inputs.map(\.inputID)
+        let newIDs = Set(replacementIDs.map { Data($0.utf8) })
+        guard inputIDs.count <= AgentFollowUpInput.editedQueueCapacity,
+              (1...AgentFollowUpInput.editedQueueCapacity).contains(inputs.count),
+              ids.count == inputIDs.count, newIDs.count == inputs.count,
+              ids.isDisjoint(with: newIDs) else { throw AgentFollowUpError.invalidInput }
         guard let store else { throw AgentFollowUpError.durableJournalRequired }
         guard !closing else { throw AgentJournalError.storeClosed }
-        if input.identity == .perCall, !supportsPerCallFollowUps { throw AgentJournalError.unsupportedFormat }
-        try validateFollowUpAttachments(input)
-        let result = try writeStore(store) { view -> AgentFollowUpRecord in
-            if let existing = try view.followUp(sessionID: sessionID, inputID: input.inputID) {
-                guard existing.input.matches(input), let replaces = existing.replaces,
-                      Set(replaces.map({ Data($0.utf8) })) == ids else { throw AgentFollowUpError.inputConflict }
-                return existing.publicRecord(storeID: store.storeID)
+        for input in inputs {
+            try input.validate()
+            if input.identity == .perCall, !supportsPerCallFollowUps { throw AgentJournalError.unsupportedFormat }
+            try validateFollowUpAttachments(input)
+        }
+        // Single-record replacements were stored without group metadata.
+        let group = inputs.count == 1 ? nil : replacementIDs
+        let result = try writeStore(store) { view -> [AgentFollowUpRecord] in
+            let existing = try inputs.compactMap { try view.followUp(sessionID: sessionID, inputID: $0.inputID) }
+            if !existing.isEmpty {
+                guard existing.count == inputs.count,
+                      zip(existing, inputs).allSatisfy({ record, input in
+                          record.input.matches(input) &&
+                          record.replaces.map { Set($0.map { Data($0.utf8) }) } == ids &&
+                          record.replacementGroup?.map { Data($0.utf8) } == group?.map { Data($0.utf8) }
+                      }) else { throw AgentFollowUpError.inputConflict }
+                return existing.map { $0.publicRecord(storeID: store.storeID) }
             }
             var head = try view.followUpHead(sessionID: sessionID)
-            guard head.nextOrdinal < .max, head.revision < .max else { throw AgentJournalError.invalidRecord }
+            guard head.nextOrdinal <= UInt64.max - UInt64(inputs.count),
+                  head.revision < .max else { throw AgentJournalError.invalidRecord }
             var retained: [JournalStoredFollowUp] = [], withdrawn: [JournalStoredFollowUp] = []
             var insertion: Int?
             var next = head.firstQueued
@@ -1210,29 +1224,32 @@ extension AgentJournal {
             guard withdrawn.count == ids.count else { throw AgentFollowUpError.staleDispatch }
             let removedBytes = withdrawn.reduce(0) { $0 + $1.input.byteCount }
             guard head.queuedBytes >= removedBytes else { throw AgentJournalError.invalidRecord }
-            let newBytes = head.queuedBytes - removedBytes + input.byteCount
-            guard newBytes <= AgentFollowUpInput.maxQueueBytes else { throw AgentFollowUpError.queueFull }
-            let replacement = JournalStoredFollowUp(sessionID: sessionID, ordinal: head.nextOrdinal,
-                input: input, state: .queued, replaces: withdrawn.map(\.input.inputID))
-            let position = insertion ?? retained.count
-            retained.insert(replacement, at: position)
+            let newBytes = head.queuedBytes - removedBytes + inputs.reduce(0) { $0 + $1.byteCount }
+            guard newBytes <= AgentFollowUpInput.maxQueueBytes,
+                  retained.count + inputs.count <= AgentFollowUpInput.editedQueueCapacity else { throw AgentFollowUpError.queueFull }
+            let removedIDs = withdrawn.map(\.input.inputID)
+            let replacements = inputs.enumerated().map { offset, input in
+                JournalStoredFollowUp(sessionID: sessionID, ordinal: head.nextOrdinal + UInt64(offset),
+                    input: input, state: .queued, replaces: removedIDs, replacementGroup: group)
+            }
+            retained.insert(contentsOf: replacements, at: insertion ?? retained.count)
             var links = withdrawn.map { JournalFollowUpLink(ordinal: $0.ordinal, next: nil) }
             for (index, kept) in retained.enumerated() {
                 let following = index + 1 == retained.count ? nil : retained[index + 1].ordinal
-                if kept.ordinal == replacement.ordinal || kept.nextQueued != following {
+                if kept.ordinal >= head.nextOrdinal || kept.nextQueued != following {
                     links.append(.init(ordinal: kept.ordinal, next: following))
                 }
             }
             let previous = head.revision
             head.revision += 1
-            head.nextOrdinal += 1
-            head.firstQueued = retained.first?.ordinal ?? replacement.ordinal
+            head.nextOrdinal += UInt64(inputs.count)
+            head.firstQueued = retained.first?.ordinal
             head.lastQueued = retained.last?.ordinal
             head.queuedCount = retained.count
             head.queuedBytes = newBytes
             try view.publishFollowUp(.init(sessionID: sessionID, expectedRevision: previous, head: head,
-                records: withdrawn + [replacement], links: links, admitsNewWork: true))
-            return replacement.publicRecord(storeID: store.storeID)
+                records: withdrawn + replacements, links: links, admitsNewWork: true))
+            return replacements.map { $0.publicRecord(storeID: store.storeID) }
         }
         scheduleMaintenanceIfNeeded()
         if let notify = dispatcherLeases[sessionID]?.notify { await notify() }

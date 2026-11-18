@@ -55,6 +55,9 @@ public struct AgentFollowUpInput: Equatable, Sendable {
 
     package static let maxTextBytes = 256 * 1024
     package static let maxQueueBytes = 8 * 1024 * 1024
+    package static let ordinaryQueueCapacity = 128
+    /// Recovery may need to reinsert work that was already accepted as steering.
+    package static let editedQueueCapacity = 2 * ordinaryQueueCapacity
 
     package var byteCount: Int {
         text.utf8.count + attachments.reduce(0) { sum, part in
@@ -179,12 +182,15 @@ package struct JournalStoredFollowUp: Equatable, Sendable {
     package var state: AgentFollowUpState
     package var nextQueued: UInt64?
     package let replaces: [String]?
+    package let replacementGroup: [String]?
 
     package init(sessionID: UUID, ordinal: UInt64, input: AgentFollowUpInput,
-                 state: AgentFollowUpState, nextQueued: UInt64? = nil, replaces: [String]? = nil) {
+                 state: AgentFollowUpState, nextQueued: UInt64? = nil, replaces: [String]? = nil,
+                 replacementGroup: [String]? = nil) {
         self.sessionID = sessionID; self.ordinal = ordinal; self.input = input
         self.state = state; self.nextQueued = nextQueued
         self.replaces = replaces
+        self.replacementGroup = replacementGroup
     }
 
     package func publicRecord(storeID: UUID) -> AgentFollowUpRecord {
@@ -195,6 +201,7 @@ package struct JournalStoredFollowUp: Equatable, Sendable {
 }
 
 package struct JournalFollowUpChange: Sendable {
+    package static let maxChanges = 2 * AgentFollowUpInput.editedQueueCapacity
     package let sessionID: UUID
     package let expectedRevision: UInt64
     package let head: JournalFollowUpHead

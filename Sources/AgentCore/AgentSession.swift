@@ -682,14 +682,28 @@ public actor AgentSession {
     /// Withdraws the named waiting inputs and inserts their replacement at the first selected queue position in one commit.
     /// The exact same edit can be retried by replacement ID after an interrupted write.
     public func replaceQueuedFollowUps(_ inputIDs: [String], with replacement: AgentFollowUpInput) async throws -> AgentFollowUpRecord {
-        let journal = try await followUpJournal(for: replacement)
-        return try await journal.replaceQueuedFollowUps(inputIDs, with: replacement, sessionID: id)
+        try await replaceQueuedFollowUps(inputIDs, with: [replacement])[0]
     }
 
-    private func followUpJournal(for input: AgentFollowUpInput) async throws -> AgentJournal {
+    /// Atomically replaces waiting inputs with an ordered group. With no named inputs, appends the group.
+    /// Retrying the same group and source IDs is idempotent.
+    public func replaceQueuedFollowUps(_ inputIDs: [String], with replacements: [AgentFollowUpInput]) async throws -> [AgentFollowUpRecord] {
+        guard let first = replacements.first else { throw AgentFollowUpError.invalidInput }
+        for replacement in replacements {
+            try validateFollowUpOperationID(replacement)
+        }
+        let journal = try await followUpJournal(for: first)
+        return try await journal.replaceQueuedFollowUps(inputIDs, with: replacements, sessionID: id)
+    }
+
+    private func validateFollowUpOperationID(_ input: AgentFollowUpInput) throws {
         if input.operationID?.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(AgentHostToolCall.operationPrefix) == true {
             throw AgentHostInvocationError.reservedOperationID
         }
+    }
+
+    private func followUpJournal(for input: AgentFollowUpInput) async throws -> AgentJournal {
+        try validateFollowUpOperationID(input)
         try authorization.validate(journal: journal)
         if authorization.mode == .requiredAudit {
             try await journal?.checkAuditAvailability(backlog: authorization.backlog)
