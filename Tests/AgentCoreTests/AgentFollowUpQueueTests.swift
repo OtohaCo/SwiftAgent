@@ -945,7 +945,7 @@ import XCTest
         let id = UUID()
         let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"), provider: QueueFixtureProvider())
         let session = try agent.makeSession(id: id, journal: journal)
-        for input in ["a", "b"] {
+        for input in ["a", "b", "later"] {
             _ = try await session.enqueueFollowUp(.init(inputID: input, text: input, identity: .perCall, configurationRef: "batch"))
         }
         let replacement = AgentFollowUpInput(inputID: "edit", text: "both", identity: .perCall, configurationRef: "batch")
@@ -956,10 +956,10 @@ import XCTest
         try await journal.close()
         let reopened = try AgentIncrementalJournal.open(at: directory)
         let restored = try agent.makeSession(id: id, journal: reopened)
-        let queued = try await restored.followUps(limit: 100).filter { $0.state == .queued }.map(\.inputID)
-        #expect(queued == (stage == .beforeAppend ? ["a", "b"] : ["edit"]))
+        let queued = try await restored.queuedFollowUps().map(\.inputID)
+        #expect(queued == (stage == .beforeAppend ? ["a", "b", "later"] : ["edit", "later"]))
         _ = try await restored.replaceQueuedFollowUps(["a", "b"], with: replacement)
-        #expect(try await restored.followUps(limit: 100).filter { $0.state == .queued }.map(\.inputID) == ["edit"])
+        #expect(try await restored.queuedFollowUps().map(\.inputID) == ["edit", "later"])
         try await reopened.close()
     }
 

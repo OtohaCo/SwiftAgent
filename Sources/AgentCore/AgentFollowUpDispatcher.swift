@@ -24,6 +24,9 @@ public struct AgentFollowUpResolution: Sendable {
 }
 
 public struct AgentFollowUpConfiguration: Sendable {
+    /// Optional host-prepared text for the admitted request. The queue still verifies each
+    /// original input and its attachments in the same admission transaction.
+    public let preparedText: String?
     public let model: AgentModelBinding
     public let capabilities: AgentCapabilityBinding
     public let expectedConversationRevision: UInt64?
@@ -31,17 +34,20 @@ public struct AgentFollowUpConfiguration: Sendable {
     public let contextControls: AgentRunContextControls?
 
     public init(model: AgentModelBinding, capabilities: AgentCapabilityBinding,
-                expectedConversationRevision: UInt64? = nil) {
+                expectedConversationRevision: UInt64? = nil, preparedText: String? = nil) {
         self.model = model; self.capabilities = capabilities
         self.expectedConversationRevision = expectedConversationRevision
         self.contextControls = nil
+        self.preparedText = preparedText
     }
 
     public init(model: AgentModelBinding, capabilities: AgentCapabilityBinding,
-                expectedConversationRevision: UInt64? = nil, contextControls: AgentRunContextControls) {
+                expectedConversationRevision: UInt64? = nil, contextControls: AgentRunContextControls,
+                preparedText: String? = nil) {
         self.model = model; self.capabilities = capabilities
         self.expectedConversationRevision = expectedConversationRevision
         self.contextControls = contextControls
+        self.preparedText = preparedText
     }
 }
 
@@ -344,7 +350,12 @@ public actor AgentFollowUpDispatcher {
                 guard attemptGeneration < .max else { throw AgentFollowUpError.staleDispatch }
                 attemptGeneration += 1
                 generation = attemptGeneration
-                try await dispatch(batch, generation: generation)
+                do {
+                    try await dispatch(batch, generation: generation)
+                } catch AgentFollowUpError.retryFirstInput where batch.count > 1 {
+                    guard mode == .running, attemptGeneration == generation else { continue }
+                    try await dispatch([batch[0]], generation: generation)
+                }
             } catch {
                 // A failure that unwinds a dispatch changed several fields at once: one status for all.
                 defer { publishStatus() }

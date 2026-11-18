@@ -141,6 +141,8 @@ public enum AgentFollowUpError: Error, Equatable, Sendable {
     case dispatcherStopped
     case staleDispatch
     case needsInspection
+    /// A resolver can decline a batch and be asked to prepare its first member alone.
+    case retryFirstInput
 }
 
 /// Produced only by the atomic startup publication after reading the actual
@@ -223,10 +225,12 @@ package struct JournalFollowUpAdmission: Sendable {
     package let inputIDs: [String]
     package var inputID: String { inputIDs[0] }
     package let expectedQueueRevision: UInt64
+    package let preparedText: String?
 
-    package init(inputIDs: [String], expectedQueueRevision: UInt64) {
+    package init(inputIDs: [String], expectedQueueRevision: UInt64, preparedText: String? = nil) {
         precondition(!inputIDs.isEmpty)
         self.inputIDs = inputIDs; self.expectedQueueRevision = expectedQueueRevision
+        self.preparedText = preparedText
     }
 }
 

@@ -226,7 +226,7 @@ public actor AgentSession {
         correlation: AgentRunCorrelation? = nil,
         dispatchOwnerID: UUID? = nil,
         followUpInputIDs: [String] = [], contextControls: AgentRunContextControls? = nil,
-        inputContent: [ModelContent]? = nil
+        inputContent: [ModelContent]? = nil, preparedFollowUpText: String? = nil
     ) async throws -> AgentRun {
         try Task.checkCancellation()
         if operationID?.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(AgentHostToolCall.operationPrefix) == true {
@@ -299,7 +299,8 @@ public actor AgentSession {
                         budget: runBudget,
                         operationID: operationID,
                         startupID: startupID,
-                        followUpInputIDs: followUpInputIDs, runAdmission: runAdmission, contextControls: contextControls, inputContent: inputContent
+                        followUpInputIDs: followUpInputIDs, runAdmission: runAdmission, contextControls: contextControls,
+                        inputContent: inputContent, preparedFollowUpText: preparedFollowUpText
                     )
                     startupReservations.removeValue(forKey: startupID)
                     startupFinished()
@@ -678,7 +679,7 @@ public actor AgentSession {
         return try await journal.enqueueFollowUp(input, sessionID: id)
     }
 
-    /// Withdraws the named waiting inputs and appends their replacement in one commit.
+    /// Withdraws the named waiting inputs and inserts their replacement at the first selected queue position in one commit.
     /// The exact same edit can be retried by replacement ID after an interrupted write.
     public func replaceQueuedFollowUps(_ inputIDs: [String], with replacement: AgentFollowUpInput) async throws -> AgentFollowUpRecord {
         let journal = try await followUpJournal(for: replacement)
@@ -701,6 +702,14 @@ public actor AgentSession {
     public func followUp(inputID: String) async throws -> AgentFollowUpRecord? {
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
         return try await journal.followUp(sessionID: id, inputID: inputID)
+    }
+
+    /// The current waiting order, which may differ from acceptance order after an edit.
+    public func queuedFollowUps() async throws -> [AgentFollowUpRecord] {
+        guard let journal, let identity = await journal.storeIdentity() else { throw AgentFollowUpError.durableJournalRequired }
+        return try await journal.queuedFollowUpBatch(sessionID: id, merging: nil).map {
+            $0.publicRecord(storeID: identity.storeID)
+        }
     }
 
     public func followUpText(inputID: String) async throws -> String {
@@ -768,12 +777,15 @@ public actor AgentSession {
                                      ownerID: UUID, budget: AgentBudget) async throws -> AgentRun {
         guard dispatcherID == ownerID else { throw AgentFollowUpError.staleDispatch }
         let batch = FollowUpBatch(inputs: inputs.map(\.input))
-        return try await runInternal(batch.text, using: configuration.model,
+        let text = configuration.preparedText ?? batch.text
+        let content = try AgentRunInput(text: text, attachments: batch.attachments).content
+        return try await runInternal(text, using: configuration.model,
             capabilities: configuration.capabilities,
             expectedConversationRevision: configuration.expectedConversationRevision,
             budget: budget, operationID: inputs[0].input.operationID,
             dispatchOwnerID: ownerID, followUpInputIDs: inputs.map(\.input.inputID),
-            contextControls: configuration.contextControls, inputContent: batch.content())
+            contextControls: configuration.contextControls, inputContent: content,
+            preparedFollowUpText: configuration.preparedText)
     }
 
     package func waitForQueuedStartupExit(ownerID: UUID) async {
@@ -863,7 +875,7 @@ public actor AgentSession {
         startupID: UUID,
         followUpInputIDs: [String] = [],
         runAdmission: JournalRunAdmission? = nil, contextControls: AgentRunContextControls? = nil,
-        inputContent: [ModelContent]
+        inputContent: [ModelContent], preparedFollowUpText: String? = nil
     ) async throws -> AgentRun {
         try budget.checkActive()
         if !restoredJournalState {
@@ -997,7 +1009,7 @@ public actor AgentSession {
                     runID: runID,
                     deadline: budget.deadline,
                     durability: journal.storage == .durable ? .durable : .memory,
-                    followUpInputIDs: followUpInputIDs, runAdmission: runAdmission,
+                    followUpInputIDs: followUpInputIDs, preparedFollowUpText: preparedFollowUpText, runAdmission: runAdmission,
                     expectedHistory: persistentHistoryWitness
                 ).inputMessageID
             } catch AgentJournalStartupAdmissionError.deadlineExceeded {
@@ -1329,7 +1341,8 @@ public actor AgentSession {
         await waitForCommittedWrites(runID)
         guard activeRunID == runID else { return nil }
         pendingNativePublications.removeValue(forKey: runID)
-        let retained = pending.filter { !appliedSteeringIDs.contains($0.id) }
+        let unused = pending.filter { !appliedSteeringIDs.contains($0.id) }
+        let retained = await control.retainableSteering(unused)
         var failure = retained.isEmpty ? nil : await retain(retained, runID: runID)
         if let outcome, let journal, journal.supportsRunRecords {
             // Retained steering and all started checkpoint writes have resolved before this boundary.

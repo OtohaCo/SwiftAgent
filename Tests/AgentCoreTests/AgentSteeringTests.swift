@@ -7,6 +7,31 @@ import Testing
 import XCTest
 
 struct AgentSteeringTests {
+    @Test func cancellationReturnsUnusedSteeringForOneNewRequest() async throws {
+        let gate = ManualGate()
+        let entered = XCTestExpectation(description: "First model request")
+        let provider = ScriptedProvider { request, turn in
+            if turn == 1 { entered.fulfill(); await gate.wait() }
+            return textResponse(request, "Done")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let run = try await session.run("original")
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 10) == .completed)
+        let removed = try await run.steer("withdrawn")
+        #expect(await run.withdrawSteering(removed))
+        let correction = try await run.steer("new direction")
+        _ = try await run.note("host note")
+        let returned = await run.cancel(returningSteering: [correction])
+        await gate.open()
+        try await run.waitForDrain()
+        #expect(returned.map(\.id) == [correction])
+        let next = try await session.run(returned.map(\.text).joined(separator: "\n\n"))
+        _ = try await next.wait()
+        #expect(await provider.log.requests.last?.messages == [
+            .user([.text("original")]), .user([.text("host note")]), .user([.text("new direction")])
+        ])
+    }
+
     @Test func correctionDuringModelTurnReplansBeforeExecutingStaleProposal() async throws {
         let gate = ManualGate()
         let entered = XCTestExpectation(description: "Model entered")

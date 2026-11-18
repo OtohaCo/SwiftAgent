@@ -2806,7 +2806,7 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                   Set(change.links.map(\.ordinal)).count == change.links.count,
                   change.links.allSatisfy({ link in
                       link.ordinal < change.head.nextOrdinal &&
-                          (link.next.map { $0 > link.ordinal && $0 < change.head.nextOrdinal } ?? true)
+                          (link.next.map { $0 != link.ordinal && $0 < change.head.nextOrdinal } ?? true)
                   }) else {
                 throw AgentJournalError.concurrentWriter
             }

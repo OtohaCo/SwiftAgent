@@ -59,6 +59,14 @@ public struct AgentRun: Sendable {
     public func wait() async throws -> AgentLoopResult { try await control.wait() }
     public func waitForDrain() async throws { try await drain.wait() }
     public func cancel() async { await control.cancel() }
+    /// Cancels and returns the selected, uncommitted steering after logical settlement.
+    /// Other steering retains the normal cancellation behavior.
+    public func cancel(returningSteering ids: Set<UUID>) async -> [AgentReturnedSteering] {
+        await control.cancel(returningSteering: ids)
+    }
+
+    /// Withdraws steering before the run has started taking it into history.
+    public func withdrawSteering(_ id: UUID) async -> Bool { await control.withdrawSteering(id) }
     @discardableResult
     public func steer(_ text: String) async throws -> UUID { try await control.enqueue(text) }
     /// A note from the Host for the Run, taken in like `steer` before its next model request. Unlike a correction,
@@ -79,6 +87,11 @@ public enum AgentRunError: Error, Equatable, Sendable {
     case finished
 }
 
+public struct AgentReturnedSteering: Sendable, Equatable {
+    public let id: UUID
+    public let text: String
+}
+
 struct AgentSteeringInput: Sendable {
     let id: UUID
     let text: String
@@ -92,6 +105,8 @@ actor AgentRunControl {
     private var result: Result<AgentLoopResult, Error>?
     private var cancelled = false
     private var finishing = false
+    private var returningSteering: Set<UUID> = []
+    private var returnedSteering: [AgentReturnedSteering] = []
     private var steering: [AgentSteeringInput] = []
     private var delivering: [AgentSteeringInput] = []
     private var waiters: [UUID: CheckedContinuation<AgentLoopResult, Error>] = [:]
@@ -110,6 +125,27 @@ actor AgentRunControl {
         cancelled = true
         worker?.cancel()
         for cancelStartup in startupWorkers.values { cancelStartup() }
+    }
+
+    func cancel(returningSteering ids: Set<UUID>) async -> [AgentReturnedSteering] {
+        guard result == nil, !finishing else { return [] }
+        returningSteering.formUnion(ids)
+        cancel()
+        await waitUntilCompleted()
+        let returned = returnedSteering.filter { ids.contains($0.id) }
+        returnedSteering.removeAll { ids.contains($0.id) }
+        return returned
+    }
+
+    func withdrawSteering(_ id: UUID) -> Bool {
+        guard !finishing, let index = steering.firstIndex(where: { $0.id == id }) else { return false }
+        steering.remove(at: index)
+        return true
+    }
+
+    func retainableSteering(_ inputs: [AgentSteeringInput]) -> [AgentSteeringInput] {
+        returnedSteering = inputs.filter { returningSteering.contains($0.id) }.map { .init(id: $0.id, text: $0.text) }
+        return inputs.filter { !returningSteering.contains($0.id) }
     }
 
     /// The same Run cancellation owner reaches cooperative preflight work

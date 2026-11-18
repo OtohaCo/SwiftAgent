@@ -131,8 +131,9 @@ package extension JournalStoreView {
         }
         let batch = FollowUpBatch(inputs: records.map(\.input))
         let bytes = records.reduce(0) { $0 + $1.input.byteCount }
-        guard head.queuedBytes >= bytes, text.utf8.elementsEqual(batch.text.utf8),
-              parts == (try batch.content()),
+        let expectedText = admission.preparedText ?? batch.text
+        guard head.queuedBytes >= bytes, text.utf8.elementsEqual(expectedText.utf8),
+              parts == (try AgentRunInput(text: expectedText, attachments: batch.attachments).content),
               records.count == 1 || records.allSatisfy({
                   $0.input.identity == .perCall
                       && $0.input.configurationRef.utf8.elementsEqual(first.input.configurationRef.utf8)

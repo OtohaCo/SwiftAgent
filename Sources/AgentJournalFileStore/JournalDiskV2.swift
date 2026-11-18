@@ -83,7 +83,7 @@ struct DiskFollowUpLinkV2: Codable {
     let next: UInt64?
     init(_ value: JournalFollowUpLink) { ordinal = value.ordinal; next = value.next }
     func value() throws -> JournalFollowUpLink {
-        guard next.map({ $0 > ordinal }) ?? true else { throw AgentJournalError.invalidRecord }
+        guard next != ordinal else { throw AgentJournalError.invalidRecord }
         return .init(ordinal: ordinal, next: next)
     }
 }
@@ -114,8 +114,7 @@ struct DiskFollowUpHeadV2: Codable {
               lastQueued.map({ $0 < nextOrdinal }) ?? true,
               lastAdmitted.map({ $0 < nextOrdinal }) ?? true,
               lastReleased.map({ $0 < nextOrdinal }) ?? true,
-              lastReleased == nil || lastAdmitted != nil,
-              lastReleased.map({ released in lastAdmitted.map { released <= $0 } ?? false }) ?? true else {
+              lastReleased == nil || lastAdmitted != nil else {
             throw AgentJournalError.invalidRecord
         }
         return .init(revision: revision, nextOrdinal: nextOrdinal,
