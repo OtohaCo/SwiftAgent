@@ -55,7 +55,7 @@ public struct AgentFollowUpDispatchPolicy: Sendable {
     }
 }
 
-public struct AgentFollowUpDispatchStatus: Sendable {
+public struct AgentFollowUpDispatchStatus: Sendable, Equatable {
     public enum Mode: String, Sendable { case running, paused, stopped }
     public let mode: Mode
     public let currentInputID: String?
@@ -75,7 +75,7 @@ public actor AgentFollowUpDispatcher {
     private let resolver: any AgentFollowUpResolver
     private let onRun: (@Sendable (AgentFollowUpRecord, AgentRun) async -> Void)?
     private let initialRun: AgentRun?
-    private var mode: AgentFollowUpDispatchStatus.Mode = .running
+    private var mode: AgentFollowUpDispatchStatus.Mode = .running { didSet { publishStatus() } }
     private var worker: Task<Void, Never>?
     private var resolverTask: Task<AgentFollowUpConfiguration, Error>?
     private var startupTask: Task<AgentRun, Error>?
@@ -83,14 +83,16 @@ public actor AgentFollowUpDispatcher {
     private var inspectionOperations = 0
     private var currentRun: AgentRun?
     private var observationTask: Task<Void, Never>?
-    private var currentInputID: String?
-    private var interruptedInputID: String?
-    private var lastFailureKind: String?
+    private var currentInputID: String? { didSet { publishStatus() } }
+    private var interruptedInputID: String? { didSet { publishStatus() } }
+    private var lastFailureKind: String? { didSet { publishStatus() } }
     private var attemptGeneration: UInt64 = 0
     private var signalVersion: UInt64 = 0
     private var signals: [CheckedContinuation<Void, Never>] = []
     private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
-    private var drained = false
+    private var drained = false { didSet { publishStatus() } }
+    private var statusSubscribers: [UUID: AsyncStream<AgentFollowUpDispatchStatus>.Continuation] = [:]
+    private var lastPublishedStatus: AgentFollowUpDispatchStatus?
     private var drainWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private var drainCountObservers: [(Int, CheckedContinuation<Void, Never>)] = []
 
@@ -120,6 +122,44 @@ public actor AgentFollowUpDispatcher {
         .init(mode: mode, currentInputID: currentInputID,
               interruptedInputID: interruptedInputID,
               lastFailureKind: lastFailureKind, physicallyDrained: drained)
+    }
+
+    /// A stream of this dispatcher's status: the status at the moment of the call first, then the
+    /// status after each change, with no polling. A consumer that falls behind sees only the newest
+    /// status, never a stale one, and a change made after the call is never missed, even before the
+    /// first element is read. The stream finishes once the dispatcher has stopped and drained, after
+    /// that final status; cancelling the consuming task ends the subscription.
+    public func statusUpdates() -> AsyncStream<AgentFollowUpDispatchStatus> {
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: AgentFollowUpDispatchStatus.self, bufferingPolicy: .bufferingNewest(1))
+        let current = status()
+        continuation.yield(current)
+        if current.physicallyDrained {
+            continuation.finish()
+            return stream
+        }
+        let id = UUID()
+        statusSubscribers[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            guard let self else { return }
+            Task { await self.removeStatusSubscriber(id) }
+        }
+        return stream
+    }
+
+    private func removeStatusSubscriber(_ id: UUID) {
+        statusSubscribers.removeValue(forKey: id)
+    }
+
+    private func publishStatus() {
+        let current = status()
+        guard current != lastPublishedStatus else { return }
+        lastPublishedStatus = current
+        for continuation in statusSubscribers.values { continuation.yield(current) }
+        guard current.physicallyDrained else { return }
+        let finished = statusSubscribers
+        statusSubscribers.removeAll()
+        finished.values.forEach { $0.finish() }
     }
 
     public func pause() {
