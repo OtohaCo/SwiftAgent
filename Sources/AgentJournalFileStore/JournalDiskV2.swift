@@ -16,6 +16,7 @@ struct DiskFollowUpV2: Codable {
     let attachments: [AgentRunInput.Attachment]?
     let replaces: [String]?
     let replacementGroup: [String]?
+    let sendAlone: Bool?
     let status: String
     let runID: UUID?
     let formalMessageID: UUID?
@@ -32,6 +33,7 @@ struct DiskFollowUpV2: Codable {
         attachments = value.input.attachments.isEmpty ? nil : value.input.attachments
         replaces = value.replaces
         replacementGroup = value.replacementGroup
+        sendAlone = value.sendAlone ? true : nil
         switch value.state {
         case .queued: status = "queued"; runID = nil; formalMessageID = nil
         case .withdrawn: status = "withdrawn"; runID = nil; formalMessageID = nil
@@ -76,7 +78,7 @@ struct DiskFollowUpV2: Codable {
         default: throw AgentJournalError.unsupportedFormat
         }
         return JournalStoredFollowUp(sessionID: sessionID, ordinal: ordinal,
-                                     input: input, state: state, replaces: replaces, replacementGroup: replacementGroup)
+                                     input: input, state: state, replaces: replaces, replacementGroup: replacementGroup, sendAlone: sendAlone ?? false)
     }
 }
 

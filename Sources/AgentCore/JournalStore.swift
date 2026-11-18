@@ -110,6 +110,48 @@ public struct JournalStoreStatus: Sendable, Equatable {
 }
 
 package extension JournalStoreView {
+    func appendTerminalFollowUps(_ change: JournalStoreChange) throws ->
+        (head: JournalFollowUpHead, items: [JournalStoredFollowUp]) {
+        let sessionID = change.sessionID
+        let inputs = change.terminalFollowUps
+        guard change.runTerminal != nil, change.followUpAdmission == nil,
+              !inputs.isEmpty, Set(inputs.map { Data($0.inputID.utf8) }).count == inputs.count else {
+            throw AgentFollowUpError.invalidInput
+        }
+        var head = try followUpHead(sessionID: sessionID)
+        guard head.revision < .max, head.nextOrdinal <= .max - UInt64(inputs.count),
+              head.queuedCount >= 0, head.queuedBytes >= 0 else { throw AgentJournalError.invalidRecord }
+        let bytes = inputs.reduce(0) { $0 + $1.byteCount }
+        guard inputs.count <= AgentFollowUpInput.editedQueueCapacity - head.queuedCount,
+              bytes <= AgentFollowUpInput.maxQueueBytes - head.queuedBytes else { throw AgentFollowUpError.queueFull }
+        var items: [JournalStoredFollowUp] = []
+        if let tail = head.lastQueued {
+            guard head.queuedCount > 0, var previous = try followUps(sessionID: sessionID, after: tail, limit: 1).first,
+                  previous.ordinal == tail, previous.state == .queued, previous.nextQueued == nil else {
+                throw AgentJournalError.invalidRecord
+            }
+            previous.nextQueued = head.nextOrdinal
+            items.append(previous)
+        } else {
+            guard head.queuedCount == 0, head.firstQueued == nil else { throw AgentJournalError.invalidRecord }
+            head.firstQueued = head.nextOrdinal
+        }
+        for (index, input) in inputs.enumerated() {
+            guard try followUp(sessionID: sessionID, inputID: input.inputID) == nil else {
+                throw AgentFollowUpError.inputConflict
+            }
+            let ordinal = head.nextOrdinal + UInt64(index)
+            items.append(.init(sessionID: sessionID, ordinal: ordinal, input: input, state: .queued,
+                nextQueued: index + 1 < inputs.count ? ordinal + 1 : nil))
+        }
+        head.nextOrdinal += UInt64(inputs.count)
+        head.lastQueued = head.nextOrdinal - 1
+        head.queuedCount += inputs.count
+        head.queuedBytes += bytes
+        head.revision += 1
+        return (head, items)
+    }
+
     func admitFollowUps(_ admission: JournalFollowUpAdmission, in change: JournalStoreChange,
                         storeID: UUID) throws -> (head: JournalFollowUpHead, items: [JournalStoredFollowUp]) {
         var head = try followUpHead(sessionID: change.sessionID)
@@ -122,18 +164,21 @@ package extension JournalStoreView {
               records.count == admission.inputIDs.count, records.count <= head.queuedCount,
               let first = records.first, head.firstQueued == first.ordinal,
               let runID = change.records.first?.runID, change.records.allSatisfy({ $0.runID == runID }),
-              let last = change.messages.last, case .user(let parts) = last.value,
-              case .text(let text)? = parts.first else { throw AgentJournalError.concurrentWriter }
+              let last = change.messages.last, case .user(let parts) = last.value else { throw AgentJournalError.concurrentWriter }
         var expected = head.firstQueued
+        var visited: Set<UInt64> = []
         for record in records {
-            guard record.ordinal == expected, record.state == .queued else { throw AgentJournalError.concurrentWriter }
+            guard visited.insert(record.ordinal).inserted,
+                  record.ordinal == expected, record.state == .queued else { throw AgentJournalError.concurrentWriter }
             expected = record.nextQueued
+        }
+        guard expected.map({ !visited.contains($0) }) ?? (head.queuedCount == records.count) else {
+            throw AgentJournalError.invalidRecord
         }
         let batch = FollowUpBatch(inputs: records.map(\.input))
         let bytes = records.reduce(0) { $0 + $1.input.byteCount }
-        let expectedText = admission.preparedText ?? batch.text
-        guard head.queuedBytes >= bytes, text.utf8.elementsEqual(expectedText.utf8),
-              parts == (try AgentRunInput(text: expectedText, attachments: batch.attachments).content),
+        guard head.queuedBytes >= bytes,
+              parts == (try batch.content(preparedText: admission.preparedText)),
               records.count == 1 || records.allSatisfy({
                   $0.input.identity == .perCall
                       && $0.input.configurationRef.utf8.elementsEqual(first.input.configurationRef.utf8)
@@ -285,6 +330,7 @@ package struct JournalStoreChange: Sendable {
     package let mutation: JournalStoredMutation?
     package let records: [AgentJournalRecord]
     package let followUpAdmission: JournalFollowUpAdmission?
+    package let terminalFollowUps: [AgentFollowUpInput]
     /// Admits new work (a Run's input) rather than settling work already admitted. A store under
     /// pressure refuses new work first.
     package let admitsNewWork: Bool
@@ -295,7 +341,8 @@ package struct JournalStoreChange: Sendable {
     package init(sessionID: UUID, expectedRevision: UInt64, header: JournalSessionHeader,
                  messageStart: UInt64, messages: [JournalMessage],
                  mutation: JournalStoredMutation?, records: [AgentJournalRecord],
-                 followUpAdmission: JournalFollowUpAdmission? = nil, admitsNewWork: Bool = false,
+                 followUpAdmission: JournalFollowUpAdmission? = nil, terminalFollowUps: [AgentFollowUpInput] = [],
+                 admitsNewWork: Bool = false,
                  auditRecords: [AuditRecord] = [],
                  runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil) {
         self.sessionID = sessionID
@@ -306,6 +353,7 @@ package struct JournalStoreChange: Sendable {
         self.mutation = mutation
         self.records = records
         self.followUpAdmission = followUpAdmission
+        self.terminalFollowUps = terminalFollowUps
         self.admitsNewWork = admitsNewWork
         self.auditRecords = auditRecords
         self.runAdmission = runAdmission; self.runTerminal = runTerminal

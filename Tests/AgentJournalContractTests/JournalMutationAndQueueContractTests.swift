@@ -219,6 +219,30 @@ import Testing
     }
 
     @Test(arguments: JournalContractBackends.all)
+    func reopenedQueueKeepsBothReorderingAndIndividualDispatch(_ backend: any JournalBackendHarness) async throws {
+        let directory = tempDir("individual-followups")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try backend.create(at: directory, operationDomain: "individual-followups",
+            capabilities: .init(supportsPerCallFollowUps: true))
+        let sessionID = UUID()
+        for id in ["first", "second", "third"] {
+            _ = try await journal.enqueueFollowUp(.init(inputID: id, text: id, identity: .perCall,
+                configurationRef: "batch"), sessionID: sessionID)
+        }
+        let batch = try await journal.queuedFollowUpBatch(sessionID: sessionID, merging: ["batch"])
+        try await journal.markFollowUpsForIndividualDispatch(sessionID: sessionID, records: batch)
+        try await journal.reorderQueuedFollowUps(sessionID: sessionID, inputIDs: ["third", "first", "second"])
+        try await journal.close()
+        let reopened = try backend.open(at: directory)
+        let queued = try await reopened.queuedFollowUpBatch(sessionID: sessionID, merging: nil)
+        #expect(queued.map(\.input.inputID) == ["third", "first", "second"])
+        #expect(queued.map(\.ordinal) == [2, 0, 1])
+        #expect(queued.map(\.sendAlone) == [true, true, true])
+        #expect(try await reopened.queuedFollowUpBatch(sessionID: sessionID, merging: ["batch"]).map(\.input.inputID) == ["third"])
+        try await reopened.close()
+    }
+
+    @Test(arguments: JournalContractBackends.all)
     func batchedFollowUpsPreserveAttachmentsAndShareAFormalMessage(_ backend: any JournalBackendHarness) async throws {
         let directory = tempDir("batched-followups")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -235,14 +259,14 @@ import Testing
         try await journal.close()
         let reopened = try backend.open(at: directory, smallMaintenanceSegments: false)
         #expect(try await reopened.followUpInput(sessionID: sessionID, inputID: "a") == first)
-        let expected = ModelMessage.user([.text("first\n\nsecond"), .image(image)])
+        let expected = ModelMessage.user([.text("first"), .image(image), .text("\n\nsecond")])
         _ = try await reopened.appendStartupCheckpoint([
             .sessionCreated,
             .checkpoint(history: [expected], steeringIDs: []),
             .userMessage("first\n\nsecond")
         ], sessionID: sessionID, runID: runID, deadline: .now.advanced(by: .seconds(5)), durability: .durable,
            followUpInputIDs: ["a", "b"], runAdmission: try await reopened.prepareRunAdmission(
-                sessionID: sessionID, text: "first\n\nsecond", operationID: nil, correlation: nil, inputContent: [.text("first\n\nsecond"), .image(image)]))
+                sessionID: sessionID, text: "first\n\nsecond", operationID: nil, correlation: nil, inputContent: [.text("first"), .image(image), .text("\n\nsecond")]))
         let message = try #require(try await reopened.readMessages(sessionID: sessionID).first)
         #expect(message.message == expected)
         for inputID in ["a", "b"] {

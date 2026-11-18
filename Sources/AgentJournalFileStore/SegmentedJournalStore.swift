@@ -2743,6 +2743,11 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
                 queueHead = admitted.head
                 queueChanges = admitted.items
                 queueLinks = admitted.items.map { .init(ordinal: $0.ordinal, next: nil) }
+            } else if !change.terminalFollowUps.isEmpty {
+                let appended = try appendTerminalFollowUps(change)
+                queueHead = appended.head
+                queueChanges = appended.items
+                queueLinks = appended.items.map { .init(ordinal: $0.ordinal, next: $0.nextQueued) }
             }
             let admitsNewWork = change.admitsNewWork || change.followUpAdmission != nil
                 || change.records.contains { if case .pendingMutation = $0.event { return true }; return false }

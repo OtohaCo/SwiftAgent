@@ -76,6 +76,7 @@ private struct SQLiteFollowUpEnvelope: Codable {
     let attachments: [AgentRunInput.Attachment]?
     let replaces: [String]?
     let replacementGroup: [String]?
+    let sendAlone: Bool?
     let admittedRunID: UUID?
     let admittedFormalMessageID: UUID?
 
@@ -90,6 +91,7 @@ private struct SQLiteFollowUpEnvelope: Codable {
         attachments = value.input.attachments.isEmpty ? nil : value.input.attachments
         replaces = value.replaces
         replacementGroup = value.replacementGroup
+        sendAlone = value.sendAlone ? true : nil
         switch value.state {
         case .queued:
             stateKind = "queued"; admittedRunID = nil; admittedFormalMessageID = nil
@@ -132,7 +134,7 @@ private struct SQLiteFollowUpEnvelope: Codable {
             ordinal: ordinal,
             input: input,
             state: state,
-            nextQueued: nextQueued, replaces: replaces, replacementGroup: replacementGroup
+            nextQueued: nextQueued, replaces: replaces, replacementGroup: replacementGroup, sendAlone: sendAlone ?? false
         )
     }
 }
@@ -851,7 +853,7 @@ extension AgentJournalSQLiteStore {
 
             let queueUpdate = try change.followUpAdmission.map {
                 try admitFollowUps($0, in: change, storeID: store.storeID)
-            }
+            } ?? (change.terminalFollowUps.isEmpty ? nil : appendTerminalFollowUps(change))
 
             guard !store.supportsRunRecords || !change.admitsNewWork || change.runAdmission != nil else {
                 throw AgentJournalError.invalidRecord

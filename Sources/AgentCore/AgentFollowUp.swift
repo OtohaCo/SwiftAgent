@@ -183,14 +183,16 @@ package struct JournalStoredFollowUp: Equatable, Sendable {
     package var nextQueued: UInt64?
     package let replaces: [String]?
     package let replacementGroup: [String]?
+    package var sendAlone: Bool
 
     package init(sessionID: UUID, ordinal: UInt64, input: AgentFollowUpInput,
                  state: AgentFollowUpState, nextQueued: UInt64? = nil, replaces: [String]? = nil,
-                 replacementGroup: [String]? = nil) {
+                 replacementGroup: [String]? = nil, sendAlone: Bool = false) {
         self.sessionID = sessionID; self.ordinal = ordinal; self.input = input
         self.state = state; self.nextQueued = nextQueued
         self.replaces = replaces
         self.replacementGroup = replacementGroup
+        self.sendAlone = sendAlone
     }
 
     package func publicRecord(storeID: UUID) -> AgentFollowUpRecord {
@@ -246,7 +248,18 @@ struct FollowUpBatch {
 
     var text: String { inputs.map(\.text).joined(separator: "\n\n") }
     var attachments: [AgentRunInput.Attachment] { inputs.flatMap(\.attachments) }
-    func content() throws -> [ModelContent] {
-        try AgentRunInput(text: text, attachments: attachments).content
+    func content(preparedText: String? = nil) throws -> [ModelContent] {
+        let raw = text
+        let supplied = preparedText ?? raw
+        let complete = try AgentRunInput(text: supplied, attachments: attachments)
+        guard inputs.count > 1, !complete.attachments.isEmpty,
+              supplied.utf8.suffix(raw.utf8.count).elementsEqual(raw.utf8) else {
+            return complete.content
+        }
+        let prefix = String(decoding: supplied.utf8.dropLast(raw.utf8.count), as: UTF8.self)
+        return try inputs.enumerated().flatMap { offset, input in
+            try AgentRunInput(text: (offset == 0 ? prefix : "\n\n") + input.text,
+                              attachments: input.attachments).content
+        }
     }
 }

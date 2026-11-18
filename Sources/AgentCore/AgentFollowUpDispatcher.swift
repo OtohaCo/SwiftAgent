@@ -324,7 +324,6 @@ public actor AgentFollowUpDispatcher {
                 publishStatus()
             }
         }
-        var sendIndividually: Set<UInt64> = []
         while mode != .stopped {
             let observed = signalVersion
             var generation = attemptGeneration
@@ -351,15 +350,10 @@ public actor AgentFollowUpDispatcher {
                 guard attemptGeneration < .max else { throw AgentFollowUpError.staleDispatch }
                 attemptGeneration += 1
                 generation = attemptGeneration
-                let attempt = sendIndividually.contains(batch[0].ordinal) ? [batch[0]] : batch
                 do {
-                    try await dispatch(attempt, generation: generation)
-                    if mode == .running, attemptGeneration == generation {
-                        sendIndividually.remove(batch[0].ordinal)
-                    }
-                } catch AgentFollowUpError.retryFirstInput where attempt.count > 1 {
-                    guard mode == .running, attemptGeneration == generation else { continue }
-                    sendIndividually.formUnion(attempt.map(\.ordinal))
+                    try await dispatch(batch, generation: generation)
+                } catch AgentFollowUpError.retryFirstInput where batch.count > 1 {
+                    try await journal.markFollowUpsForIndividualDispatch(sessionID: sessionID, records: batch)
                 }
             } catch {
                 // A failure that unwinds a dispatch changed several fields at once: one status for all.

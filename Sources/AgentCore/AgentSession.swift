@@ -696,6 +696,13 @@ public actor AgentSession {
         return try await journal.replaceQueuedFollowUps(inputIDs, with: replacements, sessionID: id)
     }
 
+    /// Changes the ordering of the entire waiting queue without changing input IDs or payloads.
+    /// A queue changed by admission or withdrawal must be read before trying again.
+    public func reorderQueuedFollowUps(_ inputIDs: [String]) async throws {
+        guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
+        try await journal.reorderQueuedFollowUps(sessionID: id, inputIDs: inputIDs)
+    }
+
     private func validateFollowUpOperationID(_ input: AgentFollowUpInput) throws {
         if input.operationID?.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(AgentHostToolCall.operationPrefix) == true {
             throw AgentHostInvocationError.reservedOperationID
@@ -792,7 +799,7 @@ public actor AgentSession {
         guard dispatcherID == ownerID else { throw AgentFollowUpError.staleDispatch }
         let batch = FollowUpBatch(inputs: inputs.map(\.input))
         let text = configuration.preparedText ?? batch.text
-        let content = try AgentRunInput(text: text, attachments: batch.attachments).content
+        let content = try batch.content(preparedText: configuration.preparedText)
         return try await runInternal(text, using: configuration.model,
             capabilities: configuration.capabilities,
             expectedConversationRevision: configuration.expectedConversationRevision,
@@ -1356,16 +1363,32 @@ public actor AgentSession {
         guard activeRunID == runID else { return nil }
         pendingNativePublications.removeValue(forKey: runID)
         let unused = pending.filter { !appliedSteeringIDs.contains($0.id) }
+        let requeued = await control.selectedForRequeue(unused)
         let retained = await control.retainableSteering(unused)
         var failure = retained.isEmpty ? nil : await retain(retained, runID: runID)
+        if !requeued.isEmpty && (outcome == nil || journal?.supportsRunRecords != true) {
+            let retainFailure = await retain(requeued.map { $0.0 }, runID: runID)
+            failure = retainFailure ?? AgentJournalError.unsupportedFormat
+            await control.finishRequeue([], failure: failure)
+        }
         if let outcome, let journal, journal.supportsRunRecords {
             // Retained steering and all started checkpoint writes have resolved before this boundary.
             // A poisoned store rejects this operation; no retry or synthetic terminal is attempted.
             let terminal = AgentRunTerminal.from(failure.map { .failure($0) } ?? outcome)
             do {
                 let prepared = try await prepareCheckpoint(history)
-                try await journal.commitRunTerminal(history: prepared, sessionID: id, runID: runID, terminal: terminal)
-            } catch { failure = error }
+                for (_, input) in requeued { try validateFollowUpOperationID(input) }
+                try await journal.commitRunTerminal(history: prepared, sessionID: id, runID: runID,
+                    terminal: terminal, queuedInputs: requeued.map { $0.1 })
+                await control.finishRequeue(requeued.map { $0.0 }, failure: nil)
+            } catch {
+                failure = error
+                if !requeued.isEmpty {
+                    if case AgentJournalError.commitUnknown = error { steeringCommitUnknown = true }
+                    else { owedSteering.append(contentsOf: requeued.map { $0.0 }) }
+                    await control.finishRequeue([], failure: error)
+                }
+            }
         }
         completedTurnRevision = failure == nil && outcome.map({ AgentRunTerminal.from($0) == .completed }) == true
             ? conversationRevision : nil

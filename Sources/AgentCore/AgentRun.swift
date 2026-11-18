@@ -65,6 +65,12 @@ public struct AgentRun: Sendable {
         await control.cancel(returningSteering: ids)
     }
 
+    /// Cancels and queues the selected unused steering in the durable run terminal transaction.
+    /// A queued input is returned only once the transaction has been confirmed.
+    public func cancel(requeuingSteering inputs: [UUID: AgentFollowUpInput]) async throws -> [AgentReturnedSteering] {
+        try await control.cancel(requeuingSteering: inputs)
+    }
+
     /// Withdraws steering before the run has started taking it into history.
     public func withdrawSteering(_ id: UUID) async -> Bool { await control.withdrawSteering(id) }
     @discardableResult
@@ -107,6 +113,9 @@ actor AgentRunControl {
     private var finishing = false
     private var returningSteering: Set<UUID> = []
     private var returnedSteering: [AgentReturnedSteering] = []
+    private var requeuingSteering: [UUID: AgentFollowUpInput] = [:]
+    private var requeuedSteering: [AgentReturnedSteering] = []
+    private var requeueFailure: (any Error)?
     private var steering: [AgentSteeringInput] = []
     private var delivering: [AgentSteeringInput] = []
     private var waiters: [UUID: CheckedContinuation<AgentLoopResult, Error>] = [:]
@@ -137,6 +146,31 @@ actor AgentRunControl {
         return returned
     }
 
+    func cancel(requeuingSteering inputs: [UUID: AgentFollowUpInput]) async throws -> [AgentReturnedSteering] {
+        guard result == nil, !finishing else { return [] }
+        for (id, input) in inputs {
+            if let existing = requeuingSteering[id], !existing.matches(input) {
+                throw AgentFollowUpError.inputConflict
+            }
+        }
+        requeuingSteering.merge(inputs) { existing, _ in existing }
+        cancel()
+        await waitUntilCompleted()
+        if let requeueFailure { throw requeueFailure }
+        return requeuedSteering.filter { inputs[$0.id] != nil }
+    }
+
+    func selectedForRequeue(_ inputs: [AgentSteeringInput]) -> [(AgentSteeringInput, AgentFollowUpInput)] {
+        inputs.compactMap { steering in requeuingSteering[steering.id].map { (steering, $0) } }
+    }
+
+    func finishRequeue(_ steering: [AgentSteeringInput], failure: (any Error)?) {
+        requeueFailure = failure
+        if failure == nil {
+            requeuedSteering = steering.map { .init(id: $0.id, text: $0.text) }
+        }
+    }
+
     func withdrawSteering(_ id: UUID) -> Bool {
         guard !finishing, let index = steering.firstIndex(where: { $0.id == id }) else { return false }
         steering.remove(at: index)
@@ -144,8 +178,8 @@ actor AgentRunControl {
     }
 
     func retainableSteering(_ inputs: [AgentSteeringInput]) -> [AgentSteeringInput] {
-        returnedSteering = inputs.filter { returningSteering.contains($0.id) }.map { .init(id: $0.id, text: $0.text) }
-        return inputs.filter { !returningSteering.contains($0.id) }
+        returnedSteering = inputs.filter { returningSteering.contains($0.id) && requeuingSteering[$0.id] == nil }.map { .init(id: $0.id, text: $0.text) }
+        return inputs.filter { !returningSteering.contains($0.id) && requeuingSteering[$0.id] == nil }
     }
 
     /// The same Run cancellation owner reaches cooperative preflight work

@@ -32,6 +32,41 @@ struct AgentSteeringTests {
         ])
     }
 
+    @Test func unusedSteeringAndCancelledTerminalReopenTogether() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("steering-terminal-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "steering",
+            supportsPerCallFollowUps: true, supportsRunRecords: true)
+        let gate = ManualGate()
+        let entered = XCTestExpectation(description: "First model request")
+        let provider = ScriptedProvider { request, _ in
+            entered.fulfill()
+            await gate.wait()
+            return textResponse(request, "Done")
+        }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let session = try agent.makeSession(journal: journal)
+        let run = try await session.run("original")
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 10) == .completed)
+        let correction = try await run.steer("new direction")
+        let input = AgentFollowUpInput(inputID: correction.uuidString, text: "new direction",
+            identity: .perCall, configurationRef: "user")
+        let rescued = try await run.cancel(requeuingSteering: [correction: input])
+        await gate.open()
+        try await run.waitForDrain()
+        #expect(rescued.map(\.id) == [correction])
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let restored = try agent.makeSession(id: session.id, journal: reopened)
+        guard case .terminal = try await reopened.runRecord(sessionID: session.id, runID: run.id) else {
+            Issue.record("The terminal was not published")
+            return
+        }
+        #expect(try await restored.queuedFollowUps().map(\.inputID) == [correction.uuidString])
+        #expect(try await reopened.readMessages(sessionID: session.id).map(\.message) == [.user([.text("original")])])
+        try await reopened.close()
+    }
+
     @Test func correctionDuringModelTurnReplansBeforeExecutingStaleProposal() async throws {
         let gate = ManualGate()
         let entered = XCTestExpectation(description: "Model entered")

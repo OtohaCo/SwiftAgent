@@ -168,10 +168,11 @@ extension AgentJournal {
 }
 
 extension AgentJournal {
-    package func commitRunTerminal(history: [ModelMessage], sessionID: UUID, runID: UUID, terminal: AgentRunTerminal) throws {
+    package func commitRunTerminal(history: [ModelMessage], sessionID: UUID, runID: UUID, terminal: AgentRunTerminal,
+        queuedInputs: [AgentFollowUpInput] = []) throws {
         let store = try runRecordStore()
         let steeringIDs = try store.read { try $0.header(sessionID)?.steeringIDs ?? [] }
         try appendCheckpointForCurrentRun([.checkpoint(history: history, steeringIDs: steeringIDs), .runTerminated(terminal)],
-            sessionID: sessionID, runID: runID, durability: .durable, runTerminal: terminal)
+            sessionID: sessionID, runID: runID, durability: .durable, runTerminal: terminal, terminalFollowUps: queuedInputs)
     }
 }

@@ -501,7 +501,8 @@ public actor AgentJournal {
         runID: UUID,
         timestamp: Date = Date(),
         durability: AgentJournalDurability = .memory,
-        runTerminal: AgentRunTerminal? = nil
+        runTerminal: AgentRunTerminal? = nil,
+        terminalFollowUps: [AgentFollowUpInput] = []
     ) throws -> [AgentJournalRecord] {
         if let store {
             let current = try store.read { try $0.header(sessionID)?.lastRunID }
@@ -515,7 +516,7 @@ public actor AgentJournal {
             runID: runID,
             timestamp: timestamp,
             durability: durability,
-            allowMutationSettlement: false, runTerminal: runTerminal
+            allowMutationSettlement: false, runTerminal: runTerminal, terminalFollowUps: terminalFollowUps
         )
     }
 
@@ -533,6 +534,7 @@ public actor AgentJournal {
         preparedFollowUpText: String? = nil,
         auditDrafts: [JournalAuditDraft] = [],
         runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil,
+        terminalFollowUps: [AgentFollowUpInput] = [],
         expectedHistory: AgentJournalHistoryWitness? = nil,
         admitsNewWork: Bool? = nil, completedReminderProof: CompletedReminderTurnProof? = nil,
         inputCapture: JournalInputCapture? = nil
@@ -551,6 +553,11 @@ public actor AgentJournal {
             if case .contextHandoff(let value) = event { return value }; return nil
         }
         guard handoffs.count <= 1, handoffs.isEmpty || (controls.isEmpty && nativeTransitions.isEmpty && expectedHistory != nil && runID == nil) else { throw AgentJournalError.invalidRecord }
+        for input in terminalFollowUps {
+            try input.validate()
+            if input.identity == .perCall, !supportsPerCallFollowUps { throw AgentJournalError.unsupportedFormat }
+            try validateFollowUpAttachments(input)
+        }
         if let store {
             guard !closing else { throw AgentJournalError.storeClosed }
             let result = try writeStore(store) { view in
@@ -561,6 +568,7 @@ public actor AgentJournal {
                                   preparedFollowUpText: preparedFollowUpText,
                                   admitsNewWork: admitsNewWork ?? checkAdmissionCancellation,
                                   auditDrafts: auditDrafts, runAdmission: runAdmission, runTerminal: runTerminal,
+                                  terminalFollowUps: terminalFollowUps,
                                   expectedHistory: expectedHistory, completedReminderProof: completedReminderProof,
                                   inputCapture: inputCapture)
             }
@@ -1308,19 +1316,77 @@ extension AgentJournal {
         }
     }
 
+    package func reorderQueuedFollowUps(sessionID: UUID, inputIDs: [String]) async throws {
+        try Task.checkCancellation()
+        guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        guard !closing else { throw AgentJournalError.storeClosed }
+        try writeStore(store) { view in
+            var head = try view.followUpHead(sessionID: sessionID)
+            guard inputIDs.count == head.queuedCount else { throw AgentFollowUpError.staleDispatch }
+            guard Set(inputIDs.map { Data($0.utf8) }).count == inputIDs.count else {
+                throw AgentFollowUpError.invalidInput
+            }
+            let records = try inputIDs.map { id in
+                guard let input = try view.followUp(sessionID: sessionID, inputID: id), input.state == .queued else {
+                    throw AgentFollowUpError.staleDispatch
+                }
+                return input
+            }
+            guard let first = records.first, let last = records.last else { return }
+            let links = records.enumerated().compactMap { offset, record -> JournalFollowUpLink? in
+                let next = offset + 1 < records.count ? records[offset + 1].ordinal : nil
+                return next == record.nextQueued ? nil : .init(ordinal: record.ordinal, next: next)
+            }
+            guard !links.isEmpty || head.firstQueued != first.ordinal else { return }
+            guard head.revision < .max else { throw AgentJournalError.invalidRecord }
+            let prior = head.revision
+            head.revision += 1
+            head.firstQueued = first.ordinal
+            head.lastQueued = last.ordinal
+            try view.publishFollowUp(.init(sessionID: sessionID, expectedRevision: prior,
+                head: head, records: [], links: links))
+        }
+        scheduleMaintenanceIfNeeded()
+        if let notify = dispatcherLeases[sessionID]?.notify { await notify() }
+    }
+
+    package func markFollowUpsForIndividualDispatch(sessionID: UUID, records: [JournalStoredFollowUp]) throws {
+        guard let store else { throw AgentFollowUpError.durableJournalRequired }
+        guard !closing else { throw AgentJournalError.storeClosed }
+        try writeStore(store) { view in
+            var head = try view.followUpHead(sessionID: sessionID)
+            guard head.revision < .max else { throw AgentJournalError.invalidRecord }
+            let changed = try records.compactMap { expected -> JournalStoredFollowUp? in
+                guard var record = try view.followUp(sessionID: sessionID, inputID: expected.input.inputID),
+                      record.ordinal == expected.ordinal, record.state == .queued, !record.sendAlone else { return nil }
+                record.sendAlone = true
+                return record
+            }
+            guard !changed.isEmpty else { return }
+            let prior = head.revision
+            head.revision += 1
+            try view.publishFollowUp(.init(sessionID: sessionID, expectedRevision: prior,
+                head: head, records: changed))
+        }
+        scheduleMaintenanceIfNeeded()
+    }
+
     package func queuedFollowUpBatch(sessionID: UUID, merging: Set<String>?) throws -> [JournalStoredFollowUp] {
         guard let store else { throw AgentFollowUpError.durableJournalRequired }
         return try store.read { view in
             let head = try view.followUpHead(sessionID: sessionID)
             var next = head.firstQueued
             var records: [JournalStoredFollowUp] = []
+            var visited: Set<UInt64> = []
             var textBytes = 0, attachments = 0
             while let ordinal = next, records.count < head.queuedCount {
-                guard let record = try view.followUps(sessionID: sessionID, after: ordinal, limit: 1).first,
-                      record.ordinal == ordinal, record.state == .queued else { throw AgentJournalError.invalidRecord }
+                guard visited.insert(ordinal).inserted,
+                      let record = try view.followUps(sessionID: sessionID, after: ordinal, limit: 1).first,
+                      record.ordinal == ordinal, record.state == .queued,
+                      record.nextQueued.map({ !visited.contains($0) }) ?? true else { throw AgentJournalError.invalidRecord }
                 let input = record.input
                 if let first = records.first, merging != nil {
-                    guard input.identity == .perCall,
+                    guard !record.sendAlone, input.identity == .perCall,
                           input.configurationRef.utf8.elementsEqual(first.input.configurationRef.utf8),
                           textBytes + 2 + input.text.utf8.count <= AgentFollowUpInput.maxTextBytes,
                           attachments + input.attachments.count <= 20 else { break }
@@ -1328,8 +1394,11 @@ extension AgentJournal {
                 textBytes += input.text.utf8.count + (records.isEmpty ? 0 : 2)
                 attachments += input.attachments.count
                 records.append(record)
-                if let merging, input.identity != .perCall || !merging.contains(input.configurationRef) { break }
+                if let merging, record.sendAlone || input.identity != .perCall || !merging.contains(input.configurationRef) { break }
                 next = record.nextQueued
+            }
+            if merging == nil, records.count != head.queuedCount || next != nil {
+                throw AgentJournalError.invalidRecord
             }
             return records
         }
@@ -1405,7 +1474,7 @@ extension AgentJournal {
             var head = try view.followUpHead(sessionID: sessionID)
             let oldRevision = head.revision
             guard head.revision < .max, head.queuedCount > 0,
-                  head.queuedBytes >= entry.input.text.utf8.count else { throw AgentJournalError.invalidRecord }
+                  head.queuedBytes >= entry.input.byteCount else { throw AgentJournalError.invalidRecord }
             var links: [JournalFollowUpLink] = []
             if head.firstQueued == entry.ordinal {
                 head.firstQueued = entry.nextQueued
@@ -1485,6 +1554,7 @@ extension AgentJournal {
         followUpInputIDs: [String] = [], preparedFollowUpText: String? = nil, admitsNewWork: Bool = false,
         auditDrafts: [JournalAuditDraft] = [],
         runAdmission: JournalRunAdmission? = nil, runTerminal: AgentRunTerminal? = nil,
+        terminalFollowUps: [AgentFollowUpInput] = [],
         expectedHistory: AgentJournalHistoryWitness? = nil, completedReminderProof: CompletedReminderTurnProof? = nil,
         inputCapture: JournalInputCapture? = nil
     ) throws -> [AgentJournalRecord] {
@@ -1660,7 +1730,7 @@ extension AgentJournal {
                                             header: nextHeader,
                                             messageStart: messageStart, messages: changedMessages,
                                             mutation: mutation, records: committed,
-                                            followUpAdmission: admission,
+                                            followUpAdmission: admission, terminalFollowUps: terminalFollowUps,
                                             admitsNewWork: admitsNewWork, auditRecords: audits,
                                             runAdmission: runAdmission, runTerminal: runTerminal))
         if admitsNewWork, let input = changedMessages.last, case .user = input.value { inputCapture?.messageID = input.id }
