@@ -2739,39 +2739,10 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
             var queueChanges: [JournalStoredFollowUp] = []
             var queueLinks: [JournalFollowUpLink] = []
             if let admission = change.followUpAdmission {
-                let current = try followUpHead(sessionID: change.sessionID)
-                let prior = try followUp(sessionID: change.sessionID, inputID: admission.inputID)
-                if let prior, prior.state == .withdrawn {
-                    throw JournalFollowUpAdmissionError.withdrawn(
-                        storeID: store.storeID, sessionID: change.sessionID,
-                        inputID: admission.inputID, ordinal: prior.ordinal)
-                }
-                guard current.revision == admission.expectedQueueRevision,
-                      current.queuedCount > 0, current.firstQueued != nil,
-                      let prior,
-                      prior.state == .queued, current.firstQueued == prior.ordinal,
-                      let runID = change.records.first?.runID,
-                      change.records.allSatisfy({ $0.runID == runID }),
-                      let last = change.messages.last,
-                      case .user(let parts) = last.value, parts.count == 1,
-                      case .text(let text) = parts[0],
-                      text.utf8.elementsEqual(prior.input.text.utf8),
-                      current.queuedBytes >= text.utf8.count else {
-                    throw AgentJournalError.concurrentWriter
-                }
-                var updated = current
-                updated.revision += 1
-                updated.queuedCount -= 1
-                updated.queuedBytes -= text.utf8.count
-                updated.firstQueued = prior.nextQueued
-                updated.lastAdmitted = prior.ordinal
-                if updated.queuedCount == 0 { updated.lastQueued = nil }
-                var admitted = prior
-                admitted.state = .admitted(runID: runID, formalMessageID: last.id)
-                admitted.nextQueued = nil
-                queueHead = updated
-                queueChanges = [admitted]
-                queueLinks = [.init(ordinal: prior.ordinal, next: nil)]
+                let admitted = try admitFollowUps(admission, in: change, storeID: store.storeID)
+                queueHead = admitted.head
+                queueChanges = admitted.items
+                queueLinks = admitted.items.map { .init(ordinal: $0.ordinal, next: nil) }
             }
             let admitsNewWork = change.admitsNewWork || change.followUpAdmission != nil
                 || change.records.contains { if case .pendingMutation = $0.event { return true }; return false }
@@ -2823,8 +2794,8 @@ private final class SegmentedJournalStore: JournalStore, @unchecked Sendable {
 
         func publishFollowUp(_ change: JournalFollowUpChange) throws {
             guard store.supportsPerCallFollowUps || change.records.allSatisfy({ $0.input.identity != .perCall }) else { throw AgentJournalError.unsupportedFormat }
-            guard writable, !didPublish, (0...2).contains(change.records.count),
-                  change.links.count <= 2 else {
+            guard writable, !didPublish, change.records.count <= 129,
+                  change.links.count <= 129 else {
                 throw AgentJournalError.invalidRecord
             }
             let current = try followUpHead(sessionID: change.sessionID)

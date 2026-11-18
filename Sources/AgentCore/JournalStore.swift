@@ -109,6 +109,49 @@ public struct JournalStoreStatus: Sendable, Equatable {
     }
 }
 
+package extension JournalStoreView {
+    func admitFollowUps(_ admission: JournalFollowUpAdmission, in change: JournalStoreChange,
+                        storeID: UUID) throws -> (head: JournalFollowUpHead, items: [JournalStoredFollowUp]) {
+        var head = try followUpHead(sessionID: change.sessionID)
+        let records = try admission.inputIDs.compactMap { try followUp(sessionID: change.sessionID, inputID: $0) }
+        if let withdrawn = records.first(where: { $0.state == .withdrawn }) {
+            throw JournalFollowUpAdmissionError.withdrawn(storeID: storeID, sessionID: change.sessionID,
+                inputID: withdrawn.input.inputID, ordinal: withdrawn.ordinal)
+        }
+        guard head.revision == admission.expectedQueueRevision, head.revision < .max,
+              records.count == admission.inputIDs.count, records.count <= head.queuedCount,
+              let first = records.first, head.firstQueued == first.ordinal,
+              let runID = change.records.first?.runID, change.records.allSatisfy({ $0.runID == runID }),
+              let last = change.messages.last, case .user(let parts) = last.value,
+              case .text(let text)? = parts.first else { throw AgentJournalError.concurrentWriter }
+        var expected = head.firstQueued
+        for record in records {
+            guard record.ordinal == expected, record.state == .queued else { throw AgentJournalError.concurrentWriter }
+            expected = record.nextQueued
+        }
+        let batch = FollowUpBatch(inputs: records.map(\.input))
+        let bytes = records.reduce(0) { $0 + $1.input.byteCount }
+        guard head.queuedBytes >= bytes, text.utf8.elementsEqual(batch.text.utf8),
+              parts == (try batch.content()),
+              records.count == 1 || records.allSatisfy({
+                  $0.input.identity == .perCall
+                      && $0.input.configurationRef.utf8.elementsEqual(first.input.configurationRef.utf8)
+              }) else { throw AgentJournalError.concurrentWriter }
+        head.revision += 1
+        head.queuedCount -= records.count
+        head.queuedBytes -= bytes
+        head.firstQueued = expected
+        head.lastAdmitted = first.ordinal
+        if head.queuedCount == 0 { head.lastQueued = nil }
+        return (head, records.map {
+            var admitted = $0
+            admitted.state = .admitted(runID: runID, formalMessageID: last.id)
+            admitted.nextQueued = nil
+            return admitted
+        })
+    }
+}
+
 package protocol JournalStoreView: AnyObject {
     func runRecord(sessionID: UUID, runID: UUID) throws -> JournalStoredRun?
     func runRecord(sessionID: UUID, correlationKey: String) throws -> JournalStoredRun?

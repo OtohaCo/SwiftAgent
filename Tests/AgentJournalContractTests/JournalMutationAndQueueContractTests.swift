@@ -196,6 +196,40 @@ import Testing
     }
 
     @Test(arguments: JournalContractBackends.all)
+    func batchedFollowUpsPreserveAttachmentsAndShareAFormalMessage(_ backend: any JournalBackendHarness) async throws {
+        let directory = tempDir("batched-followups")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try backend.create(at: directory, operationDomain: "batched-followups",
+            smallMaintenanceSegments: false, capabilities: .init(supportsImageContent: true))
+        let bytes = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOo0AAAAASUVORK5CYII="))
+        let image = try ModelImage(data: bytes, description: "The attached example")
+        let sessionID = UUID(), runID = UUID()
+        let first = AgentFollowUpInput(inputID: "a", text: "first", identity: .perCall, configurationRef: "batch",
+                                       attachments: [.image(image)])
+        let second = AgentFollowUpInput(inputID: "b", text: "second", identity: .perCall, configurationRef: "batch")
+        _ = try await journal.enqueueFollowUp(first, sessionID: sessionID)
+        _ = try await journal.enqueueFollowUp(second, sessionID: sessionID)
+        try await journal.close()
+        let reopened = try backend.open(at: directory, smallMaintenanceSegments: false)
+        #expect(try await reopened.followUpInput(sessionID: sessionID, inputID: "a") == first)
+        let expected = ModelMessage.user([.text("first\n\nsecond"), .image(image)])
+        _ = try await reopened.appendStartupCheckpoint([
+            .sessionCreated,
+            .checkpoint(history: [expected], steeringIDs: []),
+            .userMessage("first\n\nsecond")
+        ], sessionID: sessionID, runID: runID, deadline: .now.advanced(by: .seconds(5)), durability: .durable,
+           followUpInputIDs: ["a", "b"], runAdmission: try await reopened.prepareRunAdmission(
+                sessionID: sessionID, text: "first\n\nsecond", operationID: nil, correlation: nil, inputContent: [.text("first\n\nsecond"), .image(image)]))
+        let message = try #require(try await reopened.readMessages(sessionID: sessionID).first)
+        #expect(message.message == expected)
+        for inputID in ["a", "b"] {
+            #expect(try await reopened.followUp(sessionID: sessionID, inputID: inputID)?.state ==
+                .admitted(runID: runID, formalMessageID: message.id))
+        }
+        try await reopened.close()
+    }
+
+    @Test(arguments: JournalContractBackends.all)
     func runtimeAdmissionRejectionMarkersSurviveMaintenanceAndReopen(
         _ backend: any JournalBackendHarness
     ) async throws {

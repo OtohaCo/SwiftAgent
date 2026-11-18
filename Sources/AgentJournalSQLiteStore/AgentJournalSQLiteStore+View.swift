@@ -68,10 +68,13 @@ private struct SQLiteFollowUpEnvelope: Codable {
     let sessionID: UUID
     let ordinal: UInt64
     let inputID: String
-    let text: String
+    let text: String?
+    let richText: String?
     let operationID: String?
     let configurationRef: String
     let stateKind: String
+    let attachments: [AgentRunInput.Attachment]?
+    let replaces: [String]?
     let admittedRunID: UUID?
     let admittedFormalMessageID: UUID?
 
@@ -79,9 +82,12 @@ private struct SQLiteFollowUpEnvelope: Codable {
         sessionID = value.sessionID
         ordinal = value.ordinal
         inputID = value.input.inputID
-        text = value.input.text
+        text = value.input.attachments.isEmpty ? value.input.text : nil
+        richText = value.input.attachments.isEmpty ? nil : value.input.text
         operationID = value.input.operationID
         configurationRef = value.input.configurationRef
+        attachments = value.input.attachments.isEmpty ? nil : value.input.attachments
+        replaces = value.replaces
         switch value.state {
         case .queued:
             stateKind = "queued"; admittedRunID = nil; admittedFormalMessageID = nil
@@ -93,13 +99,18 @@ private struct SQLiteFollowUpEnvelope: Codable {
     }
 
     func toStoredFollowUp(nextQueued: UInt64?) throws -> JournalStoredFollowUp {
+        guard let body = text ?? richText,
+              (text != nil) == (attachments?.isEmpty != false), (text == nil) == (richText != nil) else {
+            throw AgentJournalError.invalidRecord
+        }
         let identity: AgentOperationIdentity = operationID.map { .operation($0) } ?? .perCall
         let input = AgentFollowUpInput(
             inputID: inputID,
-            text: text,
+            text: body,
             identity: identity,
-            configurationRef: configurationRef
+            configurationRef: configurationRef, attachments: attachments ?? []
         )
+        try input.validate()
         let state: AgentFollowUpState
         switch stateKind {
         case "queued":
@@ -119,7 +130,7 @@ private struct SQLiteFollowUpEnvelope: Codable {
             ordinal: ordinal,
             input: input,
             state: state,
-            nextQueued: nextQueued
+            nextQueued: nextQueued, replaces: replaces
         )
     }
 }
@@ -836,45 +847,8 @@ extension AgentJournalSQLiteStore {
             var finalHeader = change.header
             finalHeader.historyHead = hasCheckpoint ? nextSeq : priorHeader?.historyHead
 
-            var queueUpdate: (head: JournalFollowUpHead, item: JournalStoredFollowUp)?
-            if let admission = change.followUpAdmission {
-                let currentHead = try followUpHead(sessionID: change.sessionID)
-                let priorItem = try followUp(sessionID: change.sessionID, inputID: admission.inputID)
-                if let priorItem, priorItem.state == .withdrawn {
-                    throw JournalFollowUpAdmissionError.withdrawn(
-                        storeID: store.storeID,
-                        sessionID: change.sessionID,
-                        inputID: admission.inputID,
-                        ordinal: priorItem.ordinal
-                    )
-                }
-                guard currentHead.revision == admission.expectedQueueRevision,
-                      currentHead.queuedCount > 0,
-                      currentHead.firstQueued != nil,
-                      let priorItem,
-                      priorItem.state == .queued,
-                      currentHead.firstQueued == priorItem.ordinal,
-                      let runID = change.records.first?.runID,
-                      change.records.allSatisfy({ $0.runID == runID }),
-                      let lastMsg = change.messages.last,
-                      case .user(let parts) = lastMsg.value,
-                      parts.count == 1,
-                      case .text(let text) = parts[0],
-                      text.utf8.elementsEqual(priorItem.input.text.utf8),
-                      currentHead.queuedBytes >= text.utf8.count else {
-                    throw AgentJournalError.concurrentWriter
-                }
-                var updatedHead = currentHead
-                updatedHead.revision += 1
-                updatedHead.queuedCount -= 1
-                updatedHead.queuedBytes -= text.utf8.count
-                updatedHead.firstQueued = priorItem.nextQueued
-                updatedHead.lastAdmitted = priorItem.ordinal
-                if updatedHead.queuedCount == 0 { updatedHead.lastQueued = nil }
-                var admittedItem = priorItem
-                admittedItem.state = .admitted(runID: runID, formalMessageID: lastMsg.id)
-                admittedItem.nextQueued = nil
-                queueUpdate = (updatedHead, admittedItem)
+            let queueUpdate = try change.followUpAdmission.map {
+                try admitFollowUps($0, in: change, storeID: store.storeID)
             }
 
             guard !store.supportsRunRecords || !change.admitsNewWork || change.runAdmission != nil else {
@@ -1055,7 +1029,7 @@ extension AgentJournalSQLiteStore {
             // Apply follow-up admission if present.
             if let queueUpdate {
                 try writeFollowUpHead(queueUpdate.head, sessionID: change.sessionID)
-                try writeFollowUpItem(queueUpdate.item)
+                for item in queueUpdate.items { try writeFollowUpItem(item) }
             }
 
             // Insert run admission or update run terminal.
@@ -1137,7 +1111,7 @@ extension AgentJournalSQLiteStore {
             guard store.supportsPerCallFollowUps || change.records.allSatisfy({ $0.input.identity != .perCall }) else {
                 throw AgentJournalError.unsupportedFormat
             }
-            guard writable, !didPublish, (0...2).contains(change.records.count), change.links.count <= 2 else {
+            guard writable, !didPublish, change.records.count <= 129, change.links.count <= 129 else {
                 throw AgentJournalError.invalidRecord
             }
             let current = try followUpHead(sessionID: change.sessionID)

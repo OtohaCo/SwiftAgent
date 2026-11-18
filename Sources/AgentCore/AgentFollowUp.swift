@@ -1,3 +1,4 @@
+import AgentModels
 import Foundation
 
 /// Mutation identity for one Run. This is not authorization or automatic recovery.
@@ -29,17 +30,39 @@ public struct AgentFollowUpInput: Equatable, Sendable {
     /// nil for perCall; the exact caller ID for operation mode.
     public var operationID: String? { identity.operationID }
     public let configurationRef: String
+    public let attachments: [AgentRunInput.Attachment]
 
     public init(inputID: String, text: String, operationID: String, configurationRef: String) {
-        self.inputID = inputID
-        self.text = text
-        self.identity = .operation(operationID)
-        self.configurationRef = configurationRef
+        self.init(inputID: inputID, text: text, operationID: operationID, configurationRef: configurationRef, attachments: [])
     }
 
     public init(inputID: String, text: String, identity: AgentOperationIdentity, configurationRef: String) {
+        self.init(inputID: inputID, text: text, identity: identity, configurationRef: configurationRef, attachments: [])
+    }
+
+    public init(inputID: String, text: String, operationID: String, configurationRef: String,
+                attachments: [AgentRunInput.Attachment]) {
+        self.init(inputID: inputID, text: text, identity: .operation(operationID),
+                  configurationRef: configurationRef, attachments: attachments)
+    }
+
+    public init(inputID: String, text: String, identity: AgentOperationIdentity, configurationRef: String,
+                attachments: [AgentRunInput.Attachment]) {
         self.inputID = inputID; self.text = text
         self.identity = identity; self.configurationRef = configurationRef
+        self.attachments = attachments
+    }
+
+    package static let maxTextBytes = 256 * 1024
+    package static let maxQueueBytes = 8 * 1024 * 1024
+
+    package var byteCount: Int {
+        text.utf8.count + attachments.reduce(0) { sum, part in
+            switch part {
+            case .image(let image): sum + image.byteCount + image.description.utf8.count
+            case .file(let file): sum + file.uri.absoluteString.utf8.count + file.textSubstitute.utf8.count
+            }
+        }
     }
 
     package func validate() throws {
@@ -48,7 +71,8 @@ public struct AgentFollowUpInput: Equatable, Sendable {
         }
         guard !inputID.isEmpty, inputID.utf8.count <= 128,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              text.utf8.count <= 256 * 1024,
+              text.utf8.count <= Self.maxTextBytes,
+              attachments.count <= 20, byteCount <= Self.maxQueueBytes,
               !configurationRef.isEmpty, configurationRef.utf8.count <= 128,
               !inputID.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
               !configurationRef.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
@@ -61,6 +85,7 @@ public struct AgentFollowUpInput: Equatable, Sendable {
             && text.utf8.elementsEqual(other.text.utf8)
             && identity.matches(other.identity)
             && configurationRef.utf8.elementsEqual(other.configurationRef.utf8)
+            && attachments == other.attachments
     }
 }
 
@@ -151,11 +176,13 @@ package struct JournalStoredFollowUp: Equatable, Sendable {
     package var input: AgentFollowUpInput
     package var state: AgentFollowUpState
     package var nextQueued: UInt64?
+    package let replaces: [String]?
 
     package init(sessionID: UUID, ordinal: UInt64, input: AgentFollowUpInput,
-                 state: AgentFollowUpState, nextQueued: UInt64? = nil) {
+                 state: AgentFollowUpState, nextQueued: UInt64? = nil, replaces: [String]? = nil) {
         self.sessionID = sessionID; self.ordinal = ordinal; self.input = input
         self.state = state; self.nextQueued = nextQueued
+        self.replaces = replaces
     }
 
     package func publicRecord(storeID: UUID) -> AgentFollowUpRecord {
@@ -193,10 +220,22 @@ package struct JournalFollowUpLink: Sendable {
 }
 
 package struct JournalFollowUpAdmission: Sendable {
-    package let inputID: String
+    package let inputIDs: [String]
+    package var inputID: String { inputIDs[0] }
     package let expectedQueueRevision: UInt64
 
-    package init(inputID: String, expectedQueueRevision: UInt64) {
-        self.inputID = inputID; self.expectedQueueRevision = expectedQueueRevision
+    package init(inputIDs: [String], expectedQueueRevision: UInt64) {
+        precondition(!inputIDs.isEmpty)
+        self.inputIDs = inputIDs; self.expectedQueueRevision = expectedQueueRevision
+    }
+}
+
+struct FollowUpBatch {
+    let inputs: [AgentFollowUpInput]
+
+    var text: String { inputs.map(\.text).joined(separator: "\n\n") }
+    var attachments: [AgentRunInput.Attachment] { inputs.flatMap(\.attachments) }
+    func content() throws -> [ModelContent] {
+        try AgentRunInput(text: text, attachments: attachments).content
     }
 }

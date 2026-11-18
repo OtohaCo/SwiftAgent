@@ -8,10 +8,13 @@ struct DiskFollowUpV2: Codable {
     let sessionID: UUID
     let ordinal: UInt64
     let inputID: String
-    let text: String
+    let text: String?
+    let richText: String?
     let operationID: String?
     let identityMode: String?
     let configurationRef: String
+    let attachments: [AgentRunInput.Attachment]?
+    let replaces: [String]?
     let status: String
     let runID: UUID?
     let formalMessageID: UUID?
@@ -20,10 +23,13 @@ struct DiskFollowUpV2: Codable {
         sessionID = value.sessionID
         ordinal = value.ordinal
         inputID = value.input.inputID
-        text = value.input.text
+        text = value.input.attachments.isEmpty ? value.input.text : nil
+        richText = value.input.attachments.isEmpty ? nil : value.input.text
         operationID = value.input.operationID
         identityMode = value.input.identity == .perCall ? "perCall" : nil
         configurationRef = value.input.configurationRef
+        attachments = value.input.attachments.isEmpty ? nil : value.input.attachments
+        replaces = value.replaces
         switch value.state {
         case .queued: status = "queued"; runID = nil; formalMessageID = nil
         case .withdrawn: status = "withdrawn"; runID = nil; formalMessageID = nil
@@ -43,8 +49,12 @@ struct DiskFollowUpV2: Codable {
             identity = .perCall
         default: throw AgentJournalError.unsupportedFormat
         }
-        let input = AgentFollowUpInput(inputID: inputID, text: text,
-                                      identity: identity, configurationRef: configurationRef)
+        guard let body = text ?? richText,
+              (text != nil) == (attachments?.isEmpty != false), (text == nil) == (richText != nil) else {
+            throw AgentJournalError.invalidRecord
+        }
+        let input = AgentFollowUpInput(inputID: inputID, text: body,
+                                      identity: identity, configurationRef: configurationRef, attachments: attachments ?? [])
         try input.validate()
         let state: AgentFollowUpState
         switch status {
@@ -64,7 +74,7 @@ struct DiskFollowUpV2: Codable {
         default: throw AgentJournalError.unsupportedFormat
         }
         return JournalStoredFollowUp(sessionID: sessionID, ordinal: ordinal,
-                                     input: input, state: state)
+                                     input: input, state: state, replaces: replaces)
     }
 }
 

@@ -225,7 +225,7 @@ public actor AgentSession {
         operationID: String?,
         correlation: AgentRunCorrelation? = nil,
         dispatchOwnerID: UUID? = nil,
-        followUpInputID: String? = nil, contextControls: AgentRunContextControls? = nil,
+        followUpInputIDs: [String] = [], contextControls: AgentRunContextControls? = nil,
         inputContent: [ModelContent]? = nil
     ) async throws -> AgentRun {
         try Task.checkCancellation()
@@ -299,7 +299,7 @@ public actor AgentSession {
                         budget: runBudget,
                         operationID: operationID,
                         startupID: startupID,
-                        followUpInputID: followUpInputID, runAdmission: runAdmission, contextControls: contextControls, inputContent: inputContent
+                        followUpInputIDs: followUpInputIDs, runAdmission: runAdmission, contextControls: contextControls, inputContent: inputContent
                     )
                     startupReservations.removeValue(forKey: startupID)
                     startupFinished()
@@ -674,6 +674,18 @@ public actor AgentSession {
     /// Receives a future input without changing the current Run or formal
     /// conversation. The durable store, not this actor's memory, confirms it.
     public func enqueueFollowUp(_ input: AgentFollowUpInput) async throws -> AgentFollowUpRecord {
+        let journal = try await followUpJournal(for: input)
+        return try await journal.enqueueFollowUp(input, sessionID: id)
+    }
+
+    /// Withdraws the named waiting inputs and appends their replacement in one commit.
+    /// The exact same edit can be retried by replacement ID after an interrupted write.
+    public func replaceQueuedFollowUps(_ inputIDs: [String], with replacement: AgentFollowUpInput) async throws -> AgentFollowUpRecord {
+        let journal = try await followUpJournal(for: replacement)
+        return try await journal.replaceQueuedFollowUps(inputIDs, with: replacement, sessionID: id)
+    }
+
+    private func followUpJournal(for input: AgentFollowUpInput) async throws -> AgentJournal {
         if input.operationID?.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(AgentHostToolCall.operationPrefix) == true {
             throw AgentHostInvocationError.reservedOperationID
         }
@@ -683,7 +695,7 @@ public actor AgentSession {
             try await journal?.validateAuditProposalReference(authorization.relatedProposalID, sessionID: id)
         }
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
-        return try await journal.enqueueFollowUp(input, sessionID: id)
+        return journal
     }
 
     public func followUp(inputID: String) async throws -> AgentFollowUpRecord? {
@@ -692,8 +704,13 @@ public actor AgentSession {
     }
 
     public func followUpText(inputID: String) async throws -> String {
+        try await followUpInput(inputID: inputID).text
+    }
+
+    /// Returns the original immutable payload, including after admission or withdrawal.
+    public func followUpInput(inputID: String) async throws -> AgentFollowUpInput {
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
-        return try await journal.followUpText(sessionID: id, inputID: inputID)
+        return try await journal.followUpInput(sessionID: id, inputID: inputID)
     }
 
     /// `after` is exclusive. `nil` includes ordinal 0; continue with the last
@@ -714,6 +731,18 @@ public actor AgentSession {
                                       resolver: any AgentFollowUpResolver,
                                       onRun: (@Sendable (AgentFollowUpRecord, AgentRun) async -> Void)? = nil
     ) async throws -> AgentFollowUpDispatcher {
+        let observe: (@Sendable ([AgentFollowUpRecord], AgentRun) async -> Void)?
+        if let onRun { observe = { records, run in await onRun(records[0], run) } }
+        else { observe = nil }
+        return try await startBatchedFollowUpDispatch(policy: policy, merging: [], resolver: resolver, onRun: observe)
+    }
+
+    /// Merges contiguous per-call inputs that share an explicitly selected configuration
+    /// reference, retaining one withdrawal identity per input until admission.
+    public func startBatchedFollowUpDispatch(policy: AgentFollowUpDispatchPolicy, merging: Set<String>,
+                                            resolver: any AgentFollowUpResolver,
+                                            onRun: (@Sendable ([AgentFollowUpRecord], AgentRun) async -> Void)? = nil
+    ) async throws -> AgentFollowUpDispatcher {
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
         guard !dispatchStarting, dispatcherID == nil else { throw AgentFollowUpError.alreadyDispatching }
         guard !startingRun else { throw AgentSessionError.runInProgress }
@@ -724,7 +753,7 @@ public actor AgentSession {
         let priorRun = (activeRunID ?? drainingRunID).flatMap { runsByRunID[$0] }
         let handle = AgentFollowUpDispatcher(session: self, journal: journal, sessionID: id,
                                              ownerID: ownerID, policy: policy, resolver: resolver,
-                                             initialRun: priorRun, onRun: onRun)
+                                             initialRun: priorRun, merging: merging, onRun: onRun)
         try await journal.acquireDispatcherLease(sessionID: id, owner: ownerID,
                                                  allowExistingRun: priorRun != nil,
                                                  notify: { await handle.signal() })
@@ -734,15 +763,17 @@ public actor AgentSession {
         return handle
     }
 
-    package func startQueuedFollowUp(_ input: JournalStoredFollowUp,
+    package func startQueuedFollowUp(_ inputs: [JournalStoredFollowUp],
                                      using configuration: AgentFollowUpConfiguration,
                                      ownerID: UUID, budget: AgentBudget) async throws -> AgentRun {
         guard dispatcherID == ownerID else { throw AgentFollowUpError.staleDispatch }
-        return try await runInternal(input.input.text, using: configuration.model,
+        let batch = FollowUpBatch(inputs: inputs.map(\.input))
+        return try await runInternal(batch.text, using: configuration.model,
             capabilities: configuration.capabilities,
             expectedConversationRevision: configuration.expectedConversationRevision,
-            budget: budget, operationID: input.input.operationID,
-            dispatchOwnerID: ownerID, followUpInputID: input.input.inputID, contextControls: configuration.contextControls)
+            budget: budget, operationID: inputs[0].input.operationID,
+            dispatchOwnerID: ownerID, followUpInputIDs: inputs.map(\.input.inputID),
+            contextControls: configuration.contextControls, inputContent: batch.content())
     }
 
     package func waitForQueuedStartupExit(ownerID: UUID) async {
@@ -830,7 +861,7 @@ public actor AgentSession {
         budget: AgentBudget,
         operationID: String?,
         startupID: UUID,
-        followUpInputID: String? = nil,
+        followUpInputIDs: [String] = [],
         runAdmission: JournalRunAdmission? = nil, contextControls: AgentRunContextControls? = nil,
         inputContent: [ModelContent]
     ) async throws -> AgentRun {
@@ -966,7 +997,7 @@ public actor AgentSession {
                     runID: runID,
                     deadline: budget.deadline,
                     durability: journal.storage == .durable ? .durable : .memory,
-                    followUpInputID: followUpInputID, runAdmission: runAdmission,
+                    followUpInputIDs: followUpInputIDs, runAdmission: runAdmission,
                     expectedHistory: persistentHistoryWitness
                 ).inputMessageID
             } catch AgentJournalStartupAdmissionError.deadlineExceeded {
@@ -989,7 +1020,7 @@ public actor AgentSession {
         // A slow Host observer must not accumulate an unbounded queue of
         // transient progress while the durable conversation continues.
         let channel = AsyncStream<AgentEvent>.makeStream(bufferingPolicy:
-            followUpInputID == nil ? .unbounded : .bufferingNewest(256))
+            followUpInputIDs.isEmpty ? .unbounded : .bufferingNewest(256))
         let emitter = AgentEventEmitter(channel.continuation, requiresConsumer: false)
         if history != prepared { history = prepared }
         history.append(contentsOf: owed.map { .user([.text($0.text)]) })

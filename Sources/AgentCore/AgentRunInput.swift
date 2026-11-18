@@ -1,9 +1,9 @@
 import AgentModels
 import Foundation
 
-/// Immutable formal input. Existing String APIs, queued inputs and steering remain text-only.
+/// Immutable formal input. String APIs and steering remain text-only.
 public struct AgentRunInput: Sendable {
-    public enum Attachment: Hashable, Sendable {
+    public enum Attachment: Hashable, Sendable, Codable {
         case image(ModelImage)
         case file(ModelFileReference)
     }

@@ -910,6 +910,93 @@ import XCTest
         try await reopened.close()
     }
 
+    @Test func batchAdmitsOneMessageAndKeepsEachInputIdentity() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("follow-up-batch-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "batch", supportsPerCallFollowUps: true)
+        let model = ModelID(provider: "queue-fixture", name: "fixed")
+        let provider = QueueFixtureProvider()
+        let id = UUID()
+        let session = try Agent(model: model, provider: provider).makeSession(id: id, journal: journal)
+        for (inputID, text) in [("a", "first"), ("b", "second")] {
+            _ = try await session.enqueueFollowUp(.init(inputID: inputID, text: text, identity: .perCall, configurationRef: "batch"))
+        }
+        let dispatcher = try await session.startBatchedFollowUpDispatch(policy: .init(),
+            merging: ["batch"], resolver: QueueFixtureResolver(session: session, provider: provider))
+        await provider.waitForRequestCount(1)
+        await dispatcher.stop()
+        try await dispatcher.waitForDrain()
+        let first = try #require(try await session.followUp(inputID: "a"))
+        let second = try #require(try await session.followUp(inputID: "b"))
+        guard case .admitted(_, let formalID) = first.state else { Issue.record("missing admission"); return }
+        #expect(first.state == second.state)
+        #expect(try await journal.readMessages(sessionID: id).filter { $0.message.role == .user }.map(\.id) == [formalID])
+        #expect(await provider.requests().first?.messages.last == .user([.text("first\n\nsecond")]))
+        try await journal.close()
+    }
+
+    @Test(arguments: [JournalFileFaultStage.beforeAppend, .afterCurrentReplace])
+    func replacingQueuedInputsRecoversTheWholeEdit(_ stage: JournalFileFaultStage) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("follow-up-edit-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = QueueFaultProbe()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "batch",
+            supportsPerCallFollowUps: true, fault: { try fault.check($0) })
+        let id = UUID()
+        let agent = try Agent(model: .init(provider: "queue-fixture", name: "fixed"), provider: QueueFixtureProvider())
+        let session = try agent.makeSession(id: id, journal: journal)
+        for input in ["a", "b"] {
+            _ = try await session.enqueueFollowUp(.init(inputID: input, text: input, identity: .perCall, configurationRef: "batch"))
+        }
+        let replacement = AgentFollowUpInput(inputID: "edit", text: "both", identity: .perCall, configurationRef: "batch")
+        fault.arm(stage)
+        await #expect(throws: (any Error).self) {
+            try await session.replaceQueuedFollowUps(["a", "b"], with: replacement)
+        }
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let restored = try agent.makeSession(id: id, journal: reopened)
+        let queued = try await restored.followUps(limit: 100).filter { $0.state == .queued }.map(\.inputID)
+        #expect(queued == (stage == .beforeAppend ? ["a", "b"] : ["edit"]))
+        _ = try await restored.replaceQueuedFollowUps(["a", "b"], with: replacement)
+        #expect(try await restored.followUps(limit: 100).filter { $0.state == .queued }.map(\.inputID) == ["edit"])
+        try await reopened.close()
+    }
+
+    @Test(arguments: [JournalFileFaultStage.beforeAppend, .afterCurrentReplace])
+    func interruptedBatchAdmissionRecoversAllMembersTogether(_ stage: JournalFileFaultStage) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("follow-up-batch-fault-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fault = QueueFaultProbe()
+        let journal = try AgentIncrementalJournal.createForTesting(at: directory, operationDomain: "batch",
+            supportsPerCallFollowUps: true, fault: { try fault.check($0) })
+        let sessionID = UUID(), runID = UUID()
+        for inputID in ["a", "b"] {
+            _ = try await journal.enqueueFollowUp(.init(inputID: inputID, text: inputID, identity: .perCall,
+                                                       configurationRef: "batch"), sessionID: sessionID)
+        }
+        fault.arm(stage)
+        await #expect(throws: (any Error).self) {
+            try await journal.appendStartupCheckpoint([
+                .sessionCreated, .checkpoint(history: [.user([.text("a\n\nb")])], steeringIDs: []), .userMessage("a\n\nb")
+            ], sessionID: sessionID, runID: runID, deadline: .now.advanced(by: .seconds(5)),
+               durability: .durable, followUpInputIDs: ["a", "b"])
+        }
+        try await journal.close()
+        let reopened = try AgentIncrementalJournal.open(at: directory)
+        let states = try await reopened.followUps(sessionID: sessionID, after: nil, limit: 10).map(\.state)
+        let messages = try await reopened.readMessages(sessionID: sessionID)
+        if stage == .beforeAppend {
+            #expect(states == [.queued, .queued])
+            #expect(messages.isEmpty)
+        } else {
+            let message = try #require(messages.first)
+            #expect(messages.count == 1)
+            #expect(states == Array(repeating: .admitted(runID: runID, formalMessageID: message.id), count: 2))
+        }
+        try await reopened.close()
+    }
+
     @Test func atomicAdmissionPublishesQueueRunAndFormalMessageTogether() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("follow-up-admit-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }

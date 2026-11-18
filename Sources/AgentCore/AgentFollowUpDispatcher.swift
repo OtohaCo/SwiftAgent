@@ -7,13 +7,19 @@ public protocol AgentFollowUpResolver: Sendable {
 
 public struct AgentFollowUpResolution: Sendable {
     public let record: AgentFollowUpRecord
+    public let records: [AgentFollowUpRecord]
     public let text: String
     public let attemptID: UUID
     public let deadline: ContinuousClock.Instant
 
     public init(record: AgentFollowUpRecord, text: String, attemptID: UUID,
                 deadline: ContinuousClock.Instant) {
-        self.record = record; self.text = text; self.attemptID = attemptID; self.deadline = deadline
+        self.init(records: [record], text: text, attemptID: attemptID, deadline: deadline)
+    }
+
+    init(records: [AgentFollowUpRecord], text: String, attemptID: UUID, deadline: ContinuousClock.Instant) {
+        self.record = records[0]; self.records = records
+        self.text = text; self.attemptID = attemptID; self.deadline = deadline
     }
 }
 
@@ -73,7 +79,8 @@ public actor AgentFollowUpDispatcher {
     private let ownerID: UUID
     private let policy: AgentFollowUpDispatchPolicy
     private let resolver: any AgentFollowUpResolver
-    private let onRun: (@Sendable (AgentFollowUpRecord, AgentRun) async -> Void)?
+    private let onRun: (@Sendable ([AgentFollowUpRecord], AgentRun) async -> Void)?
+    private let merging: Set<String>
     private let initialRun: AgentRun?
     private var mode: AgentFollowUpDispatchStatus.Mode = .running
     private var worker: Task<Void, Never>?
@@ -99,10 +106,12 @@ public actor AgentFollowUpDispatcher {
     init(session: AgentSession, journal: AgentJournal, sessionID: UUID, ownerID: UUID,
                  policy: AgentFollowUpDispatchPolicy, resolver: any AgentFollowUpResolver,
                  initialRun: AgentRun?,
-                 onRun: (@Sendable (AgentFollowUpRecord, AgentRun) async -> Void)?) {
+                 merging: Set<String>,
+                 onRun: (@Sendable ([AgentFollowUpRecord], AgentRun) async -> Void)?) {
         self.session = session; self.journal = journal; self.sessionID = sessionID
         self.ownerID = ownerID; self.policy = policy; self.resolver = resolver
         self.initialRun = initialRun
+        self.merging = merging
         self.onRun = onRun
     }
 
@@ -325,7 +334,8 @@ public actor AgentFollowUpDispatcher {
                     publishStatus()
                     continue
                 }
-                guard let head = try await journal.firstQueuedFollowUp(sessionID: sessionID) else {
+                let batch = try await journal.queuedFollowUpBatch(sessionID: sessionID, merging: merging)
+                guard !batch.isEmpty else {
                     await waitForSignal(since: observed)
                     continue
                 }
@@ -334,7 +344,7 @@ public actor AgentFollowUpDispatcher {
                 guard attemptGeneration < .max else { throw AgentFollowUpError.staleDispatch }
                 attemptGeneration += 1
                 generation = attemptGeneration
-                try await dispatch(head, generation: generation)
+                try await dispatch(batch, generation: generation)
             } catch {
                 // A failure that unwinds a dispatch changed several fields at once: one status for all.
                 defer { publishStatus() }
@@ -370,7 +380,8 @@ public actor AgentFollowUpDispatcher {
         observers.values.forEach { $0.resume() }
     }
 
-    private func dispatch(_ head: JournalStoredFollowUp, generation: UInt64) async throws {
+    private func dispatch(_ batch: [JournalStoredFollowUp], generation: UInt64) async throws {
+        let head = batch[0]
         let deadline = AgentClock.now.advanced(by: policy.runTimeout)
         let budget = try AgentBudget(maxModelTurns: policy.maxModelTurns,
                                       maxToolCalls: policy.maxToolCalls, deadline: deadline)
@@ -382,9 +393,9 @@ public actor AgentFollowUpDispatcher {
         publishStatus()
         resolverWorkers += 1
         let resolver = self.resolver
-        let request = AgentFollowUpResolution(record: head.publicRecord(
-            storeID: identity.storeID),
-            text: head.input.text, attemptID: UUID(), deadline: deadline)
+        let records = batch.map { $0.publicRecord(storeID: identity.storeID) }
+        let request = AgentFollowUpResolution(records: records,
+            text: FollowUpBatch(inputs: batch.map(\.input)).text, attemptID: UUID(), deadline: deadline)
         let resolution = Task { [self] in
             try await withAgentDeadline(deadline, operation: {
                 try await resolver.resolve(request)
@@ -409,7 +420,7 @@ public actor AgentFollowUpDispatcher {
         // The store checks head identity and state again in the combined
         // startup publication, so withdrawal can win after resolution.
         let startup = Task { [session, ownerID] in
-            try await session.startQueuedFollowUp(head, using: configuration,
+            try await session.startQueuedFollowUp(batch, using: configuration,
                                                   ownerID: ownerID, budget: budget)
         }
         startupTask = startup
@@ -422,8 +433,7 @@ public actor AgentFollowUpDispatcher {
             await session.waitForQueuedStartupExit(ownerID: ownerID)
             guard mode == .running, attemptGeneration == generation else { return }
             guard storeID == identity.storeID, withdrawnSessionID == sessionID,
-                  withdrawnInputID.utf8.elementsEqual(head.input.inputID.utf8),
-                  ordinal == head.ordinal,
+                  batch.contains(where: { $0.ordinal == ordinal && $0.input.inputID.utf8.elementsEqual(withdrawnInputID.utf8) }),
                   let actual = try await journal.followUp(sessionID: sessionID, inputID: withdrawnInputID),
                   actual.storeID == storeID, actual.sessionID == sessionID,
                   actual.ordinal == ordinal, actual.state == .withdrawn else {
@@ -443,9 +453,8 @@ public actor AgentFollowUpDispatcher {
         }
         startupTask = nil
         currentRun = run
-        let record = head.publicRecord(storeID: identity.storeID)
         if let onRun {
-            observationTask = Task { await onRun(record, run) }
+            observationTask = Task { await onRun(records, run) }
         } else {
             // Explicit headless owner: consume and discard bounded progress.
             observationTask = Task { for await _ in run.events {} }
