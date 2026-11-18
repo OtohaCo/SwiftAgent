@@ -74,27 +74,27 @@ public struct GeminiProvider: ModelProvider, ModelProviderRequestValidator, Mode
             try Task.checkCancellation()
             switch event {
             case .response(let status, let headers):
-                guard !header else { throw ProviderJSON.invalid() }; header = true
+                guard !header else { throw GeminiShape.invalid("second HTTP response header") }; header = true
                 guard status == 200 else { throw try await ProviderHTTPFailure.classify(status, headers: headers, remainingBody: &iterator, signals: .gemini) }
             case .data(let data):
-                guard header, data.count <= configuration.maximumResponseBytes - receivedBytes else { throw ProviderJSON.invalid() }
+                guard header, data.count <= configuration.maximumResponseBytes - receivedBytes else { throw GeminiShape.invalid("data before the header or over the response limit") }
                 receivedBytes += data.count
                 if configuration.streaming {
                     for frame in try sse.consume(data) {
-                        guard frame.name == nil || frame.name == "message" else { throw ProviderJSON.invalid() }
-                        for event in try decoder.consume(ProviderJSON.decode(frame.data)) { do { try validation.append(event) } catch { throw ProviderJSON.invalid() }; try emit(event) }
+                        guard frame.name == nil || frame.name == "message" else { throw GeminiShape.invalid("unexpected stream event name") }
+                        for event in try decoder.consume(ProviderJSON.decode(frame.data)) { do { try validation.append(event) } catch { throw GeminiShape.invalid("event order rejected after decoding") }; try emit(event) }
                     }
                 } else { json.append(data) }
             }
         }
         try Task.checkCancellation()
-        guard header else { throw ProviderJSON.invalid() }
+        guard header else { throw GeminiShape.invalid("no HTTP response") }
         if configuration.streaming { try sse.finish() }
         else {
-            guard let value = try? JSONDecoder().decode(JSONValue.self, from: json) else { throw ProviderJSON.invalid() }
-            for event in try decoder.consume(ProviderJSON.object(value)) { do { try validation.append(event) } catch { throw ProviderJSON.invalid() }; try emit(event) }
+            guard let value = try? JSONDecoder().decode(JSONValue.self, from: json) else { throw GeminiShape.invalid("body is not JSON") }
+            for event in try decoder.consume(ProviderJSON.object(value)) { do { try validation.append(event) } catch { throw GeminiShape.invalid("event order rejected after decoding") }; try emit(event) }
         }
-        for event in try decoder.finish() { do { try validation.append(event) } catch { throw ProviderJSON.invalid() }; try emit(event) }
-        do { _ = try validation.finish() } catch { throw ProviderJSON.invalid() }
+        for event in try decoder.finish() { do { try validation.append(event) } catch { throw GeminiShape.invalid("event order rejected after decoding") }; try emit(event) }
+        do { _ = try validation.finish() } catch { throw GeminiShape.invalid("response did not end cleanly") }
     }
 }

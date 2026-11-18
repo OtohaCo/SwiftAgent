@@ -194,6 +194,49 @@ struct GeminiProviderTests {
         }
     }
 
+    /// A service can report more cached tokens than prompt tokens (cache counted from an earlier, larger request).
+    /// The reply is real: its usage is kept with the cached count held to the prompt count, not rejected.
+    @Test(arguments: [true, false]) func cachedTokensAbovePromptTokensAreClampedNotRejected(streaming: Bool) async throws {
+        let usage: JSONValue = .object(["promptTokenCount": .number(100), "cachedContentTokenCount": .number(130), "candidatesTokenCount": .number(5), "thoughtsTokenCount": .number(2)])
+        let provider = try GeminiProvider(credentials: .init(apiKey: { "key" }), streaming: streaming,
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [try geminiFixture(parts: [.object(["text": .string("ok")])], usage: usage, streaming: streaming)]))
+        let response = try await geminiResponse(provider, geminiRequest)
+        #expect(response.stopReason == .endTurn)
+        #expect(response.usage == .init(inputTokens: 100, outputTokens: 7, cachedInputTokens: 100, reasoningTokens: 2))
+    }
+
+    /// The cached count arrives before the prompt count that makes it fit: the earlier value is not lost to the clamp.
+    @Test func clampedCachedTokensGrowWithTheLaterPromptCount() throws {
+        var decoder = GeminiResponseDecoder(request: geminiRequest, configuration: try geminiConfiguration())
+        _ = try decoder.consume(["usageMetadata": .object(["promptTokenCount": .number(100), "cachedContentTokenCount": .number(130)])])
+        #expect(decoder.usage.cachedInputTokens == 100)
+        _ = try decoder.consume(["usageMetadata": .object(["promptTokenCount": .number(150)])])
+        #expect(decoder.usage.cachedInputTokens == 130)
+    }
+
+    /// A shape failure names the rule that failed and a finish reason's code, never the reply's own words.
+    @Test(arguments: [
+        ("MISSING_THOUGHT_SIGNATURE", "unknown finish reason MISSING_THOUGHT_SIGNATURE"),
+        ("not a code, private words", "unknown finish reason (unrecognized)"),
+    ]) func shapeFailuresNameTheRuleWithoutContent(reason: String, expected: String) async throws {
+        let provider = try GeminiProvider(credentials: .init(apiKey: { "key" }),
+            transport: FixtureHTTPTransport(probe: ProviderRequestProbe(), bodies: [try geminiFixture(parts: [.object(["text": .string("secret reply words")])], reason: reason)]))
+        do { _ = try await geminiResponse(provider, geminiRequest); Issue.record("Expected a shape failure") }
+        catch let error as ModelProviderError {
+            #expect(error.kind == .invalidResponse && error.diagnostic == .init(stage: .responseDecoding, reason: .invalidShape))
+            #expect(error.message.contains(expected))
+            #expect(!error.message.contains("secret reply words") && !error.message.contains("private words"))
+        }
+    }
+
+    @Test func contentWithoutPartsNamesItsRule() throws {
+        var decoder = GeminiResponseDecoder(request: geminiRequest, configuration: try geminiConfiguration())
+        let error = #expect(throws: ModelProviderError.self) {
+            _ = try decoder.consume(["candidates": .array([.object(["content": .object(["role": .string("model")])])])])
+        }
+        #expect(error?.message.contains("content has no parts") == true)
+    }
+
     @Test func blockedPromptWithCandidateCannotAuthorizeCallsAndResponseAccumulationIsBounded() async throws {
         var object = try ProviderJSON.decode(String(decoding: try geminiFixture(parts: geminiParallelParts, streaming: false), as: UTF8.self))
         object["promptFeedback"] = .object(["blockReason": .string("SAFETY")])
