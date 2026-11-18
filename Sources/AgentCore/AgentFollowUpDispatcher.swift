@@ -75,7 +75,7 @@ public actor AgentFollowUpDispatcher {
     private let resolver: any AgentFollowUpResolver
     private let onRun: (@Sendable (AgentFollowUpRecord, AgentRun) async -> Void)?
     private let initialRun: AgentRun?
-    private var mode: AgentFollowUpDispatchStatus.Mode = .running { didSet { publishStatus() } }
+    private var mode: AgentFollowUpDispatchStatus.Mode = .running
     private var worker: Task<Void, Never>?
     private var resolverTask: Task<AgentFollowUpConfiguration, Error>?
     private var startupTask: Task<AgentRun, Error>?
@@ -83,14 +83,14 @@ public actor AgentFollowUpDispatcher {
     private var inspectionOperations = 0
     private var currentRun: AgentRun?
     private var observationTask: Task<Void, Never>?
-    private var currentInputID: String? { didSet { publishStatus() } }
-    private var interruptedInputID: String? { didSet { publishStatus() } }
-    private var lastFailureKind: String? { didSet { publishStatus() } }
+    private var currentInputID: String?
+    private var interruptedInputID: String?
+    private var lastFailureKind: String?
     private var attemptGeneration: UInt64 = 0
     private var signalVersion: UInt64 = 0
     private var signals: [CheckedContinuation<Void, Never>] = []
     private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
-    private var drained = false { didSet { publishStatus() } }
+    private var drained = false
     private var statusSubscribers: [UUID: AsyncStream<AgentFollowUpDispatchStatus>.Continuation] = [:]
     private var lastPublishedStatus: AgentFollowUpDispatchStatus?
     private var drainWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
@@ -125,10 +125,11 @@ public actor AgentFollowUpDispatcher {
     }
 
     /// A stream of this dispatcher's status: the status at the moment of the call first, then the
-    /// status after each change, with no polling. A consumer that falls behind sees only the newest
-    /// status, never a stale one, and a change made after the call is never missed, even before the
-    /// first element is read. The stream finishes once the dispatcher has stopped and drained, after
-    /// that final status; cancelling the consuming task ends the subscription.
+    /// status after each change, with no polling. Each element is a complete status published once
+    /// the change has been made, never a half-finished one. A consumer that falls behind sees only
+    /// the newest status, never a stale one, and a change made after the call is never missed, even
+    /// before the first element is read. The stream finishes once the dispatcher has stopped and
+    /// drained, after that final status; cancelling the consuming task ends the subscription.
     public func statusUpdates() -> AsyncStream<AgentFollowUpDispatchStatus> {
         let (stream, continuation) = AsyncStream.makeStream(
             of: AgentFollowUpDispatchStatus.self, bufferingPolicy: .bufferingNewest(1))
@@ -146,6 +147,8 @@ public actor AgentFollowUpDispatcher {
         }
         return stream
     }
+
+    package var statusSubscriberCount: Int { statusSubscribers.count }
 
     private func removeStatusSubscriber(_ id: UUID) {
         statusSubscribers.removeValue(forKey: id)
@@ -166,6 +169,7 @@ public actor AgentFollowUpDispatcher {
         guard mode == .running else { return }
         mode = .paused
         notifyPaused()
+        publishStatus()
         attemptGeneration &+= 1
         resolverTask?.cancel()
         startupTask?.cancel()
@@ -176,6 +180,7 @@ public actor AgentFollowUpDispatcher {
         guard mode != .stopped else { throw AgentFollowUpError.dispatcherStopped }
         guard interruptedInputID == nil else { throw AgentFollowUpError.needsInspection }
         mode = .running
+        publishStatus()
         signal()
     }
 
@@ -185,6 +190,8 @@ public actor AgentFollowUpDispatcher {
     public func resumeAfterInspection(inputID: String) async throws {
         guard mode != .stopped else { throw AgentFollowUpError.dispatcherStopped }
         guard mode == .paused else { throw AgentFollowUpError.staleDispatch }
+        // Another caller is already releasing it: this one would only be refused by the store.
+        guard inspectionOperations == 0 else { throw AgentFollowUpError.staleDispatch }
         guard let interrupted = interruptedInputID,
               interrupted.utf8.elementsEqual(inputID.utf8),
               currentRun == nil, startupTask == nil else {
@@ -207,12 +214,14 @@ public actor AgentFollowUpDispatcher {
         interruptedInputID = nil
         lastFailureKind = nil
         mode = .running
+        publishStatus()
         signal()
     }
 
     public func stop() {
         guard mode != .stopped else { return }
         mode = .stopped
+        publishStatus()
         attemptGeneration &+= 1
         resolverTask?.cancel()
         startupTask?.cancel()
@@ -297,6 +306,7 @@ public actor AgentFollowUpDispatcher {
                 lastFailureKind = "prior_run"
                 mode = .paused
                 notifyPaused()
+                publishStatus()
             }
         }
         while mode != .stopped {
@@ -312,6 +322,7 @@ public actor AgentFollowUpDispatcher {
                     interruptedInputID = interrupted.input.inputID
                     mode = .paused
                     notifyPaused()
+                    publishStatus()
                     continue
                 }
                 guard let head = try await journal.firstQueuedFollowUp(sessionID: sessionID) else {
@@ -325,10 +336,13 @@ public actor AgentFollowUpDispatcher {
                 generation = attemptGeneration
                 try await dispatch(head, generation: generation)
             } catch {
+                // A failure that unwinds a dispatch changed several fields at once: one status for all.
+                defer { publishStatus() }
                 guard mode == .running, attemptGeneration == generation else { continue }
                 lastFailureKind = Self.failureKind(error)
                 mode = .paused
                 notifyPaused()
+                publishStatus()
             }
         }
         // A cancelled deadline race may have returned before a Host resolver
@@ -348,6 +362,7 @@ public actor AgentFollowUpDispatcher {
         await journal.releaseDispatcherLease(sessionID: sessionID, owner: ownerID)
         await session.followUpDispatcherDidStop(ownerID: ownerID)
         drained = true
+        publishStatus()
         worker = nil
         let observers = drainWaiters
         drainWaiters.removeAll()
@@ -364,6 +379,7 @@ public actor AgentFollowUpDispatcher {
         }
         guard mode == .running, attemptGeneration == generation else { return }
         currentInputID = head.input.inputID
+        publishStatus()
         resolverWorkers += 1
         let resolver = self.resolver
         let request = AgentFollowUpResolution(record: head.publicRecord(
@@ -387,6 +403,7 @@ public actor AgentFollowUpDispatcher {
         resolverTask = nil
         guard mode == .running, attemptGeneration == generation else {
             currentInputID = nil
+            publishStatus()
             return
         }
         // The store checks head identity and state again in the combined
@@ -401,6 +418,7 @@ public actor AgentFollowUpDispatcher {
         catch let JournalFollowUpAdmissionError.withdrawn(storeID, withdrawnSessionID, withdrawnInputID, ordinal) {
             startupTask = nil
             currentInputID = nil
+            publishStatus()
             await session.waitForQueuedStartupExit(ownerID: ownerID)
             guard mode == .running, attemptGeneration == generation else { return }
             guard storeID == identity.storeID, withdrawnSessionID == sessionID,
@@ -419,6 +437,7 @@ public actor AgentFollowUpDispatcher {
         catch {
             startupTask = nil
             currentInputID = nil
+            publishStatus()
             await session.waitForQueuedStartupExit(ownerID: ownerID)
             throw error
         }
@@ -446,8 +465,10 @@ public actor AgentFollowUpDispatcher {
         guard outcome == .completed else {
             interruptedInputID = head.input.inputID
             if mode != .stopped { mode = .paused; notifyPaused() }
+            publishStatus()
             return
         }
+        publishStatus()
         // This records that the existing Run actually completed and drained,
         // not that a Host business objective was fulfilled.
         do {

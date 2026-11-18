@@ -566,6 +566,35 @@ import XCTest
         try await journal.close()
     }
 
+    @Test(arguments: 0..<10) func twoCallersInspectingTheSameInterruptedInputDoNotRefuseEachOther(_ round: Int) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("queue-inspect-race-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentIncrementalJournal.create(at: directory, operationDomain: "inspect-race")
+        let provider = QueueFixtureProvider(firstStop: .refusal)
+        let session = try Agent(model: .init(provider: "queue-fixture", name: "fixed"),
+                                provider: provider).makeSession(journal: journal)
+        _ = try await session.enqueueFollowUp(.init(inputID: "first", text: "first",
+            operationID: "op-first", configurationRef: "v1"))
+        let dispatcher = try await session.startFollowUpDispatch(policy: .init(runTimeout: .seconds(10)),
+            resolver: QueueFixtureResolver(session: session, provider: provider))
+        await dispatcher.waitUntilPaused()
+        #expect(await dispatcher.status().interruptedInputID == "first")
+        // Both read the same interrupted input and go on at once: one releases it, the other must be told
+        // the dispatcher moved on (stale), not that the store refuses.
+        async let one: Result<Void, any Error> = Result { try await dispatcher.resumeAfterInspection(inputID: "first") }
+        async let two: Result<Void, any Error> = Result { try await dispatcher.resumeAfterInspection(inputID: "first") }
+        let results = await [one, two]
+        let failures = results.compactMap { result -> AgentFollowUpError? in
+            if case .failure(let error) = result { return error as? AgentFollowUpError }
+            return nil
+        }
+        #expect(results.filter { if case .success = $0 { return true } else { return false } }.count == 1)
+        #expect(failures == [.staleDispatch])
+        await dispatcher.stop()
+        try await dispatcher.waitForDrain()
+        try await journal.close()
+    }
+
     @Test func fullQueueStillAcceptsAnExistingIdentityAndNeverEvicts() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("follow-up-capacity-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
