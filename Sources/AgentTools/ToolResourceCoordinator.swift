@@ -53,19 +53,8 @@ package actor ToolResourceCoordinator {
         if let deadline, AgentClock.now >= deadline { throw WaitExpired() }
         let id = UUID()
         let request = Request(resources: Set(resources), exclusive: execution == .exclusive || effect == .mutation)
-        var timer: Task<Void, Never>?
-        defer { timer?.cancel() }
         let lease = try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                waiters.append(Waiter(id: id, request: request, continuation: continuation))
-                grantEligibleWaiters()
-                if let deadline, waiters.contains(where: { $0.id == id }) {
-                    timer = Task { [weak self] in
-                        guard (try? await AgentClock.sleep(until: deadline)) != nil else { return }
-                        await self?.expireWaiter(id)
-                    }
-                }
-            }
+            try await waitForLease(id: id, request: request, deadline: deadline)
         } onCancel: {
             // A delayed cancellation callback must never release an active lease.
             Task { await self.cancelWaiter(id) }
@@ -76,6 +65,21 @@ package actor ToolResourceCoordinator {
         } catch {
             release(lease)
             throw error
+        }
+    }
+
+    private func waitForLease(id: UUID, request: Request, deadline: ContinuousClock.Instant?) async throws -> UUID {
+        var timer: Task<Void, Never>?
+        defer { timer?.cancel() }
+        return try await withCheckedThrowingContinuation { continuation in
+            waiters.append(Waiter(id: id, request: request, continuation: continuation))
+            grantEligibleWaiters()
+            if let deadline, waiters.contains(where: { $0.id == id }) {
+                timer = Task { [weak self] in
+                    guard (try? await AgentClock.sleep(until: deadline)) != nil else { return }
+                    await self?.expireWaiter(id)
+                }
+            }
         }
     }
 
