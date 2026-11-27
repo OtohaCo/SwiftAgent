@@ -301,7 +301,7 @@ extension AgentJournalSQLiteStore {
                 on: db,
                 sql: """
                 SELECT idempotency_key, mutation_json, digest
-                FROM mutations WHERE session_id = ? AND run_id = ? AND call_id = ?;
+                FROM mutation_calls WHERE session_id = ? AND run_id = ? AND call_id = ?;
                 """
             ) { stmt in
                 AgentJournalSQLiteStore.bindText(stmt, 1, sessionID.uuidString)
@@ -316,15 +316,20 @@ extension AgentJournalSQLiteStore {
             }
             guard let (key, bytes, storedDigest) = row else { return nil }
             store.noteReadBytes(bytes.count)
-            let expected = AgentJournalSQLiteStore.rowDigest(
-                prefix: "mutation:\(store.storeID.uuidString):\(key):",
+            let expected = AgentJournalSQLiteStore.mutationCallDigest(
+                storeID: store.storeID,
+                sessionID: sessionID,
+                runID: runID,
+                callID: callID,
+                idempotencyKey: key,
                 payload: bytes
             )
             guard storedDigest == expected else { throw AgentJournalError.checksumMismatch }
             let mutation = try AgentJournalSQLiteStore.decodeJSON(JournalStoredMutation.self, from: bytes)
             guard mutation.sessionID == sessionID,
                   mutation.runID == runID,
-                  mutation.intent.call.id == callID else {
+                  mutation.intent.call.id == callID,
+                  mutation.intent.idempotencyKey == key else {
                 throw AgentJournalError.invalidRecord
             }
             return mutation
@@ -987,7 +992,7 @@ extension AgentJournalSQLiteStore {
             }
             writtenBytes += UInt64(headerBytes.count)
 
-            // Upsert mutation if present.
+            // Upsert current mutation by idempotency key and record per-call history without overwriting prior attempts.
             if let mutation = change.mutation {
                 let mutBytes = try AgentJournalSQLiteStore.canonicalJSON(mutation)
                 let key = mutation.intent.idempotencyKey
@@ -1024,7 +1029,39 @@ extension AgentJournalSQLiteStore {
                     AgentJournalSQLiteStore.bindText(stmt, 9, mutDigest)
                     try AgentJournalSQLiteStore.stepDone(stmt, on: db)
                 }
-                writtenBytes += UInt64(mutBytes.count)
+                let callDigest = AgentJournalSQLiteStore.mutationCallDigest(
+                    storeID: store.storeID,
+                    sessionID: mutation.sessionID,
+                    runID: mutation.runID,
+                    callID: mutation.intent.call.id,
+                    idempotencyKey: key,
+                    payload: mutBytes
+                )
+                try AgentJournalSQLiteStore.withPrepared(
+                    on: db,
+                    sql: """
+                    INSERT INTO mutation_calls (
+                        session_id, run_id, call_id, idempotency_key, sequence, state, mutation_json, digest
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id, run_id, call_id) DO UPDATE SET
+                        idempotency_key = excluded.idempotency_key,
+                        sequence = excluded.sequence,
+                        state = excluded.state,
+                        mutation_json = excluded.mutation_json,
+                        digest = excluded.digest;
+                    """
+                ) { stmt in
+                    AgentJournalSQLiteStore.bindText(stmt, 1, mutation.sessionID.uuidString)
+                    AgentJournalSQLiteStore.bindText(stmt, 2, mutation.runID.uuidString)
+                    AgentJournalSQLiteStore.bindText(stmt, 3, mutation.intent.call.id.rawValue)
+                    AgentJournalSQLiteStore.bindText(stmt, 4, key)
+                    sqlite3_bind_int64(stmt, 5, Int64(bitPattern: mutation.sequence))
+                    AgentJournalSQLiteStore.bindText(stmt, 6, mutation.state.rawValue)
+                    AgentJournalSQLiteStore.bindBlob(stmt, 7, mutBytes)
+                    AgentJournalSQLiteStore.bindText(stmt, 8, callDigest)
+                    try AgentJournalSQLiteStore.stepDone(stmt, on: db)
+                }
+                writtenBytes += UInt64(mutBytes.count * 2)
             }
 
             // Upsert admission rejection if present.

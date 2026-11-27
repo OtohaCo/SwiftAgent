@@ -273,7 +273,8 @@ private final class AsyncOpenGate: @unchecked Sendable {
 
 package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
     static let magic = "SWIFTAGENT-SQLITE-JOURNAL"
-    static let supportedSchemaVersion = 1
+    static let minimumReadableSchemaVersion = 1
+    static let supportedSchemaVersion = 2
     /// The same name the segmented file store uses, so a Host waiting for a released store watches one file.
     static let writerLockName = ".writer.lock"
 
@@ -528,6 +529,14 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
         }
         do {
             let loaded = try loadStoreIdentityAndCapabilities(on: writer)
+            if loaded.schemaVersion < supportedSchemaVersion {
+                try migrateSchema(
+                    on: writer,
+                    from: loaded.schemaVersion,
+                    storeID: loaded.storeID,
+                    domain: loaded.domain
+                )
+            }
             let reader = try openConnection(at: dbURL, readOnly: true, durability: durability)
             return AgentJournalSQLiteStore(
                 directoryURL: directory,

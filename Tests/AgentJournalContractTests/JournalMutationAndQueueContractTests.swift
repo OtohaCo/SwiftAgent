@@ -143,6 +143,289 @@ import Testing
     }
 
     @Test(arguments: JournalContractBackends.all)
+    func retryingAbortedMutationPreservesPriorInvocationHistoryAcrossReopen(
+        _ backend: any JournalBackendHarness
+    ) async throws {
+        let directory = tempDir("aborted-retry-history")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try backend.create(
+            at: directory,
+            operationDomain: "aborted-retry-history",
+            capabilities: .init(supportsConfirmedNoEffect: true)
+        )
+        let session = UUID()
+        let run1 = UUID(), run2 = UUID(), run3 = UUID()
+        let call1 = ToolCallID(rawValue: "attempt-1")
+        let call2 = ToolCallID(rawValue: "attempt-2")
+        let call3 = ToolCallID(rawValue: "attempt-3")
+        let target = EvidenceReference(namespace: "fixture", id: "record-1")
+        let expectation = try ToolReceiptExpectation(targets: [target], revision: .present)
+        let key = "aborted-retry-history/write/{\"a\":1,\"b\":2}"
+        let confirmation = try AgentNoEffectConfirmation(basis: "verified absent on target")
+
+        guard case .admitted = try await journal.admit(.init(
+            sessionID: session,
+            runID: run1,
+            callID: call1,
+            name: "write",
+            argumentsJSON: #"{"a":1,"b":2}"#,
+            resources: [.named(target)],
+            idempotencyKey: key,
+            receiptExpectation: expectation
+        )) else {
+            Issue.record("expected initial admission for run1")
+            try? await journal.close()
+            return
+        }
+        try await journal.markMutationNeedsReconciliation(sessionID: session, runID: run1, callID: call1)
+        let pending = try #require(try await journal.recoverPendingMutations(sessionID: session).first)
+        #expect(pending.state == .needsReconciliation)
+        #expect(pending.runID == run1)
+        #expect(pending.intent.call.id == call1)
+        try await journal.abortMutation(pending, confirmedNoEffect: confirmation)
+        #expect(try await journal.pendingMutations(sessionID: session).isEmpty)
+
+        guard case .admitted = try await journal.admit(.init(
+            sessionID: session,
+            runID: run2,
+            callID: call2,
+            name: "write",
+            argumentsJSON: #"{"b":2,"a":1}"#,
+            resources: [.named(target)],
+            idempotencyKey: key,
+            receiptExpectation: expectation
+        )) else {
+            Issue.record("expected fresh admission for run2 after confirmed no-effect abort")
+            try? await journal.close()
+            return
+        }
+
+        let receipt = ToolReceipt(operationID: key, status: .succeeded, confirmedTargets: [target], revision: "v2")
+        let settledOutput = JSONValue.object(["applied": .bool(true), "revision": .string("v2")])
+        let history: [ModelMessage] = [
+            .user([.text("apply mutation")]),
+            .assistant(content: [], toolCalls: [.init(id: call2, name: "write", argumentsJSON: #"{"b":2,"a":1}"#, completeness: .complete)]),
+            .tool(.init(callID: call2, content: [.text("applied")], isError: false)),
+        ]
+        try await journal.commitMutation(
+            sessionID: session,
+            runID: run2,
+            callID: call2,
+            receipt: receipt,
+            output: settledOutput,
+            history: history,
+            steeringIDs: []
+        )
+
+        func verifyBothInvocations(on targetJournal: AgentJournal, phase: String) async throws {
+            let firstStatus = try #require(
+                try await targetJournal.mutationStatus(sessionID: session, runID: run1, callID: call1),
+                "prior aborted invocation missing (\(phase))"
+            )
+            #expect(firstStatus.state == .aborted)
+            #expect(firstStatus.receipt == nil)
+            #expect(firstStatus.replayOutput == nil)
+            #expect(firstStatus.abortConfirmation == confirmation)
+
+            let secondStatus = try #require(
+                try await targetJournal.mutationStatus(sessionID: session, runID: run2, callID: call2),
+                "settled retry invocation missing (\(phase))"
+            )
+            #expect(secondStatus.state == .settled)
+            #expect(secondStatus.receipt == receipt)
+            #expect(secondStatus.replayOutput == settledOutput)
+            #expect(secondStatus.abortConfirmation == nil)
+
+            let currentIdentity = try #require(
+                try await targetJournal.mutationStatus(identity: key),
+                "latest logical identity missing (\(phase))"
+            )
+            #expect(currentIdentity == secondStatus)
+
+            if let store = await targetJournal.store {
+                let storedFirst = try #require(
+                    try store.read { try $0.mutation(sessionID: session, runID: run1, callID: call1) },
+                    "stored prior invocation missing (\(phase))"
+                )
+                #expect(storedFirst.sessionID == session)
+                #expect(storedFirst.runID == run1)
+                #expect(storedFirst.intent.call.id == call1)
+                #expect(storedFirst.intent.idempotencyKey == key)
+                #expect(storedFirst.state == .aborted)
+                #expect(storedFirst.abortConfirmation == confirmation)
+
+                let storedSecond = try #require(
+                    try store.read { try $0.mutation(sessionID: session, runID: run2, callID: call2) },
+                    "stored retry invocation missing (\(phase))"
+                )
+                #expect(storedSecond.sessionID == session)
+                #expect(storedSecond.runID == run2)
+                #expect(storedSecond.intent.call.id == call2)
+                #expect(storedSecond.intent.idempotencyKey == key)
+                #expect(storedSecond.state == .settled)
+                #expect(storedSecond.receipt == receipt)
+                #expect(storedSecond.output == settledOutput)
+            }
+        }
+
+        try await verifyBothInvocations(on: journal, phase: "before close")
+        try await journal.close()
+
+        let reopened = try backend.open(at: directory)
+        try await verifyBothInvocations(on: reopened, phase: "after reopen")
+
+        guard case .settled(let replayedReceipt, let replayedOutput) = try await reopened.admit(.init(
+            sessionID: session,
+            runID: run3,
+            callID: call3,
+            name: "write",
+            argumentsJSON: #"{"a":1,"b":2}"#,
+            resources: [.named(target)],
+            idempotencyKey: key,
+            receiptExpectation: expectation
+        )) else {
+            Issue.record("expected settled replay for third attempt")
+            try? await reopened.close()
+            return
+        }
+        #expect(replayedReceipt == receipt)
+        #expect(replayedOutput == settledOutput)
+
+        let firstAfterReplay = try #require(
+            try await reopened.mutationStatus(sessionID: session, runID: run1, callID: call1)
+        )
+        #expect(firstAfterReplay.state == .aborted)
+        #expect(firstAfterReplay.abortConfirmation == confirmation)
+        #expect(try await reopened.mutationStatus(sessionID: session, runID: run2, callID: call2)?.state == .settled)
+        try await reopened.close()
+    }
+
+    @Test(arguments: JournalContractBackends.all)
+    func multipleAbortedAttemptsPreserveAllPriorInvocationsAndRejectOldCallReuse(
+        _ backend: any JournalBackendHarness
+    ) async throws {
+        let directory = tempDir("multi-abort-history")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try backend.create(
+            at: directory,
+            operationDomain: "multi-abort-history",
+            smallMaintenanceSegments: true,
+            capabilities: .init(supportsConfirmedNoEffect: true)
+        )
+        let session = UUID()
+        let run1 = UUID(), run2 = UUID(), run3 = UUID()
+        let call1 = ToolCallID(rawValue: "multi-1")
+        let call2 = ToolCallID(rawValue: "multi-2")
+        let call3 = ToolCallID(rawValue: "multi-3")
+        let target = EvidenceReference(namespace: "fixture", id: "record-2")
+        let expectation = try ToolReceiptExpectation(targets: [target], revision: .present)
+        let key = "multi-abort-history/write/{\"id\":2}"
+        let confirmation1 = try AgentNoEffectConfirmation(basis: "first attempt never reached target")
+        let confirmation2 = try AgentNoEffectConfirmation(basis: "second attempt rolled back before effect")
+
+        // First attempt aborted.
+        guard case .admitted = try await journal.admit(.init(
+            sessionID: session,
+            runID: run1,
+            callID: call1,
+            name: "write",
+            argumentsJSON: #"{"id":2}"#,
+            resources: [.named(target)],
+            idempotencyKey: key,
+            receiptExpectation: expectation
+        )) else {
+            Issue.record("expected admission for run1")
+            try? await journal.close()
+            return
+        }
+        try await journal.markMutationNeedsReconciliation(sessionID: session, runID: run1, callID: call1)
+        let pending1 = try #require(try await journal.recoverPendingMutations(sessionID: session).first)
+        try await journal.abortMutation(pending1, confirmedNoEffect: confirmation1)
+
+        // Second attempt aborted.
+        guard case .admitted = try await journal.admit(.init(
+            sessionID: session,
+            runID: run2,
+            callID: call2,
+            name: "write",
+            argumentsJSON: #"{"id":2}"#,
+            resources: [.named(target)],
+            idempotencyKey: key,
+            receiptExpectation: expectation
+        )) else {
+            Issue.record("expected admission for run2")
+            try? await journal.close()
+            return
+        }
+        try await journal.markMutationNeedsReconciliation(sessionID: session, runID: run2, callID: call2)
+        let pending2 = try #require(try await journal.recoverPendingMutations(sessionID: session).first)
+        try await journal.abortMutation(pending2, confirmedNoEffect: confirmation2)
+
+        // Reusing the earlier aborted invocation identity (session, run1, call1) must be rejected.
+        await #expect(throws: AgentJournalError.mutationIntentConflict) {
+            _ = try await journal.admit(.init(
+                sessionID: session,
+                runID: run1,
+                callID: call1,
+                name: "write",
+                argumentsJSON: #"{"id":2}"#,
+                resources: [.named(target)],
+                idempotencyKey: key,
+                receiptExpectation: expectation
+            ))
+        }
+
+        // Third attempt settles.
+        guard case .admitted = try await journal.admit(.init(
+            sessionID: session,
+            runID: run3,
+            callID: call3,
+            name: "write",
+            argumentsJSON: #"{"id":2}"#,
+            resources: [.named(target)],
+            idempotencyKey: key,
+            receiptExpectation: expectation
+        )) else {
+            Issue.record("expected admission for run3")
+            try? await journal.close()
+            return
+        }
+        let receipt = ToolReceipt(operationID: key, status: .succeeded, confirmedTargets: [target], revision: "v3")
+        let output = JSONValue.string("settled-on-third")
+        let history: [ModelMessage] = [
+            .user([.text("apply third attempt")]),
+            .assistant(content: [], toolCalls: [.init(id: call3, name: "write", argumentsJSON: #"{"id":2}"#, completeness: .complete)]),
+            .tool(.init(callID: call3, content: [.text("ok")], isError: false)),
+        ]
+        try await journal.commitMutation(
+            sessionID: session,
+            runID: run3,
+            callID: call3,
+            receipt: receipt,
+            output: output,
+            history: history,
+            steeringIDs: []
+        )
+        for _ in 0..<8 {
+            if try await journal.requestMaintenance()?.sealedSegments == 0 { break }
+        }
+        try await journal.close()
+
+        let reopened = try backend.open(at: directory, smallMaintenanceSegments: true)
+        let status1 = try #require(try await reopened.mutationStatus(sessionID: session, runID: run1, callID: call1))
+        let status2 = try #require(try await reopened.mutationStatus(sessionID: session, runID: run2, callID: call2))
+        let status3 = try #require(try await reopened.mutationStatus(sessionID: session, runID: run3, callID: call3))
+        #expect(status1.state == .aborted)
+        #expect(status1.abortConfirmation == confirmation1)
+        #expect(status2.state == .aborted)
+        #expect(status2.abortConfirmation == confirmation2)
+        #expect(status3.state == .settled)
+        #expect(status3.receipt == receipt)
+        #expect(status3.replayOutput == output)
+        try await reopened.close()
+    }
+
+    @Test(arguments: JournalContractBackends.all)
     func followUpQueueAndRunRecordsPersistAcrossMaintenanceAndReopen(
         _ backend: any JournalBackendHarness
     ) async throws {

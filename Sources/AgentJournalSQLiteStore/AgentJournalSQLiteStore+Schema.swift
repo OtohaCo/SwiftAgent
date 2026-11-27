@@ -83,6 +83,20 @@ extension AgentJournalSQLiteStore {
         }
     }
 
+    static let mutationCallsTableDDL = """
+        CREATE TABLE IF NOT EXISTS mutation_calls (
+            session_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            call_id TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            mutation_json BLOB NOT NULL,
+            digest TEXT NOT NULL,
+            PRIMARY KEY (session_id, run_id, call_id)
+        );
+        """
+
     static func initializeSchema(on db: OpaquePointer) throws {
         let ddl = """
         CREATE TABLE IF NOT EXISTS store_meta (
@@ -132,6 +146,7 @@ extension AgentJournalSQLiteStore {
         );
         CREATE INDEX IF NOT EXISTS idx_mutations_pending ON mutations (state, sequence);
         CREATE INDEX IF NOT EXISTS idx_mutations_operation ON mutations (operation_id);
+        \(mutationCallsTableDDL)
         CREATE TABLE IF NOT EXISTS admission_rejections (
             session_id TEXT NOT NULL,
             run_id TEXT NOT NULL,
@@ -218,9 +233,23 @@ extension AgentJournalSQLiteStore {
         return sha256Hex(bytes)
     }
 
+    static func mutationCallDigest(
+        storeID: UUID,
+        sessionID: UUID,
+        runID: UUID,
+        callID: ToolCallID,
+        idempotencyKey: String,
+        payload: Data
+    ) -> String {
+        rowDigest(
+            prefix: "mutation_call:\(storeID.uuidString):\(sessionID.uuidString):\(runID.uuidString):\(callID.rawValue):\(idempotencyKey):",
+            payload: payload
+        )
+    }
+
     static func loadStoreIdentityAndCapabilities(
         on db: OpaquePointer
-    ) throws -> (storeID: UUID, domain: String, capabilities: CapabilitiesRecord) {
+    ) throws -> (storeID: UUID, domain: String, capabilities: CapabilitiesRecord, schemaVersion: Int) {
         return try withPrepared(
             on: db,
             sql: """
@@ -237,7 +266,7 @@ extension AgentJournalSQLiteStore {
             guard rowMagic == magic else {
                 throw AgentJournalError.invalidHeader
             }
-            guard version == supportedSchemaVersion else {
+            guard version >= minimumReadableSchemaVersion && version <= supportedSchemaVersion else {
                 throw AgentJournalError.unsupportedFormat
             }
             guard let id = UUID(uuidString: columnText(stmt, 2)) else {
@@ -265,8 +294,128 @@ extension AgentJournalSQLiteStore {
                 throw AgentJournalError.checksumMismatch
             }
             let caps = try decodeJSON(CapabilitiesRecord.self, from: capsBytes)
-            return (id, domain, caps)
+            return (id, domain, caps, version)
         }
+    }
+
+    static func migrateSchema(
+        on db: OpaquePointer,
+        from version: Int,
+        storeID: UUID,
+        domain: String
+    ) throws {
+        guard version == 1, supportedSchemaVersion == 2 else {
+            throw AgentJournalError.unsupportedFormat
+        }
+        try exec(on: db, "BEGIN IMMEDIATE TRANSACTION;")
+        do {
+            try exec(on: db, mutationCallsTableDDL)
+            let legacyRows: [(String, String, String, String, UInt64, String, Data, String)] = try withPrepared(
+                on: db,
+                sql: """
+                SELECT idempotency_key, session_id, run_id, call_id, sequence, state, mutation_json, digest
+                FROM mutations;
+                """
+            ) { stmt in
+                var rows: [(String, String, String, String, UInt64, String, Data, String)] = []
+                while try stepRow(stmt, on: db) {
+                    rows.append((
+                        columnText(stmt, 0),
+                        columnText(stmt, 1),
+                        columnText(stmt, 2),
+                        columnText(stmt, 3),
+                        UInt64(bitPattern: sqlite3_column_int64(stmt, 4)),
+                        columnText(stmt, 5),
+                        columnBlob(stmt, 6),
+                        columnText(stmt, 7)
+                    ))
+                }
+                return rows
+            }
+            for (key, sessionText, runText, callText, sequence, state, mutBytes, storedDigest) in legacyRows {
+                let expected = rowDigest(
+                    prefix: "mutation:\(storeID.uuidString):\(key):",
+                    payload: mutBytes
+                )
+                guard storedDigest == expected else {
+                    throw AgentJournalError.checksumMismatch
+                }
+                let decoded = try decodeJSON(JournalStoredMutation.self, from: mutBytes)
+                guard let sessionID = UUID(uuidString: sessionText),
+                      let runID = UUID(uuidString: runText),
+                      decoded.sessionID == sessionID,
+                      decoded.runID == runID,
+                      decoded.intent.call.id.rawValue == callText,
+                      decoded.intent.idempotencyKey == key else {
+                    throw AgentJournalError.invalidRecord
+                }
+                let callDigest = mutationCallDigest(
+                    storeID: storeID,
+                    sessionID: sessionID,
+                    runID: runID,
+                    callID: decoded.intent.call.id,
+                    idempotencyKey: key,
+                    payload: mutBytes
+                )
+                try withPrepared(
+                    on: db,
+                    sql: """
+                    INSERT OR IGNORE INTO mutation_calls (
+                        session_id, run_id, call_id, idempotency_key, sequence, state, mutation_json, digest
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                    """
+                ) { stmt in
+                    bindText(stmt, 1, sessionText)
+                    bindText(stmt, 2, runText)
+                    bindText(stmt, 3, callText)
+                    bindText(stmt, 4, key)
+                    sqlite3_bind_int64(stmt, 5, Int64(bitPattern: sequence))
+                    bindText(stmt, 6, state)
+                    bindBlob(stmt, 7, mutBytes)
+                    bindText(stmt, 8, callDigest)
+                    try stepDone(stmt, on: db)
+                }
+            }
+            let metaRow: (Data, UInt64, UInt64, UInt64, UInt64) = try withPrepared(
+                on: db,
+                sql: """
+                SELECT capabilities_json, logical_sequence, next_record_sequence, layout_generation, audit_high_water
+                FROM store_meta WHERE singleton = 1;
+                """
+            ) { stmt in
+                guard try stepRow(stmt, on: db) else { throw AgentJournalError.invalidHeader }
+                return (
+                    columnBlob(stmt, 0),
+                    UInt64(bitPattern: sqlite3_column_int64(stmt, 1)),
+                    UInt64(bitPattern: sqlite3_column_int64(stmt, 2)),
+                    UInt64(bitPattern: sqlite3_column_int64(stmt, 3)),
+                    UInt64(bitPattern: sqlite3_column_int64(stmt, 4))
+                )
+            }
+            let updatedDigest = computeMetaDigest(
+                magic: magic,
+                schemaVersion: supportedSchemaVersion,
+                storeID: storeID,
+                domain: domain,
+                capabilitiesBytes: metaRow.0,
+                logicalSequence: metaRow.1,
+                nextRecordSequence: metaRow.2,
+                layoutGeneration: metaRow.3,
+                auditHighWater: metaRow.4
+            )
+            try withPrepared(
+                on: db,
+                sql: "UPDATE store_meta SET schema_version = ?, digest = ? WHERE singleton = 1;"
+            ) { stmt in
+                sqlite3_bind_int64(stmt, 1, Int64(supportedSchemaVersion))
+                bindText(stmt, 2, updatedDigest)
+                try stepDone(stmt, on: db)
+            }
+        } catch {
+            try? exec(on: db, "ROLLBACK;")
+            throw error
+        }
+        try exec(on: db, "COMMIT;")
     }
 
     func loadMetaState(on db: OpaquePointer) throws -> MetaState {
