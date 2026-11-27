@@ -1003,7 +1003,7 @@ extension AgentJournalSQLiteStore {
                 try AgentJournalSQLiteStore.withPrepared(
                     on: db,
                     sql: """
-                    INSERT INTO mutation_calls (
+                    INSERT OR REPLACE INTO mutation_calls (
                         session_id, run_id, call_id, idempotency_key, sequence, state, mutation_json, digest
                     )
                     SELECT session_id, run_id, call_id, idempotency_key, sequence, state, mutation_json, digest

@@ -42,7 +42,7 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
         let toolCalls: [ToolCall]
     }
 
-    private struct StoredCallIdentity: Equatable {
+    private struct StoredCallIdentity: Equatable, Hashable {
         let sessionID: String
         let runID: String
         let callID: String
@@ -1041,6 +1041,200 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
         #expect(try Self.rowCount(table: "mutations", at: retryDir) == 1)
         #expect(try Self.rowCount(table: "mutation_calls", at: retryDir) == 1)
         #expect(try Self.readStoreMetaVersionAndDigest(at: retryDir).schemaVersion == 1)
+        try await reopened.close()
+    }
+
+    @Test func repeatedlySupersededInvocationsReplaceArchivedHistoryWithLatestRecord() async throws {
+        let directory = tempDir("repeated-supersede")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AgentSQLiteJournal.create(
+            at: directory,
+            operationDomain: "repeated-supersede",
+            supportsConfirmedNoEffect: true
+        )
+        let store = try #require(await journal.store)
+
+        let session = UUID()
+        let runA = UUID(), runB = UUID()
+        let callA = ToolCallID(rawValue: "bounce-call-a")
+        let callB = ToolCallID(rawValue: "bounce-call-b")
+        let callIdentityA = StoredCallIdentity(sessionID: session.uuidString, runID: runA.uuidString, callID: callA.rawValue)
+        let callIdentityB = StoredCallIdentity(sessionID: session.uuidString, runID: runB.uuidString, callID: callB.rawValue)
+
+        let target = EvidenceReference(namespace: "fixture", id: "bounce-item")
+        let expectation = try ToolReceiptExpectation(targets: [target], revision: .present)
+        let key = "repeated-supersede/write/{\"id\":\"bounce\"}"
+        let intentA = try PendingMutationIntent(
+            call: ToolCall(id: callA, name: "write", argumentsJSON: #"{"id":"bounce"}"#, completeness: .complete),
+            resources: [.named(target)],
+            idempotencyKey: key,
+            receiptExpectation: expectation
+        )
+        let intentB = try PendingMutationIntent(
+            call: ToolCall(id: callB, name: "write", argumentsJSON: #"{"id":"bounce"}"#, completeness: .complete),
+            resources: [.named(target)],
+            idempotencyKey: key,
+            receiptExpectation: expectation
+        )
+
+        func publishSnapshot(
+            runID: UUID,
+            intent: PendingMutationIntent,
+            state: AgentMutationState,
+            receipt: ToolReceipt? = nil,
+            output: JSONValue? = nil,
+            abortConfirmation: AgentNoEffectConfirmation? = nil,
+            event: AgentJournalEvent
+        ) throws -> JournalStoredMutation {
+            try store.write { view in
+                let priorHeader = try view.header(session)
+                let expectedRev = priorHeader?.revision ?? 0
+                let seq = try view.nextRecordSequence()
+                let stored = JournalStoredMutation(
+                    sessionID: session,
+                    runID: runID,
+                    intent: intent,
+                    sequence: seq,
+                    state: state,
+                    receipt: receipt,
+                    output: output,
+                    abortConfirmation: abortConfirmation
+                )
+                let nextHeader = JournalSessionHeader(
+                    revision: expectedRev + 1,
+                    created: true,
+                    lastRunID: runID,
+                    steeringIDs: [],
+                    historyHead: priorHeader?.historyHead,
+                    messageCount: priorHeader?.messageCount ?? 0,
+                    pendingIdentity: nil
+                )
+                let record = AgentJournalRecord(
+                    sequence: seq,
+                    timestamp: Date(),
+                    sessionID: session,
+                    runID: runID,
+                    event: event
+                )
+                try view.publish(JournalStoreChange(
+                    sessionID: session,
+                    expectedRevision: expectedRev,
+                    header: nextHeader,
+                    messageStart: priorHeader?.messageCount ?? 0,
+                    messages: [],
+                    mutation: stored,
+                    records: [record]
+                ))
+                return stored
+            }
+        }
+
+        // Bounce A -> B -> A -> B -> A so both invocations hit mutation_calls conflict replacement.
+        let confirmationA1 = try AgentNoEffectConfirmation(basis: "attempt-a-1")
+        let confirmationB1 = try AgentNoEffectConfirmation(basis: "attempt-b-1")
+        let confirmationA2 = try AgentNoEffectConfirmation(basis: "attempt-a-2")
+        let confirmationB2 = try AgentNoEffectConfirmation(basis: "attempt-b-2")
+        let receiptA3 = ToolReceipt(operationID: key, status: .succeeded, confirmedTargets: [target], revision: "rev-a-3")
+        let outputA3 = JSONValue.object(["attempt": .string("a-3"), "settled": .bool(true)])
+
+        _ = try publishSnapshot(
+            runID: runA,
+            intent: intentA,
+            state: .aborted,
+            abortConfirmation: confirmationA1,
+            event: .mutationAborted(callID: callA, confirmation: confirmationA1)
+        )
+        #expect(try Self.rowCount(table: "mutations", at: directory) == 1)
+        #expect(try Self.rowCount(table: "mutation_calls", at: directory) == 0)
+
+        _ = try publishSnapshot(
+            runID: runB,
+            intent: intentB,
+            state: .aborted,
+            abortConfirmation: confirmationB1,
+            event: .mutationAborted(callID: callB, confirmation: confirmationB1)
+        )
+        #expect(try Self.rowCount(table: "mutations", at: directory) == 1)
+        #expect(try Self.rowCount(table: "mutation_calls", at: directory) == 1)
+
+        let aV2 = try publishSnapshot(
+            runID: runA,
+            intent: intentA,
+            state: .aborted,
+            abortConfirmation: confirmationA2,
+            event: .mutationAborted(callID: callA, confirmation: confirmationA2)
+        )
+
+        // Superseding A a second time replaces A's earlier archived row in mutation_calls with aV2.
+        let bV2 = try publishSnapshot(
+            runID: runB,
+            intent: intentB,
+            state: .aborted,
+            abortConfirmation: confirmationB2,
+            event: .mutationAborted(callID: callB, confirmation: confirmationB2)
+        )
+        #expect(try Self.rowCount(table: "mutations", at: directory) == 1)
+        #expect(try Self.storedCalls(table: "mutations", at: directory) == [callIdentityB])
+        let archivedAfterFourth = try Self.storedCalls(table: "mutation_calls", at: directory)
+        #expect(Set(archivedAfterFourth).count == archivedAfterFourth.count)
+        #expect(archivedAfterFourth.count <= 2)
+        #expect(archivedAfterFourth.contains(callIdentityA))
+        #expect(try await journal.mutationStatus(sessionID: session, runID: runA, callID: callA)?.abortConfirmation == confirmationA2)
+        #expect(try store.read { try $0.mutation(sessionID: session, runID: runA, callID: callA) } == aV2)
+        #expect(try store.read { try $0.mutation(sessionID: session, runID: runB, callID: callB) } == bV2)
+
+        // Superseding B a second time replaces B's earlier archived row in mutation_calls with bV2.
+        let aV3 = try publishSnapshot(
+            runID: runA,
+            intent: intentA,
+            state: .settled,
+            receipt: receiptA3,
+            output: outputA3,
+            event: .mutationSettled(callID: callA, receipt: receiptA3, source: .executor)
+        )
+
+        func verifyFinalState(on targetJournal: AgentJournal, phase: String) async throws {
+            let statusA = try #require(
+                try await targetJournal.mutationStatus(sessionID: session, runID: runA, callID: callA),
+                "latest record for callA missing (\(phase))"
+            )
+            #expect(statusA.state == .settled)
+            #expect(statusA.receipt == receiptA3)
+            #expect(statusA.replayOutput == outputA3)
+            #expect(statusA.abortConfirmation == nil)
+
+            let statusB = try #require(
+                try await targetJournal.mutationStatus(sessionID: session, runID: runB, callID: callB),
+                "latest record for callB missing (\(phase))"
+            )
+            #expect(statusB.state == .aborted)
+            #expect(statusB.receipt == nil)
+            #expect(statusB.replayOutput == nil)
+            #expect(statusB.abortConfirmation == confirmationB2)
+
+            #expect(try await targetJournal.mutationStatus(identity: key) == statusA)
+
+            let targetStore = try #require(await targetJournal.store)
+            #expect(try targetStore.read { try $0.mutation(sessionID: session, runID: runA, callID: callA) } == aV3)
+            #expect(try targetStore.read { try $0.mutation(sessionID: session, runID: runB, callID: callB) } == bV2)
+            #expect(try targetStore.read { try $0.identity(key) } == aV3)
+
+            #expect(try Self.rowCount(table: "mutations", at: directory) == 1)
+            #expect(try Self.storedCalls(table: "mutations", at: directory) == [callIdentityA])
+            let archived = try Self.storedCalls(table: "mutation_calls", at: directory)
+            #expect(try Self.rowCount(table: "mutation_calls", at: directory) == archived.count)
+            #expect(Set(archived).count == archived.count)
+            #expect(archived.count <= 2)
+            #expect(archived.contains(callIdentityB))
+            #expect(archived.allSatisfy { $0 == callIdentityA || $0 == callIdentityB })
+            #expect(try Self.readStoreMetaVersionAndDigest(at: directory).schemaVersion == 1)
+        }
+
+        try await verifyFinalState(on: journal, phase: "before close")
+        try await journal.close()
+
+        let reopened = try AgentSQLiteJournal.open(at: directory)
+        try await verifyFinalState(on: reopened, phase: "after reopen")
         try await reopened.close()
     }
 }
