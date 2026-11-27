@@ -21,7 +21,9 @@ public enum SQLiteJournalDurability: Sendable, Equatable {
 
 package enum SQLiteJournalFaultStage: Sendable, Equatable {
     case beforeCommit
+    case duringCommit
     case afterCommit
+    case duringRollback
     case duringMaintenanceSnapshot
     case beforeSessionRead
 }
@@ -294,6 +296,7 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
 
     private let writeLock = NSLock()
     private let readLock = NSLock()
+    private let stateLock = NSLock()
     private let countersLock = NSLock()
     private var writerDB: OpaquePointer?
     private var readerDB: OpaquePointer?
@@ -301,6 +304,37 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
     private var closed = false
     private var poisoned = false
     let fault: (@Sendable (SQLiteJournalFaultStage) throws -> Void)?
+
+    private func checkOpenAndHealthy() throws {
+        try stateLock.withLock {
+            guard !closed else { throw AgentJournalError.storeClosed }
+            guard !poisoned else { throw AgentJournalError.commitUnknown }
+        }
+    }
+
+    private func markPoisoned() {
+        stateLock.withLock { poisoned = true }
+    }
+
+    private func rollbackOrPoison(on db: OpaquePointer) throws {
+        do {
+            try fault?(.duringRollback)
+            try Self.exec(on: db, "ROLLBACK;")
+        } catch {
+            markPoisoned()
+            throw AgentJournalError.commitUnknown
+        }
+    }
+
+    private func commitOrPoison(on db: OpaquePointer) throws {
+        do {
+            try fault?(.duringCommit)
+            try Self.exec(on: db, "COMMIT;")
+        } catch {
+            markPoisoned()
+            throw AgentJournalError.commitUnknown
+        }
+    }
 
     var bytesReadCount: UInt64 = 0
     var decodedBatchesCount: UInt64 = 0
@@ -581,8 +615,8 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
         )
         let capsBytes = try Self.canonicalJSON(upgraded)
         try writeLock.withLock {
-            guard !closed else { throw AgentJournalError.storeClosed }
-            guard !poisoned, let db = writerDB else { throw AgentJournalError.commitUnknown }
+            try checkOpenAndHealthy()
+            guard let db = writerDB else { throw AgentJournalError.commitUnknown }
             try Self.exec(on: db, "BEGIN IMMEDIATE TRANSACTION;")
             do {
                 let meta = try loadMetaState(on: db)
@@ -606,16 +640,11 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
                     try Self.stepDone(stmt, on: db)
                 }
             } catch {
-                try? Self.exec(on: db, "ROLLBACK;")
+                try rollbackOrPoison(on: db)
                 throw error
             }
-            do {
-                try Self.exec(on: db, "COMMIT;")
-            } catch {
-                // SQLite may or may not have made the change durable; reopen to see which format is current.
-                poisoned = true
-                throw AgentJournalError.commitUnknown
-            }
+            // SQLite may or may not have made the change durable; reopen to see which format is current.
+            try commitOrPoison(on: db)
         }
     }
 
@@ -680,15 +709,14 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
             }
         }
         try writeLock.withLock {
-            guard !closed else { throw AgentJournalError.storeClosed }
-            guard !poisoned else { throw AgentJournalError.commitUnknown }
+            try checkOpenAndHealthy()
         }
         // Snapshot boundary happens outside writeLock so foreground commits and reads can interleave.
         try fault?(.duringMaintenanceSnapshot)
         try Task.checkCancellation()
         return try writeLock.withLock {
-            guard !closed else { throw AgentJournalError.storeClosed }
-            guard !poisoned, let writer = writerDB else { throw AgentJournalError.commitUnknown }
+            try checkOpenAndHealthy()
+            guard let writer = writerDB else { throw AgentJournalError.commitUnknown }
             let beforeBytes = currentWALBytes()
             // Meta first, so the checkpoint below also covers this write and leaves nothing behind in the WAL.
             try Self.exec(on: writer, "BEGIN IMMEDIATE TRANSACTION;")
@@ -696,11 +724,11 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
                 var meta = try loadMetaState(on: writer)
                 meta.layoutGeneration += 1
                 try saveMetaState(meta, on: writer)
-                try Self.exec(on: writer, "COMMIT;")
             } catch {
-                try? Self.exec(on: writer, "ROLLBACK;")
+                try rollbackOrPoison(on: writer)
                 throw error
             }
+            try commitOrPoison(on: writer)
             // TRUNCATE resets the WAL file to zero bytes when no reader holds it. Do not wait for readers while
             // holding writeLock: with no busy handler SQLite checkpoints what it can and returns BUSY.
             sqlite3_busy_timeout(writer, 0)
@@ -723,14 +751,18 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
             readLock.unlock()
             writeLock.unlock()
         }
-        if closed { return }
-        closed = true
+        let (alreadyClosed, wasPoisoned) = stateLock.withLock { () -> (Bool, Bool) in
+            if closed { return (true, poisoned) }
+            closed = true
+            return (false, poisoned)
+        }
+        if alreadyClosed { return }
         if let db = readerDB {
             sqlite3_close_v2(db)
             readerDB = nil
         }
         if let db = writerDB {
-            if !poisoned {
+            if !wasPoisoned {
                 _ = sqlite3_wal_checkpoint_v2(db, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil)
             }
             sqlite3_close_v2(db)
@@ -757,52 +789,51 @@ package final class AgentJournalSQLiteStore: JournalStore, @unchecked Sendable {
             countersLock.withLock { writeLockNanosecondsCount += elapsed }
             writeLock.unlock()
         }
-        guard !closed else { throw AgentJournalError.storeClosed }
-        guard !poisoned, let db = writerDB else { throw AgentJournalError.commitUnknown }
+        try checkOpenAndHealthy()
+        guard let db = writerDB else { throw AgentJournalError.commitUnknown }
 
         try Self.exec(on: db, "BEGIN IMMEDIATE TRANSACTION;")
-        var committed = false
+        let result: T
+        let didPublish: Bool
+        let writtenBytes: UInt64
         do {
             let view = View(store: self, db: db, writable: true)
-            let result = try body(view)
-            if view.didPublish {
+            result = try body(view)
+            didPublish = view.didPublish
+            writtenBytes = view.writtenBytes
+            if didPublish {
                 try fault?(.beforeCommit)
-                try Self.exec(on: db, "COMMIT;")
-                committed = true
-                countersLock.withLock {
-                    committedBatchesCount += 1
-                    bytesWrittenCount += view.writtenBytes
-                    encodedBatchesCount += 1
-                }
-                do {
-                    try fault?(.afterCommit)
-                } catch {
-                    poisoned = true
-                    throw AgentJournalError.commitUnknown
-                }
-            } else {
-                try Self.exec(on: db, "ROLLBACK;")
             }
-            return result
         } catch {
-            if !committed {
-                try? Self.exec(on: db, "ROLLBACK;")
-            } else {
-                poisoned = true
-                throw AgentJournalError.commitUnknown
-            }
-            if poisoned { throw AgentJournalError.commitUnknown }
+            try rollbackOrPoison(on: db)
             throw error
         }
+        if didPublish {
+            try commitOrPoison(on: db)
+            countersLock.withLock {
+                committedBatchesCount += 1
+                bytesWrittenCount += writtenBytes
+                encodedBatchesCount += 1
+            }
+            do {
+                try fault?(.afterCommit)
+            } catch {
+                markPoisoned()
+                throw AgentJournalError.commitUnknown
+            }
+        } else {
+            try rollbackOrPoison(on: db)
+        }
+        return result
     }
 
     private func readLocked<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
-        // Check poisoned/closed status without blocking concurrent maintenance snapshot pauses.
-        if poisoned { throw AgentJournalError.commitUnknown }
+        // Check closed/poisoned under stateLock without blocking concurrent maintenance snapshot pauses.
+        try checkOpenAndHealthy()
         readLock.lock()
         defer { readLock.unlock() }
-        guard !closed else { throw AgentJournalError.storeClosed }
-        guard !poisoned, let db = readerDB else { throw AgentJournalError.commitUnknown }
+        try checkOpenAndHealthy()
+        guard let db = readerDB else { throw AgentJournalError.commitUnknown }
         return try body(db)
     }
 }

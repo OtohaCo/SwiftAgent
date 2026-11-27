@@ -76,9 +76,40 @@ public actor AgentSession {
     private var completedTurnRevision: UInt64?
     /// Retained corrections a definite Journal failure kept out of history; the next Run admits them.
     private var owedSteering: [AgentSteeringInput] = []
-    /// Retained corrections whose commit outcome is unknown. Only a reopened Journal can say whether
-    /// they are history, so this Session neither presents nor extends history any more.
-    private var steeringCommitUnknown = false
+    /// A Journal write's commit outcome is unknown. Only a reopened Journal can say whether
+    /// it persisted, so this Session neither presents nor extends history any more.
+    private var commitUnknown = false
+
+    private static func containsCommitUnknown(_ failure: AgentFailure) -> Bool {
+        switch failure {
+        case .journal(.commitUnknown): true
+        case .mutationPersistence(let error):
+            containsCommitUnknown(error.settlement) || containsCommitUnknown(error.quarantine)
+        case .auditPersistence(let error):
+            containsCommitUnknown(error.original) || containsCommitUnknown(error.audit)
+        default: false
+        }
+    }
+
+    private func noteJournalError(_ error: any Error) {
+        if case AgentJournalError.commitUnknown = error {
+            commitUnknown = true
+        } else if let persistence = error as? AgentMutationPersistenceError,
+                  Self.containsCommitUnknown(persistence.settlement) || Self.containsCommitUnknown(persistence.quarantine) {
+            commitUnknown = true
+        } else if let audit = error as? AgentAuditPersistenceError,
+                  Self.containsCommitUnknown(audit.original) || Self.containsCommitUnknown(audit.audit) {
+            commitUnknown = true
+        } else if let failure = error as? AgentFailure, Self.containsCommitUnknown(failure) {
+            commitUnknown = true
+        }
+    }
+
+    private func checkCommitKnown() async throws {
+        guard commitUnknown else { return }
+        if await journal?.closing == true { throw AgentJournalError.storeClosed }
+        throw AgentJournalError.commitUnknown
+    }
     private var committedWrites: [UUID: Int] = [:]
     /// Host calls (ADR 0011) whose result history committed, by Run.
     private var hostResultsCommitted: Set<UUID> = []
@@ -238,13 +269,13 @@ public actor AgentSession {
             if inputContent.contains(where: { if case .image = $0 { true } else { false } }), !journal.supportsImageContent { throw AgentJournalError.unsupportedFormat }
         }
         if correlation != nil, journal == nil { throw AgentJournalError.unsupportedFormat }
+        try await checkCommitKnown()
         let runAdmission = try await journal?.prepareRunAdmission(sessionID: id, text: text, operationID: operationID, correlation: correlation, inputContent: inputContent)
         try authorization.validate(journal: journal)
         if authorization.mode == .requiredAudit {
             try await journal?.checkAuditAvailability(backlog: authorization.backlog)
             try await journal?.validateAuditProposalReference(authorization.relatedProposalID, sessionID: id)
         }
-        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentSessionError.emptyInput }
         try contextPolicy.checkInput(text)
         let runBudget = try budget?.renewed() ?? AgentBudget(
@@ -329,6 +360,7 @@ public actor AgentSession {
                 throw error
             }
         } catch {
+            noteJournalError(error)
             if !deferredStartupReleases.contains(startupID) {
                 startupFinished()
             }
@@ -378,7 +410,7 @@ public actor AgentSession {
         try Task.checkCancellation()
         try authorization.validate(journal: journal)
         guard authorization.mode != .requiredAudit else { throw AgentHostInvocationError.requiredAuditUnsupported }
-        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
+        try await checkCommitKnown()
         let registry = capabilities.registry
         if registry.hasConfirmedNoEffectMutation, journal?.supportsConfirmedNoEffect != true {
             throw AgentSessionError.confirmedNoEffectJournalRequired
@@ -469,21 +501,25 @@ public actor AgentSession {
                     throw AgentLoopError.deadlineExceeded
                 } catch AgentJournalError.commitUnknown {
                     // The frame may be visible: keep an owner through drain, as a Run does, but never run the call.
+                    commitUnknown = true
                     uncertainStartup = true
                 }
             }
         } catch {
+            noteJournalError(error)
             if journalLeaseAcquired { await journal?.releaseSessionLease(sessionID: id) }
             if identityAcquired { await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal?.storeIdentity()?.storeID) }
             if let registeredRunID { await capabilities.scope.releaseRun(registeredRunID) }
             startupFinished()
             throw error
         }
-        if history != candidate {
-            history = candidate
-            advanceConversationRevision()
+        if !uncertainStartup {
+            if history != candidate {
+                history = candidate
+                advanceConversationRevision()
+            }
+            owedSteering.removeAll()
         }
-        owedSteering.removeAll()
         activeRunID = runID
         let drain = AgentRunDrain()
         drainHandles[runID] = drain
@@ -544,6 +580,7 @@ public actor AgentSession {
                 }
             })
         } catch {
+            noteJournalError(error)
             // Scheduler cancellation after publication cannot undo the host's result.
             guard await settled.value != nil else { throw AgentLoop.toolError(error) }
         }
@@ -593,12 +630,15 @@ public actor AgentSession {
             }
             hostResultsCommitted.insert(runID)
         } catch {
+            noteJournalError(error)
             guard call.policy.effect == .mutation, !result.isIdempotentReplay, result.confirmedNoEffect == nil,
                   !result.notAdmitted else { throw error }
             let callID = call.call.id
-            throw await AgentMutationPersistenceError.capturing(settlement: error) {
+            let captured = await AgentMutationPersistenceError.capturing(settlement: error) {
                 try await self.journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
             }
+            noteJournalError(captured)
+            throw captured
         }
         return (message, result.receipt.map { AgentToolReceipt(callID: call.call.id, effect: call.policy.effect, receipt: $0) })
     }
@@ -611,17 +651,25 @@ public actor AgentSession {
                                 recordsTerminal: Bool, work: Task<AgentHostInvocationResult, any Error>,
                                 scope: AgentCapabilityScope) async -> (any Error)? {
         await waitForCommittedWrites(runID)
+        if case .failure(let error) = outcome { noteJournalError(error) }
         var failure: (any Error)?
         if recordsTerminal, let journal, journal.supportsRunRecords {
-            let terminal: AgentRunTerminal
-            switch outcome {
-            case .success: terminal = .completed
-            case .failure(let error): terminal = .from(.failure(error))
+            if !commitUnknown {
+                let terminal: AgentRunTerminal
+                switch outcome {
+                case .success: terminal = .completed
+                case .failure(let error): terminal = .from(.failure(error))
+                }
+                do {
+                    let prepared = try await prepareCheckpoint(history)
+                    try await journal.commitRunTerminal(history: prepared, sessionID: id, runID: runID, terminal: terminal)
+                } catch {
+                    noteJournalError(error)
+                    failure = error
+                }
+            } else if case .success = outcome {
+                failure = AgentJournalError.commitUnknown
             }
-            do {
-                let prepared = try await prepareCheckpoint(history)
-                try await journal.commitRunTerminal(history: prepared, sessionID: id, runID: runID, terminal: terminal)
-            } catch { failure = error }
         }
         activeRunID = nil
         drainingRunID = runID
@@ -641,7 +689,7 @@ public actor AgentSession {
     /// no result can still be committed after it. The wording comes from the call's durable state. Best effort: the
     /// call's facts stand in the Journal whether or not this notice is kept.
     private func noteHostFailure(runID: UUID, call: PreparedToolCall) async {
-        guard drainingRunID == runID else { return }
+        guard drainingRunID == runID, !commitUnknown else { return }
         await waitForCommittedWrites(runID)
         let committed = hostResultsCommitted.contains(runID)
         let mutation: Result<AgentMutationState?, any Error>
@@ -660,13 +708,16 @@ public actor AgentSession {
             do {
                 try await journal.appendCheckpointForCurrentRun([.checkpoint(history: prepared, steeringIDs: [])], sessionID: id,
                     runID: runID, durability: journal.storage == .durable ? .durable : .memory)
-            } catch { return }
+            } catch {
+                noteJournalError(error)
+                return
+            }
         }
         applyCommittedHistory(prepared, steering: [], runID: runID)
     }
 
     public func conversationSnapshot() async throws -> AgentConversationSnapshot {
-        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
+        try await checkCommitKnown()
         try await restoreJournalStateIfNeeded()
         return .init(revision: conversationRevision, messages: history)
     }
@@ -674,6 +725,7 @@ public actor AgentSession {
     /// Receives a future input without changing the current Run or formal
     /// conversation. The durable store, not this actor's memory, confirms it.
     public func enqueueFollowUp(_ input: AgentFollowUpInput) async throws -> AgentFollowUpRecord {
+        try await checkCommitKnown()
         if input.operationID?.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(AgentHostToolCall.operationPrefix) == true {
             throw AgentHostInvocationError.reservedOperationID
         }
@@ -683,7 +735,12 @@ public actor AgentSession {
             try await journal?.validateAuditProposalReference(authorization.relatedProposalID, sessionID: id)
         }
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
-        return try await journal.enqueueFollowUp(input, sessionID: id)
+        do {
+            return try await journal.enqueueFollowUp(input, sessionID: id)
+        } catch {
+            noteJournalError(error)
+            throw error
+        }
     }
 
     public func followUp(inputID: String) async throws -> AgentFollowUpRecord? {
@@ -704,8 +761,14 @@ public actor AgentSession {
     }
 
     public func withdrawFollowUp(inputID: String) async throws -> AgentFollowUpWithdrawal {
+        try await checkCommitKnown()
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
-        return try await journal.withdrawFollowUp(sessionID: id, inputID: inputID)
+        do {
+            return try await journal.withdrawFollowUp(sessionID: id, inputID: inputID)
+        } catch {
+            noteJournalError(error)
+            throw error
+        }
     }
 
     /// Starts one explicit FIFO consumer. A paused consumer still owns this
@@ -714,6 +777,10 @@ public actor AgentSession {
                                       resolver: any AgentFollowUpResolver,
                                       onRun: (@Sendable (AgentFollowUpRecord, AgentRun) async -> Void)? = nil
     ) async throws -> AgentFollowUpDispatcher {
+        if commitUnknown {
+            if await journal?.closing == true { throw AgentFollowUpError.dispatcherStopped }
+            throw AgentJournalError.commitUnknown
+        }
         guard let journal, journal.storage == .durable else { throw AgentFollowUpError.durableJournalRequired }
         guard !dispatchStarting, dispatcherID == nil else { throw AgentFollowUpError.alreadyDispatching }
         guard !startingRun else { throw AgentSessionError.runInProgress }
@@ -766,7 +833,7 @@ public actor AgentSession {
     /// Anchors a closed range to actual Journal message IDs. The caller can
     /// derive a request-only summary; no conversation or ledger write occurs.
     public func contextHistorySpan(start: Int, count: Int) async throws -> AgentContextHistorySpan {
-        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
+        try await checkCommitKnown()
         try await restoreJournalStateIfNeeded()
         guard let journal, start >= 0, count > 0, count <= 256,
               start <= Int.max - count else { throw AgentContextPipelineError.unsafeSummary }
@@ -784,7 +851,7 @@ public actor AgentSession {
     /// Selects a committed successful result from a registered read-only tool.
     /// A projection may shorten its model view; the Journal result stays whole.
     public func contextToolExcerpt(callID: ToolCallID, text: String) async throws -> AgentContextToolExcerpt {
-        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
+        try await checkCommitKnown()
         try await restoreJournalStateIfNeeded()
         let formal = history.filter { $0.role != .system && $0.role != .developer }
         guard let index = formal.firstIndex(where: {
@@ -974,8 +1041,10 @@ public actor AgentSession {
             } catch AgentJournalError.commitUnknown {
                 // The frame may be visible. Retain a Run owner through drain,
                 // but never enter the provider or a mutation executor.
+                commitUnknown = true
                 uncertainStartup = true
             } catch {
+                noteJournalError(error)
                 throw error
             }
             // The durable startup frame is the admission boundary. Once the
@@ -991,13 +1060,15 @@ public actor AgentSession {
         let channel = AsyncStream<AgentEvent>.makeStream(bufferingPolicy:
             followUpInputID == nil ? .unbounded : .bufferingNewest(256))
         let emitter = AgentEventEmitter(channel.continuation, requiresConsumer: false)
-        if history != prepared { history = prepared }
-        history.append(contentsOf: owed.map { .user([.text($0.text)]) })
-        history.append(.user(inputContent))
-        owedSteering.removeAll()
-        conversationRevision = candidateRevision
+        if !uncertainStartup {
+            if history != prepared { history = prepared }
+            history.append(contentsOf: owed.map { .user([.text($0.text)]) })
+            history.append(.user(inputContent))
+            owedSteering.removeAll()
+            conversationRevision = candidateRevision
+            appliedSteeringIDs.removeAll()
+        }
         activeRunID = runID
-        appliedSteeringIDs.removeAll()
         let drain = AgentRunDrain()
         drainHandles[runID] = drain
         loopsByRunID[runID] = loop
@@ -1091,6 +1162,7 @@ public actor AgentSession {
                     await self.endCommittedWrite(runID)
                     return prepared
                 } catch {
+                    await self.noteJournalError(error)
                     await self.endCommittedWrite(runID)
                     throw error
                 }
@@ -1116,11 +1188,20 @@ public actor AgentSession {
                     await self.installStagedNativeCheckpoint(native, runID: runID)
                     await self.endCommittedWrite(runID)
                     return prepared
-                } catch { await self.endCommittedWrite(runID); throw error }
+                } catch {
+                    await self.noteJournalError(error)
+                    await self.endCommittedWrite(runID)
+                    throw error
+                }
             },
             markMutationNeedsReconciliation: { callID in
                 await self.mutationQuarantineDidBegin?(runID, callID)
-                try await journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
+                do {
+                    try await journal?.markMutationNeedsReconciliation(sessionID: self.id, runID: runID, callID: callID)
+                } catch {
+                    await self.noteJournalError(error)
+                    throw error
+                }
             },
             recordReadOnlyResult: { call, result in
                 guard await self.activeRunID == runID else { return }
@@ -1138,6 +1219,7 @@ public actor AgentSession {
                                                 initialRequest: initialRequest)
             return .success(result)
         } catch {
+            noteJournalError(error)
             return .failure(error)
         }
     }
@@ -1176,6 +1258,7 @@ public actor AgentSession {
             checkpointDidExit?(runID)
             return prepared
         } catch {
+            noteJournalError(error)
             checkpointDidExit?(runID)
             throw error
         }
@@ -1230,7 +1313,7 @@ public actor AgentSession {
                 try await journal.publishNativeContext(value, history: prepared, sessionID: id, runID: runID,
                     expectedHistory: snapshot.witness, steeringIDs: Array(appliedSteeringIDs),
                     deadline: budget.gate.isSettled ? nil : budget.deadline)
-            } catch AgentJournalError.commitUnknown { steeringCommitUnknown = true; throw AgentJournalError.commitUnknown }
+            } catch AgentJournalError.commitUnknown { commitUnknown = true; throw AgentJournalError.commitUnknown }
             catch AgentJournalStartupAdmissionError.deadlineExceeded { throw AgentLoopError.deadlineExceeded }
         }
         applyCommittedHistory(prepared, steering: [], runID: runID)
@@ -1249,16 +1332,21 @@ public actor AgentSession {
         let native = try await stagedNativeCheckpoint(history: prepared, runID: runID)
         beginCommittedWrite(runID)
         defer { endCommittedWrite(runID) }
-        try await journal.commitMutation(
-            sessionID: id,
-            runID: runID,
-            callID: callID,
-            receipt: receipt,
-            output: output,
-            history: prepared,
-            steeringIDs: steering.map(\.id),
-            nativeContext: native
-        )
+        do {
+            try await journal.commitMutation(
+                sessionID: id,
+                runID: runID,
+                callID: callID,
+                receipt: receipt,
+                output: output,
+                history: prepared,
+                steeringIDs: steering.map(\.id),
+                nativeContext: native
+            )
+        } catch {
+            noteJournalError(error)
+            throw error
+        }
         applyCommittedHistory(prepared, steering: steering, runID: runID)
         await installStagedNativeCheckpoint(native, runID: runID)
         return prepared
@@ -1297,17 +1385,25 @@ public actor AgentSession {
         guard activeRunID == runID else { return nil }
         await waitForCommittedWrites(runID)
         guard activeRunID == runID else { return nil }
+        if case .failure(let error) = outcome { noteJournalError(error) }
         pendingNativePublications.removeValue(forKey: runID)
         let retained = pending.filter { !appliedSteeringIDs.contains($0.id) }
         var failure = retained.isEmpty ? nil : await retain(retained, runID: runID)
         if let outcome, let journal, journal.supportsRunRecords {
             // Retained steering and all started checkpoint writes have resolved before this boundary.
             // A poisoned store rejects this operation; no retry or synthetic terminal is attempted.
-            let terminal = AgentRunTerminal.from(failure.map { .failure($0) } ?? outcome)
-            do {
-                let prepared = try await prepareCheckpoint(history)
-                try await journal.commitRunTerminal(history: prepared, sessionID: id, runID: runID, terminal: terminal)
-            } catch { failure = error }
+            if !commitUnknown {
+                let terminal = AgentRunTerminal.from(failure.map { .failure($0) } ?? outcome)
+                do {
+                    let prepared = try await prepareCheckpoint(history)
+                    try await journal.commitRunTerminal(history: prepared, sessionID: id, runID: runID, terminal: terminal)
+                } catch {
+                    noteJournalError(error)
+                    failure = error
+                }
+            } else if failure == nil, case .success = outcome {
+                failure = AgentJournalError.commitUnknown
+            }
         }
         completedTurnRevision = failure == nil && outcome.map({ AgentRunTerminal.from($0) == .completed }) == true
             ? conversationRevision : nil
@@ -1352,6 +1448,7 @@ public actor AgentSession {
             advanceConversationRevision()
             return nil
         }
+        guard !commitUnknown else { return AgentJournalError.commitUnknown }
         do {
             let prepared = try await prepareCheckpoint(messages)
             try await journal.appendCheckpointForCurrentRun(
@@ -1364,7 +1461,7 @@ public actor AgentSession {
             history = prepared
             return nil
         } catch AgentJournalError.commitUnknown {
-            steeringCommitUnknown = true
+            commitUnknown = true
             return AgentJournalError.commitUnknown
         } catch {
             owedSteering.append(contentsOf: inputs)
@@ -1437,7 +1534,7 @@ public actor AgentSession {
             do {
                 try await journal.publishConversationControls(value, history: messages, sessionID: id, runID: runID,
                     steeringIDs: Array(appliedSteeringIDs), expectedHistory: snapshot.witness, deadline: budget.deadline)
-            } catch AgentJournalError.commitUnknown { steeringCommitUnknown = true; throw AgentJournalError.commitUnknown }
+            } catch AgentJournalError.commitUnknown { commitUnknown = true; throw AgentJournalError.commitUnknown }
             catch AgentJournalStartupAdmissionError.deadlineExceeded { throw AgentLoopError.deadlineExceeded }
             persistentHistoryWitness = try await journal.historyWitness(sessionID: id)
         }
@@ -1447,6 +1544,7 @@ public actor AgentSession {
     /// Lists persisted complete request boundaries from the current native
     /// generation. Selection is read-only; compact revalidates under its writer lease.
     public func compactionBoundaries() async throws -> [AgentCompactionBoundary] {
+        try await checkCommitKnown()
         guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
         try await restoreJournalStateIfNeeded()
         let current = await nativeContextState.current()
@@ -1512,7 +1610,7 @@ public actor AgentSession {
         guard discardingRetiredProviderContinuations, !binding.isLegacyBinding else {
             throw ModelProviderError(kind: .unsupportedCapability, message: "Ordinary handoff requires explicit deployment binding and retired-continuation omission consent.")
         }
-        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
+        try await checkCommitKnown()
         guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
         guard !dispatchStarting, dispatcherID == nil else { throw AgentFollowUpError.dispatchOwned }
         if let journal, !journal.supportsContextHandoff { throw AgentJournalError.unsupportedFormat }
@@ -1568,9 +1666,12 @@ public actor AgentSession {
             if completed { completedTurnRevision = conversationRevision }
             result = .success(value)
         } catch AgentJournalError.commitUnknown {
-            steeringCommitUnknown = true; result = .failure(AgentJournalError.commitUnknown)
+            commitUnknown = true; result = .failure(AgentJournalError.commitUnknown)
         } catch AgentJournalStartupAdmissionError.deadlineExceeded { result = .failure(AgentLoopError.deadlineExceeded) }
-        catch { result = .failure(error) }
+        catch {
+            noteJournalError(error)
+            result = .failure(error)
+        }
         Task { [self] in
             await waitForCompactionPreflight(operationID)
             await releaseCompactionReservation(operationID)
@@ -1646,7 +1747,7 @@ public actor AgentSession {
     private func startCompaction(mode: ModelCompactionMode, through boundaryID: UUID?, using binding: AgentModelBinding?,
                                  deadline: ContinuousClock.Instant?) async throws -> AgentCompactionOperation {
         try Task.checkCancellation()
-        guard !steeringCommitUnknown else { throw AgentJournalError.commitUnknown }
+        try await checkCommitKnown()
         guard activeRunID == nil, !startingRun else { throw AgentSessionError.runInProgress }
         guard !dispatchStarting, dispatcherID == nil else { throw AgentFollowUpError.dispatchOwned }
         let binding = binding ?? defaultBinding
@@ -1751,9 +1852,12 @@ public actor AgentSession {
             events.yield(.completed(response))
             result = .success(.init(checkpoint: published, response: response))
         } catch AgentJournalError.commitUnknown {
-            steeringCommitUnknown = true; result = .failure(AgentJournalError.commitUnknown)
+            commitUnknown = true; result = .failure(AgentJournalError.commitUnknown)
         } catch AgentJournalStartupAdmissionError.deadlineExceeded { result = .failure(AgentLoopError.deadlineExceeded) }
-        catch { result = .failure(error) }
+        catch {
+            noteJournalError(error)
+            result = .failure(error)
+        }
         events.finish()
         // The logical result is available while noncooperative work still owns
         // the reservation. The shared preflight completion releases it later.

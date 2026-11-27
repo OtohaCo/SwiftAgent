@@ -44,6 +44,10 @@ struct SQLiteBackendHarness: JournalBackendHarness {
                     switch stage {
                     case .beforeCommit:
                         try fault(.beforeCommit)
+                    case .duringCommit:
+                        try fault(.duringCommit)
+                    case .duringRollback:
+                        try fault(.duringRollback)
                     case .afterCommit:
                         try fault(.afterCommitBeforeAck)
                     case .duringMaintenanceSnapshot:

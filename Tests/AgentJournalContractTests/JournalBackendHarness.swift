@@ -20,6 +20,8 @@ struct JournalContractCapabilities: Sendable, Equatable {
 
 enum JournalContractFaultStage: String, Sendable, Equatable, CaseIterable {
     case beforeCommit
+    case duringCommit
+    case duringRollback
     case afterCommitBeforeAck
     case duringMaintenanceSnapshot
     case beforeSessionRead
