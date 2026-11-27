@@ -297,31 +297,30 @@ extension AgentJournalSQLiteStore {
         }
 
         func mutation(sessionID: UUID, runID: UUID, callID: ToolCallID) throws -> JournalStoredMutation? {
-            let row: (String, Data, String)? = try AgentJournalSQLiteStore.withPrepared(
-                on: db,
-                sql: """
-                SELECT idempotency_key, mutation_json, digest
-                FROM mutation_calls WHERE session_id = ? AND run_id = ? AND call_id = ?;
-                """
-            ) { stmt in
-                AgentJournalSQLiteStore.bindText(stmt, 1, sessionID.uuidString)
-                AgentJournalSQLiteStore.bindText(stmt, 2, runID.uuidString)
-                AgentJournalSQLiteStore.bindText(stmt, 3, callID.rawValue)
-                guard try AgentJournalSQLiteStore.stepRow(stmt, on: db) else { return nil }
-                return (
-                    AgentJournalSQLiteStore.columnText(stmt, 0),
-                    AgentJournalSQLiteStore.columnBlob(stmt, 1),
-                    AgentJournalSQLiteStore.columnText(stmt, 2)
-                )
+            func lookup(in table: String) throws -> (String, Data, String)? {
+                try AgentJournalSQLiteStore.withPrepared(
+                    on: db,
+                    sql: """
+                    SELECT idempotency_key, mutation_json, digest
+                    FROM \(table) WHERE session_id = ? AND run_id = ? AND call_id = ?;
+                    """
+                ) { stmt in
+                    AgentJournalSQLiteStore.bindText(stmt, 1, sessionID.uuidString)
+                    AgentJournalSQLiteStore.bindText(stmt, 2, runID.uuidString)
+                    AgentJournalSQLiteStore.bindText(stmt, 3, callID.rawValue)
+                    guard try AgentJournalSQLiteStore.stepRow(stmt, on: db) else { return nil }
+                    return (
+                        AgentJournalSQLiteStore.columnText(stmt, 0),
+                        AgentJournalSQLiteStore.columnBlob(stmt, 1),
+                        AgentJournalSQLiteStore.columnText(stmt, 2)
+                    )
+                }
             }
+            let row = try lookup(in: "mutations") ?? lookup(in: "mutation_calls")
             guard let (key, bytes, storedDigest) = row else { return nil }
             store.noteReadBytes(bytes.count)
-            let expected = AgentJournalSQLiteStore.mutationCallDigest(
-                storeID: store.storeID,
-                sessionID: sessionID,
-                runID: runID,
-                callID: callID,
-                idempotencyKey: key,
+            let expected = AgentJournalSQLiteStore.rowDigest(
+                prefix: "mutation:\(store.storeID.uuidString):\(key):",
                 payload: bytes
             )
             guard storedDigest == expected else { throw AgentJournalError.checksumMismatch }
@@ -992,7 +991,7 @@ extension AgentJournalSQLiteStore {
             }
             writtenBytes += UInt64(headerBytes.count)
 
-            // Upsert current mutation by idempotency key and record per-call history without overwriting prior attempts.
+            // Archive any superseded invocation under the same idempotency key before updating current state.
             if let mutation = change.mutation {
                 let mutBytes = try AgentJournalSQLiteStore.canonicalJSON(mutation)
                 let key = mutation.intent.idempotencyKey
@@ -1001,6 +1000,24 @@ extension AgentJournalSQLiteStore {
                     payload: mutBytes
                 )
                 let opKey = AgentJournalSQLiteStore.pendingOperationKey(for: mutation.intent, runID: mutation.runID)
+                try AgentJournalSQLiteStore.withPrepared(
+                    on: db,
+                    sql: """
+                    INSERT INTO mutation_calls (
+                        session_id, run_id, call_id, idempotency_key, sequence, state, mutation_json, digest
+                    )
+                    SELECT session_id, run_id, call_id, idempotency_key, sequence, state, mutation_json, digest
+                    FROM mutations
+                    WHERE idempotency_key = ?
+                      AND NOT (session_id = ? AND run_id = ? AND call_id = ?);
+                    """
+                ) { stmt in
+                    AgentJournalSQLiteStore.bindText(stmt, 1, key)
+                    AgentJournalSQLiteStore.bindText(stmt, 2, mutation.sessionID.uuidString)
+                    AgentJournalSQLiteStore.bindText(stmt, 3, mutation.runID.uuidString)
+                    AgentJournalSQLiteStore.bindText(stmt, 4, mutation.intent.call.id.rawValue)
+                    try AgentJournalSQLiteStore.stepDone(stmt, on: db)
+                }
                 try AgentJournalSQLiteStore.withPrepared(
                     on: db,
                     sql: """
@@ -1029,39 +1046,7 @@ extension AgentJournalSQLiteStore {
                     AgentJournalSQLiteStore.bindText(stmt, 9, mutDigest)
                     try AgentJournalSQLiteStore.stepDone(stmt, on: db)
                 }
-                let callDigest = AgentJournalSQLiteStore.mutationCallDigest(
-                    storeID: store.storeID,
-                    sessionID: mutation.sessionID,
-                    runID: mutation.runID,
-                    callID: mutation.intent.call.id,
-                    idempotencyKey: key,
-                    payload: mutBytes
-                )
-                try AgentJournalSQLiteStore.withPrepared(
-                    on: db,
-                    sql: """
-                    INSERT INTO mutation_calls (
-                        session_id, run_id, call_id, idempotency_key, sequence, state, mutation_json, digest
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(session_id, run_id, call_id) DO UPDATE SET
-                        idempotency_key = excluded.idempotency_key,
-                        sequence = excluded.sequence,
-                        state = excluded.state,
-                        mutation_json = excluded.mutation_json,
-                        digest = excluded.digest;
-                    """
-                ) { stmt in
-                    AgentJournalSQLiteStore.bindText(stmt, 1, mutation.sessionID.uuidString)
-                    AgentJournalSQLiteStore.bindText(stmt, 2, mutation.runID.uuidString)
-                    AgentJournalSQLiteStore.bindText(stmt, 3, mutation.intent.call.id.rawValue)
-                    AgentJournalSQLiteStore.bindText(stmt, 4, key)
-                    sqlite3_bind_int64(stmt, 5, Int64(bitPattern: mutation.sequence))
-                    AgentJournalSQLiteStore.bindText(stmt, 6, mutation.state.rawValue)
-                    AgentJournalSQLiteStore.bindBlob(stmt, 7, mutBytes)
-                    AgentJournalSQLiteStore.bindText(stmt, 8, callDigest)
-                    try AgentJournalSQLiteStore.stepDone(stmt, on: db)
-                }
-                writtenBytes += UInt64(mutBytes.count * 2)
+                writtenBytes += UInt64(mutBytes.count)
             }
 
             // Upsert admission rejection if present.

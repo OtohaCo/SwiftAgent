@@ -42,9 +42,16 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
         let toolCalls: [ToolCall]
     }
 
+    private struct StoredCallIdentity: Equatable {
+        let sessionID: String
+        let runID: String
+        let callID: String
+    }
+
     private struct SchemaV1Fixture {
         let storeID: UUID
         let operationDomain: String
+        let metaDigest: String
         let sessionA: UUID
         let sessionB: UUID
         let message0ID: UUID
@@ -258,7 +265,7 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
         }
     }
 
-    private static func readSchemaVersion(at directory: URL) throws -> Int {
+    private static func withReadOnlyDB<T>(at directory: URL, _ body: (OpaquePointer) throws -> T) throws -> T {
         let dbURL = directory.appendingPathComponent("journal.sqlite3")
         var handle: OpaquePointer?
         guard sqlite3_open_v2(dbURL.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db = handle else {
@@ -266,21 +273,79 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
             throw AgentJournalError.persistenceUnavailable("unable to open sqlite file for inspection")
         }
         defer { sqlite3_close_v2(db) }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT schema_version FROM store_meta WHERE singleton = 1;", -1, &stmt, nil) == SQLITE_OK,
-              let prepared = stmt else {
-            if let stmt { sqlite3_finalize(stmt) }
-            throw AgentJournalError.persistenceUnavailable("unable to prepare schema_version query")
-        }
-        defer { sqlite3_finalize(prepared) }
-        guard sqlite3_step(prepared) == SQLITE_ROW else {
-            throw AgentJournalError.invalidHeader
-        }
-        return Int(sqlite3_column_int64(prepared, 0))
+        return try body(db)
     }
 
-    /// Constructs an authentic schema-v1 SQLite journal on disk directly using the v1 DDL and row digests,
-    /// without invoking the current store's creation code.
+    private static func readStoreMetaVersionAndDigest(at directory: URL) throws -> (schemaVersion: Int, digest: String) {
+        try withReadOnlyDB(at: directory) { db in
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT schema_version, digest FROM store_meta WHERE singleton = 1;", -1, &stmt, nil) == SQLITE_OK,
+                  let prepared = stmt else {
+                if let stmt { sqlite3_finalize(stmt) }
+                throw AgentJournalError.persistenceUnavailable("unable to prepare store_meta query")
+            }
+            defer { sqlite3_finalize(prepared) }
+            guard sqlite3_step(prepared) == SQLITE_ROW else {
+                throw AgentJournalError.invalidHeader
+            }
+            let version = Int(sqlite3_column_int64(prepared, 0))
+            let digest = sqlite3_column_text(prepared, 1).map { String(cString: $0) } ?? ""
+            return (version, digest)
+        }
+    }
+
+    private static func tableExists(_ name: String, at directory: URL) throws -> Bool {
+        try withReadOnlyDB(at: directory) { db in
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?;", -1, &stmt, nil) == SQLITE_OK,
+                  let prepared = stmt else {
+                if let stmt { sqlite3_finalize(stmt) }
+                throw AgentJournalError.persistenceUnavailable("unable to prepare sqlite_master query")
+            }
+            defer { sqlite3_finalize(prepared) }
+            bindText(prepared, 1, name)
+            return sqlite3_step(prepared) == SQLITE_ROW
+        }
+    }
+
+    private static func rowCount(table: String, at directory: URL) throws -> Int {
+        try withReadOnlyDB(at: directory) { db in
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM \(table);", -1, &stmt, nil) == SQLITE_OK,
+                  let prepared = stmt else {
+                if let stmt { sqlite3_finalize(stmt) }
+                throw AgentJournalError.persistenceUnavailable("unable to prepare row count query for \(table)")
+            }
+            defer { sqlite3_finalize(prepared) }
+            guard sqlite3_step(prepared) == SQLITE_ROW else {
+                throw AgentJournalError.invalidRecord
+            }
+            return Int(sqlite3_column_int64(prepared, 0))
+        }
+    }
+
+    private static func storedCalls(table: String, at directory: URL) throws -> [StoredCallIdentity] {
+        try withReadOnlyDB(at: directory) { db in
+            var stmt: OpaquePointer?
+            let sql = "SELECT session_id, run_id, call_id FROM \(table) ORDER BY session_id, run_id, call_id;"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let prepared = stmt else {
+                if let stmt { sqlite3_finalize(stmt) }
+                throw AgentJournalError.persistenceUnavailable("unable to prepare call query for \(table)")
+            }
+            defer { sqlite3_finalize(prepared) }
+            var rows: [StoredCallIdentity] = []
+            while sqlite3_step(prepared) == SQLITE_ROW {
+                let sessionID = sqlite3_column_text(prepared, 0).map { String(cString: $0) } ?? ""
+                let runID = sqlite3_column_text(prepared, 1).map { String(cString: $0) } ?? ""
+                let callID = sqlite3_column_text(prepared, 2).map { String(cString: $0) } ?? ""
+                rows.append(StoredCallIdentity(sessionID: sessionID, runID: runID, callID: callID))
+            }
+            return rows
+        }
+    }
+
+    /// Constructs an authentic pre-change schema-v1 SQLite journal on disk directly using the v1 DDL
+    /// (without `mutation_calls`) and row digests, without invoking the store's creation code.
     private static func createSchemaV1Database(at directory: URL) throws -> SchemaV1Fixture {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let dbURL = directory.appendingPathComponent("journal.sqlite3")
@@ -507,6 +572,7 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
         return SchemaV1Fixture(
             storeID: storeID,
             operationDomain: domain,
+            metaDigest: metaDigest,
             sessionA: sessionA,
             sessionB: sessionB,
             message0ID: message0ID,
@@ -526,13 +592,21 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
         )
     }
 
-    @Test func schemaV1StoreOpensAndPreservesLegacyAndRetriedMutationsAcrossReopen() async throws {
-        let directory = tempDir("v1-upgrade")
+    @Test func preChangeSchemaV1StoreOpensAtVersion1WithoutMutatingMetaAndPreservesRetriedMutations() async throws {
+        let directory = tempDir("v1-compat")
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try Self.createSchemaV1Database(at: directory)
-        #expect(try Self.readSchemaVersion(at: directory) == 1)
+
+        #expect(try Self.readStoreMetaVersionAndDigest(at: directory) == (1, fixture.metaDigest))
+        #expect(try !Self.tableExists("mutation_calls", at: directory))
 
         let journal = try AgentSQLiteJournal.open(at: directory)
+        // Opening a pre-change v1 store keeps schema_version == 1, leaves store_meta untouched, and does no backfill.
+        #expect(try Self.readStoreMetaVersionAndDigest(at: directory) == (1, fixture.metaDigest))
+        #expect(try Self.tableExists("mutation_calls", at: directory))
+        #expect(try Self.rowCount(table: "mutation_calls", at: directory) == 0)
+        #expect(try Self.rowCount(table: "mutations", at: directory) == 2)
+
         let identity = try #require(await journal.storeIdentity())
         #expect(identity == JournalStoreIdentity(storeID: fixture.storeID, operationDomain: fixture.operationDomain))
         #expect(journal.supportsConfirmedNoEffect)
@@ -562,17 +636,18 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
         #expect(legacyStatusB.state == .aborted)
         #expect(legacyStatusB.abortConfirmation == fixture.legacyConfirmationB)
 
-        // Abort the pending legacy mutation on sessionA, append new checkpoint messages, then retry legacyKeyA.
+        // Abort the pending legacy mutation on sessionA (same invocation update -> still 0 rows in mutation_calls).
         let pendingA = try #require(try await journal.recoverPendingMutations(sessionID: fixture.sessionA).first)
         #expect(pendingA.runID == fixture.legacyRunA)
         #expect(pendingA.intent.call.id == fixture.legacyCallA)
-        let confirmationA = try AgentNoEffectConfirmation(basis: "verified absent after upgrade")
+        let confirmationA = try AgentNoEffectConfirmation(basis: "verified absent on target")
         try await journal.abortMutation(pendingA, confirmedNoEffect: confirmationA)
         #expect(try await journal.pendingMutations(sessionID: fixture.sessionA).isEmpty)
+        #expect(try Self.rowCount(table: "mutation_calls", at: directory) == 0)
 
         let appendedHistory = fixture.legacyHistory + [
-            .user([.text("post-upgrade-prompt")]),
-            .assistant(content: [.text("post-upgrade-reply")], toolCalls: []),
+            .user([.text("post-open-prompt")]),
+            .assistant(content: [.text("post-open-reply")], toolCalls: []),
         ]
         _ = try await journal.appendCheckpoint(
             [.checkpoint(history: appendedHistory, steeringIDs: [])],
@@ -581,6 +656,7 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
             durability: .durable
         )
 
+        // Retry legacyKeyA under a new invocation; legacyCallA is archived into mutation_calls.
         let newRunA = UUID()
         let newCallA = ToolCallID(rawValue: "retry-call-a")
         guard case .admitted = try await journal.admit(.init(
@@ -597,7 +673,9 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
             try? await journal.close()
             return
         }
-        let receiptA = ToolReceipt(operationID: fixture.legacyKeyA, status: .succeeded, confirmedTargets: [fixture.targetA], revision: "v2-a")
+        #expect(try Self.rowCount(table: "mutation_calls", at: directory) == 1)
+
+        let receiptA = ToolReceipt(operationID: fixture.legacyKeyA, status: .succeeded, confirmedTargets: [fixture.targetA], revision: "rev-a-2")
         let outputA = JSONValue.object(["item": .string("a")])
         let finalHistoryA = appendedHistory + [
             .assistant(content: [], toolCalls: [.init(id: newCallA, name: "write", argumentsJSON: #"{"id":"a"}"#, completeness: .complete)]),
@@ -612,6 +690,7 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
             history: finalHistoryA,
             steeringIDs: []
         )
+        #expect(try Self.rowCount(table: "mutation_calls", at: directory) == 1)
 
         // Retry legacyKeyB directly against the pre-existing already-aborted v1 mutation.
         let newRunB = UUID()
@@ -630,7 +709,9 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
             try? await journal.close()
             return
         }
-        let receiptB = ToolReceipt(operationID: fixture.legacyKeyB, status: .succeeded, confirmedTargets: [fixture.targetB], revision: "v2-b")
+        #expect(try Self.rowCount(table: "mutation_calls", at: directory) == 2)
+
+        let receiptB = ToolReceipt(operationID: fixture.legacyKeyB, status: .succeeded, confirmedTargets: [fixture.targetB], revision: "rev-b-2")
         let outputB = JSONValue.object(["item": .string("b")])
         let finalHistoryB: [ModelMessage] = [
             .user([.text("retry-b")]),
@@ -646,10 +727,13 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
             history: finalHistoryB,
             steeringIDs: []
         )
+        #expect(try Self.rowCount(table: "mutation_calls", at: directory) == 2)
 
         try await journal.close()
+        #expect(try Self.readStoreMetaVersionAndDigest(at: directory).schemaVersion == 1)
 
         let reopened = try AgentSQLiteJournal.open(at: directory)
+        #expect(try Self.readStoreMetaVersionAndDigest(at: directory).schemaVersion == 1)
         #expect(await reopened.storeIdentity() == identity)
         #expect(try await reopened.latestCheckpoint(sessionID: fixture.sessionA)?.history == finalHistoryA)
         let reopenedMessages = try await reopened.readMessages(sessionID: fixture.sessionA, after: 0, limit: 20)
@@ -696,8 +780,8 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
         try await reopened.close()
     }
 
-    @Test func openingSchemaV1StoreRejectsCorruptedMutationDigest() throws {
-        let directory = tempDir("v1-corrupt-mutation")
+    @Test func localizedCorruptedMutationDigestDoesNotBlockOpeningOrHealthySessionReads() async throws {
+        let directory = tempDir("v1-corrupt-digest-localized")
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try Self.createSchemaV1Database(at: directory)
 
@@ -716,18 +800,44 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
         }
         sqlite3_close_v2(db)
 
-        #expect(throws: AgentJournalError.checksumMismatch) {
-            _ = try AgentSQLiteJournal.open(at: directory)
+        // Opening succeeds without scanning mutations or modifying store_meta.
+        let journal = try AgentSQLiteJournal.open(at: directory)
+        #expect(try Self.readStoreMetaVersionAndDigest(at: directory) == (1, fixture.metaDigest))
+
+        // Unrelated healthy session messages and mutation remain readable.
+        #expect(try await journal.latestCheckpoint(sessionID: fixture.sessionA)?.history == fixture.legacyHistory)
+        #expect(try await journal.readMessages(sessionID: fixture.sessionA, after: 0, limit: 10).map(\.id) == [fixture.message0ID, fixture.message1ID])
+        #expect(try await journal.mutationStatus(identity: fixture.legacyKeyA)?.state == .needsReconciliation)
+
+        // Reading the corrupted row fails with checksumMismatch.
+        await #expect(throws: AgentJournalError.checksumMismatch) {
+            _ = try await journal.mutationStatus(identity: fixture.legacyKeyB)
         }
-        // Failed upgrade/open must roll back cleanly rather than bumping the schema or accepting corruption.
-        #expect(try Self.readSchemaVersion(at: directory) == 1)
-        #expect(throws: AgentJournalError.checksumMismatch) {
-            _ = try AgentSQLiteJournal.open(at: directory)
+        await #expect(throws: AgentJournalError.checksumMismatch) {
+            _ = try await journal.mutationStatus(
+                sessionID: fixture.sessionB,
+                runID: fixture.legacyRunB,
+                callID: fixture.legacyCallB
+            )
         }
+        await #expect(throws: AgentJournalError.checksumMismatch) {
+            _ = try await journal.admit(.init(
+                sessionID: fixture.sessionB,
+                runID: UUID(),
+                callID: .init(rawValue: "retry-corrupt-digest"),
+                name: "write",
+                argumentsJSON: #"{"id":"b"}"#,
+                resources: [.named(fixture.targetB)],
+                idempotencyKey: fixture.legacyKeyB,
+                receiptExpectation: fixture.expectationB
+            ))
+        }
+
+        try await journal.close()
     }
 
-    @Test func openingSchemaV1StoreRejectsTamperedMutationPayloadWithOriginalDigest() throws {
-        let directory = tempDir("v1-tampered-mutation-json")
+    @Test func localizedTamperedMutationPayloadDoesNotBlockOpeningOrHealthySessionReads() async throws {
+        let directory = tempDir("v1-tampered-payload-localized")
         defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = try Self.createSchemaV1Database(at: directory)
 
@@ -737,19 +847,200 @@ private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor
             if let handle { sqlite3_close_v2(handle) }
             throw AgentJournalError.persistenceUnavailable("unable to open v1 fixture for payload tamper")
         }
-        // Replace mutation_json with a syntactically valid JSON payload while leaving the original digest untouched.
+        // Replace mutation_json with syntactically valid JSON while leaving the original hex digest untouched.
         try Self.withPrepared(
             db,
             "UPDATE mutations SET mutation_json = ? WHERE idempotency_key = ?;"
         ) { stmt in
             Self.bindBlob(stmt, 1, Data(#"{"tampered":true}"#.utf8))
-            Self.bindText(stmt, 2, fixture.legacyKeyA)
+            Self.bindText(stmt, 2, fixture.legacyKeyB)
         }
         sqlite3_close_v2(db)
 
-        #expect(throws: AgentJournalError.checksumMismatch) {
-            _ = try AgentSQLiteJournal.open(at: directory)
+        // Opening succeeds without scanning mutations or modifying store_meta.
+        let journal = try AgentSQLiteJournal.open(at: directory)
+        #expect(try Self.readStoreMetaVersionAndDigest(at: directory) == (1, fixture.metaDigest))
+
+        // Healthy session checkpoint, messages, and unrelated mutation remain readable.
+        #expect(try await journal.latestCheckpoint(sessionID: fixture.sessionA)?.history == fixture.legacyHistory)
+        #expect(try await journal.readMessages(sessionID: fixture.sessionA, after: 0, limit: 10).map(\.message) == fixture.legacyHistory)
+        #expect(try await journal.mutationStatus(sessionID: fixture.sessionA, runID: fixture.legacyRunA, callID: fixture.legacyCallA)?.state == .needsReconciliation)
+
+        // Reading the tampered mutation fails with checksumMismatch.
+        await #expect(throws: AgentJournalError.checksumMismatch) {
+            _ = try await journal.mutationStatus(identity: fixture.legacyKeyB)
         }
-        #expect(try Self.readSchemaVersion(at: directory) == 1)
+        await #expect(throws: AgentJournalError.checksumMismatch) {
+            _ = try await journal.mutationStatus(
+                sessionID: fixture.sessionB,
+                runID: fixture.legacyRunB,
+                callID: fixture.legacyCallB
+            )
+        }
+
+        try await journal.close()
+    }
+
+    @Test func sameInvocationTransitionsStoreNoHistoryRowsAndRetriesArchiveOnlySupersededCalls() async throws {
+        // Part 1: Ordinary single-attempt admit -> settle leaves mutation_calls empty.
+        let singleDir = tempDir("single-attempt-no-history")
+        defer { try? FileManager.default.removeItem(at: singleDir) }
+        let singleJournal = try AgentSQLiteJournal.create(
+            at: singleDir,
+            operationDomain: "single-attempt-storage",
+            supportsConfirmedNoEffect: true
+        )
+        let singleSession = UUID(), singleRun = UUID()
+        let singleCall = ToolCallID(rawValue: "single-call")
+        let singleTarget = EvidenceReference(namespace: "fixture", id: "single-item")
+        let singleExpectation = try ToolReceiptExpectation(targets: [singleTarget], revision: .present)
+        let singleKey = "single-attempt/write/{\"id\":\"single\"}"
+
+        guard case .admitted = try await singleJournal.admit(.init(
+            sessionID: singleSession,
+            runID: singleRun,
+            callID: singleCall,
+            name: "write",
+            argumentsJSON: #"{"id":"single"}"#,
+            resources: [.named(singleTarget)],
+            idempotencyKey: singleKey,
+            receiptExpectation: singleExpectation
+        )) else {
+            Issue.record("expected single-attempt admission")
+            try? await singleJournal.close()
+            return
+        }
+        #expect(try Self.rowCount(table: "mutations", at: singleDir) == 1)
+        #expect(try Self.rowCount(table: "mutation_calls", at: singleDir) == 0)
+
+        let singleReceipt = ToolReceipt(operationID: singleKey, status: .succeeded, confirmedTargets: [singleTarget], revision: "rev-1")
+        let singleHistory: [ModelMessage] = [
+            .user([.text("single write")]),
+            .assistant(content: [], toolCalls: [.init(id: singleCall, name: "write", argumentsJSON: #"{"id":"single"}"#, completeness: .complete)]),
+            .tool(.init(callID: singleCall, content: [.text("ok")], isError: false)),
+        ]
+        try await singleJournal.commitMutation(
+            sessionID: singleSession,
+            runID: singleRun,
+            callID: singleCall,
+            receipt: singleReceipt,
+            output: .string("single-ok"),
+            history: singleHistory,
+            steeringIDs: []
+        )
+        #expect(try Self.rowCount(table: "mutations", at: singleDir) == 1)
+        #expect(try Self.rowCount(table: "mutation_calls", at: singleDir) == 0)
+        try await singleJournal.close()
+
+        // Part 2: Same-invocation intent -> needsReconciliation -> aborted produces 0 history rows;
+        // retrying under a new invocation archives only the superseded call and settling adds no extra rows.
+        let retryDir = tempDir("retry-archives-superseded")
+        defer { try? FileManager.default.removeItem(at: retryDir) }
+        let journal = try AgentSQLiteJournal.create(
+            at: retryDir,
+            operationDomain: "retry-storage",
+            supportsConfirmedNoEffect: true
+        )
+        let session = UUID(), run1 = UUID(), run2 = UUID()
+        let call1 = ToolCallID(rawValue: "call-1")
+        let call2 = ToolCallID(rawValue: "call-2")
+        let target = EvidenceReference(namespace: "fixture", id: "retry-item")
+        let expectation = try ToolReceiptExpectation(targets: [target], revision: .present)
+        let key = "retry-storage/write/{\"id\":\"item\"}"
+        let confirmation = try AgentNoEffectConfirmation(basis: "verified absent before retry")
+
+        guard case .admitted = try await journal.admit(.init(
+            sessionID: session,
+            runID: run1,
+            callID: call1,
+            name: "write",
+            argumentsJSON: #"{"id":"item"}"#,
+            resources: [.named(target)],
+            idempotencyKey: key,
+            receiptExpectation: expectation
+        )) else {
+            Issue.record("expected initial admission")
+            try? await journal.close()
+            return
+        }
+        #expect(try Self.rowCount(table: "mutations", at: retryDir) == 1)
+        #expect(try Self.rowCount(table: "mutation_calls", at: retryDir) == 0)
+
+        try await journal.markMutationNeedsReconciliation(sessionID: session, runID: run1, callID: call1)
+        #expect(try Self.rowCount(table: "mutations", at: retryDir) == 1)
+        #expect(try Self.rowCount(table: "mutation_calls", at: retryDir) == 0)
+
+        let pending = try #require(try await journal.recoverPendingMutations(sessionID: session).first)
+        try await journal.abortMutation(pending, confirmedNoEffect: confirmation)
+        #expect(try Self.rowCount(table: "mutations", at: retryDir) == 1)
+        #expect(try Self.rowCount(table: "mutation_calls", at: retryDir) == 0)
+
+        // Retrying the same idempotencyKey with a new invocation archives (session, run1, call1) into mutation_calls.
+        guard case .admitted = try await journal.admit(.init(
+            sessionID: session,
+            runID: run2,
+            callID: call2,
+            name: "write",
+            argumentsJSON: #"{"id":"item"}"#,
+            resources: [.named(target)],
+            idempotencyKey: key,
+            receiptExpectation: expectation
+        )) else {
+            Issue.record("expected retry admission")
+            try? await journal.close()
+            return
+        }
+        #expect(try Self.rowCount(table: "mutations", at: retryDir) == 1)
+        #expect(try Self.rowCount(table: "mutation_calls", at: retryDir) == 1)
+        #expect(try Self.storedCalls(table: "mutations", at: retryDir) == [
+            StoredCallIdentity(sessionID: session.uuidString, runID: run2.uuidString, callID: call2.rawValue),
+        ])
+        #expect(try Self.storedCalls(table: "mutation_calls", at: retryDir) == [
+            StoredCallIdentity(sessionID: session.uuidString, runID: run1.uuidString, callID: call1.rawValue),
+        ])
+
+        // Settling (session, run2, call2) updates mutations in place without adding another row to mutation_calls.
+        let receipt = ToolReceipt(operationID: key, status: .succeeded, confirmedTargets: [target], revision: "rev-2")
+        let settledOutput = JSONValue.object(["settled": .bool(true)])
+        let history: [ModelMessage] = [
+            .user([.text("retry write")]),
+            .assistant(content: [], toolCalls: [.init(id: call2, name: "write", argumentsJSON: #"{"id":"item"}"#, completeness: .complete)]),
+            .tool(.init(callID: call2, content: [.text("done")], isError: false)),
+        ]
+        try await journal.commitMutation(
+            sessionID: session,
+            runID: run2,
+            callID: call2,
+            receipt: receipt,
+            output: settledOutput,
+            history: history,
+            steeringIDs: []
+        )
+        #expect(try Self.rowCount(table: "mutations", at: retryDir) == 1)
+        #expect(try Self.rowCount(table: "mutation_calls", at: retryDir) == 1)
+        #expect(try Self.storedCalls(table: "mutations", at: retryDir) == [
+            StoredCallIdentity(sessionID: session.uuidString, runID: run2.uuidString, callID: call2.rawValue),
+        ])
+        #expect(try Self.storedCalls(table: "mutation_calls", at: retryDir) == [
+            StoredCallIdentity(sessionID: session.uuidString, runID: run1.uuidString, callID: call1.rawValue),
+        ])
+        try await journal.close()
+
+        let reopened = try AgentSQLiteJournal.open(at: retryDir)
+        let firstStatus = try #require(try await reopened.mutationStatus(sessionID: session, runID: run1, callID: call1))
+        #expect(firstStatus.state == .aborted)
+        #expect(firstStatus.receipt == nil)
+        #expect(firstStatus.replayOutput == nil)
+        #expect(firstStatus.abortConfirmation == confirmation)
+
+        let secondStatus = try #require(try await reopened.mutationStatus(sessionID: session, runID: run2, callID: call2))
+        #expect(secondStatus.state == .settled)
+        #expect(secondStatus.receipt == receipt)
+        #expect(secondStatus.replayOutput == settledOutput)
+        #expect(try await reopened.mutationStatus(identity: key) == secondStatus)
+        #expect(try Self.rowCount(table: "mutations", at: retryDir) == 1)
+        #expect(try Self.rowCount(table: "mutation_calls", at: retryDir) == 1)
+        #expect(try Self.readStoreMetaVersionAndDigest(at: retryDir).schemaVersion == 1)
+        try await reopened.close()
     }
 }
