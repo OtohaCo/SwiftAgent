@@ -171,7 +171,7 @@ package enum AgentJournalStartupAdmissionError: Error, Sendable {
     case deadlineExceeded
 }
 
-public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
+public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable, OperationDeadlinePreservedError {
     case invalidHeader
     case invalidFrame
     case invalidRecord
@@ -198,6 +198,10 @@ public enum AgentJournalError: Error, LocalizedError, Equatable, Sendable {
     /// budget of at least `requiredWorkBytes`.
     case maintenanceBudgetTooSmall(requiredWorkBytes: UInt64)
     case deadlineExceeded
+
+    package var preservesOverDeadlineAndCancellation: Bool {
+        self == .commitUnknown
+    }
 
     public var errorDescription: String? {
         switch self {

@@ -9,6 +9,7 @@ public struct ToolScheduler: Sendable {
     private let coordinator = ToolResourceCoordinator()
     private let drain = ToolExecutionDrain()
     private let operationCancellationDidResolve: (@Sendable (UUID, UUID, ToolCallID) async -> Void)?
+    private let beforeLeaseRelease: (@Sendable (UUID, UUID, ToolCallID) async -> Void)?
     private let authorization: ToolAuthorizationTiming
     private let authorizationWaitLimit: Duration?
     private let leaseWaitLimit: Duration?
@@ -26,6 +27,7 @@ public struct ToolScheduler: Sendable {
     public init(authorization: ToolAuthorizationTiming = .beforeResourceLease,
                 authorizationWaitLimit: Duration? = nil, leaseWaitLimit: Duration? = nil) {
         operationCancellationDidResolve = nil
+        beforeLeaseRelease = nil
         self.authorization = authorization
         self.authorizationWaitLimit = authorizationWaitLimit
         self.leaseWaitLimit = leaseWaitLimit
@@ -34,9 +36,11 @@ public struct ToolScheduler: Sendable {
     package init(
         authorization: ToolAuthorizationTiming = .beforeResourceLease,
         authorizationWaitLimit: Duration? = nil, leaseWaitLimit: Duration? = nil,
-        operationCancellationDidResolve: @escaping @Sendable (UUID, UUID, ToolCallID) async -> Void
+        operationCancellationDidResolve: (@Sendable (UUID, UUID, ToolCallID) async -> Void)? = nil,
+        beforeLeaseRelease: (@Sendable (UUID, UUID, ToolCallID) async -> Void)? = nil
     ) {
         self.operationCancellationDidResolve = operationCancellationDidResolve
+        self.beforeLeaseRelease = beforeLeaseRelease
         self.authorization = authorization
         self.authorizationWaitLimit = authorizationWaitLimit
         self.leaseWaitLimit = leaseWaitLimit
@@ -241,12 +245,16 @@ public struct ToolScheduler: Sendable {
         let toolDeadline = min(deadline, AgentClock.now.advanced(by: call.policy.timeout))
         let timeoutError: ToolSchedulerError = toolDeadline == deadline ? .deadlineExceeded : .toolTimedOut(call.call.id)
         let leased = admitted
+        let gate = OperationDeadlineGate(deadline: toolDeadline)
         await drain.begin(drainKey)
-        return try await withOperationDeadline(toolDeadline, timeoutError: timeoutError) {
+        return try await withOperationDeadline(toolDeadline, timeoutError: timeoutError, gate: gate) {
             try Task.checkCancellation()
-            return try await leased.invoke(deadline: toolDeadline)
+            let result = try await leased.invoke(deadline: toolDeadline)
+            guard gate.settle() else { throw timeoutError }
+            return result
         } onOperationFinished: {
             // An executor that outlives its timeout keeps the lease until it physically returns.
+            await beforeLeaseRelease?(leased.contextSessionID, leased.contextRunID, leased.call.id)
             await coordinator.release(lease)
             await drain.end(drainKey)
         }

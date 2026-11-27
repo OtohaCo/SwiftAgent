@@ -58,6 +58,16 @@ package final class OperationDeadlineGate: @unchecked Sendable {
     }
 }
 
+/// An error whose uncertainty must survive deadline expiry and task cancellation
+/// (for example, a journal commit whose durability cannot be confirmed until reopen).
+package protocol OperationDeadlinePreservedError: Error {
+    var preservesOverDeadlineAndCancellation: Bool { get }
+}
+
+private func isPreservedOverDeadline(_ error: any Error) -> Bool {
+    (error as? any OperationDeadlinePreservedError)?.preservesOverDeadlineAndCancellation == true
+}
+
 /// Settles once without joining a host operation that ignores cancellation.
 /// The cancelled operation can finish later, but its result cannot settle the caller again.
 /// With a `gate`, a result settled in time is returned even if the deadline passes while it is recorded.
@@ -85,6 +95,9 @@ package func withOperationDeadline<Value: Sendable>(
             await onOperationFinished()
             await race.resolve(.success(value))
         } catch {
+            if isPreservedOverDeadline(error) {
+                await race.reservePreservedFailure()
+            }
             await onOperationFinished()
             await race.resolve(.failure(error))
         }
@@ -94,7 +107,7 @@ package func withOperationDeadline<Value: Sendable>(
             try await AgentClock.sleep(until: deadline)
             if let gate, !gate.expire() { return }
             worker.cancel()
-            await race.resolve(.failure(timeoutError))
+            await race.resolve(.failure(timeoutError), replaceableByPreservedFailure: true)
         } catch { /* Timer cancellation means another outcome won. */ }
     }
     defer { worker.cancel(); timer.cancel() }
@@ -104,12 +117,13 @@ package func withOperationDeadline<Value: Sendable>(
         } onCancel: {
             worker.cancel()
             timer.cancel()
-            Task { await race.resolve(.failure(CancellationError())) }
+            Task { await race.resolve(.failure(CancellationError()), replaceableByPreservedFailure: true) }
         }
         try Task.checkCancellation()
         guard gate?.isSettled == true || AgentClock.now < deadline else { throw timeoutError }
         return value
     } catch {
+        if isPreservedOverDeadline(error) { throw error }
         try Task.checkCancellation()
         guard gate?.isSettled == true || AgentClock.now < deadline else { throw timeoutError }
         throw error
@@ -119,6 +133,11 @@ package func withOperationDeadline<Value: Sendable>(
 private actor OperationDeadlineResult<Value: Sendable> {
     private var result: Result<Value, Error>?
     private var continuation: CheckedContinuation<Value, Error>?
+    private var preservingFailure = false
+
+    func reservePreservedFailure() {
+        preservingFailure = true
+    }
 
     func wait() async throws -> Value {
         try await withCheckedThrowingContinuation { continuation in
@@ -127,8 +146,9 @@ private actor OperationDeadlineResult<Value: Sendable> {
         }
     }
 
-    func resolve(_ result: Result<Value, Error>) {
+    func resolve(_ result: Result<Value, Error>, replaceableByPreservedFailure: Bool = false) {
         guard self.result == nil else { return }
+        if replaceableByPreservedFailure && preservingFailure { return }
         self.result = result
         continuation?.resume(with: result)
         continuation = nil
