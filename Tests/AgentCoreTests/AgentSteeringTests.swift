@@ -68,11 +68,121 @@ struct AgentSteeringTests {
         let session = try Agent(model: fixtureModel, provider: provider).makeSession()
         let run = try await session.run("original")
         #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
-        _ = try await run.note("note")
+        let id = try await run.note("note")
         await gate.open()
         let result = try await run.wait()
+        let events = await collectEvents(run.events)
         #expect(result.modelTurns == 2)
-        #expect(await provider.log.requests.last?.messages.last == .user([.text("note")]))
+        let expectedTurn2Messages: [ModelMessage] = [
+            .user([.text("original")]),
+            .assistant(content: [.text("First")], toolCalls: []),
+            .user([.text("note")]),
+        ]
+        #expect(await provider.log.requests.count == 2)
+        #expect(await provider.log.requests.last?.messages == expectedTurn2Messages)
+        #expect(await session.history == expectedTurn2Messages + [.assistant(content: [.text("Second")], toolCalls: [])])
+        let firstResponseCompleted = try #require(events.firstIndex(of: .model(.responseCompleted(
+            .init(info: .init(id: "response", model: fixtureModel), content: [.text("First")], stopReason: .endTurn)
+        ))))
+        let steeringApplied = try #require(events.firstIndex(of: .steeringApplied(id: id, text: "note")))
+        let secondTurnStarted = try #require(events.firstIndex(of: .turnStarted(2)))
+        #expect(firstResponseCompleted < steeringApplied)
+        #expect(steeringApplied < secondTurnStarted)
+    }
+
+    @Test func steeringBeforeAFinalAnswerRetainsTheDisplayedAnswerBeforeTheCorrection() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("steering-final-answer-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let journal = try AgentIncrementalJournal.create(at: url, operationDomain: "steering")
+        let gate = ManualGate()
+        let entered = XCTestExpectation(description: "Model entered")
+        let provider = ScriptedProvider { request, turn in
+            if turn == 1 { entered.fulfill(); await gate.wait(); return textResponse(request, "First") }
+            if turn == 2 { return textResponse(request, "Second") }
+            return textResponse(request, "Third")
+        }
+        let agent = try Agent(model: fixtureModel, provider: provider)
+        let session = try agent.makeSession(journal: journal)
+        let run = try await session.run("original")
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
+        let steeringID = try await run.steer("correction")
+        await gate.open()
+        let result = try await run.wait()
+        let events = await collectEvents(run.events)
+        try await run.waitForDrain()
+
+        let expectedTurn2Messages: [ModelMessage] = [
+            .user([.text("original")]),
+            .assistant(content: [.text("First")], toolCalls: []),
+            .user([.text("correction")]),
+        ]
+        let expectedFinalHistory = expectedTurn2Messages + [.assistant(content: [.text("Second")], toolCalls: [])]
+
+        #expect(result.outcome == .completed)
+        #expect(result.modelTurns == 2)
+        #expect(await provider.log.requests.count == 2)
+        #expect(await provider.log.requests.last?.messages == expectedTurn2Messages)
+        #expect(result.history == expectedFinalHistory)
+        #expect(await session.history == expectedFinalHistory)
+        #expect(try await session.conversationSnapshot().messages == expectedFinalHistory)
+
+        #expect(events.filter { if case .runStarted = $0 { true } else { false } }.count == 1)
+        #expect(events.filter { if case .runFinished = $0 { true } else { false } }.count == 1)
+        #expect(events.last == .runFinished(.result(result)))
+        let firstResponseCompleted = try #require(events.firstIndex(of: .model(.responseCompleted(
+            .init(info: .init(id: "response", model: fixtureModel), content: [.text("First")], stopReason: .endTurn)
+        ))))
+        let steeringApplied = try #require(events.firstIndex(of: .steeringApplied(id: steeringID, text: "correction")))
+        let secondTurnStarted = try #require(events.firstIndex(of: .turnStarted(2)))
+        #expect(firstResponseCompleted < steeringApplied)
+        #expect(steeringApplied < secondTurnStarted)
+
+        #expect(try await journal.latestCheckpoint(sessionID: session.id)?.history == expectedFinalHistory)
+        try await journal.close()
+
+        let reopened = try AgentIncrementalJournal.open(at: url)
+        let restored = try agent.makeSession(id: session.id, journal: reopened)
+        #expect(try await restored.conversationSnapshot().messages == expectedFinalHistory)
+        let followUp = try await restored.run("follow-up")
+        _ = try await followUp.wait()
+        try await followUp.waitForDrain()
+        #expect(await provider.log.requests.last?.messages == expectedFinalHistory + [.user([.text("follow-up")])])
+        try await reopened.close()
+    }
+
+    @Test(arguments: ["note", "steer"])
+    func emptyFinalAnswerBeforeSteeringDoesNotInsertAnEmptyAssistantMessage(_ kind: String) async throws {
+        let gate = ManualGate()
+        let entered = XCTestExpectation(description: "Model entered")
+        let provider = ScriptedProvider { request, turn in
+            if turn == 1 {
+                entered.fulfill()
+                await gate.wait()
+                let info = ResponseInfo(id: "response", model: request.model)
+                return [.responseStarted(info), .responseCompleted(.init(info: info, content: [], stopReason: .endTurn))]
+            }
+            return textResponse(request, "Second")
+        }
+        let session = try Agent(model: fixtureModel, provider: provider).makeSession()
+        let run = try await session.run("original")
+        #expect(await XCTWaiter.fulfillment(of: [entered], timeout: 60) == .completed)
+        let steeringID = kind == "note" ? try await run.note("follow-up") : try await run.steer("follow-up")
+        await gate.open()
+        let result = try await run.wait()
+        let events = await collectEvents(run.events)
+        try await run.waitForDrain()
+
+        #expect(result.outcome == .completed)
+        #expect(result.modelTurns == 2)
+        let expectedTurn2Messages: [ModelMessage] = [
+            .user([.text("original")]),
+            .user([.text("follow-up")]),
+        ]
+        #expect(await provider.log.requests.count == 2)
+        #expect(await provider.log.requests.last?.messages == expectedTurn2Messages)
+        #expect(await session.history == expectedTurn2Messages + [.assistant(content: [.text("Second")], toolCalls: [])])
+        #expect(events.contains(.steeringApplied(id: steeringID, text: "follow-up")))
+        #expect(events.last == .runFinished(.result(result)))
     }
 
     @Test func correctionWithANoteStillSupersedesTheProposedTools() async throws {

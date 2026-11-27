@@ -388,6 +388,13 @@ package struct AgentLoop: Sendable {
                         }
                         guard !accepted.isEmpty else { throw ModelProviderError(kind: .unsupportedCapability, message: "Steering needs a real assistant boundary after trusted controls.") }
                         history.append(.assistant(content: accepted, toolCalls: []))
+                    } else if response.classification == .finalResponse {
+                        let accepted = checkpointContent(response, retainingToolCalls: 0).filter {
+                            if case .providerContinuation(let state) = $0 { state.contextTransition == nil } else { true }
+                        }
+                        if !accepted.isEmpty {
+                            history.append(.assistant(content: accepted, toolCalls: []))
+                        }
                     }
                     try await applySteering(inputs, to: &history, lifecycle: lifecycle, emitter: emitter)
                     (projectionRevision, contextEpoch) = try advancedProjectionCoordinates(
