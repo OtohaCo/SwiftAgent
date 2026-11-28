@@ -29,26 +29,22 @@ import Glibc
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try AgentIncrementalJournal.create(at: directory, operationDomain: "fork-window")
         try await store.close()
-        let process = Process()
-        process.executableURL = try ChildRun.journalTestProcess()
-        process.arguments = ["fork-window", directory.path]
-        let input = Pipe(), output = Pipe()
-        process.standardInput = input; process.standardOutput = output; process.standardError = Pipe()
-        try process.run()
-        defer { if process.isRunning { input.fileHandleForWriting.closeFile(); process.waitUntilExit() } }
-        let ready = try line(output.fileHandleForReading)
+        let window = try ForkWindowProcess(directory: directory)
+        defer { window.cleanupIfStillRunning() }
+        let ready = try window.readLine()
         #expect(ready.hasPrefix("WINDOW "))
         let pid = try #require(Int32(ready.dropFirst(7)))
         #expect(try ChildRun.probe(directory).status == 42)
         #expect(LockDescriptors.held(by: pid, store: directory) != .notHeld)
-        input.fileHandleForWriting.write(Data([1]))
-        #expect(try line(output.fileHandleForReading) == "EXECUTED")
+        try window.signalExec()
+        #expect(try window.readLine() == "EXECUTED")
         #expect(kill(pid, 0) == 0)
         #expect(try ChildRun.probe(directory).status == 0)
         #expect(LockDescriptors.held(by: pid, store: directory) != .held)
-        input.fileHandleForWriting.write(Data([1]))
-        process.waitUntilExit()
-        #expect(process.terminationStatus == 0)
+        let exit = await window.finishAndWaitForExit()
+        #expect(!exit.timedOut)
+        #expect(exit.reason == .exit)
+        #expect(exit.status == 0)
         print("writer-lock-window platform=\(WriterLockLifetimeTests.platform) preExec=contended postExec=independentReopen childAlive=true")
     }
 
@@ -165,27 +161,139 @@ import Glibc
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try AgentIncrementalJournal.create(at: directory, operationDomain: "fork-window")
         try await store.close()
-        let process = Process()
-        process.executableURL = try ChildRun.journalTestProcess()
-        process.arguments = ["fork-window", directory.path]
-        let input = Pipe(), output = Pipe()
-        process.standardInput = input; process.standardOutput = output; process.standardError = Pipe()
-        try process.run()
-        defer { if process.isRunning { input.fileHandleForWriting.closeFile(); process.waitUntilExit() } }
-        #expect(try line(output.fileHandleForReading).hasPrefix("WINDOW "))
-        let gate = input.fileHandleForWriting
-        let observer = OpeningObserver(onContention: { gate.write(Data([1])) })
+        let window = try ForkWindowProcess(directory: directory)
+        defer { window.cleanupIfStillRunning() }
+        #expect(try window.readLine().hasPrefix("WINDOW "))
+        let observer = OpeningObserver(onContention: {
+            do {
+                try window.signalExec()
+            } catch {
+                Issue.record("Failed to signal fork-window helper to exec: \(error)")
+            }
+        })
         let opened = try await AgentIncrementalJournal.openAsyncForTesting(at: directory,
             writerLockWait: .failFast, observer: observer.observe)
         #expect(observer.contentions >= 1)
-        #expect(try line(output.fileHandleForReading) == "EXECUTED")
+        #expect(try window.readLine() == "EXECUTED")
         try await opened.close()
-        gate.write(Data([1]))
-        process.waitUntilExit()
-        #expect(process.terminationStatus == 0)
+        let exit = await window.finishAndWaitForExit()
+        #expect(!exit.timedOut)
+        #expect(exit.reason == .exit)
+        #expect(exit.status == 0)
+    }
+}
+
+/// Manages a `JournalTestProcess fork-window` helper using `terminationHandler` rather than
+/// `Process.waitUntilExit()`, awaiting exit asynchronously with a bounded timeout and providing
+/// bounded synchronous cleanup if a test exits early.
+private final class ForkWindowProcess: @unchecked Sendable {
+    struct ExitResult: Sendable {
+        let status: Int32
+        let reason: Process.TerminationReason
+        let timedOut: Bool
     }
 
-    private func line(_ handle: FileHandle) throws -> String {
+    private final class ExitState: @unchecked Sendable {
+        private let lock = NSLock()
+        private let semaphore = DispatchSemaphore(value: 0)
+        private var info: (status: Int32, reason: Process.TerminationReason)?
+        private var waiters: [UUID: CheckedContinuation<(status: Int32, reason: Process.TerminationReason)?, Never>] = [:]
+        private var expiredTokens: Set<UUID> = []
+
+        var hasExited: Bool { lock.withLock { info != nil } }
+
+        func recordExit(status: Int32, reason: Process.TerminationReason) {
+            let value = (status: status, reason: reason)
+            let pending = lock.withLock { () -> [CheckedContinuation<(status: Int32, reason: Process.TerminationReason)?, Never>] in
+                if info == nil { info = value }
+                let continuations = Array(waiters.values)
+                waiters.removeAll()
+                expiredTokens.removeAll()
+                return continuations
+            }
+            semaphore.signal()
+            for continuation in pending {
+                continuation.resume(returning: value)
+            }
+        }
+
+        func awaitExit(timeout: Duration) async -> (status: Int32, reason: Process.TerminationReason)? {
+            let token = UUID()
+            let timeoutTask = Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                guard !Task.isCancelled, let self else { return }
+                let expired = self.lock.withLock { () -> CheckedContinuation<(status: Int32, reason: Process.TerminationReason)?, Never>? in
+                    if let waiter = self.waiters.removeValue(forKey: token) {
+                        return waiter
+                    }
+                    if self.info == nil {
+                        self.expiredTokens.insert(token)
+                    }
+                    return nil
+                }
+                expired?.resume(returning: nil)
+            }
+            defer {
+                timeoutTask.cancel()
+                lock.withLock { _ = expiredTokens.remove(token) }
+            }
+            return await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    let immediate: ((status: Int32, reason: Process.TerminationReason)?)? = lock.withLock {
+                        let wasExpired = expiredTokens.remove(token) != nil
+                        if let info { return .some(info) }
+                        if Task.isCancelled || wasExpired { return .some(nil) }
+                        waiters[token] = continuation
+                        return nil
+                    }
+                    if let immediate {
+                        continuation.resume(returning: immediate)
+                    }
+                }
+            } onCancel: {
+                let cancelled = lock.withLock { () -> CheckedContinuation<(status: Int32, reason: Process.TerminationReason)?, Never>? in
+                    if let waiter = waiters.removeValue(forKey: token) {
+                        return waiter
+                    }
+                    if info == nil {
+                        expiredTokens.insert(token)
+                    }
+                    return nil
+                }
+                cancelled?.resume(returning: nil)
+            }
+        }
+
+        func waitSynchronously(timeout: TimeInterval) -> Bool {
+            if hasExited { return true }
+            _ = semaphore.wait(timeout: .now() + timeout)
+            return hasExited
+        }
+    }
+
+    private let process = Process()
+    private let input = Pipe()
+    private let output = Pipe()
+    private let errorPipe = Pipe()
+    private let inputLock = NSLock()
+    private var inputClosed = false
+    private let exitState = ExitState()
+
+    init(directory: URL) throws {
+        process.executableURL = try ChildRun.journalTestProcess()
+        process.arguments = ["fork-window", directory.path]
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = errorPipe
+        let exitState = self.exitState
+        process.terminationHandler = { terminated in
+            exitState.recordExit(status: terminated.terminationStatus, reason: terminated.terminationReason)
+        }
+        try process.run()
+    }
+
+    func readLine() throws -> String {
+        let handle = output.fileHandleForReading
         var bytes = Data()
         while let part = try handle.read(upToCount: 1), !part.isEmpty {
             if part == Data([10]) { return String(decoding: bytes, as: UTF8.self) }
@@ -195,6 +303,78 @@ import Glibc
         throw AgentJournalError.invalidRecord
     }
 
+    func signalExec() throws {
+        let handle = inputLock.withLock { inputClosed ? nil : input.fileHandleForWriting }
+        guard let handle else { throw AgentJournalError.invalidRecord }
+        try handle.write(contentsOf: Data([1]))
+    }
+
+    func finishAndWaitForExit(
+        timeout: Duration = .seconds(10),
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async -> ExitResult {
+        writeExitByteAndCloseInput()
+        if let exited = await exitState.awaitExit(timeout: timeout) {
+            return ExitResult(status: exited.status, reason: exited.reason, timedOut: false)
+        }
+        Issue.record(
+            "fork-window helper process \(process.processIdentifier) did not exit within \(timeout)",
+            sourceLocation: sourceLocation
+        )
+        if process.isRunning {
+            _ = kill(process.processIdentifier, SIGKILL)
+        }
+        let killed = await exitState.awaitExit(timeout: .seconds(5))
+        return ExitResult(
+            status: killed?.status ?? -1,
+            reason: killed?.reason ?? .uncaughtSignal,
+            timedOut: true
+        )
+    }
+
+    func cleanupIfStillRunning(sourceLocation: SourceLocation = #_sourceLocation) {
+        defer {
+            try? output.fileHandleForReading.close()
+            try? errorPipe.fileHandleForReading.close()
+        }
+        if exitState.hasExited {
+            closeInputIfNeeded()
+            return
+        }
+        closeInputIfNeeded()
+        if exitState.waitSynchronously(timeout: 2) {
+            return
+        }
+        if process.isRunning {
+            _ = kill(process.processIdentifier, SIGKILL)
+        }
+        if !exitState.waitSynchronously(timeout: 5) {
+            Issue.record(
+                "fork-window helper process \(process.processIdentifier) did not exit during cleanup",
+                sourceLocation: sourceLocation
+            )
+        }
+    }
+
+    private func writeExitByteAndCloseInput() {
+        let handle = inputLock.withLock { () -> FileHandle? in
+            guard !inputClosed else { return nil }
+            inputClosed = true
+            return input.fileHandleForWriting
+        }
+        guard let handle else { return }
+        try? handle.write(contentsOf: Data([1]))
+        try? handle.close()
+    }
+
+    private func closeInputIfNeeded() {
+        let handle = inputLock.withLock { () -> FileHandle? in
+            guard !inputClosed else { return nil }
+            inputClosed = true
+            return input.fileHandleForWriting
+        }
+        try? handle?.close()
+    }
 }
 
 private final class LockWriter {

@@ -119,17 +119,138 @@ import Testing
     }
 
     @Test func answerTheModelSourceHandedOverBeforeTheDeadlineCompletesWhenTheRunReadsItLate() async throws {
-        let provider = ScriptedProvider { request, _ in textResponse(request, "the whole answer") }
-        // The model source has sent everything at once; the Run gets to the first event after the deadline.
         let clock = ManualAgentClock.current
+        let handedOver = ClockTestSignal()
+        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 0, deadline: clock.after(.milliseconds(300)))
+        let provider = HandedOverStreamProvider(
+            events: { request in textResponse(request, "the whole answer") },
+            onHandedOver: {
+                #expect(clock.now < budget.deadline)
+                await handedOver.signal()
+            }
+        )
+        // The model source hands over every event before the deadline while the Run is still
+        // paused before handling the first event; the Run then processes them after the deadline.
         let loop = AgentLoop(model: fixtureModel, provider: provider, tools: try ToolRegistry(tools: []),
                              beforeHandlingModelEvent: { event in
-            if case .responseStarted = event { clock.advance(by: .milliseconds(600)) }
+            if case .responseStarted = event {
+                await handedOver.wait()
+                #expect(clock.now < budget.deadline)
+                // Wait for the Run's deadline timer (withOperationDeadline) to arm before advancing past it.
+                await clock.waitForSleeper(until: budget.deadline)
+                clock.advance(by: .milliseconds(600))
+                #expect(clock.now >= budget.deadline)
+            }
         })
-        let budget = try AgentBudget(maxModelTurns: 2, maxToolCalls: 0, deadline: clock.after(.milliseconds(300)))
         let result = try await loop.run(messages: [ModelMessage.user([.text("Answer")])], sessionID: UUID(), budget: budget)
+        #expect(clock.now >= budget.deadline)
         #expect(result.outcome == .completed)
         #expect(result.history.last == .assistant(content: [.text("the whole answer")], toolCalls: []))
+    }
+
+    @Test func settlingModelEventsDeliversSettledAnswerWhenLateCloserFiresBeforeConsumerReads() async throws {
+        let clock = ManualAgentClock.current
+        let deadline = clock.after(.milliseconds(300))
+        let gate = OperationDeadlineGate(deadline: deadline)
+        let info = ResponseInfo(id: "response", model: fixtureModel)
+        let completed = ModelResponse(info: info, content: [.text("the whole answer")], stopReason: .endTurn)
+        let expected: [ModelEvent] = [
+            .responseStarted(info),
+            .textDelta("the whole answer"),
+            .responseCompleted(completed),
+        ]
+        // Upstream hands over the final answer before the deadline and never closes on its own.
+        let upstream = AsyncThrowingStream<ModelEvent, Error> { continuation in
+            for event in expected {
+                continuation.yield(event)
+            }
+        }
+        let deadlinePassed = Task {
+            await clock.waitForSleeper(until: deadline)
+            #expect(clock.now < deadline)
+            #expect(gate.isSettled)
+            clock.advance(by: .milliseconds(600))
+        }
+        let settled = settlingModelEvents(upstream, gate: gate)
+        await deadlinePassed.value
+        await Task.yield()
+
+        var received: [ModelEvent] = []
+        for try await event in settled {
+            received.append(event)
+        }
+        #expect(clock.now >= deadline)
+        #expect(gate.isSettled)
+        #expect(received == expected)
+    }
+
+    @Test func settlingModelEventsDoesNotSettleGateForToolCallResponseBeforeDeadline() async throws {
+        let clock = ManualAgentClock.current
+        let deadline = clock.after(.milliseconds(300))
+        let gate = OperationDeadlineGate(deadline: deadline)
+        let info = ResponseInfo(id: "response", model: fixtureModel)
+        let call = ToolCall(id: ToolCallID(rawValue: "call-1"), name: "add",
+                            argumentsJSON: #"{"lhs":1,"rhs":2}"#, completeness: .complete)
+        let expected: [ModelEvent] = [
+            .responseStarted(info),
+            .toolCallStarted(call.id, name: call.name),
+            .toolCallArgumentsDelta(call.id, call.argumentsJSON),
+            .toolCallCompleted(call),
+            .responseCompleted(.init(info: info, toolCalls: [call], stopReason: .toolCalls)),
+        ]
+        let upstream = AsyncThrowingStream<ModelEvent, Error> { continuation in
+            for event in expected {
+                continuation.yield(event)
+            }
+            continuation.finish()
+        }
+        var received: [ModelEvent] = []
+        for try await event in settlingModelEvents(upstream, gate: gate) {
+            received.append(event)
+        }
+        #expect(received == expected)
+        #expect(clock.now < deadline)
+        #expect(!gate.isSettled)
+        #expect(!clock.hasSleeper(until: deadline))
+        #expect(gate.expire())
+    }
+
+    @Test func settlingModelEventsDoesNotSettleGateWhenFinalResponseArrivesAfterDeadline() async throws {
+        let clock = ManualAgentClock.current
+        let deadline = clock.after(.milliseconds(300))
+        let gate = OperationDeadlineGate(deadline: deadline)
+        let info = ResponseInfo(id: "response", model: fixtureModel)
+        let completed = ModelResponse(info: info, content: [.text("late answer")], stopReason: .endTurn)
+        let expected: [ModelEvent] = [
+            .responseStarted(info),
+            .textDelta("late answer"),
+            .responseCompleted(completed),
+        ]
+        let allowCompletion = ClockTestSignal()
+        let upstream = AsyncThrowingStream<ModelEvent, Error> { continuation in
+            let task = Task {
+                continuation.yield(.responseStarted(info))
+                await allowCompletion.wait()
+                continuation.yield(.textDelta("late answer"))
+                continuation.yield(.responseCompleted(completed))
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+        var received: [ModelEvent] = []
+        for try await event in settlingModelEvents(upstream, gate: gate) {
+            received.append(event)
+            if case .responseStarted = event {
+                #expect(clock.now < deadline)
+                #expect(!gate.isSettled)
+                clock.advance(by: .milliseconds(600))
+                await allowCompletion.signal()
+            }
+        }
+        #expect(clock.now >= deadline)
+        #expect(!gate.isSettled)
+        #expect(!clock.hasSleeper(until: deadline))
+        #expect(received == expected)
     }
 
     @Test func steeringAfterAnAnswerReopensTheDeadlineBeforeAnotherModelRequest() async throws {
@@ -174,6 +295,41 @@ extension ScriptedProvider {
     /// Same events, but the stream only finishes `delay` (on the test's manual clock) after the last of them.
     func delayingStreamEnd(by delay: Duration, beforeEnd: @escaping @Sendable () async -> Void = {}) -> any ModelProvider {
         DelayedEndProvider(inner: self, delay: delay, beforeEnd: beforeEnd)
+    }
+}
+
+private struct HandedOverStreamProvider: ModelProvider {
+    var descriptor = ModelProviderDescriptor(id: "fixture", capabilities: [.streaming, .multiTurn, .tools, .structuredOutput])
+    let events: @Sendable (ModelRequest) -> [ModelEvent]
+    let onHandedOver: @Sendable () async -> Void
+
+    func stream(request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
+        let source = UnfoldingModelEvents(events(request), onConsumed: onHandedOver)
+        return AsyncThrowingStream {
+            await source.next()
+        }
+    }
+}
+
+private actor UnfoldingModelEvents {
+    private var remaining: ArraySlice<ModelEvent>
+    private let onConsumed: @Sendable () async -> Void
+    private var notified = false
+
+    init(_ events: [ModelEvent], onConsumed: @escaping @Sendable () async -> Void) {
+        self.remaining = events[...]
+        self.onConsumed = onConsumed
+    }
+
+    func next() async -> ModelEvent? {
+        if let event = remaining.popFirst() {
+            return event
+        }
+        if !notified {
+            notified = true
+            await onConsumed()
+        }
+        return nil
     }
 }
 

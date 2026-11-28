@@ -15,14 +15,20 @@ func settlingModelEvents(
             let closer = LateCloser(gate: gate, continuation: continuation)
             do {
                 for try await event in upstream {
+                    let shouldStartCloser: Bool
                     if case .responseCompleted(let response) = event,
-                       response.classification == .finalResponse,
-                       gate.settle() {
-                        // The answer is in. A source that then keeps its stream open past the deadline
-                        // cannot keep the Run waiting for a close that adds nothing to the answer.
-                        closer.start()
+                       response.classification == .finalResponse {
+                        shouldStartCloser = gate.settle()
+                    } else {
+                        shouldStartCloser = false
                     }
                     if case .terminated = continuation.yield(event) { break }
+                    if shouldStartCloser {
+                        // The answer is already buffered for the Run. A source that then keeps its stream
+                        // open past the deadline cannot keep the Run waiting for a close that adds nothing
+                        // to the answer.
+                        closer.start()
+                    }
                 }
                 closer.cancel()
                 continuation.finish()
@@ -46,9 +52,11 @@ private final class LateCloser: @unchecked Sendable {
     }
 
     func start() {
+        task?.cancel()
         let gate = gate, continuation = continuation
         task = Task {
             do { try await AgentClock.sleep(until: gate.deadline) } catch { return }
+            guard !Task.isCancelled else { return }
             continuation.finish()
         }
     }
