@@ -141,6 +141,20 @@ extension AgentJournal {
         }
     }
 
+    public func latestRunRecord(sessionID: UUID) throws -> AgentRunLookup {
+        let store = try runRecordStore()
+        return try store.read { view in
+            guard let runID = try view.header(sessionID)?.lastRunID,
+                  let stored = try view.runRecord(sessionID: sessionID, runID: runID) else {
+                return .notAdmitted
+            }
+            if let terminal = try view.runTerminal(sessionID: sessionID, runID: runID) {
+                return .terminal(stored.record, terminal)
+            }
+            return .admitted(stored.record)
+        }
+    }
+
     package func prepareRunAdmission(sessionID: UUID, text: String, operationID: String?, correlation: AgentRunCorrelation?, inputContent: [ModelContent]? = nil) throws -> JournalRunAdmission? {
         guard supportsRunRecords else {
             if correlation != nil { throw AgentJournalError.unsupportedFormat }
@@ -173,5 +187,48 @@ extension AgentJournal {
         let steeringIDs = try store.read { try $0.header(sessionID)?.steeringIDs ?? [] }
         try appendCheckpointForCurrentRun([.checkpoint(history: history, steeringIDs: steeringIDs), .runTerminated(terminal)],
             sessionID: sessionID, runID: runID, durability: .durable, runTerminal: terminal)
+    }
+
+    package func closeAbandonedRun(
+        sessionID: UUID,
+        runID: UUID,
+        expectedHistory: AgentJournalHistoryWitness,
+        terminal: AgentRunTerminal
+    ) throws {
+        let store = try runRecordStore()
+        try writeStore(store) { view in
+            guard let storedSession = try view.session(sessionID) else {
+                throw AgentJournalError.invalidRecord
+            }
+            let header = storedSession.header
+            guard header.historyHead == expectedHistory.head else {
+                throw AgentJournalError.concurrentWriter
+            }
+            guard header.lastRunID == runID,
+                  try view.runRecord(sessionID: sessionID, runID: runID) != nil,
+                  try view.runTerminal(sessionID: sessionID, runID: runID) == nil else {
+                throw AgentJournalError.invalidRecord
+            }
+            guard header.pendingIdentity == nil,
+                  try view.pending(sessionID: sessionID).isEmpty else {
+                throw AgentJournalError.mutationRequiresReconciliation
+            }
+            let formal = Self.formalMessages(storedSession.history)
+            try AgentConversationControlState.requireClosed(formal)
+            _ = try appendToStore(
+                [
+                    .checkpoint(history: storedSession.history, steeringIDs: header.steeringIDs),
+                    .runTerminated(terminal),
+                ],
+                sessionID: sessionID,
+                runID: runID,
+                timestamp: Date(),
+                view: view,
+                allowMutationSettlement: false,
+                runTerminal: terminal,
+                expectedHistory: expectedHistory
+            )
+        }
+        scheduleMaintenanceIfNeeded()
     }
 }

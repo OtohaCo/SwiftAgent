@@ -2076,6 +2076,69 @@ extension AgentSession {
         guard let journal else { throw AgentJournalError.unsupportedFormat }
         return try await journal.runRecord(sessionID: id, runID: runID)
     }
+    public func latestRunRecord() async throws -> AgentRunLookup {
+        guard let journal else { throw AgentJournalError.unsupportedFormat }
+        return try await journal.latestRunRecord(sessionID: id)
+    }
+
+    /// Explicitly records an `.incomplete(.other)` terminal for an admitted Run that
+    /// left no persisted terminal once no Run or follow-up dispatcher is active, no
+    /// mutation awaits reconciliation, and every committed tool call is paired with
+    /// its result.
+    ///
+    /// Leaves canonical messages, mutation records, follow-up inspection gates, and
+    /// any existing terminal unchanged.
+    @discardableResult
+    public func closeAbandonedRun(runID: UUID) async throws -> AgentRunTerminal {
+        try Task.checkCancellation()
+        try await checkCommitKnown()
+        guard let journal, journal.storage == .durable, journal.supportsRunRecords else {
+            throw AgentJournalError.unsupportedFormat
+        }
+        guard !dispatchStarting, dispatcherID == nil else { throw AgentFollowUpError.dispatchOwned }
+        guard activeRunID == nil, !startingRun, drainingRunID == nil, pendingDrainTask == nil else {
+            throw AgentSessionError.runInProgress
+        }
+        startingRun = true
+        var identityAcquired = false
+        var journalLeaseAcquired = false
+        do {
+            try await AgentSessionIdentityRegistry.shared.acquire(id, storeID: await journal.storeIdentity()?.storeID)
+            identityAcquired = true
+            do {
+                try await journal.acquireSessionLease(sessionID: id)
+            } catch AgentJournalError.sessionLeaseUnavailable {
+                throw AgentSessionError.runInProgress
+            }
+            journalLeaseAcquired = true
+            try await restoreJournalStateIfNeeded()
+            guard let witness = persistentHistoryWitness else {
+                throw AgentJournalError.invalidRecord
+            }
+            let current = try await journal.historyWitness(sessionID: id)
+            guard current == witness else { throw AgentJournalError.concurrentWriter }
+            let terminal = AgentRunTerminal.incomplete(.other)
+            try await journal.closeAbandonedRun(
+                sessionID: id,
+                runID: runID,
+                expectedHistory: witness,
+                terminal: terminal
+            )
+            persistentHistoryWitness = try await journal.historyWitness(sessionID: id)
+            await journal.releaseSessionLease(sessionID: id)
+            await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal.storeIdentity()?.storeID)
+            startupFinished()
+            return terminal
+        } catch {
+            noteJournalError(error)
+            if journalLeaseAcquired { await journal.releaseSessionLease(sessionID: id) }
+            if identityAcquired {
+                await AgentSessionIdentityRegistry.shared.release(id, storeID: await journal.storeIdentity()?.storeID)
+            }
+            startupFinished()
+            throw error
+        }
+    }
 }
 
 private extension String {

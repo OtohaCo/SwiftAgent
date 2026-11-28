@@ -1324,7 +1324,7 @@ extension AgentJournal {
         }
     }
 
-    private static func formalMessages(_ history: [ModelMessage]) -> [ModelMessage] {
+    static func formalMessages(_ history: [ModelMessage]) -> [ModelMessage] {
         var index = 0
         while index < history.count {
             switch history[index] {
